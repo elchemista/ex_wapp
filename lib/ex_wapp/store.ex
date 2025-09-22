@@ -15,6 +15,17 @@ defmodule ExWapp.Store do
   @callback load(t()) :: {:ok, data()} | {:error, term()}
   @callback persist(t(), data()) :: :ok | {:error, term()}
 
+  def load(store), do: store.__struct__.load(store)
+
+  def load!(store) do
+    case load(store) do
+      {:ok, data} -> data
+      {:error, _} -> %{}
+    end
+  end
+
+  def persist(store, data), do: store.__struct__.persist(store, data)
+
   defmodule File do
     @moduledoc """
     Minimal file-backed store using Erlang external term format.
