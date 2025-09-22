@@ -3,14 +3,9 @@ defmodule ExWapp.Pairing do
   Implements the QR-code based pairing handshake used by WhatsApp Web.
   """
 
-  alias ExWapp.{Binary, Noise.Certificate, Signal, Store}
-  alias WAAdv.{ADVDeviceIdentity, ADVSignedDeviceIdentity, ADVSignedDeviceIdentityHMAC}
+  alias ExWapp.{Binary, Signal, Store}
+  alias ExWapp.Pairing.ADV
   require Logger
-
-  @adv_prefix_account_signature <<6, 0>>
-  @adv_prefix_device_signature_generate <<6, 1>>
-  @adv_hosted_prefix_device_identity_account_signature <<6, 5>>
-  @adv_hosted_prefix_device_identity_device_signature_verification <<6, 6>>
 
   @typedoc """
   Aggregate structure that keeps temporary pairing data.
@@ -192,6 +187,7 @@ defmodule ExWapp.Pairing do
 
     with {:ok, device_identity} <- fetch_child_binary(node, "device-identity"),
          {:ok, adv_identity} <- fetch_child_binary(node, "adv-device-identity", optional: true),
+         {:ok, adv_parsed} <- parse_adv_identity(data, adv_identity),
          {:ok, device_attrs} <- fetch_child_attrs(node, "device"),
          {:ok, biz_attrs} <- fetch_child_attrs(node, "biz", optional: true),
          {:ok, platform_attrs} <- fetch_child_attrs(node, "platform", optional: true),
@@ -199,12 +195,15 @@ defmodule ExWapp.Pairing do
            Signal.bootstrap(%{
              device_identity: device_identity,
              adv_device_identity: adv_identity,
+             adv: adv_parsed,
              device_attrs: device_attrs
            }) do
       pairing_data =
         %{
           device_identity: device_identity,
           adv_device_identity: adv_identity,
+          adv: adv_parsed,
+          adv_self_signed: adv_parsed && adv_parsed.self_signed,
           device: device_attrs,
           biz: biz_attrs,
           platform: platform_attrs,
@@ -238,6 +237,33 @@ defmodule ExWapp.Pairing do
       _ -> {:error, {:invalid_child, tag}}
     end
   end
+
+  defp parse_adv_identity(_data, nil), do: {:ok, nil}
+
+  defp parse_adv_identity(data, adv_identity) when is_binary(adv_identity) do
+    with {:ok, adv_secret} <- fetch_adv_secret(data),
+         {:ok, identity} <- fetch_identity_keypair(data),
+         {:ok, parsed} <- ADV.parse_signed_device_identity(adv_identity, adv_secret, identity) do
+      {:ok, parsed}
+    end
+  end
+
+  defp parse_adv_identity(_data, _), do: {:error, :invalid_adv_identity}
+
+  defp fetch_adv_secret(%{adv_secret: <<_::binary-size(32)>> = secret}), do: {:ok, secret}
+
+  defp fetch_adv_secret(%{adv_secret: secret}) when is_binary(secret),
+    do: {:error, :invalid_adv_secret}
+
+  defp fetch_adv_secret(_), do: {:error, :missing_adv_secret}
+
+  defp fetch_identity_keypair(%{
+         identity: %{public: <<_::binary-size(32)>>, private: <<_::binary-size(32)>>} = identity
+       }),
+       do: {:ok, identity}
+
+  defp fetch_identity_keypair(%{identity: %{}}), do: {:error, :invalid_identity_keypair}
+  defp fetch_identity_keypair(_), do: {:error, :missing_identity_keypair}
 
   defp error_event(reason), do: {:error, reason}
 end
