@@ -22,12 +22,17 @@ defmodule ExWapp.Conn do
     defstruct session: nil,
               store: nil,
               noise: nil,
+              noise_opts: [],
               buffer: <<>>,
               header_sent?: false,
               header_seen?: false
   end
 
-  @type options :: [session: pid(), store: ExWapp.Store.t()]
+  @type options :: [
+          session: pid(),
+          store: ExWapp.Store.t(),
+          noise: keyword()
+        ]
 
   @doc """
   Starts the WebSocket process.
@@ -36,11 +41,13 @@ defmodule ExWapp.Conn do
   def start_link(opts) do
     session = Keyword.fetch!(opts, :session)
     store = Keyword.fetch!(opts, :store)
+    noise_opts = Keyword.get(opts, :noise, [])
     headers = [{"Origin", @origin}]
 
     state = %State{
       session: session,
-      store: store
+      store: store,
+      noise_opts: noise_opts
     }
 
     WebSockex.start_link(@url, __MODULE__, state, extra_headers: headers)
@@ -57,7 +64,12 @@ defmodule ExWapp.Conn do
     Logger.info("websocket connected; Noise handshake pending")
     notify_session(state.session, {:transport, :connected})
 
-    case Noise.init(store: state.store, client_payload_fun: &ClientPayload.build/1) do
+    noise_opts =
+      state.noise_opts
+      |> Keyword.put_new(:client_payload_fun, &ClientPayload.build/1)
+      |> Keyword.delete(:store)
+
+    case Noise.init(Keyword.put(noise_opts, :store, state.store)) do
       {:ok, client_hello, noise_state} ->
         state = %{state | noise: noise_state}
         {state, reply} = build_reply(state, client_hello)

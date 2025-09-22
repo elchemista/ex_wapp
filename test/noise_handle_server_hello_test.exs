@@ -36,7 +36,8 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
 
       assert {:ok, client_finish, new_noise} = Noise.handle_server_hello(noise, server.payload)
 
-      assert_receive {:cert_verified, ^certificate_plain, ^server.static_pub}
+      static_pub = server.static_pub
+      assert_receive {:cert_verified, ^certificate_plain, ^static_pub}
 
       assert new_noise.phase == :transport
       assert new_noise.tx_counter == 0

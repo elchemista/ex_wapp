@@ -179,7 +179,7 @@ defmodule ExWapp.Noise do
          {:ok, payload} <- build_client_payload(state),
          {handshake, encrypted_payload} <- Handshake.encrypt(handshake, payload),
          {:ok, client_finish} <- encode_client_finish(encrypted_static, encrypted_payload),
-         {tx_key, rx_key} <- Handshake.derive_transport_keys(handshake) do
+         {write_key, read_key} <- Handshake.derive_transport_keys(handshake) do
       new_state =
         %{
           state
@@ -187,8 +187,8 @@ defmodule ExWapp.Noise do
             handshake: nil,
             eph_priv: nil,
             eph_pub: nil,
-            tx_key: tx_key,
-            rx_key: rx_key,
+            tx_key: read_key,
+            rx_key: write_key,
             tx_counter: 0,
             rx_counter: 0
         }
