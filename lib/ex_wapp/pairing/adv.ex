@@ -127,7 +127,12 @@ defmodule ExWapp.Pairing.ADV do
 
   defp ensure_signature_fields(_), do: {:error, :adv_invalid_account_signature_fields}
 
-  defp verify_account_signature(%ADVSignedDeviceIdentity{} = signed, _details, identity_pub, hosted?) do
+  defp verify_account_signature(
+         %ADVSignedDeviceIdentity{} = signed,
+         _details,
+         identity_pub,
+         hosted?
+       ) do
     details_inner = signed.details
     message = account_signature_prefix(hosted?) <> details_inner <> identity_pub
 
@@ -138,7 +143,13 @@ defmodule ExWapp.Pairing.ADV do
     end
   end
 
-  defp generate_device_signature(%ADVSignedDeviceIdentity{} = signed, _details, identity_pub, identity_priv, hosted?) do
+  defp generate_device_signature(
+         %ADVSignedDeviceIdentity{} = signed,
+         _details,
+         identity_pub,
+         identity_priv,
+         hosted?
+       ) do
     details_inner = signed.details
 
     message =
