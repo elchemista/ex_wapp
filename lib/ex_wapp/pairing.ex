@@ -86,7 +86,7 @@ defmodule ExWapp.Pairing do
             nil
           end
 
-        events = (if ack, do: [{:send_node, ack}], else: []) ++ [{:status, :success}]
+        events = if(ack, do: [{:send_node, ack}], else: []) ++ [{:status, :success}]
 
         {%{state | status: :paired, ref: nil, req_id: nil}, events}
 
@@ -200,12 +200,13 @@ defmodule ExWapp.Pairing do
          {:ok, device_attrs} <- fetch_child_attrs(node, "device"),
          {:ok, biz_attrs} <- fetch_child_attrs(node, "biz", optional: true),
          {:ok, platform_attrs} <- fetch_child_attrs(node, "platform", optional: true),
-         {:ok, signal_info} <-
+         {:ok, signal_info, signal_state} <-
            Signal.bootstrap(%{
              device_identity: device_identity,
              adv_device_identity: adv_identity,
              adv: adv_parsed,
-             device_attrs: device_attrs
+             device_attrs: device_attrs,
+             current_signal: Map.get(data, :signal)
            }) do
       pairing_data =
         %{
@@ -220,7 +221,12 @@ defmodule ExWapp.Pairing do
           signal: signal_info
         }
 
-      {:ok, Map.put(data, :pairing, pairing_data)}
+      updated_data =
+        data
+        |> Map.put(:pairing, pairing_data)
+        |> Map.put(:signal, signal_state)
+
+      {:ok, updated_data}
     end
   end
 
