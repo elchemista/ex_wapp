@@ -1,15 +1,9 @@
 defmodule ExWapp.Session do
   @moduledoc """
   Coordinates the lifecycle of a WhatsApp Web connection.
-
-  The process role is intentionally narrow at the moment: it keeps track of
-  runtime state, delegates protocol specific work to specialised modules,
-  and provides a central point where callers can subscribe to QR updates or
-  issue messaging requests.
   """
 
   use GenServer
-
   alias ExWapp.{Binary, Conn, Pairing, Store}
 
   @typedoc """
@@ -38,42 +32,36 @@ defmodule ExWapp.Session do
 
   Options:
 
-    * `:name` – register the process under a given name
-    * `:store` – custom store implementation (defaults to `ExWapp.Store.File`)
+    * `:name`  – register the process under a given name
+    * `:store` – a store backend in one of the forms:
+                 - `nil` (default ETS)
+                 - `MyStoreModule`
+                 - `{MyStoreModule, opts}`
+                 - `%MyStoreStruct{}` (already initialized)
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
   end
 
-  @doc """
-  Bootstraps the network connection asynchronously.
-  """
+  @doc "Bootstraps the network connection asynchronously."
   @spec connect(GenServer.server()) :: :ok
   def connect(server), do: GenServer.cast(server, :connect)
 
-  @doc """
-  Internal API for testing / stream setup.
-  """
+  @doc "Internal API for testing / stream setup."
   @spec subscribe_qr(GenServer.server()) :: {:ok, reference()}
   def subscribe_qr(server), do: GenServer.call(server, {:subscribe_qr, self()})
 
-  @doc """
-  Cancels a previously created QR subscription.
-  """
+  @doc "Cancels a previously created QR subscription."
   @spec unsubscribe_qr(GenServer.server(), reference()) :: :ok
   def unsubscribe_qr(server, ref), do: GenServer.cast(server, {:unsubscribe_qr, ref})
 
-  @doc """
-  Queues a plain text message for sending.
-  """
+  @doc "Queues a plain text message for sending."
   @spec send_text(GenServer.server(), binary(), iodata()) :: :ok
   def send_text(server, jid, text),
     do: GenServer.cast(server, {:send_text, jid, IO.iodata_to_binary(text)})
 
-  @doc """
-  Builds a lazy stream of QR pairing events.
-  """
+  @doc "Builds a lazy stream of QR pairing events."
   @spec qr_stream(GenServer.server()) :: Enumerable.t()
   def qr_stream(server) do
     Stream.resource(
@@ -90,7 +78,7 @@ defmodule ExWapp.Session do
 
   @impl true
   def init(opts) do
-    store = build_store(opts)
+    store = Store.new(Keyword.get(opts, :store))
 
     {:ok,
      %__MODULE__{
@@ -212,24 +200,8 @@ defmodule ExWapp.Session do
     :ok = Conn.send_node(conn, node)
   end
 
-  defp handle_pairing_action({:qr, code}, state) do
-    notify_qr(state, {:code, code})
-  end
-
-  defp handle_pairing_action({:status, :success}, state) do
-    notify_qr(state, :success)
-  end
-
-  defp handle_pairing_action({:error, reason}, state) do
-    notify_qr(state, {:error, reason})
-  end
-
+  defp handle_pairing_action({:qr, code}, state), do: notify_qr(state, {:code, code})
+  defp handle_pairing_action({:status, :success}, state), do: notify_qr(state, :success)
+  defp handle_pairing_action({:error, reason}, state), do: notify_qr(state, {:error, reason})
   defp handle_pairing_action(_other, _state), do: :ok
-
-  defp build_store(opts) do
-    case Keyword.get(opts, :store) do
-      nil -> Store.File.new()
-      module -> module.new()
-    end
-  end
 end

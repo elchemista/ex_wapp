@@ -1,4 +1,5 @@
 defmodule ExWapp.PairingADVTest do
+  @moduledoc false
   use ExUnit.Case, async: true
 
   alias ExWapp.Pairing.ADV
@@ -60,7 +61,11 @@ defmodule ExWapp.PairingADVTest do
     # Container HMAC over (maybe prefixed) SignedDeviceIdentity bytes
     adv_secret = :crypto.strong_rand_bytes(32)
 
-    hmac_prefix = if account_type == :HOSTED, do: @adv_hosted_prefix_device_identity_account_signature, else: <<>>
+    hmac_prefix =
+      if account_type == :HOSTED,
+        do: @adv_hosted_prefix_device_identity_account_signature,
+        else: <<>>
+
     hmac = :crypto.mac(:hmac, :sha256, adv_secret, hmac_prefix <> signed_bytes)
 
     container = %ADVSignedDeviceIdentityHMAC{
@@ -73,7 +78,10 @@ defmodule ExWapp.PairingADVTest do
 
     # Parse/verify/sign
     {:ok, parsed} =
-      ADV.parse_signed_device_identity(adv_blob, adv_secret, %{public: identity_pub, private: identity_priv})
+      ADV.parse_signed_device_identity(adv_blob, adv_secret, %{
+        public: identity_pub,
+        private: identity_priv
+      })
 
     assert parsed.hosted? == (account_type == :HOSTED)
 
@@ -111,7 +119,4 @@ defmodule ExWapp.PairingADVTest do
     {:ok, io} = mod.encode(struct)
     IO.iodata_to_binary(io)
   end
-
-  # Dummy helper to avoid compiler warning with first signature attempt
-  defp false_value, do: false
 end

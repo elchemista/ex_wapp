@@ -1,4 +1,5 @@
 defmodule ExWapp.StoreTest do
+  @moduledoc false
   use ExUnit.Case, async: true
 
   alias ExWapp.Store
@@ -12,14 +13,15 @@ defmodule ExWapp.StoreTest do
     :ok
   end
 
-  test "file store persists arbitrary maps" do
+  test "ETS store persists arbitrary maps (via facade)" do
     path = Path.join(@tmp_dir, "session.etf")
-    store = Store.File.new(path: path)
 
-    assert {:ok, %{}} = Store.File.load(store)
+    store = Store.new({ExWapp.Store.ETS, path: path})
+
+    assert {:ok, %{}} = Store.load(store)
 
     payload = %{"noise" => %{client_static: <<1, 2, 3>>}}
-    assert :ok = Store.File.persist(store, payload)
-    assert {:ok, ^payload} = Store.File.load(store)
+    assert :ok = Store.persist(store, payload)
+    assert {:ok, ^payload} = Store.load(store)
   end
 end

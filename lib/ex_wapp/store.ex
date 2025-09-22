@@ -2,10 +2,16 @@ defmodule ExWapp.Store do
   @moduledoc """
   Persistence abstraction used by the WhatsApp session.
 
-  The protocol demands a fair amount of durable state (Noise keys, device
-  identity, Signal ratchets, ...). For the initial prototype we only store
-  a generic map so we can gradually expand the schema without rewriting the
-  surrounding code.
+  Adapters implement this behaviour to back the durable state (Noise keys,
+  identity, Signal ratchets, etc). The default adapter is ETS+file
+  (`ExWapp.Store.ETS`), but you can provide your own (e.g. SQL, Mongo).
+
+  ## Passing a store to the Session
+
+    * `nil`                      -> uses `ExWapp.Store.ETS.new/1` with defaults
+    * `MyStoreModule`            -> calls `MyStoreModule.new([])`
+    * `{MyStoreModule, opts}`    -> calls `MyStoreModule.new(opts)`
+    * `%MyStoreStruct{}`         -> used as-is (must implement this behaviour)
   """
 
   @type data :: map()
@@ -15,8 +21,21 @@ defmodule ExWapp.Store do
   @callback load(t()) :: {:ok, data()} | {:error, term()}
   @callback persist(t(), data()) :: :ok | {:error, term()}
 
+  @doc """
+  Create a store instance from various inputs. See moduledoc for accepted forms.
+  """
+  @spec new(nil | module() | {module(), keyword()} | t()) :: t()
+  def new(nil), do: ExWapp.Store.ETS.new([])
+  def new(%_{} = struct), do: struct
+  def new({mod, opts}) when is_atom(mod) and is_list(opts), do: mod.new(opts)
+  def new(mod) when is_atom(mod), do: mod.new([])
+
+  @doc "Load data from a store adapter."
+  @spec load(t()) :: {:ok, data()} | {:error, term()}
   def load(store), do: store.__struct__.load(store)
 
+  @doc "Load data or return an empty map if missing."
+  @spec load!(t()) :: data()
   def load!(store) do
     case load(store) do
       {:ok, data} -> data
@@ -24,68 +43,7 @@ defmodule ExWapp.Store do
     end
   end
 
+  @doc "Persist data via the store adapter."
+  @spec persist(t(), data()) :: :ok | {:error, term()}
   def persist(store, data), do: store.__struct__.persist(store, data)
-
-  defmodule File do
-    @moduledoc """
-    Minimal file-backed store using Erlang external term format.
-
-    The implementation is intentionally simple: it persists a map to a
-    single file under `~/.cache/ex_wapp/session.etf`. The format is stable
-    enough for prototyping yet human readable via `:erlang.binary_to_term/1`.
-    """
-
-    @behaviour ExWapp.Store
-
-    defstruct [:path, :table]
-
-    @type t :: %__MODULE__{path: Path.t(), table: :ets.tid()}
-
-    @impl true
-    def new(opts \\ []) do
-      path =
-        opts
-        |> Keyword.get(:path, default_path())
-        |> Path.expand()
-
-      char_path = String.to_charlist(path)
-      :ok = :filelib.ensure_dir(char_path)
-
-      table =
-        case :ets.file2tab(char_path) do
-          {:ok, tab} -> tab
-          {:error, :enoent} -> :ets.new(:ex_wapp_store, [:set, :private])
-          {:error, _} -> :ets.new(:ex_wapp_store, [:set, :private])
-        end
-
-      if :ets.lookup(table, :data) == [] do
-        :ets.insert(table, {:data, %{}})
-      end
-
-      %__MODULE__{path: path, table: table}
-    end
-
-    @impl true
-    def load(%__MODULE__{table: table}) do
-      case :ets.lookup(table, :data) do
-        [{:data, data}] -> {:ok, data}
-        [] -> {:ok, %{}}
-      end
-    end
-
-    @impl true
-    def persist(%__MODULE__{path: path, table: table}, data) when is_map(data) do
-      :ets.insert(table, {:data, data})
-      char_path = String.to_charlist(path)
-
-      case :ets.tab2file(table, char_path, sync: true) do
-        :ok -> :ok
-        {:error, reason} -> {:error, reason}
-      end
-    end
-
-    defp default_path do
-      Path.join([System.user_home!(), ".cache", "ex_wapp", "session.etf"])
-    end
-  end
 end
