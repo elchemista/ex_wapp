@@ -10,7 +10,7 @@ defmodule ExWapp.Session do
 
   use GenServer
 
-  alias ExWapp.{Conn, Store}
+  alias ExWapp.{Binary, Conn, Pairing, Store}
 
   @typedoc """
   Human readable events emitted during the pairing flow.
@@ -21,14 +21,16 @@ defmodule ExWapp.Session do
             conn: nil,
             store: nil,
             qr_subscribers: %{},
-            opts: []
+            opts: [],
+            pairing: nil
 
   @type state :: %__MODULE__{
           status: :idle | :connecting | :connected,
           conn: pid() | nil,
           store: Store.t() | nil,
           qr_subscribers: %{reference() => {pid(), reference()}},
-          opts: keyword()
+          opts: keyword(),
+          pairing: Pairing.state()
         }
 
   @doc """
@@ -88,10 +90,13 @@ defmodule ExWapp.Session do
 
   @impl true
   def init(opts) do
+    store = build_store(opts)
+
     {:ok,
      %__MODULE__{
        opts: opts,
-       store: build_store(opts)
+       store: store,
+       pairing: Pairing.new(store)
      }}
   end
 
@@ -138,6 +143,29 @@ defmodule ExWapp.Session do
     {:noreply, state}
   end
 
+  def handle_info({:connection_event, {:noise, :handshake_started}}, state) do
+    {:noreply, state}
+  end
+
+  def handle_info({:connection_event, {:noise, :handshake_completed}}, state) do
+    {:noreply, %{state | status: :connected}}
+  end
+
+  def handle_info({:connection_event, {:connection_message, %Binary.Node{} = node}}, state) do
+    {pairing, actions} = Pairing.apply_node(state.pairing, node)
+    state = %{state | pairing: pairing}
+    Enum.each(actions, &handle_pairing_action(&1, state))
+    {:noreply, state}
+  end
+
+  def handle_info({:connection_event, {:connection_binary, _payload}}, state),
+    do: {:noreply, state}
+
+  def handle_info({:connection_event, {:error, reason}}, state) do
+    notify_qr(state, {:error, reason})
+    {:noreply, state}
+  end
+
   def handle_info({:DOWN, mon, :process, _pid, _reason}, state) do
     new_subscribers =
       Enum.reduce(state.qr_subscribers, %{}, fn
@@ -179,6 +207,20 @@ defmodule ExWapp.Session do
       send(pid, {:ex_wapp_qr, ref, event})
     end)
   end
+
+  defp handle_pairing_action({:send_node, node}, %__MODULE__{conn: conn}) when is_pid(conn) do
+    :ok = Conn.send_node(conn, node)
+  end
+
+  defp handle_pairing_action({:qr, code}, state) do
+    notify_qr(state, {:code, code})
+  end
+
+  defp handle_pairing_action({:status, :success}, state) do
+    notify_qr(state, :success)
+  end
+
+  defp handle_pairing_action(_other, _state), do: :ok
 
   defp build_store(opts) do
     case Keyword.get(opts, :store) do
