@@ -20,9 +20,9 @@ defmodule ExWapp.MixProject do
   defp deps do
     [
       {:websockex, "~> 0.4"},
-      {:eqrcode, "~> 0.1"},
+      {:eqrcode, "~> 0.2.0"},
       {:protox, "~> 1.7"},
-      {:libsignal_protocol, "~> 0.1"},
+      {:libsignal_protocol, "~> 0.1.1"},
       {:ed25519, "~> 1.4"},
       {:credo, "~> 1.6", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.3", only: [:dev, :test], runtime: false}

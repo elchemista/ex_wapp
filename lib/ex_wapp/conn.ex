@@ -169,16 +169,16 @@ defmodule ExWapp.Conn do
   end
 
   defp handle_decrypted_payload(state, plaintext) do
-    case Binary.decode(plaintext) do
-      {:ok, node} ->
-        notify_session(state.session, {:connection_message, node})
-
+    with {:ok, unpacked} <- Binary.unpack(plaintext),
+         {:ok, node} <- Binary.decode(unpacked) do
+      notify_session(state.session, {:connection_message, node})
+      {:ok, state, nil}
+    else
       {:error, reason} ->
-        Logger.warning("failed to decode binary node: #{inspect(reason)}")
+        Logger.warning("failed to decode binary payload: #{inspect(reason)}")
         notify_session(state.session, {:connection_binary, plaintext})
+        {:ok, state, nil}
     end
-
-    {:ok, state, nil}
   end
 
   defp build_reply(%State{} = state, payload) do

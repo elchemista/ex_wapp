@@ -29,6 +29,32 @@ defmodule ExWapp.Binary do
     def new(data) when is_binary(data), do: %__MODULE__{data: data}
   end
 
+  @doc """
+  Unpacks a decrypted WebSocket payload.
+
+  The first byte contains flags that describe the remaining payload. WhatsApp
+  currently sets bit 1 to indicate that the data is zlib-compressed. We strip
+  the flag byte and optionally inflate the rest before returning it.
+  """
+  @spec unpack(binary()) :: {:ok, binary()} | {:error, term()}
+  def unpack(<<flags, rest::binary>>) do
+    if (flags &&& 0x02) != 0 do
+      inflate(rest)
+    else
+      {:ok, rest}
+    end
+  end
+
+  def unpack(_), do: {:error, :invalid_frame}
+
+  defp inflate(data) when is_binary(data) do
+    try do
+      {:ok, :zlib.uncompress(data)}
+    rescue
+      error -> {:error, error}
+    end
+  end
+
   @type binary_node :: %Node{
           tag: String.t(),
           attrs: map(),

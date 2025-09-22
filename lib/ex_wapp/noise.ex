@@ -71,7 +71,9 @@ defmodule ExWapp.Noise do
       }
 
       case HandshakeMessage.encode(message) do
-        {:ok, payload} ->
+        {:ok, iodata} ->
+          payload = IO.iodata_to_binary(iodata)
+
           state = %__MODULE__{
             handshake: handshake,
             eph_priv: eph_priv,
@@ -220,7 +222,9 @@ defmodule ExWapp.Noise do
       }
     }
 
-    HandshakeMessage.encode(message)
+    with {:ok, iodata} <- HandshakeMessage.encode(message) do
+      {:ok, IO.iodata_to_binary(iodata)}
+    end
   end
 
   defp build_client_payload(%__MODULE__{client_payload_fun: fun} = state)
