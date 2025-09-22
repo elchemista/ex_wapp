@@ -1,0 +1,189 @@
+defmodule ExWapp.Session do
+  @moduledoc """
+  Coordinates the lifecycle of a WhatsApp Web connection.
+
+  The process role is intentionally narrow at the moment: it keeps track of
+  runtime state, delegates protocol specific work to specialised modules,
+  and provides a central point where callers can subscribe to QR updates or
+  issue messaging requests.
+  """
+
+  use GenServer
+
+  alias ExWapp.{Conn, Store}
+
+  @typedoc """
+  Human readable events emitted during the pairing flow.
+  """
+  @type qr_event :: {:code, String.t()} | :success | {:error, term()}
+
+  defstruct status: :idle,
+            conn: nil,
+            store: nil,
+            qr_subscribers: %{},
+            opts: []
+
+  @type state :: %__MODULE__{
+          status: :idle | :connecting | :connected,
+          conn: pid() | nil,
+          store: Store.t() | nil,
+          qr_subscribers: %{reference() => {pid(), reference()}},
+          opts: keyword()
+        }
+
+  @doc """
+  Starts the session process.
+
+  Options:
+
+    * `:name` – register the process under a given name
+    * `:store` – custom store implementation (defaults to `ExWapp.Store.File`)
+  """
+  @spec start_link(keyword()) :: GenServer.on_start()
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
+  end
+
+  @doc """
+  Bootstraps the network connection asynchronously.
+  """
+  @spec connect(GenServer.server()) :: :ok
+  def connect(server), do: GenServer.cast(server, :connect)
+
+  @doc """
+  Internal API for testing / stream setup.
+  """
+  @spec subscribe_qr(GenServer.server()) :: {:ok, reference()}
+  def subscribe_qr(server), do: GenServer.call(server, {:subscribe_qr, self()})
+
+  @doc """
+  Cancels a previously created QR subscription.
+  """
+  @spec unsubscribe_qr(GenServer.server(), reference()) :: :ok
+  def unsubscribe_qr(server, ref), do: GenServer.cast(server, {:unsubscribe_qr, ref})
+
+  @doc """
+  Queues a plain text message for sending.
+  """
+  @spec send_text(GenServer.server(), binary(), iodata()) :: :ok
+  def send_text(server, jid, text),
+    do: GenServer.cast(server, {:send_text, jid, IO.iodata_to_binary(text)})
+
+  @doc """
+  Builds a lazy stream of QR pairing events.
+  """
+  @spec qr_stream(GenServer.server()) :: Enumerable.t()
+  def qr_stream(server) do
+    Stream.resource(
+      fn -> subscribe_qr(server) end,
+      fn subscription = {:ok, ref} ->
+        receive do
+          {:ex_wapp_qr, ^ref, event} -> {[event], subscription}
+          {:ex_wapp_qr_closed, ^ref} -> {:halt, subscription}
+        end
+      end,
+      fn {:ok, ref} -> unsubscribe_qr(server, ref) end
+    )
+  end
+
+  @impl true
+  def init(opts) do
+    {:ok,
+     %__MODULE__{
+       opts: opts,
+       store: build_store(opts)
+     }}
+  end
+
+  @impl true
+  def handle_cast(:connect, %__MODULE__{status: :idle} = state) do
+    Process.send(self(), :bootstrap_connection, [])
+    {:noreply, %{state | status: :connecting}}
+  end
+
+  def handle_cast(:connect, state), do: {:noreply, state}
+
+  def handle_cast({:unsubscribe_qr, ref}, state) do
+    case Map.pop(state.qr_subscribers, ref) do
+      {nil, _} ->
+        {:noreply, state}
+
+      {{pid, mon}, subscribers} ->
+        Process.demonitor(mon, [:flush])
+        send(pid, {:ex_wapp_qr_closed, ref})
+        {:noreply, %{state | qr_subscribers: subscribers}}
+    end
+  end
+
+  def handle_cast({:send_text, jid, text}, state) do
+    _ = maybe_send_text(state, jid, text)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_call({:subscribe_qr, pid}, _from, state) do
+    ref = make_ref()
+    mon = Process.monitor(pid)
+    new_state = %{state | qr_subscribers: Map.put(state.qr_subscribers, ref, {pid, mon})}
+    {:reply, {:ok, ref}, new_state}
+  end
+
+  @impl true
+  def handle_info(:bootstrap_connection, state) do
+    {:noreply, do_bootstrap(state)}
+  end
+
+  def handle_info({:notify_qr, event}, state) do
+    notify_qr(state, event)
+    {:noreply, state}
+  end
+
+  def handle_info({:DOWN, mon, :process, _pid, _reason}, state) do
+    new_subscribers =
+      Enum.reduce(state.qr_subscribers, %{}, fn
+        {ref, {pid, ref_mon}}, acc when ref_mon == mon ->
+          send(pid, {:ex_wapp_qr_closed, ref})
+          acc
+
+        {ref, subscriber}, acc ->
+          Map.put(acc, ref, subscriber)
+      end)
+
+    {:noreply, %{state | qr_subscribers: new_subscribers}}
+  end
+
+  def handle_info(_msg, state), do: {:noreply, state}
+
+  defp do_bootstrap(%__MODULE__{conn: nil} = state) do
+    case Conn.start_link(session: self(), store: state.store, opts: state.opts) do
+      {:ok, pid} ->
+        %{state | conn: pid}
+
+      {:error, reason} ->
+        notify_qr(state, {:error, reason})
+        %{state | status: :idle}
+    end
+  end
+
+  defp do_bootstrap(state), do: state
+
+  defp maybe_send_text(state, _jid, _text) do
+    case state.status do
+      :connected -> :ok
+      _ -> {:error, :not_connected}
+    end
+  end
+
+  defp notify_qr(state, event) do
+    Enum.each(state.qr_subscribers, fn {ref, {pid, _mon}} ->
+      send(pid, {:ex_wapp_qr, ref, event})
+    end)
+  end
+
+  defp build_store(opts) do
+    case Keyword.get(opts, :store) do
+      nil -> Store.File.new()
+      module -> module.new()
+    end
+  end
+end
