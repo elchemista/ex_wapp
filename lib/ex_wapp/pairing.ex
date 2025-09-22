@@ -71,29 +71,38 @@ defmodule ExWapp.Pairing do
   end
 
   defp handle_pair_success(%{store: store} = state, attrs, %Binary.Node{} = pair_success) do
-    base_events =
-      case {Map.get(attrs, "from"), Map.get(attrs, "id")} do
-        {from, id} when is_binary(from) and is_binary(id) ->
-          ack = %Binary.Node{
-            tag: "iq",
-            attrs: %{"to" => from, "type" => "result", "id" => id},
-            content: nil
-          }
-
-          [{:send_node, ack}]
-
-        _ ->
-          []
-      end
+    from = Map.get(attrs, "from")
+    id = Map.get(attrs, "id")
 
     case persist_pair_success(store, pair_success) do
       {:ok, data} ->
         :ok = Store.persist(store, data)
-        {%{state | status: :paired, ref: nil, req_id: nil}, base_events ++ [{:status, :success}]}
+        adv_self_signed = get_in(data, [:pairing, :adv_self_signed])
+
+        ack =
+          if is_binary(from) and is_binary(id) do
+            build_pair_success_ack(from, id, adv_self_signed)
+          else
+            nil
+          end
+
+        events = (if ack, do: [{:send_node, ack}], else: []) ++ [{:status, :success}]
+
+        {%{state | status: :paired, ref: nil, req_id: nil}, events}
 
       {:error, reason} ->
         Logger.error("failed to persist pair-success data: #{inspect(reason)}")
-        {state, base_events ++ [error_event(reason)]}
+
+        ack =
+          if is_binary(from) and is_binary(id) do
+            build_pair_success_ack(from, id, nil)
+          else
+            nil
+          end
+
+        events = if ack, do: [{:send_node, ack}, error_event(reason)], else: [error_event(reason)]
+
+        {state, events}
     end
   end
 
@@ -266,4 +275,24 @@ defmodule ExWapp.Pairing do
   defp fetch_identity_keypair(_), do: {:error, :missing_identity_keypair}
 
   defp error_event(reason), do: {:error, reason}
+
+  defp build_pair_success_ack(from, id, nil) do
+    %Binary.Node{tag: "iq", attrs: %{"to" => from, "type" => "result", "id" => id}, content: nil}
+  end
+
+  defp build_pair_success_ack(from, id, adv_self_signed) when is_binary(adv_self_signed) do
+    adv_node = %Binary.Node{
+      tag: "adv-device-identity",
+      attrs: %{},
+      content: Binary.raw(adv_self_signed)
+    }
+
+    pair_success = %Binary.Node{tag: "pair-success", attrs: %{}, content: [adv_node]}
+
+    %Binary.Node{
+      tag: "iq",
+      attrs: %{"to" => from, "type" => "result", "id" => id},
+      content: [pair_success]
+    }
+  end
 end

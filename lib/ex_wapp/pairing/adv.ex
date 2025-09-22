@@ -48,7 +48,7 @@ defmodule ExWapp.Pairing.ADV do
          {:ok, container} <- decode_container(adv_bytes),
          {:ok, details_bin} <- ensure_details(container.details),
          hosted? <- hosted_account?(container.accountType),
-         :ok <- verify_hmac(details_bin, container.HMAC, adv_secret, hosted?),
+         :ok <- verify_hmac(details_bin, container."HMAC", adv_secret, hosted?),
          {:ok, signed_identity} <- decode_signed_identity(details_bin),
          {:ok, signed_identity} <- ensure_signature_fields(signed_identity),
          :ok <- verify_account_signature(signed_identity, details_bin, identity_pub, hosted?),
