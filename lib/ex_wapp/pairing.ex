@@ -12,7 +12,8 @@ defmodule ExWapp.Pairing do
   @type state :: %{
           status: :idle | :waiting_for_scan | :paired,
           ref: String.t() | nil,
-          store: Store.t()
+          store: Store.t(),
+          req_id: String.t() | nil
         }
 
   @doc """
@@ -20,26 +21,29 @@ defmodule ExWapp.Pairing do
   """
   @spec new(Store.t()) :: state()
   def new(store) do
-    %{status: :idle, ref: nil, store: store}
+    %{status: :idle, ref: nil, store: store, req_id: nil}
   end
 
   @doc """
   Applies a decoded node and returns the updated state plus pairing events.
   """
   @spec apply_node(state(), Binary.binary_node()) :: {state(), [term()]}
-  def apply_node(state, %Binary.Node{tag: "iq", attrs: attrs, content: content} = node) do
-    case find_child(content, "pair-device") do
-      nil ->
-        {state, []}
+  def apply_node(state, %Binary.Node{tag: "iq", attrs: attrs, content: content}) do
+    cond do
+      pair_device = find_child(content, "pair-device") ->
+        handle_pair_device(state, attrs, pair_device)
 
-      pair_device ->
-        handle_pair_device(state, node, attrs, pair_device)
+      pair_success = find_child(content, "pair-success") ->
+        handle_pair_success(state, attrs, pair_success)
+
+      true ->
+        {state, []}
     end
   end
 
   def apply_node(state, _other), do: {state, []}
 
-  defp handle_pair_device(state, _node, attrs, pair_device) do
+  defp handle_pair_device(state, attrs, pair_device) do
     refs = extract_refs(state, pair_device)
     codes = Enum.map(refs, &qr_from_ref(state, &1))
 
@@ -55,8 +59,41 @@ defmodule ExWapp.Pairing do
       [{:send_node, ack_node}] ++
         Enum.map(codes, fn code -> {:qr, code} end)
 
-    new_state = %{state | status: :waiting_for_scan, ref: List.first(refs)}
+    new_state = %{
+      state
+      | status: :waiting_for_scan,
+        ref: List.first(refs),
+        req_id: Map.get(attrs, "id")
+    }
+
     {new_state, events}
+  end
+
+  defp handle_pair_success(%{store: store} = state, attrs, %Binary.Node{} = pair_success) do
+    base_events =
+      case {Map.get(attrs, "from"), Map.get(attrs, "id")} do
+        {from, id} when is_binary(from) and is_binary(id) ->
+          ack = %Binary.Node{
+            tag: "iq",
+            attrs: %{"to" => from, "type" => "result", "id" => id},
+            content: nil
+          }
+
+          [{:send_node, ack}]
+
+        _ ->
+          []
+      end
+
+    case persist_pair_success(store, pair_success) do
+      {:ok, data} ->
+        :ok = Store.persist(store, data)
+        {%{state | status: :paired, ref: nil, req_id: nil}, base_events ++ [{:status, :success}]}
+
+      {:error, reason} ->
+        Logger.error("failed to persist pair-success data: #{inspect(reason)}")
+        {state, base_events ++ [error_event(reason)]}
+    end
   end
 
   defp find_child(nil, _tag), do: nil
@@ -143,4 +180,51 @@ defmodule ExWapp.Pairing do
         {Map.put(data, :adv_secret, secret), secret}
     end
   end
+
+  defp persist_pair_success(store, %Binary.Node{} = node) do
+    data = Store.load!(store)
+
+    with {:ok, device_identity} <- fetch_child_binary(node, "device-identity"),
+         {:ok, adv_identity} <- fetch_child_binary(node, "adv-device-identity", optional: true),
+         {:ok, device_attrs} <- fetch_child_attrs(node, "device"),
+         {:ok, biz_attrs} <- fetch_child_attrs(node, "biz", optional: true),
+         {:ok, platform_attrs} <- fetch_child_attrs(node, "platform", optional: true) do
+      pairing_data =
+        %{
+          device_identity: device_identity,
+          adv_device_identity: adv_identity,
+          device: device_attrs,
+          biz: biz_attrs,
+          platform: platform_attrs,
+          paired_at: System.system_time(:second)
+        }
+
+      {:ok, Map.put(data, :pairing, pairing_data)}
+    end
+  end
+
+  defp fetch_child_binary(node, tag, opts \\ []) do
+    optional? = Keyword.get(opts, :optional, false)
+
+    case find_child(node.content, tag) do
+      %Binary.Node{content: %Binary.Raw{data: data}} -> {:ok, IO.iodata_to_binary(data)}
+      %Binary.Node{content: binary} when is_binary(binary) -> {:ok, binary}
+      nil when optional? -> {:ok, nil}
+      nil -> {:error, {:missing_child, tag}}
+      _ -> {:error, {:invalid_child, tag}}
+    end
+  end
+
+  defp fetch_child_attrs(node, tag, opts \\ []) do
+    optional? = Keyword.get(opts, :optional, false)
+
+    case find_child(node.content, tag) do
+      %Binary.Node{attrs: attrs} -> {:ok, attrs}
+      nil when optional? -> {:ok, %{}}
+      nil -> {:error, {:missing_child, tag}}
+      _ -> {:error, {:invalid_child, tag}}
+    end
+  end
+
+  defp error_event(reason), do: {:error, reason}
 end

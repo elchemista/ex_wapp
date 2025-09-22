@@ -220,6 +220,10 @@ defmodule ExWapp.Session do
     notify_qr(state, :success)
   end
 
+  defp handle_pairing_action({:error, reason}, state) do
+    notify_qr(state, {:error, reason})
+  end
+
   defp handle_pairing_action(_other, _state), do: :ok
 
   defp build_store(opts) do
