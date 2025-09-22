@@ -23,7 +23,10 @@ defmodule ExWapp.Noise do
             tx_counter: 0,
             rx_counter: 0,
             store: nil,
-            client_payload_fun: nil
+            client_payload_fun: nil,
+            certificate_verifier: nil
+
+  @type certificate_verifier_fun :: (binary(), binary() -> :ok | {:error, term()})
 
   @type t :: %__MODULE__{
           handshake: Handshake.t() | nil,
@@ -39,7 +42,11 @@ defmodule ExWapp.Noise do
           client_payload_fun:
             nil
             | (t() ->
-                 binary() | {:ok, binary()} | {:error, term()} | {:ok, binary(), Store.data()})
+                 binary()
+                 | {:ok, binary()}
+                 | {:error, term()}
+                 | {:ok, binary(), Store.data()}),
+          certificate_verifier: certificate_verifier_fun() | nil
         }
 
   @noise_pattern "Noise_XX_25519_AESGCM_SHA256\x00\x00\x00\x00"
@@ -55,6 +62,9 @@ defmodule ExWapp.Noise do
     with {:ok, store} <- Keyword.fetch(opts, :store) do
       header = Keyword.get(opts, :header, Frame.header())
       client_payload_fun = Keyword.get(opts, :client_payload_fun, &ClientPayload.build/1)
+
+      certificate_verifier =
+        Keyword.get(opts, :certificate_verifier, &ExWapp.Noise.Certificate.verify/2)
 
       {:ok, static_key} = ensure_static_key(store)
 
@@ -80,7 +90,8 @@ defmodule ExWapp.Noise do
             eph_pub: eph_pub,
             static_key: static_key,
             store: store,
-            client_payload_fun: client_payload_fun
+            client_payload_fun: client_payload_fun,
+            certificate_verifier: certificate_verifier
           }
 
           {:ok, payload, state}
@@ -160,7 +171,8 @@ defmodule ExWapp.Noise do
            read_server_ephemeral(state.handshake, server_hello.ephemeral),
          {:ok, handshake, server_static} <-
            decrypt_static(handshake, state.eph_priv, server_ephemeral, server_hello.static),
-         {:ok, handshake} <- verify_certificate(handshake, server_static, server_hello.payload),
+         {:ok, handshake} <-
+           verify_certificate(state, handshake, server_static, server_hello.payload),
          {:ok, handshake, encrypted_static} <- encrypt_static(handshake, state.static_key.pub),
          {:ok, handshake} <-
            Handshake.mix_shared_secret(handshake, state.static_key.priv, server_ephemeral),
@@ -202,12 +214,21 @@ defmodule ExWapp.Noise do
     end
   end
 
-  defp verify_certificate(handshake, static_plain, payload_cipher) do
+  defp verify_certificate(
+         %__MODULE__{certificate_verifier: verifier},
+         handshake,
+         static_plain,
+         payload_cipher
+       )
+       when is_function(verifier, 2) do
     with {:ok, handshake, cert_bytes} <- Handshake.decrypt(handshake, payload_cipher),
-         :ok <- ExWapp.Noise.Certificate.verify(cert_bytes, static_plain) do
+         :ok <- verifier.(cert_bytes, static_plain) do
       {:ok, handshake}
     end
   end
+
+  defp verify_certificate(_state, _handshake, _static_plain, _payload_cipher),
+    do: {:error, :invalid_certificate_verifier}
 
   defp encrypt_static(handshake, static_pub) do
     {handshake, ciphertext} = Handshake.encrypt(handshake, static_pub)
