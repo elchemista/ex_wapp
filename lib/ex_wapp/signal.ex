@@ -15,8 +15,28 @@ defmodule ExWapp.Signal do
   @doc """
   Initialises local identity and prekey material.
   """
-  @spec bootstrap(keyword()) :: {:ok, map()} | {:error, term()}
-  def bootstrap(_opts), do: {:error, :not_implemented}
+  @spec bootstrap(map()) :: {:ok, map()} | {:error, term()}
+  def bootstrap(params) when is_map(params) do
+    identity_seed = Map.get(params, :device_identity, <<>>)
+    adv_seed = Map.get(params, :adv_device_identity, <<>>)
+
+    identity_key = derive_key(identity_seed)
+    signed_prekey = :crypto.strong_rand_bytes(32)
+    one_time_prekey = :crypto.strong_rand_bytes(32)
+
+    registration_id = :rand.uniform(65_535)
+
+    {:ok,
+     %{
+       identity_key: identity_key,
+       signed_prekey: signed_prekey,
+       one_time_prekey: one_time_prekey,
+       registration_id: registration_id,
+       adv_seed: adv_seed
+     }}
+  end
+
+  def bootstrap(_), do: {:error, :invalid_parameters}
 
   @doc """
   Encrypts a protobuf payload for the given peer.
@@ -29,4 +49,7 @@ defmodule ExWapp.Signal do
   """
   @spec decrypt(peer_id(), ciphertext()) :: {:ok, plaintext(), map()} | {:error, term()}
   def decrypt(_peer, _cipher), do: {:error, :not_implemented}
+
+  defp derive_key(<<>>), do: :crypto.strong_rand_bytes(32)
+  defp derive_key(seed), do: :crypto.hash(:sha256, seed)
 end

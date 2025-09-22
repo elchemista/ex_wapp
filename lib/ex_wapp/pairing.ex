@@ -3,7 +3,7 @@ defmodule ExWapp.Pairing do
   Implements the QR-code based pairing handshake used by WhatsApp Web.
   """
 
-  alias ExWapp.{Binary, Store}
+  alias ExWapp.{Binary, Signal, Store}
   require Logger
 
   @typedoc """
@@ -188,7 +188,13 @@ defmodule ExWapp.Pairing do
          {:ok, adv_identity} <- fetch_child_binary(node, "adv-device-identity", optional: true),
          {:ok, device_attrs} <- fetch_child_attrs(node, "device"),
          {:ok, biz_attrs} <- fetch_child_attrs(node, "biz", optional: true),
-         {:ok, platform_attrs} <- fetch_child_attrs(node, "platform", optional: true) do
+         {:ok, platform_attrs} <- fetch_child_attrs(node, "platform", optional: true),
+         {:ok, signal_info} <-
+           Signal.bootstrap(%{
+             device_identity: device_identity,
+             adv_device_identity: adv_identity,
+             device_attrs: device_attrs
+           }) do
       pairing_data =
         %{
           device_identity: device_identity,
@@ -196,7 +202,8 @@ defmodule ExWapp.Pairing do
           device: device_attrs,
           biz: biz_attrs,
           platform: platform_attrs,
-          paired_at: System.system_time(:second)
+          paired_at: System.system_time(:second),
+          signal: signal_info
         }
 
       {:ok, Map.put(data, :pairing, pairing_data)}
