@@ -77,11 +77,11 @@ defmodule ExWapp.Pairing do
     case persist_pair_success(store, pair_success) do
       {:ok, data} ->
         :ok = Store.persist(store, data)
-        adv_self_signed = get_in(data, [:pairing, :adv_self_signed])
+        pairing_data = Map.get(data, :pairing)
 
         ack =
           if is_binary(from) and is_binary(id) do
-            build_pair_success_ack(from, id, adv_self_signed)
+            build_pair_success_ack(from, id, pairing_data)
           else
             nil
           end
@@ -282,23 +282,51 @@ defmodule ExWapp.Pairing do
 
   defp error_event(reason), do: {:error, reason}
 
-  defp build_pair_success_ack(from, id, nil) do
-    %Binary.Node{tag: "iq", attrs: %{"to" => from, "type" => "result", "id" => id}, content: nil}
+  defp build_pair_success_ack(from, id, pairing_data) do
+    base_attrs = %{"to" => from, "type" => "result", "id" => id}
+
+    case build_pair_device_sign(pairing_data) do
+      {:ok, pair_device_sign} ->
+        %Binary.Node{tag: "iq", attrs: base_attrs, content: [pair_device_sign]}
+
+      :error ->
+        %Binary.Node{tag: "iq", attrs: base_attrs, content: nil}
+    end
   end
 
-  defp build_pair_success_ack(from, id, adv_self_signed) when is_binary(adv_self_signed) do
-    adv_node = %Binary.Node{
-      tag: "adv-device-identity",
-      attrs: %{},
+  defp build_pair_device_sign(%{adv_self_signed: adv_self_signed} = pairing_data)
+       when is_binary(adv_self_signed) do
+    key_index =
+      pairing_data
+      |> get_in([:adv, :details, :keyIndex])
+      |> normalize_key_index()
+
+    attrs =
+      case key_index do
+        nil -> %{}
+        value -> %{"key-index" => value}
+      end
+
+    device_identity = %Binary.Node{
+      tag: "device-identity",
+      attrs: attrs,
       content: Binary.raw(adv_self_signed)
     }
 
-    pair_success = %Binary.Node{tag: "pair-success", attrs: %{}, content: [adv_node]}
-
-    %Binary.Node{
-      tag: "iq",
-      attrs: %{"to" => from, "type" => "result", "id" => id},
-      content: [pair_success]
-    }
+    {:ok, %Binary.Node{tag: "pair-device-sign", attrs: %{}, content: [device_identity]}}
   end
+
+  defp build_pair_device_sign(_pairing_data), do: :error
+
+  defp normalize_key_index(value) when is_integer(value) and value >= 0,
+    do: Integer.to_string(value)
+
+  defp normalize_key_index(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {int, ""} when int >= 0 -> Integer.to_string(int)
+      _ -> nil
+    end
+  end
+
+  defp normalize_key_index(_value), do: nil
 end
