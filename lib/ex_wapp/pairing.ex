@@ -3,8 +3,14 @@ defmodule ExWapp.Pairing do
   Implements the QR-code based pairing handshake used by WhatsApp Web.
   """
 
-  alias ExWapp.{Binary, Signal, Store}
+  alias ExWapp.{Binary, Noise.Certificate, Signal, Store}
+  alias WAAdv.{ADVDeviceIdentity, ADVSignedDeviceIdentity, ADVSignedDeviceIdentityHMAC}
   require Logger
+
+  @adv_prefix_account_signature <<6, 0>>
+  @adv_prefix_device_signature_generate <<6, 1>>
+  @adv_hosted_prefix_device_identity_account_signature <<6, 5>>
+  @adv_hosted_prefix_device_identity_device_signature_verification <<6, 6>>
 
   @typedoc """
   Aggregate structure that keeps temporary pairing data.
