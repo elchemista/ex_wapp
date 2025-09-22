@@ -12,8 +12,8 @@ defmodule ExWapp.Transport.Frame do
   @length_size 3
 
   @doc """
-Returns the static WA connection header.
-"""
+  Returns the static WA connection header.
+  """
   @spec header() :: binary()
   def header, do: @header
 
@@ -32,11 +32,11 @@ Returns the static WA connection header.
   end
 
   @doc """
-Consumes as many frames as possible from `buffer`.
+  Consumes as many frames as possible from `buffer`.
 
-Returns `{frames, rest}` where `frames` is a list of payload binaries in FIFO
-order and `rest` is the leftover buffer that did not yet form a full frame.
-"""
+  Returns `{frames, rest}` where `frames` is a list of payload binaries in FIFO
+  order and `rest` is the leftover buffer that did not yet form a full frame.
+  """
   @spec decode(binary()) :: {[binary()], binary()}
   def decode(buffer) when is_binary(buffer) do
     do_decode(buffer, [])

@@ -64,10 +64,18 @@ defmodule ExWapp.JID do
 
   def to_string(%__MODULE__{user: user, raw_agent: agent, device: device, server: server}) do
     cond do
-      agent == 0 and device == 0 -> user <> "@" <> server
-      agent == 0 -> user <> ":" <> Integer.to_string(device) <> "@" <> server
-      device == 0 -> user <> "." <> Integer.to_string(agent) <> "@" <> server
-      true -> user <> "." <> Integer.to_string(agent) <> ":" <> Integer.to_string(device) <> "@" <> server
+      agent == 0 and device == 0 ->
+        user <> "@" <> server
+
+      agent == 0 ->
+        user <> ":" <> Integer.to_string(device) <> "@" <> server
+
+      device == 0 ->
+        user <> "." <> Integer.to_string(agent) <> "@" <> server
+
+      true ->
+        user <>
+          "." <> Integer.to_string(agent) <> ":" <> Integer.to_string(device) <> "@" <> server
     end
   end
 end

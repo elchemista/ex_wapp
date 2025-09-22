@@ -29,7 +29,11 @@ defmodule ExWapp.Binary do
     def new(data) when is_binary(data), do: %__MODULE__{data: data}
   end
 
-  @type binary_node :: %Node{tag: String.t(), attrs: map(), content: nil | Raw.t() | binary() | [binary_node()]}
+  @type binary_node :: %Node{
+          tag: String.t(),
+          attrs: map(),
+          content: nil | Raw.t() | binary() | [binary_node()]
+        }
 
   @doc """
   Wraps a binary payload so that the encoder treats it as raw bytes instead of a
@@ -99,7 +103,11 @@ defmodule ExWapp.Binary do
   end
 
   defp normalize_node({tag, attrs, content}) do
-    %Node{tag: normalize_tag(tag), attrs: normalize_attrs(attrs), content: normalize_content(content)}
+    %Node{
+      tag: normalize_tag(tag),
+      attrs: normalize_attrs(attrs),
+      content: normalize_content(content)
+    }
   end
 
   defp normalize_node({tag, attrs}) do
@@ -107,7 +115,9 @@ defmodule ExWapp.Binary do
   end
 
   defp normalize_node(tag) when is_binary(tag), do: %Node{tag: tag, attrs: %{}, content: nil}
-  defp normalize_node(tag) when is_atom(tag), do: %Node{tag: Atom.to_string(tag), attrs: %{}, content: nil}
+
+  defp normalize_node(tag) when is_atom(tag),
+    do: %Node{tag: Atom.to_string(tag), attrs: %{}, content: nil}
 
   defp normalize_node(other) do
     raise(Error, message: "invalid node representation: #{inspect(other)}")
@@ -230,9 +240,11 @@ defmodule ExWapp.Binary do
 
     defp write(encoder, binary) when is_binary(binary), do: write_string(encoder, binary)
 
-    defp write(encoder, value) when is_integer(value), do: write_string(encoder, Integer.to_string(value))
+    defp write(encoder, value) when is_integer(value),
+      do: write_string(encoder, Integer.to_string(value))
 
-    defp write(encoder, value) when is_boolean(value), do: write_string(encoder, if(value, do: "true", else: "false"))
+    defp write(encoder, value) when is_boolean(value),
+      do: write_string(encoder, if(value, do: "true", else: "false"))
 
     defp write(encoder, list) when is_list(list) do
       if Enum.all?(list, &match?(%Node{}, &1)) do
@@ -243,7 +255,8 @@ defmodule ExWapp.Binary do
       end
     end
 
-    defp write(_encoder, other), do: raise(Error, message: "unsupported payload type: #{inspect(other)}")
+    defp write(_encoder, other),
+      do: raise(Error, message: "unsupported payload type: #{inspect(other)}")
 
     defp write_string(encoder, value) do
       case Token.index_of_single_token(value) do
@@ -269,6 +282,7 @@ defmodule ExWapp.Binary do
 
     defp write_string_raw(encoder, value) do
       bytes = :unicode.characters_to_binary(value)
+
       encoder
       |> write_byte_length(byte_size(bytes))
       |> push_bytes(bytes)
@@ -276,8 +290,8 @@ defmodule ExWapp.Binary do
 
     defp write_jid(encoder, %JID{} = jid) do
       cond do
-        ((jid.server in [JID.default_user_server(), JID.hidden_user_server()] and jid.device > 0) or
-           jid.server == JID.hosted_server()) ->
+        (jid.server in [JID.default_user_server(), JID.hidden_user_server()] and jid.device > 0) or
+            jid.server == JID.hosted_server() ->
           encoder
           |> push_byte(Token.ad_jid())
           |> push_byte(JID.actual_agent(jid))
@@ -309,8 +323,12 @@ defmodule ExWapp.Binary do
 
     defp write_attributes(encoder, attrs) do
       Enum.reduce(attrs, encoder, fn
-        {_key, nil}, acc -> acc
-        {_key, ""}, acc -> acc
+        {_key, nil}, acc ->
+          acc
+
+        {_key, ""}, acc ->
+          acc
+
         {key, value}, acc ->
           acc
           |> write_string(key)
@@ -364,6 +382,7 @@ defmodule ExWapp.Binary do
         end
 
       bytes = :binary.bin_to_list(value)
+
       chunks =
         if rem(length(bytes), 2) == 0 do
           Enum.chunk_every(bytes, 2)
@@ -372,7 +391,7 @@ defmodule ExWapp.Binary do
         end
 
       Enum.reduce(chunks, encoder, fn [part1, part2], acc ->
-        push_byte(acc, (packer.(part1) <<< 4) ||| packer.(part2))
+        push_byte(acc, packer.(part1) <<< 4 ||| packer.(part2))
       end)
     end
 
@@ -380,7 +399,9 @@ defmodule ExWapp.Binary do
     defp pack_nibble(?.), do: 11
     defp pack_nibble(0), do: 15
     defp pack_nibble(digit) when digit in ?0..?9, do: digit - ?0
-    defp pack_nibble(other), do: raise(Error, message: "invalid nibble character: #{inspect(other)}")
+
+    defp pack_nibble(other),
+      do: raise(Error, message: "invalid nibble character: #{inspect(other)}")
 
     defp pack_hex(0), do: 15
     defp pack_hex(digit) when digit in ?0..?9, do: digit - ?0
@@ -389,12 +410,16 @@ defmodule ExWapp.Binary do
 
     defp validate_nibble?(value) do
       byte_size(value) <= Token.packed_max() and
-        Enum.all?(:binary.bin_to_list(value), fn c -> c in [?-, ?., 0] or (?0 <= c and c <= ?9) end)
+        Enum.all?(:binary.bin_to_list(value), fn c ->
+          c in [?-, ?., 0] or (?0 <= c and c <= ?9)
+        end)
     end
 
     defp validate_hex?(value) do
       byte_size(value) <= Token.packed_max() and
-        Enum.all?(:binary.bin_to_list(value), fn c -> (?0 <= c and c <= ?9) or (?A <= c and c <= ?F) end)
+        Enum.all?(:binary.bin_to_list(value), fn c ->
+          (?0 <= c and c <= ?9) or (?A <= c and c <= ?F)
+        end)
     end
 
     defp write_byte_length(encoder, length) when length < 256 do
@@ -425,9 +450,10 @@ defmodule ExWapp.Binary do
 
     defp push_int8(encoder, value), do: push_bytes(encoder, <<value::unsigned-integer-size(8)>>)
     defp push_int16(encoder, value), do: push_bytes(encoder, <<value::unsigned-integer-size(16)>>)
+
     defp push_int20(encoder, value) do
-      b1 = (value >>> 16) &&& 0x0F
-      b2 = (value >>> 8) &&& 0xFF
+      b1 = value >>> 16 &&& 0x0F
+      b2 = value >>> 8 &&& 0xFF
       b3 = value &&& 0xFF
       push_bytes(encoder, <<b1, b2, b3>>)
     end
@@ -493,17 +519,22 @@ defmodule ExWapp.Binary do
     defp read_attributes(decoder, 0), do: {%{}, decoder}
 
     defp read_attributes(decoder, count) do
-      {pairs, decoder} = Enum.reduce(1..count, {[], decoder}, fn _, {acc, dec} ->
-        {key, dec} = read(dec, true)
-        key =
-          case key do
-            k when is_binary(k) -> k
-            other -> raise(Error, message: "attribute key must be string, got #{inspect(other)}")
-          end
+      {pairs, decoder} =
+        Enum.reduce(1..count, {[], decoder}, fn _, {acc, dec} ->
+          {key, dec} = read(dec, true)
 
-        {value, dec} = read(dec, true)
-        {[{key, value} | acc], dec}
-      end)
+          key =
+            case key do
+              k when is_binary(k) ->
+                k
+
+              other ->
+                raise(Error, message: "attribute key must be string, got #{inspect(other)}")
+            end
+
+          {value, dec} = read(dec, true)
+          {[{key, value} | acc], dec}
+        end)
 
       {Map.new(pairs), decoder}
     end
@@ -512,12 +543,27 @@ defmodule ExWapp.Binary do
       {tag, decoder} = read_int8(decoder)
 
       cond do
-        tag == Token.list_empty() -> {nil, decoder}
-        tag in [Token.list8(), Token.list16()] -> read_list(decoder, tag)
-        tag == Token.binary8() -> read_length_prefixed(decoder, 1, as_string)
-        tag == Token.binary20() -> read_length_prefixed(decoder, :int20, as_string)
-        tag == Token.binary32() -> read_length_prefixed(decoder, 4, as_string)
-        tag in [Token.dictionary0(), Token.dictionary1(), Token.dictionary2(), Token.dictionary3()] ->
+        tag == Token.list_empty() ->
+          {nil, decoder}
+
+        tag in [Token.list8(), Token.list16()] ->
+          read_list(decoder, tag)
+
+        tag == Token.binary8() ->
+          read_length_prefixed(decoder, 1, as_string)
+
+        tag == Token.binary20() ->
+          read_length_prefixed(decoder, :int20, as_string)
+
+        tag == Token.binary32() ->
+          read_length_prefixed(decoder, 4, as_string)
+
+        tag in [
+          Token.dictionary0(),
+          Token.dictionary1(),
+          Token.dictionary2(),
+          Token.dictionary3()
+        ] ->
           {index, decoder} = read_int8(decoder)
 
           case Token.get_double_token(tag - Token.dictionary0(), index) do
@@ -525,11 +571,21 @@ defmodule ExWapp.Binary do
             :error -> raise(Error, message: "double token out of range")
           end
 
-        tag == Token.fb_jid() -> read_fb_jid(decoder)
-        tag == Token.interop_jid() -> read_interop_jid(decoder)
-        tag == Token.jid_pair() -> read_jid_pair(decoder)
-        tag == Token.ad_jid() -> read_ad_jid(decoder)
-        tag in [Token.nibble8(), Token.hex8()] -> read_packed(decoder, tag)
+        tag == Token.fb_jid() ->
+          read_fb_jid(decoder)
+
+        tag == Token.interop_jid() ->
+          read_interop_jid(decoder)
+
+        tag == Token.jid_pair() ->
+          read_jid_pair(decoder)
+
+        tag == Token.ad_jid() ->
+          read_ad_jid(decoder)
+
+        tag in [Token.nibble8(), Token.hex8()] ->
+          read_packed(decoder, tag)
+
         tag >= 1 and tag < Token.single_byte_max() ->
           tokens = Token.single_byte_tokens()
 
@@ -538,7 +594,9 @@ defmodule ExWapp.Binary do
           else
             raise(Error, message: "invalid single byte token index #{tag}")
           end
-        true -> raise(Error, message: "invalid token #{tag} at position #{decoder.index}")
+
+        true ->
+          raise(Error, message: "invalid token #{tag} at position #{decoder.index}")
       end
     end
 
@@ -567,12 +625,13 @@ defmodule ExWapp.Binary do
       count = length_byte &&& 0x7F
       odd? = (length_byte &&& 0x80) != 0
 
-      {chars, decoder} = Enum.reduce(1..count, {[], decoder}, fn _, {acc, dec} ->
-        {byte, dec} = read_int8(dec)
-        upper = unpack_byte(tag, byte >>> 4)
-        lower = unpack_byte(tag, byte &&& 0x0F)
-        {[lower, upper | acc], dec}
-      end)
+      {chars, decoder} =
+        Enum.reduce(1..count, {[], decoder}, fn _, {acc, dec} ->
+          {byte, dec} = read_int8(dec)
+          upper = unpack_byte(tag, byte >>> 4)
+          lower = unpack_byte(tag, byte &&& 0x0F)
+          {[lower, upper | acc], dec}
+        end)
 
       chars = Enum.reverse(chars)
       chars = if odd?, do: List.delete_at(chars, -1), else: chars
@@ -588,8 +647,8 @@ defmodule ExWapp.Binary do
     end
 
     defp unpack_nibble(value) when value < 10, do: <<?0 + value>>
-    defp unpack_nibble(10), do: <<?- >>
-    defp unpack_nibble(11), do: <<?. >>
+    defp unpack_nibble(10), do: <<?->>
+    defp unpack_nibble(11), do: <<?.>>
     defp unpack_nibble(15), do: <<0>>
     defp unpack_nibble(value), do: raise(Error, message: "invalid nibble value #{value}")
 
@@ -600,10 +659,11 @@ defmodule ExWapp.Binary do
     defp read_list(decoder, tag) do
       {size, decoder} = read_list_size(decoder, tag)
 
-      {nodes, decoder} = Enum.reduce(1..size, {[], decoder}, fn _, {acc, dec} ->
-        {node, dec} = read_node(dec)
-        {[node | acc], dec}
-      end)
+      {nodes, decoder} =
+        Enum.reduce(1..size, {[], decoder}, fn _, {acc, dec} ->
+          {node, dec} = read_node(dec)
+          {[node | acc], dec}
+        end)
 
       {Enum.reverse(nodes), decoder}
     end
@@ -662,7 +722,7 @@ defmodule ExWapp.Binary do
     defp read_int20(%__MODULE__{data: data, index: index} = decoder) do
       ensure_bytes(decoder, 3)
       <<b1, b2, b3, _::binary>> = binary_part(data, index, 3)
-      value = ((b1 &&& 0x0F) <<< 16) ||| (b2 <<< 8) ||| b3
+      value = (b1 &&& 0x0F) <<< 16 ||| b2 <<< 8 ||| b3
       {value, %{decoder | index: index + 3}}
     end
 

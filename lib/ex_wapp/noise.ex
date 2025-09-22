@@ -7,7 +7,7 @@ defmodule ExWapp.Noise do
   payloads once the handshake completes.
   """
 
-  alias ExWapp.Noise.Handshake
+  alias ExWapp.Noise.{ClientPayload, Handshake}
   alias ExWapp.Store
   alias ExWapp.Transport.Frame
 
@@ -36,7 +36,10 @@ defmodule ExWapp.Noise do
           tx_counter: non_neg_integer(),
           rx_counter: non_neg_integer(),
           store: Store.t() | nil,
-          client_payload_fun: nil | (t() -> binary() | {:ok, binary()} | {:error, term()} | {:ok, binary(), Store.data()})
+          client_payload_fun:
+            nil
+            | (t() ->
+                 binary() | {:ok, binary()} | {:error, term()} | {:ok, binary(), Store.data()})
         }
 
   @noise_pattern "Noise_XX_25519_AESGCM_SHA256\x00\x00\x00\x00"
@@ -51,7 +54,7 @@ defmodule ExWapp.Noise do
   def init(opts) do
     with {:ok, store} <- Keyword.fetch(opts, :store) do
       header = Keyword.get(opts, :header, Frame.header())
-      client_payload_fun = Keyword.get(opts, :client_payload_fun, fn _ -> <<>> end)
+      client_payload_fun = Keyword.get(opts, :client_payload_fun, &ClientPayload.build/1)
 
       {:ok, static_key} = ensure_static_key(store)
 
@@ -93,7 +96,8 @@ defmodule ExWapp.Noise do
   with the updated Noise state (now ready for transport encryption/decryption).
   """
   @spec handle_server_hello(t(), binary()) :: {:ok, binary(), t()} | {:error, term()}
-  def handle_server_hello(%__MODULE__{phase: :handshake} = state, payload) when is_binary(payload) do
+  def handle_server_hello(%__MODULE__{phase: :handshake} = state, payload)
+      when is_binary(payload) do
     with {:ok, message} <- HandshakeMessage.decode(payload),
          %HandshakeMessage{serverHello: server_hello} when not is_nil(server_hello) <- message,
          {:ok, new_state, client_finish} <- do_server_hello(state, server_hello) do
@@ -111,7 +115,8 @@ defmodule ExWapp.Noise do
   Encrypts a transport payload once the handshake has completed.
   """
   @spec encrypt(t(), binary()) :: {:ok, binary(), t()} | {:error, term()}
-  def encrypt(%__MODULE__{phase: :transport, tx_key: key} = state, plaintext) when is_binary(plaintext) do
+  def encrypt(%__MODULE__{phase: :transport, tx_key: key} = state, plaintext)
+      when is_binary(plaintext) do
     iv = build_nonce(state.tx_counter)
 
     {ciphertext, tag} = :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, plaintext, <<>>, true)
@@ -126,7 +131,8 @@ defmodule ExWapp.Noise do
   Decrypts a transport payload once the handshake has completed.
   """
   @spec decrypt(t(), binary()) :: {:ok, binary(), t()} | {:error, term()}
-  def decrypt(%__MODULE__{phase: :transport, rx_key: key} = state, payload) when is_binary(payload) do
+  def decrypt(%__MODULE__{phase: :transport, rx_key: key} = state, payload)
+      when is_binary(payload) do
     case split_cipher_and_tag(payload) do
       {:ok, cipher, tag} ->
         iv = build_nonce(state.rx_counter)
@@ -140,38 +146,45 @@ defmodule ExWapp.Noise do
             {:error, :decrypt_failed}
         end
 
-      {:error, reason} -> {:error, reason}
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
   def decrypt(_state, _payload), do: {:error, :invalid_state}
 
   defp do_server_hello(state, server_hello) do
-    with {:ok, handshake, server_ephemeral} <- read_server_ephemeral(state.handshake, server_hello.ephemeral),
-         {:ok, handshake, server_static} <- decrypt_static(handshake, state.eph_priv, server_ephemeral, server_hello.static),
+    with {:ok, handshake, server_ephemeral} <-
+           read_server_ephemeral(state.handshake, server_hello.ephemeral),
+         {:ok, handshake, server_static} <-
+           decrypt_static(handshake, state.eph_priv, server_ephemeral, server_hello.static),
          {:ok, handshake} <- verify_certificate(handshake, server_static, server_hello.payload),
          {:ok, handshake, encrypted_static} <- encrypt_static(handshake, state.static_key.pub),
-         {:ok, handshake} <- Handshake.mix_shared_secret(handshake, state.static_key.priv, server_ephemeral),
+         {:ok, handshake} <-
+           Handshake.mix_shared_secret(handshake, state.static_key.priv, server_ephemeral),
          {:ok, payload} <- build_client_payload(state),
          {handshake, encrypted_payload} <- Handshake.encrypt(handshake, payload),
          {:ok, client_finish} <- encode_client_finish(encrypted_static, encrypted_payload),
          {tx_key, rx_key} <- Handshake.derive_transport_keys(handshake) do
       new_state =
-        %{state |
-          phase: :transport,
-          handshake: nil,
-          eph_priv: nil,
-          eph_pub: nil,
-          tx_key: tx_key,
-          rx_key: rx_key,
-          tx_counter: 0,
-          rx_counter: 0}
+        %{
+          state
+          | phase: :transport,
+            handshake: nil,
+            eph_priv: nil,
+            eph_pub: nil,
+            tx_key: tx_key,
+            rx_key: rx_key,
+            tx_counter: 0,
+            rx_counter: 0
+        }
 
       {:ok, new_state, client_finish}
     end
   end
 
-  defp read_server_ephemeral(handshake, server_ephemeral) when byte_size(server_ephemeral) == 32 do
+  defp read_server_ephemeral(handshake, server_ephemeral)
+       when byte_size(server_ephemeral) == 32 do
     handshake = Handshake.authenticate(handshake, server_ephemeral)
     {:ok, handshake, server_ephemeral}
   end
@@ -210,15 +223,24 @@ defmodule ExWapp.Noise do
     HandshakeMessage.encode(message)
   end
 
-  defp build_client_payload(%__MODULE__{client_payload_fun: fun} = state) when is_function(fun, 1) do
+  defp build_client_payload(%__MODULE__{client_payload_fun: fun} = state)
+       when is_function(fun, 1) do
     case fun.(state) do
-      {:ok, payload} when is_binary(payload) -> {:ok, payload}
+      {:ok, payload} when is_binary(payload) ->
+        {:ok, payload}
+
       {:ok, payload, data} when is_binary(payload) ->
         maybe_persist(state.store, data)
         {:ok, payload}
-      {:error, _} = error -> error
-      payload when is_binary(payload) -> {:ok, payload}
-      other -> {:error, {:invalid_payload, other}}
+
+      {:error, _} = error ->
+        error
+
+      payload when is_binary(payload) ->
+        {:ok, payload}
+
+      other ->
+        {:error, {:invalid_payload, other}}
     end
   end
 
