@@ -173,18 +173,14 @@ defmodule ExWapp.Session do
 
   defp handle_connection_node(%Binary.Node{tag: "iq"} = node, state) do
     {pairing, actions} = Pairing.apply_node(state.pairing, node)
+
+    pairing =
+      case maybe_reset_pairing(actions, pairing) do
+        {:ok, new_pairing} -> new_pairing
+        :noop -> pairing
+      end
+
     {%{state | pairing: pairing}, actions}
-  end
-
-  defp handle_connection_node(%Binary.Node{tag: "challenge"} = node, state) do
-    case build_challenge_response(node) do
-      {:ok, response} ->
-        {state, [{:send_node, response}]}
-
-      {:error, reason} ->
-        Logger.warning("failed to build challenge response: #{inspect(reason)}")
-        {state, []}
-    end
   end
 
   defp handle_connection_node(%Binary.Node{tag: "success"}, state) do
@@ -195,7 +191,10 @@ defmodule ExWapp.Session do
     {state, []}
   end
 
-  defp handle_connection_node(_node, state), do: {state, []}
+  defp handle_connection_node(node, state) do
+    Logger.debug("unhandled node: #{inspect(node)}")
+    {state, []}
+  end
 
   defp do_bootstrap(%__MODULE__{conn: nil} = state) do
     case Conn.start_link(session: self(), store: state.store, opts: state.opts) do
@@ -237,37 +236,11 @@ defmodule ExWapp.Session do
 
   defp handle_pairing_action(_other, _state), do: :ok
 
-  defp build_challenge_response(%Binary.Node{} = node) do
-    with {:ok, challenge} <- extract_challenge_payload(node.content),
-         {:ok, reply} <- compute_challenge_reply(challenge) do
-      content =
-        case reply do
-          nil -> nil
-          <<>> -> nil
-          data when is_binary(data) -> Binary.raw(data)
-        end
-
-      response = %Binary.Node{
-        tag: "response",
-        attrs: %{"xmlns" => "urn:ietf:params:xml:ns:xmpp-sasl"},
-        content: content
-      }
-
-      {:ok, response}
+  defp maybe_reset_pairing(actions, pairing) do
+    if Enum.any?(actions, &match?({:status, :success}, &1)) do
+      {:ok, Pairing.new(pairing.store)}
+    else
+      :noop
     end
-  end
-
-  defp extract_challenge_payload(nil), do: {:ok, <<>>}
-
-  defp extract_challenge_payload(%Binary.Raw{data: data}) do
-    {:ok, IO.iodata_to_binary(data)}
-  end
-
-  defp extract_challenge_payload(payload) when is_binary(payload), do: {:ok, payload}
-
-  defp extract_challenge_payload(other), do: {:error, {:invalid_challenge_content, other}}
-
-  defp compute_challenge_reply(challenge) when is_binary(challenge) do
-    {:ok, challenge}
   end
 end

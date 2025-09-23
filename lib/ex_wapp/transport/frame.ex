@@ -7,7 +7,7 @@ defmodule ExWapp.Transport.Frame do
   """
 
   @wa_magic 0x06
-  @dict_version 0x03
+  @dict_version 0x04
   @header <<?W, ?A, @wa_magic, @dict_version>>
   @length_size 3
 

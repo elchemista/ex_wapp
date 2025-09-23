@@ -12,6 +12,7 @@ defmodule ExWapp.Noise do
   alias ExWapp.Transport.Frame
 
   alias WAWebProtobufsWa6.HandshakeMessage
+  require Logger
 
   defstruct handshake: nil,
             phase: :handshake,
@@ -83,6 +84,7 @@ defmodule ExWapp.Noise do
       case HandshakeMessage.encode(message) do
         {:ok, iodata} ->
           payload = IO.iodata_to_binary(iodata)
+          Logger.debug("Handshake client hello (#{byte_size(payload)} bytes): #{hex(payload)}")
 
           state = %__MODULE__{
             handshake: handshake,
@@ -132,10 +134,27 @@ defmodule ExWapp.Noise do
       when is_binary(plaintext) do
     iv = build_nonce(state.tx_counter)
 
-    {ciphertext, tag} = :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, plaintext, <<>>, true)
+    try do
+      Logger.debug(
+        "Noise plaintext (counter=#{state.tx_counter}, #{byte_size(plaintext)} bytes): #{hex(plaintext)}"
+      )
 
-    new_state = %{state | tx_counter: state.tx_counter + 1}
-    {:ok, ciphertext <> tag, new_state}
+      {ciphertext, tag} =
+        :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, plaintext, <<>>, true)
+
+      payload = ciphertext <> tag
+
+      Logger.debug(
+        "Noise ciphertext (counter=#{state.tx_counter}, #{byte_size(payload)} bytes): #{hex(payload)}"
+      )
+
+      new_state = %{state | tx_counter: state.tx_counter + 1}
+      {:ok, payload, new_state}
+    rescue
+      e in ArgumentError ->
+        Logger.error("noise encrypt failed: #{Exception.message(e)}")
+        {:error, {:encrypt_failed, e}}
+    end
   end
 
   def encrypt(_state, _plaintext), do: {:error, :invalid_state}
@@ -146,17 +165,31 @@ defmodule ExWapp.Noise do
   @spec decrypt(t(), binary()) :: {:ok, binary(), t()} | {:error, term()}
   def decrypt(%__MODULE__{phase: :transport, rx_key: key} = state, payload)
       when is_binary(payload) do
+    Logger.debug(
+      "Noise ciphertext (counter=#{state.rx_counter}, #{byte_size(payload)} bytes): #{hex(payload)}"
+    )
+
     case split_cipher_and_tag(payload) do
       {:ok, cipher, tag} ->
         iv = build_nonce(state.rx_counter)
 
-        case :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, cipher, <<>>, tag, false) do
-          plaintext when is_binary(plaintext) ->
-            new_state = %{state | rx_counter: state.rx_counter + 1}
-            {:ok, plaintext, new_state}
+        try do
+          case :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, cipher, <<>>, tag, false) do
+            plaintext when is_binary(plaintext) ->
+              Logger.debug(
+                "Noise plaintext (counter=#{state.rx_counter}, #{byte_size(plaintext)} bytes): #{hex(plaintext)}"
+              )
 
-          :error ->
-            {:error, :decrypt_failed}
+              new_state = %{state | rx_counter: state.rx_counter + 1}
+              {:ok, plaintext, new_state}
+
+            :error ->
+              {:error, :decrypt_failed}
+          end
+        rescue
+          e in ArgumentError ->
+            Logger.error("noise decrypt failed: #{Exception.message(e)}")
+            {:error, {:decrypt_failed, e}}
         end
 
       {:error, reason} ->
@@ -192,6 +225,10 @@ defmodule ExWapp.Noise do
             tx_counter: 0,
             rx_counter: 0
         }
+
+      Logger.debug(
+        "Handshake client finish (#{byte_size(client_finish)} bytes): #{hex(client_finish)}"
+      )
 
       {:ok, new_state, client_finish}
     end
@@ -299,6 +336,11 @@ defmodule ExWapp.Noise do
   end
 
   defp split_cipher_and_tag(_payload), do: {:error, :ciphertext_too_short}
+
+  defp hex(data) do
+    Base.encode16(data, case: :lower)
+  end
+
   @doc false
   def new, do: {:error, :deprecated_interface}
 

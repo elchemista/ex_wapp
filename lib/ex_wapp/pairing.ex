@@ -163,7 +163,7 @@ defmodule ExWapp.Pairing do
     identity = Base.encode64(identity_pub)
     adv = Base.encode64(adv_secret)
 
-    Enum.join([ref, noise, identity, adv], ",")
+    Enum.join(["2@" <> ref, noise, identity, adv], ",")
   end
 
   def qr_from_ref(_state, ref), do: ref

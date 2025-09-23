@@ -6,7 +6,7 @@ defmodule ExWapp.MixProject do
       app: :ex_wapp,
       version: "0.1.0",
       elixir: "~> 1.18",
-      start_permanent: Mix.env() == :prod,
+      start_permanent: Mix.env() == :dev,
       deps: deps()
     ]
   end

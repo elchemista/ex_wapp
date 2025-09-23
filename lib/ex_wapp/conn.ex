@@ -10,6 +10,8 @@ defmodule ExWapp.Conn do
   require Logger
 
   alias ExWapp.{Binary, Noise, Store}
+  alias ExWapp.Binary.Node
+  alias ExWapp.Binary.Raw
   alias ExWapp.Noise.ClientPayload
   alias ExWapp.Transport.Frame
 
@@ -42,7 +44,19 @@ defmodule ExWapp.Conn do
     session = Keyword.fetch!(opts, :session)
     store = Keyword.fetch!(opts, :store)
     noise_opts = Keyword.get(opts, :noise, [])
-    headers = [{"Origin", @origin}]
+
+    headers = [
+      {"Origin", @origin},
+      {"Sec-WebSocket-Protocol", "binary"},
+      {"Sec-WebSocket-Extensions", "permessage-deflate; client_max_window_bits"},
+      {"User-Agent",
+       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"},
+      {"Cache-Control", "no-cache"},
+      {"Pragma", "no-cache"},
+      {"Sec-Fetch-Dest", "websocket"},
+      {"Sec-Fetch-Mode", "websocket"},
+      {"Sec-Fetch-Site", "same-origin"}
+    ]
 
     state = %State{
       session: session,
@@ -103,6 +117,13 @@ defmodule ExWapp.Conn do
       {:ok, %{state | buffer: buffer}}
     else
       {frames, rest} = Frame.decode(buffer)
+
+      Enum.each(frames, fn frame ->
+        Logger.debug(
+          "received frame size=#{byte_size(frame)} phase=#{state.noise && state.noise.phase}"
+        )
+      end)
+
       state = %{state | buffer: rest}
 
       case process_frames(frames, state) do
@@ -118,6 +139,7 @@ defmodule ExWapp.Conn do
   @impl true
   def handle_cast({:send_node, node}, %State{noise: %Noise{phase: :transport} = noise} = state) do
     with {:ok, encoded} <- Binary.encode(node),
+         :ok <- log_outgoing_node(node, encoded),
          {:ok, ciphertext, noise_state} <- Noise.encrypt(noise, encoded) do
       state = %{state | noise: noise_state}
       {state, reply} = build_reply(state, ciphertext)
@@ -201,6 +223,7 @@ defmodule ExWapp.Conn do
   defp handle_decrypted_payload(state, plaintext) do
     with {:ok, unpacked} <- Binary.unpack(plaintext),
          {:ok, node} <- Binary.decode(unpacked) do
+      Logger.debug("Received node: #{node_to_xml(node)}")
       notify_session(state.session, {:connection_message, node})
       {:ok, state, []}
     else
@@ -214,6 +237,8 @@ defmodule ExWapp.Conn do
   defp build_reply(%State{} = state, payload) do
     include_header = not state.header_sent?
     frame = Frame.encode(payload, include_header: include_header)
+    Logger.debug("Frame payload (#{byte_size(payload)} bytes): #{hex(payload)}")
+    Logger.debug("Websocket frame (#{byte_size(frame)} bytes): #{hex(frame)}")
     {%{state | header_sent?: true}, {:binary, frame}}
   end
 
@@ -262,6 +287,58 @@ defmodule ExWapp.Conn do
   end
 
   defp maybe_send_stream_start(state), do: {:ok, state, []}
+
+  defp hex(data) do
+    Base.encode16(data, case: :lower)
+  end
+
+  defp log_outgoing_node(node, encoded) do
+    case Binary.decode(encoded) do
+      {:ok, decoded} ->
+        Logger.info("Sending node: #{node_to_xml(decoded)}")
+
+      {:error, _} ->
+        Logger.info("Sending node: #{inspect(node)}")
+    end
+
+    :ok
+  rescue
+    _ ->
+      Logger.info("Sending node: #{inspect(node)}")
+      :ok
+  end
+
+  defp node_to_xml(%Node{tag: tag, attrs: attrs, content: nil}) do
+    "<#{tag}#{attrs_to_string(attrs)}/>"
+  end
+
+  defp node_to_xml(%Node{tag: tag, attrs: attrs, content: []}) do
+    "<#{tag}#{attrs_to_string(attrs)}/>"
+  end
+
+  defp node_to_xml(%Node{tag: tag, attrs: attrs, content: content}) when is_binary(content) do
+    "<#{tag}#{attrs_to_string(attrs)}>#{content}</#{tag}>"
+  end
+
+  defp node_to_xml(%Node{tag: tag, attrs: attrs, content: %Raw{data: data}}) do
+    "<#{tag}#{attrs_to_string(attrs)}>[raw #{byte_size(data)} bytes]</#{tag}>"
+  end
+
+  defp node_to_xml(%Node{tag: tag, attrs: attrs, content: content}) when is_list(content) do
+    inner = content |> Enum.map(&node_to_xml/1) |> Enum.join()
+    "<#{tag}#{attrs_to_string(attrs)}>#{inner}</#{tag}>"
+  end
+
+  defp node_to_xml(other), do: inspect(other)
+
+  defp attrs_to_string(attrs) do
+    attrs
+    |> Enum.map(fn
+      {key, true} -> " #{key}"
+      {key, value} -> " #{key}=\"#{value}\""
+    end)
+    |> Enum.join()
+  end
 
   defp build_stream_start_node(%State{store: store}) do
     data = Store.load!(store)
