@@ -4,6 +4,8 @@ defmodule ExWapp.Session do
   """
 
   use GenServer
+  require Logger
+
   alias ExWapp.{Binary, Conn, Pairing, Store}
 
   @typedoc """
@@ -140,10 +142,9 @@ defmodule ExWapp.Session do
   end
 
   def handle_info({:connection_event, {:connection_message, %Binary.Node{} = node}}, state) do
-    {pairing, actions} = Pairing.apply_node(state.pairing, node)
-    state = %{state | pairing: pairing}
-    Enum.each(actions, &handle_pairing_action(&1, state))
-    {:noreply, state}
+    {new_state, actions} = handle_connection_node(node, state)
+    Enum.each(actions, &handle_pairing_action(&1, new_state))
+    {:noreply, new_state}
   end
 
   def handle_info({:connection_event, {:connection_binary, _payload}}, state),
@@ -169,6 +170,28 @@ defmodule ExWapp.Session do
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
+
+  defp handle_connection_node(%Binary.Node{tag: "iq"} = node, state) do
+    {pairing, actions} = Pairing.apply_node(state.pairing, node)
+    {%{state | pairing: pairing}, actions}
+  end
+
+  defp handle_connection_node(%Binary.Node{tag: "challenge"} = node, state) do
+    case build_challenge_response(node) do
+      {:ok, response} ->
+        {state, [{:send_node, response}]}
+
+      {:error, reason} ->
+        Logger.warning("failed to build challenge response: #{inspect(reason)}")
+        {state, []}
+    end
+  end
+
+  defp handle_connection_node(%Binary.Node{tag: "stream:features"}, state) do
+    {state, []}
+  end
+
+  defp handle_connection_node(_node, state), do: {state, []}
 
   defp do_bootstrap(%__MODULE__{conn: nil} = state) do
     case Conn.start_link(session: self(), store: state.store, opts: state.opts) do
@@ -204,4 +227,38 @@ defmodule ExWapp.Session do
   defp handle_pairing_action({:status, :success}, state), do: notify_qr(state, :success)
   defp handle_pairing_action({:error, reason}, state), do: notify_qr(state, {:error, reason})
   defp handle_pairing_action(_other, _state), do: :ok
+
+  defp build_challenge_response(%Binary.Node{} = node) do
+    with {:ok, challenge} <- extract_challenge_payload(node.content),
+         {:ok, reply} <- compute_challenge_reply(challenge) do
+      content =
+        case reply do
+          nil -> nil
+          <<>> -> nil
+          data when is_binary(data) -> Binary.raw(data)
+        end
+
+      response = %Binary.Node{
+        tag: "response",
+        attrs: %{"xmlns" => "urn:ietf:params:xml:ns:xmpp-sasl"},
+        content: content
+      }
+
+      {:ok, response}
+    end
+  end
+
+  defp extract_challenge_payload(nil), do: {:ok, <<>>}
+
+  defp extract_challenge_payload(%Binary.Raw{data: data}) do
+    {:ok, IO.iodata_to_binary(data)}
+  end
+
+  defp extract_challenge_payload(payload) when is_binary(payload), do: {:ok, payload}
+
+  defp extract_challenge_payload(other), do: {:error, {:invalid_challenge_content, other}}
+
+  defp compute_challenge_reply(challenge) when is_binary(challenge) do
+    {:ok, challenge}
+  end
 end
