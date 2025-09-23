@@ -187,6 +187,10 @@ defmodule ExWapp.Session do
     end
   end
 
+  defp handle_connection_node(%Binary.Node{tag: "success"}, state) do
+    {state, [:restart_stream]}
+  end
+
   defp handle_connection_node(%Binary.Node{tag: "stream:features"}, state) do
     {state, []}
   end
@@ -226,6 +230,11 @@ defmodule ExWapp.Session do
   defp handle_pairing_action({:qr, code}, state), do: notify_qr(state, {:code, code})
   defp handle_pairing_action({:status, :success}, state), do: notify_qr(state, :success)
   defp handle_pairing_action({:error, reason}, state), do: notify_qr(state, {:error, reason})
+
+  defp handle_pairing_action(:restart_stream, %__MODULE__{conn: conn}) when is_pid(conn) do
+    :ok = Conn.restart_stream(conn)
+  end
+
   defp handle_pairing_action(_other, _state), do: :ok
 
   defp build_challenge_response(%Binary.Node{} = node) do

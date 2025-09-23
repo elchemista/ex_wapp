@@ -59,6 +59,10 @@ defmodule ExWapp.Conn do
   @spec send_node(pid(), Binary.binary_node() | tuple()) :: :ok
   def send_node(pid, node), do: WebSockex.cast(pid, {:send_node, node})
 
+  @doc "Restarts the XML stream after SASL success."
+  @spec restart_stream(pid()) :: :ok
+  def restart_stream(pid), do: WebSockex.cast(pid, :restart_stream)
+
   @impl true
   def handle_connect(_conn, %State{} = state) do
     Logger.info("websocket connected; Noise handshake pending")
@@ -129,6 +133,15 @@ defmodule ExWapp.Conn do
   def handle_cast({:send_node, _node}, state) do
     Logger.warning("dropping outbound node before Noise handshake completes")
     {:noreply, state}
+  end
+
+  def handle_cast(:restart_stream, %State{} = state) do
+    state = %{state | stream_started?: false}
+
+    case maybe_send_stream_start(state) do
+      {:ok, new_state, []} -> {:noreply, new_state}
+      {:ok, new_state, replies} -> {:reply, replies, new_state}
+    end
   end
 
   defp process_frames(frames, state) do
@@ -244,7 +257,7 @@ defmodule ExWapp.Conn do
     else
       {:error, reason} ->
         Logger.error("failed to send stream start: #{inspect(reason)}")
-        {:ok, %{state | stream_started?: true}, []}
+        {:ok, state, []}
     end
   end
 
