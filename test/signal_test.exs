@@ -3,7 +3,7 @@ defmodule ExWapp.SignalTest do
   use ExUnit.Case, async: true
 
   alias ExWapp.Signal
-  alias Ed25519
+  alias ExWapp.Signal.Keys
 
   test "bootstrap generates fresh signal bundle and state" do
     {:ok, info, state} = Signal.bootstrap(%{device_attrs: %{"device-id" => "5"}})
@@ -16,7 +16,7 @@ defmodule ExWapp.SignalTest do
     assert signed_id > 0
     assert byte_size(signed_pub) == 32
     assert byte_size(signature) == 64
-    assert Ed25519.valid_signature?(signature, signed_pub, info.identity_key)
+    assert Keys.verify(info.identity_key, signed_pub, signature)
 
     assert %{id: prekey_id, public: prekey_pub} = info.prekey
     assert prekey_id > 0

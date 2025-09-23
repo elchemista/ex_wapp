@@ -16,7 +16,6 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
     test "completes the handshake and derives usable transport keys" do
       parent = self()
       certificate_plain = "test-cert"
-      client_payload = "client-payload"
 
       verifier = fn cert_bytes, static_plain ->
         send(parent, {:cert_verified, cert_bytes, static_plain})
@@ -28,13 +27,13 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
       {:ok, _hello, noise} =
         Noise.init(
           store: store,
-          client_payload_fun: fn _ -> {:ok, client_payload} end,
           certificate_verifier: verifier
         )
 
       server = build_server_hello(noise, certificate_plain)
 
       assert {:ok, client_finish, new_noise} = Noise.handle_server_hello(noise, server.payload)
+      assert byte_size(client_finish) > 300
 
       static_pub = server.static_pub
       assert_receive {:cert_verified, ^certificate_plain, ^static_pub}
@@ -45,8 +44,7 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
       assert byte_size(new_noise.tx_key) == 32
       assert byte_size(new_noise.rx_key) == 32
 
-      {:ok, server_keys} = process_client_finish(server, client_finish, client_payload)
-
+      {:ok, server_keys} = process_client_finish(server, client_finish)
       assert new_noise.tx_key == server_keys.read_key
       assert new_noise.rx_key == server_keys.write_key
 
@@ -91,7 +89,7 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
     }
   end
 
-  defp process_client_finish(server, client_finish_payload, expected_payload) do
+  defp process_client_finish(server, client_finish_payload) do
     {:ok, %HandshakeMessage{clientFinish: client_finish}} =
       HandshakeMessage.decode(client_finish_payload)
 
@@ -99,9 +97,8 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
            Handshake.decrypt(server.handshake, client_finish.static),
          {:ok, handshake} <-
            Handshake.mix_shared_secret(handshake, server.eph_priv, client_static_pub),
-         {:ok, handshake, payload_plain} <-
-           Handshake.decrypt(handshake, client_finish.payload),
-         true <- payload_plain == expected_payload || {:error, :unexpected_payload} do
+         {:ok, handshake, _payload_plain} <-
+           Handshake.decrypt(handshake, client_finish.payload) do
       {write_key, read_key} = Handshake.derive_transport_keys(handshake)
 
       {:ok, %{write_key: write_key, read_key: read_key}}
