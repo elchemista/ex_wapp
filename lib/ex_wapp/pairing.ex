@@ -298,7 +298,7 @@ defmodule ExWapp.Pairing do
        when is_binary(adv_self_signed) do
     key_index =
       pairing_data
-      |> get_in([:adv, :details, :keyIndex])
+      |> extract_key_index()
       |> normalize_key_index()
 
     attrs =
@@ -317,6 +317,12 @@ defmodule ExWapp.Pairing do
   end
 
   defp build_pair_device_sign(_pairing_data), do: :error
+
+  defp extract_key_index(%{adv: %{details: details}}) when is_map(details) do
+    Map.get(details, :keyIndex) || Map.get(details, "keyIndex")
+  end
+
+  defp extract_key_index(_), do: nil
 
   defp normalize_key_index(value) when is_integer(value) and value >= 0,
     do: Integer.to_string(value)

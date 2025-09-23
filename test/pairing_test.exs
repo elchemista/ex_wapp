@@ -29,18 +29,14 @@ defmodule ExWapp.PairingTest do
     assert ack_node.attrs["type"] == "result"
     assert ack_node.attrs["id"] == "req-123"
 
-    assert [
-             %Binary.Node{
-               tag: "pair-device-sign",
-               content: [
-                 %Binary.Node{
-                   tag: "device-identity",
-                   attrs: %{"key-index" => Integer.to_string(parsed_adv.details.keyIndex)},
-                   content: %Binary.Raw{data: parsed_adv.self_signed}
-                 }
-               ]
-             }
-           ] = ack_node.content
+    expected_key_index = parsed_adv.details.keyIndex
+    expected_self_signed = parsed_adv.self_signed
+
+    assert [%Binary.Node{tag: "pair-device-sign", content: [identity_node]}] = ack_node.content
+
+    assert identity_node.tag == "device-identity"
+    assert identity_node.attrs["key-index"] == Integer.to_string(expected_key_index)
+    assert %Binary.Raw{data: ^expected_self_signed} = identity_node.content
 
     assert Enum.any?(actions, &(&1 == {:status, :success}))
   end

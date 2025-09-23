@@ -9,8 +9,7 @@ defmodule ExWapp.Conn do
   use WebSockex
   require Logger
 
-  alias ExWapp.Binary
-  alias ExWapp.Noise
+  alias ExWapp.{Binary, Noise, Store}
   alias ExWapp.Noise.ClientPayload
   alias ExWapp.Transport.Frame
 
@@ -134,9 +133,11 @@ defmodule ExWapp.Conn do
   defp process_frames(frames, state) do
     Enum.reduce_while(frames, {:ok, state, []}, fn frame, {:ok, acc_state, replies} ->
       case handle_payload_frame(acc_state, frame) do
-        {:ok, next_state, nil} -> {:cont, {:ok, next_state, replies}}
-        {:ok, next_state, reply} -> {:cont, {:ok, next_state, replies ++ [reply]}}
-        {:close, next_state} -> {:halt, {:close, next_state}}
+        {:ok, next_state, responses} ->
+          {:cont, {:ok, next_state, replies ++ normalize_replies(responses)}}
+
+        {:close, next_state} ->
+          {:halt, {:close, next_state}}
       end
     end)
     |> case do
@@ -150,8 +151,11 @@ defmodule ExWapp.Conn do
       {:ok, client_finish, noise_state} ->
         state = %{state | noise: noise_state}
         {state, reply} = build_reply(state, client_finish)
-        notify_session(state.session, {:noise, :handshake_completed})
-        {:ok, state, reply}
+
+        with {:ok, state, extra_replies} <- maybe_send_stream_start(state) do
+          notify_session(state.session, {:noise, :handshake_completed})
+          {:ok, state, [reply | extra_replies]}
+        end
 
       {:error, reason} ->
         Logger.error("Noise handshake failed: #{inspect(reason)}")
@@ -177,19 +181,19 @@ defmodule ExWapp.Conn do
 
   defp handle_decrypted_payload(state, <<>>) do
     notify_session(state.session, {:connection_message, :empty})
-    {:ok, state, nil}
+    {:ok, state, []}
   end
 
   defp handle_decrypted_payload(state, plaintext) do
     with {:ok, unpacked} <- Binary.unpack(plaintext),
          {:ok, node} <- Binary.decode(unpacked) do
       notify_session(state.session, {:connection_message, node})
-      {:ok, state, nil}
+      {:ok, state, []}
     else
       {:error, reason} ->
         Logger.warning("failed to decode binary payload: #{inspect(reason)}")
         notify_session(state.session, {:connection_binary, plaintext})
-        {:ok, state, nil}
+        {:ok, state, []}
     end
   end
 
@@ -218,4 +222,64 @@ defmodule ExWapp.Conn do
   end
 
   defp notify_session(pid, message) when is_pid(pid), do: send(pid, {:connection_event, message})
+
+  defp normalize_replies(nil), do: []
+  defp normalize_replies(replies) when is_list(replies), do: replies
+  defp normalize_replies(reply), do: [reply]
+
+  defp maybe_send_stream_start(%State{noise: %Noise{phase: :transport} = noise} = state) do
+    with {:ok, node} <- build_stream_start_node(state),
+         {:ok, encoded} <- Binary.encode(node),
+         {:ok, ciphertext, noise_state} <- Noise.encrypt(noise, encoded) do
+      state = %{state | noise: noise_state}
+      {state, reply} = build_reply(state, ciphertext)
+      {:ok, state, [reply]}
+    else
+      {:error, reason} ->
+        Logger.error("failed to send stream start: #{inspect(reason)}")
+        {:ok, state, []}
+    end
+  end
+
+  defp maybe_send_stream_start(state), do: {:ok, state, []}
+
+  defp build_stream_start_node(%State{store: store}) do
+    data = Store.load!(store)
+    info = Map.get(data, :client_info, %{})
+
+    attrs =
+      %{
+        "to" => "s.whatsapp.net",
+        "xmlns" => "jabber:client",
+        "xmlns:stream" => "http://etherx.jabber.org/streams",
+        "version" => "1.0"
+      }
+      |> maybe_put_attr("resource", stream_resource(info))
+      |> maybe_put_attr("id", stream_id(info))
+
+    {:ok, %Binary.Node{tag: "xmlstreamstart", attrs: attrs, content: nil}}
+  end
+
+  defp stream_resource(%{stream_resource: resource}) when is_binary(resource) and resource != "",
+    do: resource
+
+  defp stream_resource(%{device_name: name}) when is_binary(name) and name != "",
+    do: name
+
+  defp stream_resource(%{phone_id: phone_id}) when is_binary(phone_id) and phone_id != "",
+    do: phone_id
+
+  defp stream_resource(_), do: "EX_WAPP"
+
+  defp stream_id(%{stream_id: id}) when is_binary(id) and id != "", do: id
+  defp stream_id(_), do: generate_stream_id()
+
+  defp generate_stream_id do
+    4
+    |> :crypto.strong_rand_bytes()
+    |> Base.encode16(case: :lower)
+  end
+
+  defp maybe_put_attr(attrs, _key, nil), do: attrs
+  defp maybe_put_attr(attrs, key, value), do: Map.put(attrs, key, value)
 end
