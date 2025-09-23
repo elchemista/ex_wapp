@@ -24,7 +24,8 @@ defmodule ExWapp.Conn do
               noise_opts: [],
               buffer: <<>>,
               header_sent?: false,
-              header_seen?: false
+              header_seen?: false,
+              stream_started?: false
   end
 
   @type options :: [
@@ -227,17 +228,23 @@ defmodule ExWapp.Conn do
   defp normalize_replies(replies) when is_list(replies), do: replies
   defp normalize_replies(reply), do: [reply]
 
+  defp maybe_send_stream_start(%State{stream_started?: true} = state), do: {:ok, state, []}
+
   defp maybe_send_stream_start(%State{noise: %Noise{phase: :transport} = noise} = state) do
-    with {:ok, node} <- build_stream_start_node(state),
-         {:ok, encoded} <- Binary.encode(node),
-         {:ok, ciphertext, noise_state} <- Noise.encrypt(noise, encoded) do
-      state = %{state | noise: noise_state}
-      {state, reply} = build_reply(state, ciphertext)
-      {:ok, state, [reply]}
+    with {:ok, stream_start} <- build_stream_start_node(state),
+         {:ok, stream_bin} <- Binary.encode(stream_start),
+         {:ok, stream_cipher, noise_state} <- Noise.encrypt(noise, stream_bin),
+         {state, stream_reply} <- build_reply(%{state | noise: noise_state}, stream_cipher),
+         {:ok, handshake_node} <- build_handshake_node(),
+         {:ok, handshake_bin} <- Binary.encode(handshake_node),
+         {:ok, handshake_cipher, noise_state} <- Noise.encrypt(state.noise, handshake_bin),
+         {state, handshake_reply} <-
+           build_reply(%{state | noise: noise_state, stream_started?: true}, handshake_cipher) do
+      {:ok, state, [stream_reply, handshake_reply]}
     else
       {:error, reason} ->
         Logger.error("failed to send stream start: #{inspect(reason)}")
-        {:ok, state, []}
+        {:ok, %{state | stream_started?: true}, []}
     end
   end
 
@@ -258,6 +265,10 @@ defmodule ExWapp.Conn do
       |> maybe_put_attr("id", stream_id(info))
 
     {:ok, %Binary.Node{tag: "xmlstreamstart", attrs: attrs, content: nil}}
+  end
+
+  defp build_handshake_node do
+    {:ok, %Binary.Node{tag: "handshake", attrs: %{}, content: nil}}
   end
 
   defp stream_resource(%{stream_resource: resource}) when is_binary(resource) and resource != "",
