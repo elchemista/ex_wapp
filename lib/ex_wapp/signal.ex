@@ -8,7 +8,7 @@ defmodule ExWapp.Signal do
   can be persisted by the store backend.
   """
 
-  alias Ed25519
+  alias ExWapp.Signal.Keys
 
   @type identity_key :: %{public: binary(), private: binary()}
   @type signed_prekey :: %{
@@ -95,7 +95,7 @@ defmodule ExWapp.Signal do
        do: {:ok, identity}
 
   defp ensure_identity(_current, now) do
-    {priv, pub} = Ed25519.generate_key_pair()
+    %{public: pub, private: priv} = Keys.generate_key_pair()
     {:ok, %{public: pub, private: priv, generated_at: now}}
   end
 
@@ -137,16 +137,10 @@ defmodule ExWapp.Signal do
 
       :error ->
         id = next_identifier(existing, 1)
-        {priv, pub} = Ed25519.generate_key_pair()
-        signature = Ed25519.signature(pub, identity.private, identity.public)
 
-        key = %{
-          id: id,
-          public: pub,
-          private: priv,
-          signature: signature,
-          generated_at: now
-        }
+        key =
+          Keys.generate_signed_prekey(identity, id)
+          |> Map.put(:generated_at, now)
 
         {:ok, key, Map.put(existing, id, key)}
     end
@@ -163,14 +157,10 @@ defmodule ExWapp.Signal do
 
       :error ->
         id = next_id_hint || next_identifier(existing, 1)
-        {priv, pub} = Ed25519.generate_key_pair()
 
-        key = %{
-          id: id,
-          public: pub,
-          private: priv,
-          generated_at: now
-        }
+        key =
+          Keys.generate_prekey(id)
+          |> Map.put(:generated_at, now)
 
         {:ok, key, Map.put(existing, id, key), id + 1}
     end
@@ -185,7 +175,7 @@ defmodule ExWapp.Signal do
          private: <<_::binary-size(32)>>,
          signature: <<_::binary-size(64)>> = sig
        }} ->
-        Ed25519.valid_signature?(sig, pub, identity_pub)
+        Keys.verify(identity_pub, pub, sig)
 
       _ ->
         false
