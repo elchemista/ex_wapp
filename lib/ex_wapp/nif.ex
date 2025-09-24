@@ -34,14 +34,18 @@ defmodule ExWapp.Nif do
     @spec from_nif(struct()) :: t()
     def from_nif(%ExWappNif.HandshakeSecrets{} = nif) do
       %__MODULE__{
-        write_key: nif.write_key,
-        read_key: nif.read_key,
-        handshake_hash: nif.handshake_hash,
-        handshake_salt: nif.handshake_ck,
-        server_static: nif.server_static,
-        server_certificate: nif.server_certificate
+        write_key: ensure_binary(nif.write_key),
+        read_key: ensure_binary(nif.read_key),
+        handshake_hash: ensure_binary(nif.handshake_hash),
+        handshake_salt: ensure_binary(nif.handshake_ck),
+        server_static: ensure_binary(nif.server_static),
+        server_certificate: ensure_binary(nif.server_certificate)
       }
     end
+
+    defp ensure_binary(value) when is_binary(value), do: value
+    defp ensure_binary(value) when is_list(value), do: :erlang.list_to_binary(value)
+    defp ensure_binary(value), do: value
   end
 
   @spec to_secrets(struct()) :: Secrets.t()

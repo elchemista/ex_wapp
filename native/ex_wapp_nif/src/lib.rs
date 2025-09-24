@@ -1,9 +1,9 @@
-use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::Aes256Gcm;
+use aes_gcm::aead::{Aead, KeyInit, Payload};
 use hkdf::Hkdf;
 use prost::Message;
-use rand::{rng, RngCore};
-use rustler::{types::binary::Binary, Env, Error as NifError, NifResult, ResourceArc, Term};
+use rand::{RngCore, rng};
+use rustler::{Env, Error as NifError, NifResult, ResourceArc, Term, types::binary::Binary};
 use sha2::{Digest, Sha256 as Sha256Digest};
 use std::sync::Mutex;
 use thiserror::Error;
@@ -387,7 +387,7 @@ impl HandshakeState {
     }
 
     fn finish(self) -> Result<HandshakeSecrets, HsError> {
-        let (write_key, read_key) = self.noise.finish_split()?;
+        let (first_key, second_key) = self.noise.finish_split()?;
         let server_static = self
             .server_static
             .ok_or(HsError::State("server static key missing"))?;
@@ -395,9 +395,11 @@ impl HandshakeState {
             .server_cert
             .ok_or(HsError::State("server certificate missing"))?;
 
+        // In Noise XX, the client's write key is the second key (server's read key)
+        // and the client's read key is the first key (server's write key)
         Ok(HandshakeSecrets {
-            write_key,
-            read_key,
+            write_key: second_key,
+            read_key: first_key,
             handshake_hash: self.noise.h,
             handshake_ck: self.noise.ck,
             server_static,
