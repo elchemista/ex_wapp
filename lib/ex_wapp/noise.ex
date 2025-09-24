@@ -207,6 +207,7 @@ defmodule ExWapp.Noise do
     case Nif.handshake_client_finish(handshake_ref, payload) do
       {:error, reason} -> {:error, {:handshake_client_finish, reason}}
       bin when is_binary(bin) -> {:ok, bin}
+      list when is_list(list) -> {:ok, ensure_binary(list)}
     end
   end
 
