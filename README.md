@@ -8,8 +8,10 @@ minimum viable path to “QR pairing + send a text message”.
 
 * Project skeleton in place with dedicated modules for transport, Noise,
   binary nodes, pairing, messaging, Signal, and persistence.
-* Pairing events can already be observed via `ExWapp.qr_stream/1` (the stream is
-  fed manually until the full handshake is implemented).
+* The full Noise registration handshake runs against WhatsApp Web using the
+  bundled Rust NIF, persisting the derived secrets for later reconnects.
+* Pairing events are emitted via `ExWapp.qr_stream/1` once the server issues the
+  `pair-device` IQ, allowing QR codes to be rendered directly from the client.
 * File-based store keeps key material and other state using Erlang ETF terms.
 * Tests cover the QR event stream and store persistence helpers.
 
@@ -30,9 +32,9 @@ end)
 ExWapp.connect(session)
 ```
 
-The `connect/1` call will eventually drive the Noise handshake, emit QR codes,
-and transition to a paired session. For now the process only stubs the flow so
-that the supervising infrastructure and persistence hooks can be validated.
+The `connect/1` call drives the Noise handshake, emits QR codes, and transitions
+to a paired session. Once paired, the derived credentials are persisted in the
+configured store for future reconnects.
 
 ### Pairing with a QR code
 
@@ -107,10 +109,9 @@ without showing another QR code.
 
 ## Next steps
 
-1. Fill in `ExWapp.Noise` with the proper handshake and AEAD framing.
-2. Implement binary node encoding/decoding with the necessary token tables.
-3. Drive the QR pairing flow by producing/consuming the relevant nodes.
-4. Add protobuf models (e.g. `Message`) via `protox` and wire in the Signal
+1. Implement binary node encoding/decoding with the necessary token tables.
+2. Drive the QR pairing flow by producing/consuming the relevant nodes.
+3. Add protobuf models (e.g. `Message`) via `protox` and wire in the Signal
    pipeline for outbound texts.
 
 Run the test suite with:
@@ -120,7 +121,6 @@ mix test
 ```
 
 ### TODO 
-* Expand the Noise client payload to include the device registration bundle (registration id, identity key, signed prekey + signature, device props); right now lib/ex_wapp/noise/client_payload.ex:13 only emits push-name metadata, so the server never receives the data it needs to offer a pairing QR (see Go’s store/clientpayload.go for the reference structure).
 * Fix the pair-success acknowledgement to send a pair-device-sign/device-identity node carrying the self-signed identity and key index; build_pair_success_ack/3 in lib/ex_wapp/pairing.ex:285 currently emits pair-success/adv-device-identity, which doesn’t match the WhatsApp handshake and the pairing will be rejected.
 * After Pairing reports :success, add logic in the session to tear down the registration socket and reconnect using the freshly stored credentials (login payload instead of registration); without that post-pairing reconnect path (lib/ex_wapp/session.ex:138 and the surrounding state machine) you end up paired but never establish a normal logged-in transport.
  

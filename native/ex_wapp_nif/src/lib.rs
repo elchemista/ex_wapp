@@ -407,11 +407,11 @@ impl HandshakeState {
             .server_cert
             .ok_or(HsError::State("server certificate missing"))?;
 
-        // In Noise XX, the client's write key is the second key (server's read key)
-        // and the client's read key is the first key (server's write key)
+        // In Noise XX, the client's write key is the first key (server's read key)
+        // and the client's read key is the second key (server's write key)
         Ok(HandshakeSecrets {
-            write_key: second_key,
-            read_key: first_key,
+            write_key: first_key,
+            read_key: second_key,
             handshake_hash: self.noise.h,
             handshake_ck: self.noise.ck,
             server_static,
@@ -701,9 +701,7 @@ mod tests {
         };
         let cert_plain = cert_chain.encode_to_vec();
 
-        let cert_cipher = server_noise
-            .encrypt(&cert_plain)
-            .expect("encrypt cert");
+        let cert_cipher = server_noise.encrypt(&cert_plain).expect("encrypt cert");
 
         let server_hello = HandshakeMessage {
             server_hello: Some(wa::handshake_message::ServerHello {

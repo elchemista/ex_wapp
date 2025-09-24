@@ -204,6 +204,7 @@ defmodule ExWapp.Noise do
          {:ok, cipher_ref} <- build_transport_cipher(state, secrets),
          :ok <- verify_certificate_callback(state, secrets),
          :ok <- persist_pending_data(state),
+         :ok <- persist_handshake_metadata(state, secrets),
          new_state <- promote_to_transport(state, secrets, cipher_ref) do
       Logger.debug(
         "Handshake client finish (#{byte_size(client_finish)} bytes): #{hex(client_finish)}"
@@ -248,6 +249,25 @@ defmodule ExWapp.Noise do
 
   defp persist_pending_data(%__MODULE__{store: store, pending_store_data: data}) do
     maybe_persist(store, data)
+  end
+
+  defp persist_handshake_metadata(%__MODULE__{store: nil}, %Secrets{}), do: :ok
+
+  defp persist_handshake_metadata(%__MODULE__{store: store}, %Secrets{} = secrets) do
+    data = Store.load!(store)
+    noise = Map.get(data, :noise, %{})
+
+    updated_noise =
+      noise
+      |> Map.put(:handshake_hash, secrets.handshake_hash)
+      |> Map.put(:handshake_salt, secrets.handshake_salt)
+      |> Map.put(:server_static, secrets.server_static)
+      |> Map.put(:server_certificate, secrets.server_certificate)
+
+    case Store.persist(store, Map.put(data, :noise, updated_noise)) do
+      :ok -> :ok
+      {:error, _} = error -> error
+    end
   end
 
   defp build_transport_cipher(%__MODULE__{backend: backend}, %Secrets{} = secrets) do

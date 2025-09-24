@@ -55,6 +55,14 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
       assert byte_size(new_noise.tx_key) == 32
       assert byte_size(new_noise.rx_key) == 32
 
+      persisted = Store.load!(store)
+      assert %{noise: noise_store} = persisted
+      assert noise_store[:handshake_hash] == new_noise.handshake_hash
+      assert noise_store[:handshake_salt] == new_noise.handshake_salt
+      assert noise_store[:server_static] == static_pub
+      assert noise_store[:server_certificate] == server_certificate
+      assert byte_size(noise_store[:handshake_salt]) == 32
+
       {:ok, server_keys} = process_client_finish(server, client_finish)
       assert new_noise.handshake_hash == server_keys.handshake_hash
       assert new_noise.tx_key == server_keys.read_key
@@ -129,12 +137,12 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
            Handshake.mix_shared_secret(handshake, server.eph_priv, client_static_pub),
          {:ok, handshake, _payload_plain} <-
            Handshake.decrypt(handshake, client_finish.payload) do
-      {write_key, read_key} = Handshake.derive_transport_keys(handshake)
+      {client_write, client_read} = Handshake.derive_transport_keys(handshake)
 
       {:ok,
        %{
-         write_key: write_key,
-         read_key: read_key,
+         write_key: client_read,
+         read_key: client_write,
          handshake_hash: handshake.hash
        }}
     end
