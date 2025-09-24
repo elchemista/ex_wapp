@@ -210,6 +210,18 @@ impl NoiseState {
         // final split: derive transport write/read keys from current ck
         self.kdf_2(None)
     }
+
+    fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, HsError> {
+        let ciphertext = self.cipher.encrypt_aad(&self.h, plaintext)?;
+        self.mix_hash(&ciphertext);
+        Ok(ciphertext)
+    }
+
+    fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, HsError> {
+        let plaintext = self.cipher.decrypt_aad(&self.h, ciphertext)?;
+        self.mix_hash(ciphertext);
+        Ok(plaintext)
+    }
 }
 
 struct HandshakeState {
