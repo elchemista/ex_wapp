@@ -1,9 +1,9 @@
-use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
+use aes_gcm::Aes256Gcm;
 use hkdf::Hkdf;
 use prost::Message;
-use rand::{RngCore, rng};
-use rustler::{Env, Error as NifError, NifResult, ResourceArc, Term, types::binary::Binary};
+use rand::{rng, RngCore};
+use rustler::{types::binary::Binary, Env, Error as NifError, NifResult, ResourceArc, Term};
 use sha2::{Digest, Sha256 as Sha256Digest};
 use std::sync::Mutex;
 use thiserror::Error;
@@ -341,7 +341,10 @@ impl HandshakeState {
         self.noise.mix_dh(&dh1)?;
 
         // decrypt server static key (use READ cipher)
-        let rs = self.noise.decrypt(&rs_ct)?;
+        let rs = self
+            .noise
+            .decrypt(&rs_ct)
+            .map_err(|e| HsError::Crypto(format!("decrypt server static: {e}")))?;
         if rs.len() != 32 {
             return Err(HsError::InvalidLength {
                 name: "server static key",
@@ -357,21 +360,30 @@ impl HandshakeState {
         self.noise.mix_dh(&dh2)?;
 
         // decrypt certificate (still using READ cipher after re-key)
-        let cert_plain = self.noise.decrypt(&cert_ct)?;
+        let cert_plain = self
+            .noise
+            .decrypt(&cert_ct)
+            .map_err(|e| HsError::Crypto(format!("decrypt certificate: {e}")))?;
         Self::verify_server_cert(&cert_plain, &rs_bytes)?;
         self.server_static = Some(rs_bytes);
         self.server_cert = Some(cert_plain);
 
         // Now we send our static public under the WRITE cipher
         let s_pub = self.s_kp.public_bytes();
-        let s_pub_ct = self.noise.encrypt(&s_pub)?;
+        let s_pub_ct = self
+            .noise
+            .encrypt(&s_pub)
+            .map_err(|e| HsError::Crypto(format!("encrypt client static: {e}")))?;
 
         // mix DH(s, re)
         let dh3 = KeyPair::dh(&self.s_kp.private_bytes(), &re);
         self.noise.mix_dh(&dh3)?;
 
         // encrypt payload with WRITE cipher
-        let payload_ct = self.noise.encrypt(&self.payload)?;
+        let payload_ct = self
+            .noise
+            .encrypt(&self.payload)
+            .map_err(|e| HsError::Crypto(format!("encrypt client payload: {e}")))?;
 
         // Build ClientFinish
         let msg = HandshakeMessage {
@@ -580,16 +592,17 @@ struct CipherResource(Mutex<(CipherState, CipherState, [u8; 32])>); // (write, r
 
 #[rustler::nif]
 fn noise_cipher_new(
-    keys: NoiseKeys,
+    write_key: Binary<'_>,
+    read_key: Binary<'_>,
     handshake_hash: Binary<'_>,
 ) -> NifResult<ResourceArc<CipherResource>> {
-    if keys.write_key.len() != 32 || keys.read_key.len() != 32 || handshake_hash.len() != 32 {
+    if write_key.len() != 32 || read_key.len() != 32 || handshake_hash.len() != 32 {
         return Err(NifError::Term(Box::new("keys and hash must be 32 bytes")));
     }
     let mut w = [0u8; 32];
-    w.copy_from_slice(&keys.write_key);
+    w.copy_from_slice(write_key.as_slice());
     let mut r = [0u8; 32];
-    r.copy_from_slice(&keys.read_key);
+    r.copy_from_slice(read_key.as_slice());
     let mut h = [0u8; 32];
     h.copy_from_slice(handshake_hash.as_slice());
 
@@ -617,3 +630,95 @@ fn noise_decrypt(state: ResourceArc<CipherResource>, ciphertext: Binary<'_>) -> 
 }
 
 rustler::init!("Elixir.ExWapp.Nif", load = load);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::{rng, RngCore};
+
+    fn random_payload(len: usize) -> Vec<u8> {
+        let mut out = vec![0u8; len];
+        rand::rng().fill_bytes(&mut out);
+        out
+    }
+
+    #[test]
+    fn handshake_roundtrip_matches_reference_flow() {
+        let payload = random_payload(128);
+        let client_static = KeyPair::generate();
+        let mut client = HandshakeState::new(client_static, payload.clone()).expect("init");
+        let client_hello = client.build_client_hello().expect("client hello");
+
+        let client_msg = HandshakeMessage::decode(client_hello.as_slice()).expect("decode hello");
+        let client_ephemeral = client_msg
+            .client_hello
+            .and_then(|c| c.ephemeral)
+            .expect("client ephemeral");
+        let client_ephemeral: [u8; 32] = client_ephemeral.try_into().expect("len");
+
+        let server_ephemeral = KeyPair::generate();
+        let server_static = KeyPair::generate();
+
+        let mut server_noise = NoiseState::new(NOISE_PROLOGUE, &WA_CONN_HEADER).expect("init");
+        server_noise.mix_hash(&client_ephemeral);
+        server_noise.mix_hash(&server_ephemeral.public_bytes());
+
+        let dh1 = KeyPair::dh(&server_ephemeral.private_bytes(), &client_ephemeral);
+        server_noise.mix_dh(&dh1).expect("mix dh1");
+
+        let static_cipher = server_noise
+            .encrypt(&server_static.public_bytes())
+            .expect("encrypt static");
+
+        let dh2 = KeyPair::dh(&server_static.private_bytes(), &client_ephemeral);
+        server_noise.mix_dh(&dh2).expect("mix dh2");
+
+        // Build minimal certificate payload that references the static key.
+        let intermediate_details = wa::cert_chain::noise_certificate::Details {
+            serial: 1,
+            issuer_serial: WA_CERT_ISSUER_SERIAL as u32,
+            key: Some(random_payload(32)),
+            ..Default::default()
+        };
+        let leaf_details = wa::cert_chain::noise_certificate::Details {
+            serial: 2,
+            issuer_serial: 1,
+            key: Some(server_static.public_bytes().to_vec()),
+            ..Default::default()
+        };
+        let cert_chain = CertChain {
+            intermediate: Some(wa::cert_chain::NoiseCertificate {
+                details: Some(intermediate_details.encode_to_vec()),
+                signature: None,
+                ..Default::default()
+            }),
+            leaf: Some(wa::cert_chain::NoiseCertificate {
+                details: Some(leaf_details.encode_to_vec()),
+                signature: None,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let cert_plain = cert_chain.encode_to_vec();
+
+        let cert_cipher = server_noise
+            .encrypt(&cert_plain)
+            .expect("encrypt cert");
+
+        let server_hello = HandshakeMessage {
+            server_hello: Some(wa::handshake_message::ServerHello {
+                ephemeral: Some(server_ephemeral.public_bytes().to_vec()),
+                r#static: Some(static_cipher),
+                payload: Some(cert_cipher),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let server_bytes = server_hello.encode_to_vec();
+
+        let client_finish = client
+            .read_server_hello_and_build_client_finish(&server_bytes)
+            .expect("client finish");
+        assert!(!client_finish.is_empty());
+    }
+}

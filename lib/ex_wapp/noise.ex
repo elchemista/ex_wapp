@@ -9,7 +9,6 @@ defmodule ExWapp.Noise do
 
   alias ExWapp.Nif
   alias ExWapp.Nif.Secrets
-  alias ExWappNif.NoiseKeys
   alias ExWapp.Noise.ClientPayload
   alias ExWapp.Store
   alias WAWebProtobufsWa6.HandshakeMessage
@@ -232,12 +231,11 @@ defmodule ExWapp.Noise do
   end
 
   defp build_transport_cipher(%Secrets{} = secrets) do
-    keys = %NoiseKeys{
-      write_key: ensure_binary(secrets.write_key),
-      read_key: ensure_binary(secrets.read_key)
-    }
+    write_key = ensure_binary(secrets.write_key)
+    read_key = ensure_binary(secrets.read_key)
+    handshake_hash = ensure_binary(secrets.handshake_hash)
 
-    case Nif.noise_cipher_new(keys, ensure_binary(secrets.handshake_hash)) do
+    case Nif.noise_cipher_new(write_key, read_key, handshake_hash) do
       {:error, reason} -> {:error, {:noise_cipher_new, reason}}
       cipher_ref -> {:ok, cipher_ref}
     end

@@ -58,7 +58,7 @@ defmodule ExWapp.Nif do
   def handshake_finish(_state), do: :erlang.nif_error(:nif_not_loaded)
   def pack_frame(_bin, _include_header), do: :erlang.nif_error(:nif_not_loaded)
   def unpack_frame(_bin, _expect_header), do: :erlang.nif_error(:nif_not_loaded)
-  def noise_cipher_new(_keys, _hash), do: :erlang.nif_error(:nif_not_loaded)
+  def noise_cipher_new(_write_key, _read_key, _hash), do: :erlang.nif_error(:nif_not_loaded)
   def noise_encrypt(_res, _pt), do: :erlang.nif_error(:nif_not_loaded)
   def noise_decrypt(_res, _ct), do: :erlang.nif_error(:nif_not_loaded)
 end
