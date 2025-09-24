@@ -23,8 +23,8 @@ defmodule ExWapp.MixProject do
       {:libsignal_protocol, "~> 0.1.1"},
       {:ed25519, "~> 1.4"},
       {:rustler, "~> 0.37.1", runtime: false},
-      {:eqrcode, "~> 0.2.0", only: [:dev, :test], runtime: false},
-      {:protox, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:eqrcode, "~> 0.2.0"},
+      {:protox, "~> 1.7"},
       {:credo, "~> 1.6", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.3", only: [:dev, :test], runtime: false}
     ]
