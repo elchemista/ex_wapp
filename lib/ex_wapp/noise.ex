@@ -9,6 +9,7 @@ defmodule ExWapp.Noise do
 
   alias ExWapp.Nif
   alias ExWapp.Nif.Secrets
+  alias ExWappNif.NoiseKeys
   alias ExWapp.Noise.ClientPayload
   alias ExWapp.Store
   alias WAWebProtobufsWa6.HandshakeMessage
@@ -26,7 +27,8 @@ defmodule ExWapp.Noise do
             certificate_verifier: nil,
             pending_store_data: nil,
             handshake_hash: nil,
-            handshake_salt: nil
+            handshake_salt: nil,
+            cipher_ref: nil
 
   @type certificate_verifier_fun :: (binary(), binary() -> :ok | {:error, term()})
 
@@ -49,7 +51,8 @@ defmodule ExWapp.Noise do
           certificate_verifier: certificate_verifier_fun() | nil,
           pending_store_data: Store.data() | nil,
           handshake_hash: binary() | nil,
-          handshake_salt: binary() | nil
+          handshake_salt: binary() | nil,
+          cipher_ref: reference() | nil
         }
 
   @doc """
@@ -120,30 +123,29 @@ defmodule ExWapp.Noise do
   Encrypts a transport payload once the handshake has completed.
   """
   @spec encrypt(t(), binary()) :: {:ok, binary(), t()} | {:error, term()}
-  def encrypt(%__MODULE__{phase: :transport, tx_key: key} = state, plaintext)
+  def encrypt(%__MODULE__{phase: :transport, cipher_ref: cipher} = state, plaintext)
       when is_binary(plaintext) do
-    iv = build_nonce(state.tx_counter)
-
-    try do
+    if is_nil(cipher) do
+      {:error, :invalid_state}
+    else
       Logger.debug(
         "Noise plaintext (counter=#{state.tx_counter}, #{byte_size(plaintext)} bytes): #{hex(plaintext)}"
       )
 
-      {ciphertext, tag} =
-        :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, plaintext, <<>>, true)
+      case Nif.noise_encrypt(cipher, plaintext) do
+        {:error, reason} ->
+          {:error, {:encrypt_failed, reason}}
 
-      payload = ciphertext <> tag
+        payload when is_binary(payload) or is_list(payload) ->
+          payload = ensure_binary(payload)
 
-      Logger.debug(
-        "Noise ciphertext (counter=#{state.tx_counter}, #{byte_size(payload)} bytes): #{hex(payload)}"
-      )
+          Logger.debug(
+            "Noise ciphertext (counter=#{state.tx_counter}, #{byte_size(payload)} bytes): #{hex(payload)}"
+          )
 
-      new_state = %{state | tx_counter: state.tx_counter + 1}
-      {:ok, payload, new_state}
-    rescue
-      e in ArgumentError ->
-        Logger.error("noise encrypt failed: #{Exception.message(e)}")
-        {:error, {:encrypt_failed, e}}
+          new_state = %{state | tx_counter: state.tx_counter + 1}
+          {:ok, payload, new_state}
+      end
     end
   end
 
@@ -153,37 +155,29 @@ defmodule ExWapp.Noise do
   Decrypts a transport payload once the handshake has completed.
   """
   @spec decrypt(t(), binary()) :: {:ok, binary(), t()} | {:error, term()}
-  def decrypt(%__MODULE__{phase: :transport, rx_key: key} = state, payload)
+  def decrypt(%__MODULE__{phase: :transport, cipher_ref: cipher} = state, payload)
       when is_binary(payload) do
-    Logger.debug(
-      "Noise ciphertext (counter=#{state.rx_counter}, #{byte_size(payload)} bytes): #{hex(payload)}"
-    )
+    if is_nil(cipher) do
+      {:error, :invalid_state}
+    else
+      Logger.debug(
+        "Noise ciphertext (counter=#{state.rx_counter}, #{byte_size(payload)} bytes): #{hex(payload)}"
+      )
 
-    case split_cipher_and_tag(payload) do
-      {:ok, cipher, tag} ->
-        iv = build_nonce(state.rx_counter)
+      case Nif.noise_decrypt(cipher, payload) do
+        {:error, reason} ->
+          {:error, {:decrypt_failed, reason}}
 
-        try do
-          case :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, cipher, <<>>, tag, false) do
-            plaintext when is_binary(plaintext) ->
-              Logger.debug(
-                "Noise plaintext (counter=#{state.rx_counter}, #{byte_size(plaintext)} bytes): #{hex(plaintext)}"
-              )
+        plaintext when is_binary(plaintext) or is_list(plaintext) ->
+          plaintext = ensure_binary(plaintext)
 
-              new_state = %{state | rx_counter: state.rx_counter + 1}
-              {:ok, plaintext, new_state}
+          Logger.debug(
+            "Noise plaintext (counter=#{state.rx_counter}, #{byte_size(plaintext)} bytes): #{hex(plaintext)}"
+          )
 
-            :error ->
-              {:error, :decrypt_failed}
-          end
-        rescue
-          e in ArgumentError ->
-            Logger.error("noise decrypt failed: #{Exception.message(e)}")
-            {:error, {:decrypt_failed, e}}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
+          new_state = %{state | rx_counter: state.rx_counter + 1}
+          {:ok, plaintext, new_state}
+      end
     end
   end
 
@@ -192,9 +186,10 @@ defmodule ExWapp.Noise do
   defp do_server_hello(%__MODULE__{} = state, payload) do
     with {:ok, client_finish} <- build_client_finish(state.handshake_ref, payload),
          {:ok, secrets} <- complete_handshake(state.handshake_ref),
+         {:ok, cipher_ref} <- build_transport_cipher(secrets),
          :ok <- verify_certificate_callback(state, secrets),
          :ok <- persist_pending_data(state),
-         new_state <- promote_to_transport(state, secrets) do
+         new_state <- promote_to_transport(state, secrets, cipher_ref) do
       Logger.debug(
         "Handshake client finish (#{byte_size(client_finish)} bytes): #{hex(client_finish)}"
       )
@@ -236,7 +231,19 @@ defmodule ExWapp.Noise do
     maybe_persist(store, data)
   end
 
-  defp promote_to_transport(state, %Secrets{} = secrets) do
+  defp build_transport_cipher(%Secrets{} = secrets) do
+    keys = %NoiseKeys{
+      write_key: ensure_binary(secrets.write_key),
+      read_key: ensure_binary(secrets.read_key)
+    }
+
+    case Nif.noise_cipher_new(keys, ensure_binary(secrets.handshake_hash)) do
+      {:error, reason} -> {:error, {:noise_cipher_new, reason}}
+      cipher_ref -> {:ok, cipher_ref}
+    end
+  end
+
+  defp promote_to_transport(state, %Secrets{} = secrets, cipher_ref) do
     state
     |> Map.put(:phase, :transport)
     |> Map.put(:handshake_ref, nil)
@@ -247,6 +254,7 @@ defmodule ExWapp.Noise do
     |> Map.put(:pending_store_data, nil)
     |> Map.put(:handshake_hash, secrets.handshake_hash)
     |> Map.put(:handshake_salt, secrets.handshake_salt)
+    |> Map.put(:cipher_ref, cipher_ref)
   end
 
   defp build_client_payload(%__MODULE__{client_payload_fun: fun} = state)
@@ -327,17 +335,6 @@ defmodule ExWapp.Noise do
 
   defp maybe_persist(store, data) when is_map(data), do: Store.persist(store, data)
   defp maybe_persist(_store, _data), do: :ok
-
-  defp build_nonce(counter), do: <<0::unsigned-size(64), counter::unsigned-size(32)>>
-
-  defp split_cipher_and_tag(payload) when byte_size(payload) >= 16 do
-    tag_size = 16
-    cipher_size = byte_size(payload) - tag_size
-    <<cipher::binary-size(cipher_size), tag::binary-size(tag_size)>> = payload
-    {:ok, cipher, tag}
-  end
-
-  defp split_cipher_and_tag(_payload), do: {:error, :ciphertext_too_short}
 
   defp hex(data) do
     Base.encode16(data, case: :lower)
