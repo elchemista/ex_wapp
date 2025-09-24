@@ -49,7 +49,7 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
       assert_receive {:cert_verified, ^server_certificate, ^static_pub}
 
       assert new_noise.phase == :transport
-      assert is_reference(new_noise.cipher_ref)
+      refute is_nil(new_noise.cipher_ref)
       assert new_noise.tx_counter == 0
       assert new_noise.rx_counter == 0
       assert byte_size(new_noise.tx_key) == 32
