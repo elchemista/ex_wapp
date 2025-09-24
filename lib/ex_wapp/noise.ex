@@ -7,17 +7,15 @@ defmodule ExWapp.Noise do
   payloads once the handshake completes.
   """
 
-  alias ExWapp.Noise.{ClientPayload, Handshake}
+  alias ExWapp.Nif
+  alias ExWapp.Nif.Secrets
+  alias ExWapp.Noise.ClientPayload
   alias ExWapp.Store
-  alias ExWapp.Transport.Frame
-
   alias WAWebProtobufsWa6.HandshakeMessage
   require Logger
 
-  defstruct handshake: nil,
-            phase: :handshake,
-            eph_priv: nil,
-            eph_pub: nil,
+  defstruct phase: :handshake,
+            handshake_ref: nil,
             static_key: nil,
             tx_key: nil,
             rx_key: nil,
@@ -25,15 +23,16 @@ defmodule ExWapp.Noise do
             rx_counter: 0,
             store: nil,
             client_payload_fun: nil,
-            certificate_verifier: nil
+            certificate_verifier: nil,
+            pending_store_data: nil,
+            handshake_hash: nil,
+            handshake_salt: nil
 
   @type certificate_verifier_fun :: (binary(), binary() -> :ok | {:error, term()})
 
   @type t :: %__MODULE__{
-          handshake: Handshake.t() | nil,
           phase: :handshake | :transport,
-          eph_priv: binary() | nil,
-          eph_pub: binary() | nil,
+          handshake_ref: reference() | nil,
           static_key: %{priv: binary(), pub: binary()} | nil,
           tx_key: binary() | nil,
           rx_key: binary() | nil,
@@ -47,10 +46,11 @@ defmodule ExWapp.Noise do
                  | {:ok, binary()}
                  | {:error, term()}
                  | {:ok, binary(), Store.data()}),
-          certificate_verifier: certificate_verifier_fun() | nil
+          certificate_verifier: certificate_verifier_fun() | nil,
+          pending_store_data: Store.data() | nil,
+          handshake_hash: binary() | nil,
+          handshake_salt: binary() | nil
         }
-
-  @noise_pattern "Noise_XX_25519_AESGCM_SHA256\x00\x00\x00\x00"
 
   @doc """
   Initialises a new Noise handshake state.
@@ -61,45 +61,35 @@ defmodule ExWapp.Noise do
   @spec init(keyword()) :: {:ok, binary(), t()} | {:error, term()}
   def init(opts) do
     with {:ok, store} <- Keyword.fetch(opts, :store) do
-      header = Keyword.get(opts, :header, Frame.header())
       client_payload_fun = Keyword.get(opts, :client_payload_fun, &ClientPayload.build/1)
 
       certificate_verifier =
         Keyword.get(opts, :certificate_verifier, &ExWapp.Noise.Certificate.verify/2)
 
-      {:ok, static_key} = ensure_static_key(store)
+      static_key = load_static_key(store)
 
-      {eph_pub, eph_priv} = :crypto.generate_key(:ecdh, :x25519)
-
-      handshake =
-        Handshake.new(@noise_pattern, header)
-        |> Handshake.authenticate(eph_pub)
-
-      message = %HandshakeMessage{
-        clientHello: %HandshakeMessage.ClientHello{
-          ephemeral: eph_pub
-        }
+      base_state = %__MODULE__{
+        store: store,
+        static_key: static_key,
+        client_payload_fun: client_payload_fun,
+        certificate_verifier: certificate_verifier
       }
 
-      case HandshakeMessage.encode(message) do
-        {:ok, iodata} ->
-          payload = IO.iodata_to_binary(iodata)
-          Logger.debug("Handshake client hello (#{byte_size(payload)} bytes): #{hex(payload)}")
+      with {:ok, client_payload, pending_data} <- build_client_payload(base_state),
+           {:ok, handshake_ref, client_hello, static_map} <-
+             start_handshake(client_payload, static_key),
+           :ok <- persist_static_key(store, static_map) do
+        state =
+          base_state
+          |> Map.put(:handshake_ref, handshake_ref)
+          |> Map.put(:static_key, static_map)
+          |> Map.put(:pending_store_data, pending_data)
 
-          state = %__MODULE__{
-            handshake: handshake,
-            eph_priv: eph_priv,
-            eph_pub: eph_pub,
-            static_key: static_key,
-            store: store,
-            client_payload_fun: client_payload_fun,
-            certificate_verifier: certificate_verifier
-          }
+        Logger.debug(
+          "Handshake client hello (#{byte_size(client_hello)} bytes): #{hex(client_hello)}"
+        )
 
-          {:ok, payload, state}
-
-        {:error, reason} ->
-          {:error, {:encode_client_hello, reason}}
+        {:ok, client_hello, state}
       end
     else
       :error -> {:error, :missing_store}
@@ -111,11 +101,11 @@ defmodule ExWapp.Noise do
   with the updated Noise state (now ready for transport encryption/decryption).
   """
   @spec handle_server_hello(t(), binary()) :: {:ok, binary(), t()} | {:error, term()}
-  def handle_server_hello(%__MODULE__{phase: :handshake} = state, payload)
-      when is_binary(payload) do
-    with {:ok, message} <- HandshakeMessage.decode(payload),
-         %HandshakeMessage{serverHello: server_hello} when not is_nil(server_hello) <- message,
-         {:ok, new_state, client_finish} <- do_server_hello(state, server_hello) do
+  def handle_server_hello(%__MODULE__{phase: :handshake, handshake_ref: ref} = state, payload)
+      when is_binary(payload) and not is_nil(ref) do
+    with {:ok, %HandshakeMessage{serverHello: %HandshakeMessage.ServerHello{}}} <-
+           HandshakeMessage.decode(payload),
+         {:ok, new_state, client_finish} <- do_server_hello(state, payload) do
       {:ok, client_finish, new_state}
     else
       %HandshakeMessage{serverHello: nil} -> {:error, :missing_server_hello}
@@ -199,33 +189,12 @@ defmodule ExWapp.Noise do
 
   def decrypt(_state, _payload), do: {:error, :invalid_state}
 
-  defp do_server_hello(state, server_hello) do
-    with {:ok, handshake, server_ephemeral} <-
-           read_server_ephemeral(state.handshake, server_hello.ephemeral),
-         {:ok, handshake, server_static} <-
-           decrypt_static(handshake, state.eph_priv, server_ephemeral, server_hello.static),
-         {:ok, handshake} <-
-           verify_certificate(state, handshake, server_static, server_hello.payload),
-         {:ok, handshake, encrypted_static} <- encrypt_static(handshake, state.static_key.pub),
-         {:ok, handshake} <-
-           Handshake.mix_shared_secret(handshake, state.static_key.priv, server_ephemeral),
-         {:ok, payload} <- build_client_payload(state),
-         {handshake, encrypted_payload} <- Handshake.encrypt(handshake, payload),
-         {:ok, client_finish} <- encode_client_finish(encrypted_static, encrypted_payload),
-         {write_key, read_key} <- Handshake.derive_transport_keys(handshake) do
-      new_state =
-        %{
-          state
-          | phase: :transport,
-            handshake: nil,
-            eph_priv: nil,
-            eph_pub: nil,
-            tx_key: read_key,
-            rx_key: write_key,
-            tx_counter: 0,
-            rx_counter: 0
-        }
-
+  defp do_server_hello(%__MODULE__{} = state, payload) do
+    with {:ok, client_finish} <- build_client_finish(state.handshake_ref, payload),
+         {:ok, secrets} <- complete_handshake(state.handshake_ref),
+         :ok <- verify_certificate_callback(state, secrets),
+         :ok <- persist_pending_data(state),
+         new_state <- promote_to_transport(state, secrets) do
       Logger.debug(
         "Handshake client finish (#{byte_size(client_finish)} bytes): #{hex(client_finish)}"
       )
@@ -234,94 +203,126 @@ defmodule ExWapp.Noise do
     end
   end
 
-  defp read_server_ephemeral(handshake, server_ephemeral)
-       when byte_size(server_ephemeral) == 32 do
-    handshake = Handshake.authenticate(handshake, server_ephemeral)
-    {:ok, handshake, server_ephemeral}
-  end
-
-  defp read_server_ephemeral(_handshake, _), do: {:error, :invalid_server_ephemeral}
-
-  defp decrypt_static(handshake, eph_priv, server_ephemeral, static_cipher) do
-    with {:ok, handshake} <- Handshake.mix_shared_secret(handshake, eph_priv, server_ephemeral),
-         {:ok, handshake, static_plain} <- Handshake.decrypt(handshake, static_cipher),
-         true <- byte_size(static_plain) == 32 || {:error, :invalid_static_key},
-         {:ok, handshake} <- Handshake.mix_shared_secret(handshake, eph_priv, static_plain) do
-      {:ok, handshake, static_plain}
+  defp build_client_finish(handshake_ref, payload) do
+    case Nif.handshake_client_finish(handshake_ref, payload) do
+      {:error, reason} -> {:error, {:handshake_client_finish, reason}}
+      bin when is_binary(bin) -> {:ok, bin}
     end
   end
 
-  defp verify_certificate(
+  defp complete_handshake(handshake_ref) do
+    case Nif.handshake_finish(handshake_ref) do
+      {:error, reason} -> {:error, {:handshake_finish, reason}}
+      %ExWappNif.HandshakeSecrets{} = secrets -> {:ok, Nif.to_secrets(secrets)}
+    end
+  end
+
+  defp verify_certificate_callback(
          %__MODULE__{certificate_verifier: verifier},
-         handshake,
-         static_plain,
-         payload_cipher
+         %Secrets{server_certificate: cert, server_static: static}
        )
        when is_function(verifier, 2) do
-    with {:ok, handshake, cert_bytes} <- Handshake.decrypt(handshake, payload_cipher),
-         :ok <- verifier.(cert_bytes, static_plain) do
-      {:ok, handshake}
+    case verifier.(cert, static) do
+      :ok -> :ok
+      {:error, _} = error -> error
+      other -> {:error, {:invalid_certificate_verifier_result, other}}
     end
   end
 
-  defp verify_certificate(_state, _handshake, _static_plain, _payload_cipher),
-    do: {:error, :invalid_certificate_verifier}
+  defp verify_certificate_callback(_state, _secrets), do: {:error, :invalid_certificate_verifier}
 
-  defp encrypt_static(handshake, static_pub) do
-    {handshake, ciphertext} = Handshake.encrypt(handshake, static_pub)
-    {:ok, handshake, ciphertext}
+  defp persist_pending_data(%__MODULE__{store: store, pending_store_data: data}) do
+    maybe_persist(store, data)
   end
 
-  defp encode_client_finish(encrypted_static, encrypted_payload) do
-    message = %HandshakeMessage{
-      clientFinish: %HandshakeMessage.ClientFinish{
-        static: encrypted_static,
-        payload: encrypted_payload
-      }
-    }
-
-    with {:ok, iodata} <- HandshakeMessage.encode(message) do
-      {:ok, IO.iodata_to_binary(iodata)}
-    end
+  defp promote_to_transport(state, %Secrets{} = secrets) do
+    state
+    |> Map.put(:phase, :transport)
+    |> Map.put(:handshake_ref, nil)
+    |> Map.put(:tx_key, secrets.write_key)
+    |> Map.put(:rx_key, secrets.read_key)
+    |> Map.put(:tx_counter, 0)
+    |> Map.put(:rx_counter, 0)
+    |> Map.put(:pending_store_data, nil)
+    |> Map.put(:handshake_hash, secrets.handshake_hash)
+    |> Map.put(:handshake_salt, secrets.handshake_salt)
   end
 
   defp build_client_payload(%__MODULE__{client_payload_fun: fun} = state)
        when is_function(fun, 1) do
     case fun.(state) do
       {:ok, payload} when is_binary(payload) ->
-        {:ok, payload}
+        {:ok, payload, nil}
 
       {:ok, payload, data} when is_binary(payload) ->
-        maybe_persist(state.store, data)
-        {:ok, payload}
+        {:ok, payload, data}
 
       {:error, _} = error ->
         error
 
       payload when is_binary(payload) ->
-        {:ok, payload}
+        {:ok, payload, nil}
 
       other ->
         {:error, {:invalid_payload, other}}
     end
   end
 
-  defp build_client_payload(%__MODULE__{}), do: {:ok, <<>>}
+  defp build_client_payload(%__MODULE__{}), do: {:ok, <<>>, nil}
 
-  defp ensure_static_key(store) do
+  defp start_handshake(payload, static_key) do
+    maybe_priv =
+      case static_key do
+        %{priv: priv} when is_binary(priv) -> priv
+        _ -> nil
+      end
+
+    case Nif.handshake_new(payload, maybe_priv) do
+      {:error, reason} ->
+        {:error, {:handshake_new, reason}}
+
+      {handshake_ref, client_hello, static_pub, static_priv} ->
+        {:ok, handshake_ref, ensure_binary(client_hello),
+         %{priv: ensure_binary(static_priv), pub: ensure_binary(static_pub)}}
+    end
+  end
+
+  defp load_static_key(store) do
     data = Store.load!(store)
 
     case data[:noise] do
       %{static_private: priv, static_public: pub} when is_binary(priv) and is_binary(pub) ->
-        {:ok, %{priv: priv, pub: pub}}
+        %{priv: priv, pub: pub}
 
       _ ->
-        {pub, priv} = :crypto.generate_key(:ecdh, :x25519)
-        noise_map = %{static_private: priv, static_public: pub}
-        :ok = Store.persist(store, Map.put(data, :noise, noise_map))
-        {:ok, %{priv: priv, pub: pub}}
+        nil
     end
   end
+
+  defp persist_static_key(_store, nil), do: :ok
+
+  defp persist_static_key(store, %{priv: priv, pub: pub}) do
+    data = Store.load!(store)
+    noise = Map.get(data, :noise, %{})
+
+    current_priv = Map.get(noise, :static_private)
+    current_pub = Map.get(noise, :static_public)
+
+    if current_priv == priv and current_pub == pub do
+      :ok
+    else
+      updated_noise =
+        noise
+        |> Map.put(:static_private, priv)
+        |> Map.put(:static_public, pub)
+
+      :ok = Store.persist(store, Map.put(data, :noise, updated_noise))
+    end
+  end
+
+  defp ensure_binary(value) when is_binary(value), do: value
+  defp ensure_binary(value) when is_list(value), do: :erlang.list_to_binary(value)
+  defp ensure_binary(value), do: value
 
   defp maybe_persist(store, data) when is_map(data), do: Store.persist(store, data)
   defp maybe_persist(_store, _data), do: :ok

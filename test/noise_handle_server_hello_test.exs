@@ -9,13 +9,16 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
   alias ExWapp.Transport.Frame
 
   alias WAWebProtobufsWa6.HandshakeMessage
+  alias WACert.CertChain
+  alias WACert.CertChain.NoiseCertificate
+  alias WACert.CertChain.NoiseCertificate.Details
 
   @noise_pattern "Noise_XX_25519_AESGCM_SHA256\x00\x00\x00\x00"
+  @issuer_serial 0
 
   describe "handle_server_hello/2" do
     test "completes the handshake and derives usable transport keys" do
       parent = self()
-      certificate_plain = "test-cert"
 
       verifier = fn cert_bytes, static_plain ->
         send(parent, {:cert_verified, cert_bytes, static_plain})
@@ -24,19 +27,26 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
 
       store = store_fixture()
 
-      {:ok, _hello, noise} =
+      {:ok, client_hello, noise} =
         Noise.init(
           store: store,
           certificate_verifier: verifier
         )
 
-      server = build_server_hello(noise, certificate_plain)
+      assert byte_size(client_hello) > 0
+
+      {:ok,
+       %HandshakeMessage{clientHello: %HandshakeMessage.ClientHello{ephemeral: client_ephemeral}}} =
+        HandshakeMessage.decode(client_hello)
+
+      server = build_server_hello(client_ephemeral)
 
       assert {:ok, client_finish, new_noise} = Noise.handle_server_hello(noise, server.payload)
       assert byte_size(client_finish) > 300
 
       static_pub = server.static_pub
-      assert_receive {:cert_verified, ^certificate_plain, ^static_pub}
+      server_certificate = server.certificate
+      assert_receive {:cert_verified, ^server_certificate, ^static_pub}
 
       assert new_noise.phase == :transport
       assert new_noise.tx_counter == 0
@@ -52,9 +62,27 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
     end
   end
 
-  defp build_server_hello(%Noise{eph_pub: client_ephemeral}, certificate_plain) do
+  defp build_server_hello(client_ephemeral) do
     {server_ephemeral_pub, server_ephemeral_priv} = :crypto.generate_key(:ecdh, :x25519)
     {server_static_pub, server_static_priv} = :crypto.generate_key(:ecdh, :x25519)
+
+    intermediate_details =
+      %Details{serial: 1, issuerSerial: @issuer_serial, key: random_bytes(32)}
+      |> Details.encode!()
+      |> IO.iodata_to_binary()
+
+    leaf_details =
+      %Details{serial: 2, issuerSerial: 1, key: server_static_pub}
+      |> Details.encode!()
+      |> IO.iodata_to_binary()
+
+    certificate_plain =
+      %CertChain{
+        intermediate: %NoiseCertificate{details: intermediate_details, signature: nil},
+        leaf: %NoiseCertificate{details: leaf_details, signature: nil}
+      }
+      |> CertChain.encode!()
+      |> IO.iodata_to_binary()
 
     handshake =
       Handshake.new(@noise_pattern, Frame.header())
@@ -136,6 +164,8 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
   end
 
   defp nonce(counter), do: <<0::unsigned-size(64), counter::unsigned-size(32)>>
+
+  defp random_bytes(size), do: :crypto.strong_rand_bytes(size)
 
   defp store_fixture do
     tmp_dir = Path.join(System.tmp_dir!(), "ex_wapp_tests")
