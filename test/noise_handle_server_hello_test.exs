@@ -49,12 +49,14 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
       assert_receive {:cert_verified, ^server_certificate, ^static_pub}
 
       assert new_noise.phase == :transport
+      assert is_reference(new_noise.cipher_ref)
       assert new_noise.tx_counter == 0
       assert new_noise.rx_counter == 0
       assert byte_size(new_noise.tx_key) == 32
       assert byte_size(new_noise.rx_key) == 32
 
       {:ok, server_keys} = process_client_finish(server, client_finish)
+      assert new_noise.handshake_hash == server_keys.handshake_hash
       assert new_noise.tx_key == server_keys.read_key
       assert new_noise.rx_key == server_keys.write_key
 
@@ -129,21 +131,36 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
            Handshake.decrypt(handshake, client_finish.payload) do
       {write_key, read_key} = Handshake.derive_transport_keys(handshake)
 
-      {:ok, %{write_key: write_key, read_key: read_key}}
+      {:ok,
+       %{
+         write_key: write_key,
+         read_key: read_key,
+         handshake_hash: handshake.hash
+       }}
     end
   end
 
-  defp assert_encryption_round_trip(noise, %{write_key: server_write, read_key: server_read}) do
+  defp assert_encryption_round_trip(
+         noise,
+         %{write_key: server_write, read_key: server_read, handshake_hash: handshake_hash}
+       ) do
     plaintext = "hello"
 
     assert {:ok, ciphertext, noise_after_tx} = Noise.encrypt(noise, plaintext)
 
-    assert decrypt_with_key(server_read, 0, ciphertext) == plaintext
+    assert decrypt_with_key(server_read, handshake_hash, 0, ciphertext) == plaintext
 
     reply = "world"
 
     {server_cipher, server_tag} =
-      :crypto.crypto_one_time_aead(:aes_256_gcm, server_write, nonce(0), reply, <<>>, true)
+      :crypto.crypto_one_time_aead(
+        :aes_256_gcm,
+        server_write,
+        nonce(0),
+        reply,
+        handshake_hash,
+        true
+      )
 
     server_payload = server_cipher <> server_tag
 
@@ -154,10 +171,18 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
     assert noise_after_rx.rx_counter == 1
   end
 
-  defp decrypt_with_key(key, counter, payload) do
+  defp decrypt_with_key(key, handshake_hash, counter, payload) do
     <<cipher::binary-size(byte_size(payload) - 16), tag::binary-size(16)>> = payload
 
-    case :crypto.crypto_one_time_aead(:aes_256_gcm, key, nonce(counter), cipher, <<>>, tag, false) do
+    case :crypto.crypto_one_time_aead(
+           :aes_256_gcm,
+           key,
+           nonce(counter),
+           cipher,
+           handshake_hash,
+           tag,
+           false
+         ) do
       :error -> flunk("failed to decrypt test payload")
       plaintext -> plaintext
     end
