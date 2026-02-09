@@ -79,7 +79,7 @@ defmodule ExWapp.Signal.SessionStore do
   """
   @spec get_or_create_session(t(), String.t(), map(), map(), non_neg_integer()) ::
           {:ok, map(), binary() | nil, t()} | {:error, term()}
-  def get_or_create_session(store, jid, local_identity, remote_bundle, local_registration_id) do
+  def get_or_create_session(store, jid, local_identity, remote_bundle, _local_registration_id) do
     jid = normalize_jid(jid)
 
     case get_session(store, jid) do
@@ -91,18 +91,6 @@ defmodule ExWapp.Signal.SessionStore do
         cond do
           remote_bundle in [nil, %{}] ->
             {:error, :missing_bundle}
-
-          Signal.get_impl() == :native ->
-            with {:ok, session_data} <-
-                   ExWapp.Signal.NativeSession.create_session_v2(
-                     local_identity,
-                     local_registration_id,
-                     remote_bundle
-                   ) do
-              session = %{impl: :native_v2, data: session_data}
-              updated_store = put_session(store, jid, session)
-              {:ok, session, nil, updated_store}
-            end
 
           true ->
             case Signal.create_session(local_identity, remote_bundle) do
@@ -148,47 +136,28 @@ defmodule ExWapp.Signal.SessionStore do
              remote_bundle,
              local_registration_id
            ) do
-      case {Signal.get_impl(), session} do
-        {:native, %{impl: :native_v2, data: data}} ->
-          case ExWapp.Signal.NativeSession.encrypt_v2(data, plaintext) do
-            {:ok, ciphertext, enc_type, updated_data} ->
-              updated_store =
-                update_session(store, jid, %{impl: :native_v2, data: updated_data})
+      case Signal.encrypt(session, plaintext) do
+        {:ok, ciphertext, updated_session} ->
+          updated_store = update_session(store, jid, updated_session)
 
-              {:ok, ciphertext, enc_type, updated_store}
+          if base_key do
+            prekey_id = get_in(remote_bundle, [:prekey, :id]) || 0
+            signed_prekey_id = get_in(remote_bundle, [:signed_prekey, :id]) || 0
+            identity_pub = local_identity.public
 
-            {:error, reason} ->
-              {:error, reason}
-          end
+            wrapped =
+              ExWapp.Signal.WireFormat.serialize_prekey_signal_message(
+                local_registration_id,
+                prekey_id,
+                signed_prekey_id,
+                base_key,
+                identity_pub,
+                ciphertext
+              )
 
-        _ ->
-          # Always use regular encrypt to get SignalMessage
-          case Signal.encrypt(session, plaintext) do
-            {:ok, ciphertext, updated_session} ->
-              updated_store = update_session(store, jid, updated_session)
-
-              if base_key do
-                prekey_id = get_in(remote_bundle, [:prekey, :id]) || 0
-                signed_prekey_id = get_in(remote_bundle, [:signed_prekey, :id]) || 0
-                identity_pub = local_identity.public
-
-                wrapped =
-                  ExWapp.Signal.WireFormat.serialize_prekey_signal_message(
-                    local_registration_id,
-                    prekey_id,
-                    signed_prekey_id,
-                    base_key,
-                    identity_pub,
-                    ciphertext
-                  )
-
-                {:ok, wrapped, :prekey, updated_store}
-              else
-                {:ok, ciphertext, :whisper, updated_store}
-              end
-
-            {:error, reason} ->
-              {:error, reason}
+            {:ok, wrapped, :prekey, updated_store}
+          else
+            {:ok, ciphertext, :whisper, updated_store}
           end
       end
     end

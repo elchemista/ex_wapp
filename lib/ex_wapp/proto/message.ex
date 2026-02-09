@@ -19,6 +19,13 @@ defmodule ExWapp.Proto.Message do
             protocolMessage: nil,
             __uf__: []
 
+  @type t :: %__MODULE__{
+          conversation: binary() | nil,
+          extendedTextMessage: ExWapp.Proto.ExtendedTextMessage.t() | nil,
+          protocolMessage: ExWapp.Proto.ProtocolMessage.t() | nil,
+          __uf__: list()
+        }
+
   @spec encode(struct()) :: {:ok, binary()} | {:error, any()}
   def encode(msg) do
     try do
@@ -81,6 +88,12 @@ defmodule ExWapp.Proto.ExtendedTextMessage do
             contextInfo: nil,
             __uf__: []
 
+  @type t :: %__MODULE__{
+          text: binary() | nil,
+          contextInfo: ExWapp.Proto.ContextInfo.t() | nil,
+          __uf__: list()
+        }
+
   @spec encode!(struct()) :: binary()
   def encode!(msg) do
     []
@@ -125,6 +138,14 @@ defmodule ExWapp.Proto.ContextInfo do
             mentionedJID: [],
             isForwarded: nil,
             __uf__: []
+
+  @type t :: %__MODULE__{
+          stanzaID: binary() | nil,
+          participant: binary() | nil,
+          mentionedJID: [binary()],
+          isForwarded: boolean() | nil,
+          __uf__: list()
+        }
 
   @spec encode!(struct()) :: binary()
   def encode!(msg) do
@@ -185,6 +206,12 @@ defmodule ExWapp.Proto.ProtocolMessage do
             type: nil,
             __uf__: []
 
+  @type t :: %__MODULE__{
+          key: ExWapp.Proto.MessageKey.t() | nil,
+          type: atom() | nil,
+          __uf__: list()
+        }
+
   @spec encode!(struct()) :: binary()
   def encode!(msg) do
     []
@@ -234,6 +261,14 @@ defmodule ExWapp.Proto.MessageKey do
             id: nil,
             participant: nil,
             __uf__: []
+
+  @type t :: %__MODULE__{
+          remoteJID: binary() | nil,
+          fromMe: boolean() | nil,
+          id: binary() | nil,
+          participant: binary() | nil,
+          __uf__: list()
+        }
 
   @spec encode!(struct()) :: binary()
   def encode!(msg) do

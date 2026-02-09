@@ -19,9 +19,9 @@ defmodule ExWapp.Pairing.ADV do
   Result returned by `parse_signed_device_identity/3`.
   """
   @type parsed_identity :: %{
-          container: ADVSignedDeviceIdentityHMAC.t(),
-          signed: ADVSignedDeviceIdentity.t(),
-          details: ADVDeviceIdentity.t(),
+          container: struct(),
+          signed: struct(),
+          details: struct(),
           hosted?: boolean(),
           device_signature: binary(),
           self_signed: binary(),
@@ -72,6 +72,9 @@ defmodule ExWapp.Pairing.ADV do
       end
     end
   end
+
+  def parse_signed_device_identity(_adv_bytes, _adv_secret, _identity),
+    do: {:error, :invalid_adv_payload}
 
   # Parse HMAC-wrapped ADV (from adv-device-identity node)
   defp parse_hmac_wrapped(container, adv_secret, identity_pub, identity_priv) do
@@ -171,9 +174,6 @@ defmodule ExWapp.Pairing.ADV do
         err
     end
   end
-
-  def parse_signed_device_identity(_adv_bytes, _adv_secret, _identity),
-    do: {:error, :invalid_adv_payload}
 
   defp decode_container(bytes) do
     case ADVSignedDeviceIdentityHMAC.decode(bytes) do
@@ -292,7 +292,7 @@ defmodule ExWapp.Pairing.ADV do
     require Logger
 
     Logger.info(
-      "[ADV] encode_self_signed: details=#{byte_size(signed.details || <<>>)}, acctSigKey=#{byte_size(signed.accountSignatureKey || <<>>)}, acctSig=#{byte_size(signed.accountSignature || <<>>)}, devSig=#{byte_size(signed.deviceSignature || <<>>)}"
+      "[ADV] encode_self_signed: details=#{byte_size(signed.details)}, acctSigKey=#{byte_size(signed.accountSignatureKey)}, acctSig=#{byte_size(signed.accountSignature)}, devSig=#{byte_size(signed.deviceSignature)}"
     )
 
     with {:ok, iodata} <- ADVSignedDeviceIdentity.encode(signed) do

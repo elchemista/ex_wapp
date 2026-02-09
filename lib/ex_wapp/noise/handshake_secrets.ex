@@ -45,18 +45,6 @@ defmodule ExWapp.Noise.HandshakeSecrets do
     |> new()
   end
 
-  @spec from_nif(%ExWappNif.HandshakeSecrets{}) :: t()
-  def from_nif(%ExWappNif.HandshakeSecrets{} = secrets) do
-    new(%{
-      write_key: secrets.write_key,
-      read_key: secrets.read_key,
-      handshake_hash: secrets.handshake_hash,
-      handshake_salt: secrets.handshake_ck,
-      server_static: secrets.server_static,
-      server_certificate: secrets.server_certificate
-    })
-  end
-
   defp fetch_binary!(attrs, key) do
     attrs
     |> Map.fetch!(key)

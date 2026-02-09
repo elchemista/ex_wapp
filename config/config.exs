@@ -4,6 +4,6 @@ import Config
 config :logger,
   level: :info
 
-config :ex_wapp, :signal_impl, :native
+config :ex_wapp, :signal_impl, :elixir
 
 config :logger, :console, format: "$time [$level] $message\n"

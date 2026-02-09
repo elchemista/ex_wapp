@@ -18,12 +18,12 @@ defmodule ExWapp do
   # Stream QR codes for pairing
   ExWapp.qr_stream(session)
   |> Stream.each(fn
-    {:qr, ref, data} ->
+    {:code, data} ->
       # Display QR code for user to scan
       IO.puts("Scan this QR with WhatsApp:")
       data |> ExWapp.Pairing.QR.to_terminal() |> IO.puts()
 
-    {:paired, info} ->
+    :success ->
       IO.puts("Successfully paired!")
 
     {:error, reason} ->
@@ -72,14 +72,12 @@ defmodule ExWapp do
         store: {ExWapp.Store.Ets, path: @store_path}
       )
 
-      # Check if already paired
-      case ExWapp.Session.state(session) do
-        :paired ->
-          IO.puts("Already paired, ready to send messages")
+      case ExWapp.state(session) do
+        :connected ->
+          IO.puts("Already connected")
           {:ok, session}
 
-        :unpaired ->
-          IO.puts("Need to pair, starting QR flow...")
+        _other ->
           ExWapp.connect(session)
           wait_for_pairing(session)
       end
@@ -88,12 +86,12 @@ defmodule ExWapp do
     defp wait_for_pairing(session) do
       ExWapp.qr_stream(session)
       |> Enum.find(fn
-        {:paired, _} -> true
+        :success -> true
         {:error, _} -> true
         _ -> false
       end)
       |> case do
-        {:paired, _} -> {:ok, session}
+        :success -> {:ok, session}
         {:error, reason} -> {:error, reason}
       end
     end
@@ -161,21 +159,21 @@ defmodule ExWapp do
 
   Subscribe to this stream after calling `connect/1` to receive:
 
-    * `{:qr, ref, data}` - New QR code to display (codes expire periodically)
-    * `{:paired, info}` - Successfully paired with phone
+    * `{:code, data}` - New QR code payload to display (codes expire periodically)
+    * `:success` - Successfully paired with phone
     * `{:error, reason}` - Pairing failed
 
   ## Example
 
       ExWapp.qr_stream(session)
       |> Stream.each(fn
-        {:qr, _ref, data} ->
+        {:code, data} ->
           # Render QR code (e.g., using qrencode or terminal output)
           qr = ExWapp.Pairing.QR.to_terminal(data)
           IO.puts(qr)
 
-        {:paired, %{jid: jid}} ->
-          IO.puts("Paired as \#{jid}")
+        :success ->
+          IO.puts("Paired successfully")
 
         {:error, :timeout} ->
           IO.puts("QR expired, generating new one...")
@@ -263,6 +261,14 @@ defmodule ExWapp do
   """
   @spec list_chats(GenServer.server()) :: [Chat.chat()]
   def list_chats(session), do: Chat.list(session)
+
+  @doc """
+  Lists only group chats for a session.
+
+  Returns chats where JID ends with `@g.us`, sorted by most recent activity.
+  """
+  @spec list_groups(GenServer.server()) :: [Chat.chat()]
+  def list_groups(session), do: Chat.list_groups(session)
 
   @doc """
   Gets a specific chat by JID.

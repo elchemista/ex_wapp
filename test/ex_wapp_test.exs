@@ -30,6 +30,121 @@ defmodule ExWappTest do
     end
   end
 
+  describe "Chat listing" do
+    test "add_message initializes chats map when store has no :chats key" do
+      {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
+
+      :ok =
+        ExWapp.Chat.add_message(session, "999000111@s.whatsapp.net", %{
+          id: "m1",
+          from_me: false,
+          timestamp: 123,
+          text: "hello",
+          status: :received,
+          participant: nil,
+          raw: nil
+        })
+
+      chats = ExWapp.list_chats(session)
+      assert length(chats) == 1
+      assert hd(chats).jid == "999000111@s.whatsapp.net"
+
+      GenServer.stop(session)
+    end
+
+    test "list_groups returns only group chats" do
+      {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
+
+      :ok =
+        ExWapp.Chat.add_message(session, "12345@g.us", %{
+          id: "g1",
+          from_me: false,
+          timestamp: 1,
+          text: "group",
+          status: :sent,
+          participant: nil,
+          raw: nil
+        })
+
+      :ok =
+        ExWapp.Chat.add_message(session, "555000111@s.whatsapp.net", %{
+          id: "d1",
+          from_me: false,
+          timestamp: 2,
+          text: "direct",
+          status: :sent,
+          participant: nil,
+          raw: nil
+        })
+
+      groups = ExWapp.list_groups(session)
+
+      assert length(groups) == 1
+      assert hd(groups).jid == "12345@g.us"
+
+      GenServer.stop(session)
+    end
+  end
+
+  describe "LiveTest helpers" do
+    test "wait_new_messages returns timeout when no messages arrive" do
+      {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
+      assert {:error, :timeout} = ExWapp.LiveTest.wait_new_messages(session, timeout_ms: 10)
+      GenServer.stop(session)
+    end
+  end
+
+  describe "Message handling persistence" do
+    test "incoming message node is persisted to chats on empty store" do
+      {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
+
+      node = %ExWapp.Binary.Node{
+        tag: "message",
+        attrs: %{
+          "from" => "393519534944@s.whatsapp.net",
+          "id" => "MSG_1",
+          "type" => "text",
+          "t" => "1730000000"
+        },
+        content: [%ExWapp.Binary.Node{tag: "body", attrs: %{}, content: "hello"}]
+      }
+
+      state = %{stats: %{messages_received: 0}}
+      assert {:ok, _new_state, _actions} = ExWapp.MessageHandler.handle_node(node, session, state)
+
+      chats = ExWapp.list_chats(session)
+      assert length(chats) == 1
+      assert hd(chats).jid == "393519534944@s.whatsapp.net"
+
+      GenServer.stop(session)
+    end
+
+    test "connection_event message persists when handled inside Session process" do
+      {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
+
+      node = %ExWapp.Binary.Node{
+        tag: "message",
+        attrs: %{
+          "from" => "393519534944@s.whatsapp.net",
+          "id" => "MSG_2",
+          "type" => "text",
+          "t" => "1730000001"
+        },
+        content: [%ExWapp.Binary.Node{tag: "body", attrs: %{}, content: "inside-session"}]
+      }
+
+      send(session, {:connection_event, {:connection_message, node}})
+      Process.sleep(50)
+
+      chats = ExWapp.list_chats(session)
+      assert length(chats) == 1
+      assert hd(chats).jid == "393519534944@s.whatsapp.net"
+      assert hd(chats).messages |> hd() |> Map.get(:id) == "MSG_2"
+
+      GenServer.stop(session)
+    end
+  end
+
   describe "QR stream" do
     test "subscribes and receives events" do
       {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)

@@ -22,11 +22,16 @@ defmodule ExWapp.Session do
 
   The session emits the following telemetry events:
 
+    * `[:ex_wapp, :session, :init]` - Session process initialized
     * `[:ex_wapp, :session, :connect]` - Connection attempt
     * `[:ex_wapp, :session, :connected]` - Successfully connected
     * `[:ex_wapp, :session, :disconnected]` - Connection lost
     * `[:ex_wapp, :session, :reconnect]` - Reconnection attempt
     * `[:ex_wapp, :session, :error]` - Error occurred
+    * `[:ex_wapp, :session, :qr]` - QR lifecycle event (`:code`, `:success`, `:error`)
+    * `[:ex_wapp, :session, :message_received]` - Message persisted/forwarded
+    * `[:ex_wapp, :session, :message_sent]` - Message sent to transport
+    * `[:ex_wapp, :session, :terminate]` - Session terminate callback
 
   ## State Machine
 
@@ -39,7 +44,8 @@ defmodule ExWapp.Session do
   use GenServer
   require Logger
 
-  alias ExWapp.{Binary, Conn, Pairing, Store}
+  alias ExWapp.{Binary, Pairing, Store, Telemetry}
+  alias ExWapp.Session.{InboundRouter, OutboundQueue}
 
   # Reconnection configuration
   @initial_backoff_ms 1_000
@@ -56,14 +62,18 @@ defmodule ExWapp.Session do
 
   defstruct [
     :store,
+    :transport_mod,
     :pairing,
     :conn,
     :conn_ref,
+    :outbound_queue,
+    :inbound_router,
     :session_id,
     :health_timer,
     status: :idle,
     qr_subscribers: %{},
     message_subscribers: %{},
+    send_workers: %{},
     opts: [],
     reconnect_attempts: 0,
     last_disconnect_reason: nil,
@@ -84,10 +94,14 @@ defmodule ExWapp.Session do
           conn: pid() | nil,
           conn_ref: reference() | nil,
           store: Store.t() | nil,
+          transport_mod: module(),
+          outbound_queue: pid() | nil,
+          inbound_router: pid() | nil,
           session_id: term() | nil,
           health_timer: reference() | nil,
           qr_subscribers: %{reference() => {pid(), reference()}},
           message_subscribers: %{reference() => {pid(), reference()}},
+          send_workers: %{pid() => binary()},
           opts: keyword(),
           pairing: Pairing.state(),
           reconnect_attempts: non_neg_integer(),
@@ -236,15 +250,24 @@ defmodule ExWapp.Session do
 
     store = Store.new(Keyword.get(opts, :store))
     session_id = Keyword.get(opts, :session_id)
+    transport_mod = Keyword.get(opts, :transport, ExWapp.Conn)
 
     # Register with Registry if session_id provided
     if session_id do
       Registry.register(ExWapp.Session.Registry, session_id, self())
     end
 
+    {:ok, outbound_queue} =
+      OutboundQueue.start_link(session: self(), transport: transport_mod)
+
+    {:ok, inbound_router} = InboundRouter.start_link(session: self())
+
     state = %__MODULE__{
       opts: opts,
       store: store,
+      transport_mod: transport_mod,
+      outbound_queue: outbound_queue,
+      inbound_router: inbound_router,
       session_id: session_id,
       pairing: Pairing.new(store)
     }
@@ -308,7 +331,7 @@ defmodule ExWapp.Session do
   def handle_call({:send_iq, node, message_id}, from, %{status: :connected, conn: conn} = state)
       when is_pid(conn) do
     # Send the IQ node
-    case Conn.send_node(conn, node) do
+    case state.transport_mod.send_node(conn, node) do
       :ok ->
         # Register pending IQ with timeout
         timer = Process.send_after(self(), {:iq_timeout, message_id}, 30_000)
@@ -391,7 +414,19 @@ defmodule ExWapp.Session do
     {:noreply, new_state}
   end
 
-  def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
+  def handle_info({:EXIT, pid, reason}, %__MODULE__{outbound_queue: pid} = state) do
+    Logger.warning("[SESSION] outbound queue exited: #{inspect(reason)}")
+    {:noreply, restart_outbound_queue(state)}
+  end
+
+  def handle_info({:EXIT, pid, reason}, %__MODULE__{inbound_router: pid} = state) do
+    Logger.warning("[SESSION] inbound router exited: #{inspect(reason)}")
+    {:noreply, restart_inbound_router(state)}
+  end
+
+  def handle_info({:EXIT, pid, _reason}, %__MODULE__{send_workers: workers} = state) do
+    {:noreply, %{state | send_workers: Map.delete(workers, pid)}}
+  end
 
   # Connection events from Conn process
   def handle_info({:connection_event, event}, state) do
@@ -412,8 +447,32 @@ defmodule ExWapp.Session do
 
   # New message received - notify subscribers
   def handle_info({:new_message, jid, message}, state) do
+    emit_telemetry(
+      :message_received,
+      %{message_count: 1},
+      state,
+      %{
+        jid: jid,
+        message_id: Map.get(message, :id),
+        type: get_in(message, [:raw, :type])
+      }
+    )
+
     notify_message_subscribers(state, jid, message)
     {:noreply, state}
+  end
+
+  # Inbound node routed by InboundRouter process
+  def handle_info({:inbound_node, %Binary.Node{} = node}, state) do
+    {new_state, actions} = safe_handle_node(node, state)
+    Enum.each(actions, &safe_handle_action(&1, new_state))
+    {:noreply, new_state}
+  end
+
+  def handle_info({:outbound_error, _item, reason}, state) do
+    Logger.warning("[SESSION] outbound queue error: #{inspect(reason)}")
+    emit_telemetry(:error, %{reason: reason, phase: :outbound}, state)
+    {:noreply, update_stats(state, :errors)}
   end
 
   # IQ timeout
@@ -464,6 +523,7 @@ defmodule ExWapp.Session do
       {:ok, conn_pid} ->
         Logger.debug("[SESSION] ✓ Connection started: #{inspect(conn_pid)}")
         conn_ref = Process.monitor(conn_pid)
+        OutboundQueue.set_conn(state.outbound_queue, conn_pid)
 
         %{state | conn: conn_pid, conn_ref: conn_ref, status: :connecting}
         |> schedule_health_check()
@@ -478,25 +538,33 @@ defmodule ExWapp.Session do
   end
 
   defp safe_start_connection(state) do
-    Logger.debug("[SESSION] safe_start_connection calling Conn.start_link...")
-    result = Conn.start_link(session: self(), store: state.store, opts: state.opts)
-    Logger.debug("[SESSION] Conn.start_link result: #{inspect(result)}")
+    Logger.debug("[SESSION] safe_start_connection calling transport.start_link...")
+    noise_opts = Keyword.get(state.opts, :noise, [])
+
+    result =
+      state.transport_mod.start_link(session: self(), store: state.store, noise: noise_opts)
+
+    Logger.debug("[SESSION] transport.start_link result: #{inspect(result)}")
     result
   rescue
     e ->
-      Logger.debug("[SESSION] ✗ Conn.start_link EXCEPTION: #{inspect(e)}")
+      Logger.debug("[SESSION] ✗ transport.start_link EXCEPTION: #{inspect(e)}")
       {:error, {:exception, e}}
   catch
     :exit, reason ->
-      Logger.debug("[SESSION] ✗ Conn.start_link EXIT: #{inspect(reason)}")
+      Logger.debug("[SESSION] ✗ transport.start_link EXIT: #{inspect(reason)}")
       {:error, {:exit, reason}}
   end
 
-  defp do_disconnect(%__MODULE__{conn: nil} = state, _reason), do: state
+  defp do_disconnect(%__MODULE__{conn: nil} = state, _reason) do
+    OutboundQueue.clear_conn(state.outbound_queue)
+    state
+  end
 
   defp do_disconnect(%__MODULE__{conn: conn, conn_ref: ref} = state, reason) do
     if ref, do: Process.demonitor(ref, [:flush])
-    cancel_health_check(state)
+    state = state |> cancel_health_check() |> clear_pending_requests(reason)
+    OutboundQueue.clear_conn(state.outbound_queue)
 
     # Gracefully stop connection
     try do
@@ -518,7 +586,10 @@ defmodule ExWapp.Session do
   end
 
   defp handle_connection_exit(state, reason) do
+    OutboundQueue.clear_conn(state.outbound_queue)
+
     state
+    |> clear_pending_requests(reason)
     |> cancel_health_check()
     |> Map.merge(%{
       conn: nil,
@@ -544,6 +615,13 @@ defmodule ExWapp.Session do
     Process.send_after(self(), :connect, delay_ms)
     # Don't change status here - do_connect will set it after successful connection
     state
+  end
+
+  defp restart_connection_now(state, reason) do
+    state
+    |> do_disconnect(reason)
+    |> Map.put(:reconnect_attempts, 0)
+    |> schedule_connect(0)
   end
 
   defp schedule_reconnect(state, _reason) do
@@ -580,12 +658,7 @@ defmodule ExWapp.Session do
     Keyword.get(state.opts, :reconnect, true)
   end
 
-  defp under_max_attempts?(state) do
-    case @max_reconnect_attempts do
-      :infinity -> true
-      max -> state.reconnect_attempts < max
-    end
-  end
+  defp under_max_attempts?(_state), do: true
 
   defp calculate_backoff(attempt) do
     delay = @initial_backoff_ms * :math.pow(@backoff_multiplier, attempt - 1)
@@ -628,6 +701,15 @@ defmodule ExWapp.Session do
     %{state | status: :handshaking}
   end
 
+  defp handle_connection_event({:transport, :connected}, state) do
+    %{state | status: :connecting}
+  end
+
+  defp handle_connection_event({:transport, {:closed, reason}}, state) do
+    Logger.warning("[SESSION] Transport closed: #{inspect(reason)}")
+    handle_connection_exit(state, {:transport_closed, reason})
+  end
+
   defp handle_connection_event({:noise, :handshake_completed}, state) do
     emit_telemetry(:connected, %{}, state)
 
@@ -635,9 +717,8 @@ defmodule ExWapp.Session do
   end
 
   defp handle_connection_event({:connection_message, %Binary.Node{} = node}, state) do
-    {new_state, actions} = safe_handle_node(node, state)
-    Enum.each(actions, &safe_handle_action(&1, new_state))
-    new_state
+    InboundRouter.route(state.inbound_router, node)
+    state
   end
 
   defp handle_connection_event({:connection_binary, _payload}, state), do: state
@@ -906,24 +987,29 @@ defmodule ExWapp.Session do
         nil
       end
 
-    cond do
-      code == "401" and conflict_type == "device_removed" ->
-        Logger.error("[SESSION] Device was removed! Need to re-pair from scratch.")
-        Logger.error("[SESSION] Delete session file and scan QR code again.")
-        notify_qr(state, {:error, :device_removed})
+    new_state =
+      cond do
+        code == "401" and conflict_type == "device_removed" ->
+          Logger.error("[SESSION] Device was removed! Need to re-pair from scratch.")
+          Logger.error("[SESSION] Delete session file and scan QR code again.")
+          notify_qr(state, {:error, :device_removed})
+          state
 
-      code == "515" ->
-        Logger.warning("[SESSION] Got 515, will reconnect...")
+        code == "515" ->
+          Logger.warning("[SESSION] Got 515, will reconnect...")
+          state
 
-      conflict_type == "replaced" ->
-        Logger.error("[SESSION] Stream replaced by another connection")
-        notify_qr(state, {:error, :stream_replaced})
+        conflict_type == "replaced" ->
+          Logger.error("[SESSION] Stream replaced by another connection, restarting transport")
+          notify_qr(state, {:error, :stream_replaced})
+          restart_connection_now(state, :stream_replaced)
 
-      true ->
-        Logger.error("[SESSION] Unknown stream error: code=#{code}, conflict=#{conflict_type}")
-    end
+        true ->
+          Logger.error("[SESSION] Unknown stream error: code=#{code}, conflict=#{conflict_type}")
+          state
+      end
 
-    {state, []}
+    {new_state, []}
   end
 
   # Handle incoming messages and notifications via MessageHandler
@@ -945,10 +1031,6 @@ defmodule ExWapp.Session do
           end)
 
         {new_state, converted_actions}
-
-      {:error, reason} ->
-        Logger.warning("MessageHandler error: #{inspect(reason)}")
-        {state, []}
     end
   end
 
@@ -987,18 +1069,18 @@ defmodule ExWapp.Session do
       Logger.error("Exit handling action #{inspect(action)}: #{inspect(reason)}")
   end
 
-  defp handle_pairing_action({:send_node, node}, %__MODULE__{conn: conn})
-       when is_pid(conn) do
-    Conn.send_node(conn, node)
+  defp handle_pairing_action({:send_node, node}, %__MODULE__{outbound_queue: outbound_queue})
+       when is_pid(outbound_queue) do
+    OutboundQueue.enqueue_node(outbound_queue, node)
   end
 
   defp handle_pairing_action({:qr, code}, state), do: notify_qr(state, {:code, code})
   defp handle_pairing_action({:status, :success}, state), do: notify_qr(state, :success)
   defp handle_pairing_action({:error, reason}, state), do: notify_qr(state, {:error, reason})
 
-  defp handle_pairing_action(:restart_stream, %__MODULE__{conn: conn})
-       when is_pid(conn) do
-    Conn.restart_stream(conn)
+  defp handle_pairing_action(:restart_stream, %__MODULE__{outbound_queue: outbound_queue})
+       when is_pid(outbound_queue) do
+    OutboundQueue.restart_stream(outbound_queue)
   end
 
   defp handle_pairing_action(_action, _state), do: :ok
@@ -1040,7 +1122,7 @@ defmodule ExWapp.Session do
     Logger.info("[PREKEY] Sending prekey request for #{jid}")
 
     # Send the IQ - we'll receive the response directly since we're not a GenServer
-    case Conn.send_node(conn, request_node) do
+    case send_transport_node(state, conn, request_node) do
       :ok ->
         # Wait for response - the session will forward it to us
         receive do
@@ -1102,7 +1184,7 @@ defmodule ExWapp.Session do
 
   defp do_send_encrypted(
          session_pid,
-         %{conn: conn, store: store},
+         %{conn: conn, store: store} = state,
          signal_sessions,
          jid,
          text,
@@ -1125,9 +1207,7 @@ defmodule ExWapp.Session do
                bundle || %{}
              ) do
           {:ok, ciphertext, enc_type, updated_sessions} ->
-            if updated_sessions do
-              send(session_pid, {:signal_sessions_updated, updated_sessions})
-            end
+            send(session_pid, {:signal_sessions_updated, updated_sessions})
 
             node =
               build_encrypted_message_node(
@@ -1140,9 +1220,17 @@ defmodule ExWapp.Session do
                 enc_type == :prekey
               )
 
-            case Conn.send_node(conn, node) do
+            case send_transport_node(state, conn, node) do
               :ok ->
                 Logger.info("[SEND] Sent #{enc_type} message to #{jid}")
+
+                emit_telemetry(
+                  :message_sent,
+                  %{message_count: 1, payload_bytes: byte_size(payload)},
+                  state,
+                  %{jid: jid, message_id: message_id, encryption: enc_type}
+                )
+
                 {:ok, message_id}
 
               error ->
@@ -1205,7 +1293,7 @@ defmodule ExWapp.Session do
     request_node = build_prekey_request(jid, message_id)
 
     # Send and wait for response (blocking)
-    case send_and_wait_for_iq(conn, request_node, message_id, 30_000) do
+    case send_and_wait_for_iq(state, request_node, message_id, 30_000) do
       {:ok, response_node} ->
         Logger.info("[PREKEY] Got prekey response")
 
@@ -1253,7 +1341,7 @@ defmodule ExWapp.Session do
 
   # Send IQ and wait for response synchronously
   # Uses an Agent to communicate between the IQ handler and this function
-  defp send_and_wait_for_iq(conn, node, message_id, timeout) do
+  defp send_and_wait_for_iq(%{conn: conn} = state, node, message_id, timeout) do
     # Create a simple agent to store the response
     {:ok, agent} = Agent.start_link(fn -> nil end)
 
@@ -1261,7 +1349,7 @@ defmodule ExWapp.Session do
     Process.put({:iq_callback, message_id}, agent)
 
     # Send the IQ
-    case Conn.send_node(conn, node) do
+    case send_transport_node(state, conn, node) do
       :ok ->
         # Poll for response
         result = poll_for_iq_response(agent, message_id, timeout)
@@ -1516,10 +1604,10 @@ defmodule ExWapp.Session do
               raw: nil
             }
 
-            ExWapp.Chat.add_message(self(), jid, message)
+            ExWapp.Chat.add_message(store, jid, message)
 
             # Send via connection
-            case Conn.send_node(conn, node) do
+            case send_transport_node(state, conn, node) do
               :ok ->
                 Logger.info("Sent encrypted message to #{jid}: #{message_id}")
                 {:ok, message_id}
@@ -1539,7 +1627,7 @@ defmodule ExWapp.Session do
             Logger.warning("No Signal session for #{jid}, sending unencrypted (will likely fail)")
             node = ExWapp.Messages.build_message_node(jid, message_id, payload, timestamp, [])
 
-            case Conn.send_node(conn, node) do
+            case send_transport_node(state, conn, node) do
               :ok -> {:ok, message_id}
               error -> error
             end
@@ -1570,10 +1658,7 @@ defmodule ExWapp.Session do
     type_str =
       case enc_type do
         :prekey -> "pkmsg"
-        :pkmsg -> "pkmsg"
-        "pkmsg" -> "pkmsg"
         :whisper -> "msg"
-        _ -> "msg"
       end
 
     base_jid = String.replace(jid, ~r/:.+@/, "@")
@@ -1667,6 +1752,13 @@ defmodule ExWapp.Session do
   # ============================================================================
 
   defp notify_qr(state, event) do
+    emit_telemetry(
+      :qr,
+      %{subscriber_count: map_size(state.qr_subscribers)},
+      state,
+      %{event: qr_event_kind(event)}
+    )
+
     Enum.each(state.qr_subscribers, fn {ref, {pid, _mon}} ->
       send(pid, {:ex_wapp_qr, ref, event})
     end)
@@ -1724,12 +1816,56 @@ defmodule ExWapp.Session do
   # Helpers
   # ============================================================================
 
+  defp restart_outbound_queue(state) do
+    {:ok, outbound_queue} =
+      OutboundQueue.start_link(session: self(), transport: state.transport_mod)
+
+    maybe_set_conn(outbound_queue, state.conn)
+    %{state | outbound_queue: outbound_queue}
+  end
+
+  defp restart_inbound_router(state) do
+    {:ok, inbound_router} = InboundRouter.start_link(session: self())
+    %{state | inbound_router: inbound_router}
+  end
+
+  defp maybe_set_conn(_outbound_queue, nil), do: :ok
+
+  defp maybe_set_conn(outbound_queue, conn) when is_pid(conn),
+    do: OutboundQueue.set_conn(outbound_queue, conn)
+
+  defp send_transport_node(%{transport_mod: transport_mod}, conn, node) when is_pid(conn) do
+    transport_mod.send_node(conn, node)
+  rescue
+    e -> {:error, {:exception, e}}
+  end
+
   defp maybe_reset_pairing(actions, pairing) do
     if Enum.any?(actions, &match?({:status, :success}, &1)) do
       {:ok, Pairing.new(pairing.store)}
     else
       :noop
     end
+  end
+
+  defp clear_pending_requests(state, reason) do
+    Enum.each(state.pending_iqs, fn {_message_id, pending} ->
+      timer = Map.get(pending, :timer)
+      if timer, do: Process.cancel_timer(timer)
+
+      case Map.get(pending, :from) do
+        nil -> :ok
+        from -> GenServer.reply(from, {:error, {:disconnected, reason}})
+      end
+    end)
+
+    Enum.each(state.send_workers, fn {pid, _jid} ->
+      if Process.alive?(pid) do
+        send(pid, {:prekey_error, :transport_closed, reason})
+      end
+    end)
+
+    %{state | pending_iqs: %{}, send_workers: %{}}
   end
 
   defp update_stats(state, key) do
@@ -1742,19 +1878,24 @@ defmodule ExWapp.Session do
     DateTime.diff(DateTime.utc_now(), connected_at, :second)
   end
 
-  defp emit_telemetry(event, measurements, state) do
+  defp emit_telemetry(event, measurements, state, extra_metadata \\ %{}) do
     metadata = %{
       status: state.status,
-      reconnect_attempts: state.reconnect_attempts
+      reconnect_attempts: state.reconnect_attempts,
+      session_id: state.session_id
     }
 
-    :telemetry.execute(
-      [:ex_wapp, :session, event],
+    Telemetry.execute(
+      event,
       Map.merge(%{system_time: System.system_time()}, measurements),
-      metadata
+      Map.merge(metadata, extra_metadata)
     )
   rescue
     # Don't crash if telemetry fails
     _ -> :ok
   end
+
+  defp qr_event_kind({:code, _}), do: :code
+  defp qr_event_kind(:success), do: :success
+  defp qr_event_kind({:error, _}), do: :error
 end

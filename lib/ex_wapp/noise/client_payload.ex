@@ -29,6 +29,8 @@ defmodule ExWapp.Noise.ClientPayload do
     end
   end
 
+  def build(_), do: {:error, :invalid_noise_state}
+
   defp build_login_payload(data, jid) do
     require Logger
     Logger.info("[ClientPayload] Building LOGIN payload for #{inspect(jid)}")
@@ -93,8 +95,6 @@ defmodule ExWapp.Noise.ClientPayload do
   end
 
   defp jid_to_username(_), do: 0
-
-  def build(_), do: {:error, :invalid_noise_state}
 
   defp build_user_agent(_phone_id, info) do
     {primary, secondary, tertiary} = @version

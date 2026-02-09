@@ -131,7 +131,6 @@ defmodule ExWapp.Noise do
          {:ok, new_state, client_finish} <- do_server_hello(state, payload) do
       {:ok, client_finish, new_state}
     else
-      %HandshakeMessage{serverHello: nil} -> {:error, :missing_server_hello}
       {:error, _} = error -> error
       other -> {:error, {:unexpected_message, other}}
     end

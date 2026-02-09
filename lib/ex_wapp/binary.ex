@@ -14,18 +14,30 @@ defmodule ExWapp.Binary do
   alias ExWapp.JID
 
   defmodule Error do
+    @moduledoc false
+    @type t :: %__MODULE__{message: String.t()}
     defexception [:message]
   end
 
   defmodule Node do
+    @moduledoc false
     @enforce_keys [:tag]
     defstruct tag: nil, attrs: %{}, content: nil
+
+    @type t :: %__MODULE__{
+            tag: String.t(),
+            attrs: map(),
+            content: term()
+          }
   end
 
   defmodule Raw do
+    @moduledoc false
     @enforce_keys [:data]
     defstruct data: nil
 
+    @type t :: %__MODULE__{data: binary()}
+    @spec new(binary()) :: t()
     def new(data) when is_binary(data), do: %__MODULE__{data: data}
   end
 
@@ -213,6 +225,7 @@ defmodule ExWapp.Binary do
   defp node_like?(_), do: false
 
   defmodule Encoder do
+    @moduledoc false
     import Bitwise
 
     alias ExWapp.Binary.{Node, Raw}
@@ -221,18 +234,20 @@ defmodule ExWapp.Binary do
 
     defstruct data: []
 
-    @spec new() :: %__MODULE__{}
+    @type t :: %__MODULE__{data: [iodata()]}
+
+    @spec new() :: t()
     # Must start with a 0 byte, matching Go implementation
     def new, do: %__MODULE__{data: [<<0>>]}
 
-    @spec to_binary(%__MODULE__{}) :: binary()
+    @spec to_binary(t()) :: binary()
     def to_binary(%__MODULE__{data: data}) do
       data
       |> Enum.reverse()
       |> IO.iodata_to_binary()
     end
 
-    @spec write_node(%__MODULE__{}, Node.t()) :: %__MODULE__{}
+    @spec write_node(t(), Node.t()) :: t()
     def write_node(encoder, %Node{tag: "0"}) do
       encoder
       |> push_byte(Token.list8())
@@ -489,6 +504,7 @@ defmodule ExWapp.Binary do
   end
 
   defmodule Decoder do
+    @moduledoc false
     import Bitwise
 
     alias ExWapp.Binary.{Error, Node, Raw}
@@ -497,13 +513,15 @@ defmodule ExWapp.Binary do
 
     defstruct data: <<>>, index: 0
 
-    @spec new(binary()) :: %__MODULE__{}
+    @type t :: %__MODULE__{data: binary(), index: non_neg_integer()}
+
+    @spec new(binary()) :: t()
     def new(data) when is_binary(data), do: %__MODULE__{data: data, index: 0}
 
-    @spec bytes_remaining(%__MODULE__{}) :: non_neg_integer()
+    @spec bytes_remaining(t()) :: non_neg_integer()
     def bytes_remaining(%__MODULE__{data: data, index: index}), do: byte_size(data) - index
 
-    @spec read_node(%__MODULE__{}) :: {Node.t(), %__MODULE__{}}
+    @spec read_node(t()) :: {Node.t(), t()}
     def read_node(decoder) do
       {tag_token, decoder} = read_int8(decoder)
       {list_size, decoder} = read_list_size(decoder, tag_token)

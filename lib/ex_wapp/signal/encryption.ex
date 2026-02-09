@@ -105,9 +105,7 @@ defmodule ExWapp.Signal.Encryption do
               {:ok, ciphertext, type}
 
             {:error, reason} ->
-              Logger.error(
-                "[ENCRYPTION] SessionStore.encrypt_message failed: #{inspect(reason)}"
-              )
+              Logger.error("[ENCRYPTION] SessionStore.encrypt_message failed: #{inspect(reason)}")
 
               {:error, reason}
           end

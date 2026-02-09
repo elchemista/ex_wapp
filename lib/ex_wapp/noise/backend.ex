@@ -3,9 +3,8 @@ defmodule ExWapp.Noise.Backend do
   Behaviour describing the callbacks required by a Noise handshake backend.
 
   Backends are responsible for managing the Noise handshake and transport
-  cipher lifecycle. The default implementation uses the Rust NIFs bundled with
-  the project, but alternate pure Elixir implementations can be provided by
-  implementing this behaviour.
+  cipher lifecycle. The default implementation is pure Elixir, and alternate
+  implementations can be provided by implementing this behaviour.
   """
 
   alias ExWapp.Noise.HandshakeSecrets

@@ -81,34 +81,14 @@ defmodule ExWapp.Noise.Backends.Elixir do
 
   @impl true
   def setup_transport(%HandshakeSecrets{} = secrets) do
-    # For transport, we need two cipher states (write and read)
-    # The noise library usually handles this, but here we need to manage it.
-    # We will return a tuple {write_cipher, read_cipher, hash}
-    # But wait, the `encrypt` and `decrypt` callbacks take a `cipher_state`.
-    # Let's define cipher state as a map or tuple.
-
     write_cipher = %{key: secrets.write_key, counter: 0}
     read_cipher = %{key: secrets.read_key, counter: 0}
-
-    # We also need the handshake hash for AAD in transport?
-    # WA transport uses the handshake hash as AAD?
-    # Rust code:
-    # fn noise_cipher_new(...) -> ... (write, read, h)
-    # fn noise_encrypt(...) -> write.encrypt_aad(h, ...)
 
     {:ok, {write_cipher, read_cipher, secrets.handshake_hash}}
   end
 
   @impl true
   def encrypt({write_cipher, read_cipher, hash}, plaintext, _counter) do
-    # Note: The `counter` argument in the callback seems unused in the Rust NIF
-    # because the Rust struct keeps track of it.
-    # But `ExWapp.Noise` module keeps track of `tx_counter` and passes it.
-    # However, `ExWapp.Noise.Backend` spec has `encrypt(cipher_state, binary, counter)`.
-    # If we manage counter internally in `cipher_state`, we can ignore the passed counter
-    # or use it to verify.
-    # Let's use the internal counter to be safe and consistent with Rust logic.
-
     {ciphertext, new_write_cipher} = encrypt_payload(write_cipher, hash, plaintext)
     {:ok, {new_write_cipher, read_cipher, hash}, ciphertext}
   end

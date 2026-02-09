@@ -41,6 +41,37 @@ defmodule ExWapp.PairingTest do
     assert Enum.any?(actions, &(&1 == {:status, :success}))
   end
 
+  test "pair-device emits only first qr ref" do
+    store = store_fixture()
+    :ok = Store.persist(store, %{noise: %{static_public: :crypto.strong_rand_bytes(32)}})
+
+    state = Pairing.new(store)
+
+    node = %Binary.Node{
+      tag: "iq",
+      attrs: %{"from" => "s.whatsapp.net", "id" => "pair-1"},
+      content: [
+        %Binary.Node{
+          tag: "pair-device",
+          attrs: %{},
+          content: [
+            %Binary.Node{tag: "ref", attrs: %{}, content: Binary.raw("REF_ONE")},
+            %Binary.Node{tag: "ref", attrs: %{}, content: Binary.raw("REF_TWO")}
+          ]
+        }
+      ]
+    }
+
+    {_new_state, actions} = Pairing.apply_node(state, node)
+
+    qr_actions = Enum.filter(actions, &match?({:qr, _}, &1))
+    assert length(qr_actions) == 1
+
+    assert [{:qr, qr_code}] = qr_actions
+    [ref_prefix | _rest] = String.split(qr_code, ",")
+    assert ref_prefix == "2@REF_ONE"
+  end
+
   defp identity_fixture do
     {priv, pub} = Ed25519.generate_key_pair()
     {%{public: pub, private: priv}, :crypto.strong_rand_bytes(32)}

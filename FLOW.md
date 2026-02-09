@@ -1,11 +1,28 @@
 # WhatsApp Web Socket Connection Flow
 
-> STATUS: The project currently works only up to QR pairing. Outgoing messages
-> are encrypted and sent but are dropped by WhatsApp after recent protocol
-> changes (see log at the end of this file). Work is ongoing, so do not rely on
-> this library for any production or hobby use yet.
+> STATUS (Feb 9, 2026): The runtime is now pure Elixir (no Rust Signal path).
+> QR pairing/connect/disconnect/send/receive flows are kept, with a cleaned
+> reconnect lifecycle for transport drops. Delivery reliability still depends on
+> protocol compatibility and remains a work in progress.
 
 This document describes the complete flow for establishing a WhatsApp Web socket connection, based on reverse-engineering the Go `whatsmeow` library and implementing it in Elixir.
+
+## 2026 Refactor Plan (Implemented)
+
+1. Keep only one Signal path (pure Elixir) to remove split debugging paths.
+2. Treat transport disconnect as a first-class session event and trigger reconnect.
+3. Keep minimal capabilities in the main flow:
+   - QR pairing
+   - connect/disconnect/reconnect
+   - receive nodes/messages
+   - send encrypted messages
+4. Trim helper surface (`ExWapp.Example`) to a minimal debug entrypoint.
+5. Keep protocol-touch points concentrated in:
+   - `lib/ex_wapp/conn.ex`
+   - `lib/ex_wapp/session.ex`
+   - `lib/ex_wapp/noise/*`
+   - `lib/ex_wapp/pairing.ex`
+   - `lib/ex_wapp/signal/*`
 
 ## Table of Contents
 
@@ -551,47 +568,24 @@ PreKeySignalMessage (164 bytes):
 - Session creation with recipient's prekey bundle
 - Double Ratchet key derivation
 
-### 4. ✅ COMPLETED: Rust NIF for Signal Protocol
+### 4. ✅ COMPLETED: Single Pure Elixir Signal Path
 
-**Solution**: Created a Rustler NIF that implements Signal Protocol encryption.
+- Removed the runtime split between native and Elixir Signal implementations.
+- Kept only `lib/ex_wapp/signal/*` pure Elixir code paths active.
+- Kept adapter compatibility helpers, but native mode now resolves to Elixir.
 
-**Files created**:
-- `native/signal_nif/` - Rust NIF crate
-- `lib/ex_wapp/signal/native.ex` - Elixir NIF wrapper
-- `lib/ex_wapp/signal/native_session.ex` - High-level session API
+### 5. ✅ COMPLETED: Transport Disconnect Recovery
 
-**What the Rust NIF provides**:
-- `generate_key_pair/0` - Curve25519 key generation
-- `generate_signed_prekey/1` - Signed prekey with XEdDSA signature
-- `x25519_shared_secret/2` - DH key exchange
-- `verify_signature/3` - XEdDSA signature verification
-- `hkdf_derive_initial/1` - X3DH key derivation (WhisperText)
-- `hkdf_derive_ratchet/2` - Ratchet step key derivation (WhisperRatchet)
-- `derive_message_keys/1` - Message keys (cipher, mac, iv)
-- `encrypt_aes_cbc/3` / `decrypt_aes_cbc/3` - AES-256-CBC
-- `build_signal_message/7` - SignalMessage with MAC
-- `build_prekey_signal_message/6` - PreKeySignalMessage wrapper
-- `encrypt_message/13` - Full encryption pipeline
-- `debug_prekey_message/1` - Debug message structure
+- `ExWapp.Conn` now closes its process on websocket disconnect.
+- `ExWapp.Session` handles `{:transport, {:closed, reason}}` as a reconnect trigger.
+- Pending IQ waits and worker waits are cleared on disconnect to avoid stale state.
 
-**Verified correct format**:
-```
-PreKeySignalMessage (145 bytes):
-  Version byte: 0x34 (msg_ver=3, cur_ver=4)
-  Field 1: preKeyId (varint)
-  Field 2: baseKey (33 bytes = 0x05 + 32-byte key)
-  Field 3: identityKey (33 bytes = 0x05 + 32-byte key)
-  Field 4: message (SignalMessage bytes)
-  Field 5: registrationId (varint)
-  Field 6: signedPreKeyId (varint)
-```
-
-### 5. TODO: Message Decryption
+### 6. TODO: Message Decryption
 - Decrypt incoming encrypted messages
 - Handle both PreKeySignalMessage and SignalMessage
 - Implement message padding removal
 
-### 6. TODO: Chat History Sync
+### 7. TODO: Chat History Sync
 - Handle history sync blobs from server
 - Requires Signal decryption to read message content
 - Parse protobuf message structures
@@ -600,7 +594,13 @@ PreKeySignalMessage (145 bytes):
 
 ## Reference: Go Source Files
 
-Key files in `whatsmeow` for reference:
+The old in-repo `whatsmeow/` clone was removed during cleanup.
+Use upstream sources directly for protocol comparison:
+
+- https://github.com/tulir/whatsmeow
+- https://github.com/tulir/libsignal-protocol-go
+
+Useful files in `whatsmeow`:
 
 | File | Purpose |
 |------|---------|
@@ -692,5 +692,3 @@ func NewPreKeySignalMessage(
   0a 30 <48-byte encrypted client static>
   12 xx <encrypted ClientPayload>
 ```
-
-

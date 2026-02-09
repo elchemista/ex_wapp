@@ -26,7 +26,8 @@ defmodule ExWapp.Chat do
 
   alias ExWapp.{Binary, JID, Store}
 
-  @type message_status :: :pending | :sent | :delivered | :read | :failed
+  @type target :: pid() | struct()
+  @type message_status :: :pending | :sent | :received | :delivered | :read | :failed
 
   @type message :: %{
           id: String.t(),
@@ -34,11 +35,11 @@ defmodule ExWapp.Chat do
           timestamp: integer(),
           text: String.t() | nil,
           status: message_status(),
-          participant: String.t() | nil,
+          participant: String.t() | JID.t() | nil,
           raw: map() | nil
         }
 
-  @type chat :: %{
+  @type chat :: %__MODULE__{
           jid: String.t(),
           name: String.t() | nil,
           unread_count: non_neg_integer(),
@@ -67,47 +68,67 @@ defmodule ExWapp.Chat do
 
   Returns a list of chat structs sorted by last message timestamp (most recent first).
   """
-  @spec list(pid()) :: [chat()]
-  def list(session) when is_pid(session) do
-    store = get_store(session)
-    data = Store.load!(store)
+  @spec list(target()) :: [chat()]
+  def list(target) do
+    store = resolve_store(target)
 
-    data
-    |> Map.get(:chats, %{})
-    |> Map.values()
-    |> Enum.sort_by(& &1.last_message_timestamp, :desc)
+    if store do
+      data = Store.load!(store)
+
+      data
+      |> Map.get(:chats, %{})
+      |> Map.values()
+      |> Enum.sort_by(& &1.last_message_timestamp, :desc)
+    else
+      []
+    end
+  end
+
+  @doc """
+  Lists only group chats for a session.
+  """
+  @spec list_groups(target()) :: [chat()]
+  def list_groups(target) do
+    target
+    |> list()
+    |> Enum.filter(& &1.is_group)
   end
 
   @doc """
   Gets a specific chat by JID.
   """
-  @spec get(pid(), String.t() | JID.t()) :: {:ok, chat()} | {:error, :not_found}
-  def get(session, jid) when is_pid(session) do
+  @spec get(target(), String.t() | JID.t()) :: {:ok, chat()} | {:error, :not_found}
+  def get(target, jid) do
     jid_str = normalize_jid(jid)
-    store = get_store(session)
-    data = Store.load!(store)
+    store = resolve_store(target)
 
-    case get_in(data, [:chats, jid_str]) do
-      nil -> {:error, :not_found}
-      chat -> {:ok, chat}
+    if store do
+      data = Store.load!(store)
+
+      case get_in(data, [:chats, jid_str]) do
+        nil -> {:error, :not_found}
+        chat -> {:ok, chat}
+      end
+    else
+      {:error, :not_found}
     end
   end
 
   @doc """
   Gets or creates a chat for a JID.
   """
-  @spec get_or_create(pid(), String.t() | JID.t(), keyword()) :: chat()
-  def get_or_create(session, jid, opts \\ []) when is_pid(session) do
+  @spec get_or_create(target(), String.t() | JID.t(), keyword()) :: chat()
+  def get_or_create(target, jid, opts \\ []) do
     # Normalize JID to string
     jid_str = normalize_jid(jid)
 
-    case get(session, jid_str) do
+    case get(target, jid_str) do
       {:ok, chat} ->
         chat
 
       {:error, :not_found} ->
         chat = new_chat(jid_str, opts)
-        save_chat(session, chat)
+        save_chat(target, chat)
         chat
     end
   end
@@ -129,12 +150,12 @@ defmodule ExWapp.Chat do
   @doc """
   Gets messages for a chat, optionally with pagination.
   """
-  @spec messages(pid(), String.t() | JID.t(), keyword()) :: [message()]
-  def messages(session, jid, opts \\ []) do
+  @spec messages(target(), String.t() | JID.t(), keyword()) :: [message()]
+  def messages(target, jid, opts \\ []) do
     limit = Keyword.get(opts, :limit, 50)
     offset = Keyword.get(opts, :offset, 0)
 
-    case get(session, jid) do
+    case get(target, jid) do
       {:ok, chat} ->
         chat.messages
         |> Enum.drop(offset)
@@ -148,9 +169,9 @@ defmodule ExWapp.Chat do
   @doc """
   Adds a message to a chat.
   """
-  @spec add_message(pid(), String.t() | JID.t(), message()) :: :ok
-  def add_message(session, jid, message) when is_pid(session) do
-    chat = get_or_create(session, jid)
+  @spec add_message(target(), String.t() | JID.t(), message()) :: :ok
+  def add_message(target, jid, message) do
+    chat = get_or_create(target, jid)
 
     updated_chat = %{
       chat
@@ -159,18 +180,18 @@ defmodule ExWapp.Chat do
         unread_count: if(message.from_me, do: chat.unread_count, else: chat.unread_count + 1)
     }
 
-    save_chat(session, updated_chat)
+    save_chat(target, updated_chat)
   end
 
   @doc """
   Marks all messages in a chat as read.
   """
-  @spec mark_read(pid(), String.t() | JID.t()) :: :ok
-  def mark_read(session, jid) when is_pid(session) do
-    case get(session, jid) do
+  @spec mark_read(target(), String.t() | JID.t()) :: :ok
+  def mark_read(target, jid) do
+    case get(target, jid) do
       {:ok, chat} ->
         updated_chat = %{chat | unread_count: 0}
-        save_chat(session, updated_chat)
+        save_chat(target, updated_chat)
 
       {:error, _} ->
         :ok
@@ -180,9 +201,9 @@ defmodule ExWapp.Chat do
   @doc """
   Updates a message status.
   """
-  @spec update_message_status(pid(), String.t() | JID.t(), String.t(), message_status()) :: :ok
-  def update_message_status(session, jid, message_id, status) do
-    case get(session, jid) do
+  @spec update_message_status(target(), String.t() | JID.t(), String.t(), message_status()) :: :ok
+  def update_message_status(target, jid, message_id, status) do
+    case get(target, jid) do
       {:ok, chat} ->
         updated_messages =
           Enum.map(chat.messages, fn msg ->
@@ -193,7 +214,7 @@ defmodule ExWapp.Chat do
             end
           end)
 
-        save_chat(session, %{chat | messages: updated_messages})
+        save_chat(target, %{chat | messages: updated_messages})
 
       {:error, _} ->
         :ok
@@ -203,57 +224,56 @@ defmodule ExWapp.Chat do
   @doc """
   Deletes a chat.
   """
-  @spec delete(pid(), String.t()) :: :ok
-  def delete(session, jid) when is_pid(session) do
-    store = get_store(session)
-    data = Store.load!(store)
+  @spec delete(target(), String.t()) :: :ok
+  def delete(target, jid) do
+    store = resolve_store(target)
 
-    updated_data =
-      update_in(data, [:chats], fn chats ->
-        Map.delete(chats || %{}, jid)
-      end)
-
-    Store.persist(store, updated_data)
+    if store do
+      data = Store.load!(store)
+      chats = Map.get(data, :chats, %{})
+      updated_data = Map.put(data, :chats, Map.delete(chats, jid))
+      Store.persist(store, updated_data)
+    end
   end
 
   @doc """
   Archives a chat.
   """
-  @spec archive(pid(), String.t()) :: :ok
-  def archive(session, jid) do
-    update_chat(session, jid, fn chat -> %{chat | archived: true} end)
+  @spec archive(target(), String.t()) :: :ok
+  def archive(target, jid) do
+    update_chat(target, jid, fn chat -> %{chat | archived: true} end)
   end
 
   @doc """
   Unarchives a chat.
   """
-  @spec unarchive(pid(), String.t()) :: :ok
-  def unarchive(session, jid) do
-    update_chat(session, jid, fn chat -> %{chat | archived: false} end)
+  @spec unarchive(target(), String.t()) :: :ok
+  def unarchive(target, jid) do
+    update_chat(target, jid, fn chat -> %{chat | archived: false} end)
   end
 
   @doc """
   Pins a chat.
   """
-  @spec pin(pid(), String.t()) :: :ok
-  def pin(session, jid) do
-    update_chat(session, jid, fn chat -> %{chat | pinned: true} end)
+  @spec pin(target(), String.t()) :: :ok
+  def pin(target, jid) do
+    update_chat(target, jid, fn chat -> %{chat | pinned: true} end)
   end
 
   @doc """
   Unpins a chat.
   """
-  @spec unpin(pid(), String.t()) :: :ok
-  def unpin(session, jid) do
-    update_chat(session, jid, fn chat -> %{chat | pinned: false} end)
+  @spec unpin(target(), String.t()) :: :ok
+  def unpin(target, jid) do
+    update_chat(target, jid, fn chat -> %{chat | pinned: false} end)
   end
 
   @doc """
   Updates the chat name (for contacts that send push names).
   """
-  @spec update_name(pid(), String.t(), String.t()) :: :ok
-  def update_name(session, jid, name) do
-    update_chat(session, jid, fn chat -> %{chat | name: name} end)
+  @spec update_name(target(), String.t(), String.t()) :: :ok
+  def update_name(target, jid, name) do
+    update_chat(target, jid, fn chat -> %{chat | name: name} end)
   end
 
   # ============================================================================
@@ -307,6 +327,18 @@ defmodule ExWapp.Chat do
   # Internal Helpers
   # ============================================================================
 
+  defp resolve_store(target) when is_pid(target), do: get_store(target)
+
+  defp resolve_store(%{__struct__: mod} = store) when is_atom(mod) do
+    if function_exported?(mod, :load, 1) and function_exported?(mod, :persist, 2) do
+      store
+    else
+      nil
+    end
+  end
+
+  defp resolve_store(_), do: nil
+
   defp get_store(session) do
     GenServer.call(session, :get_store)
   catch
@@ -322,22 +354,23 @@ defmodule ExWapp.Chat do
   defp parse_timestamp(ts) when is_binary(ts), do: String.to_integer(ts)
   defp parse_timestamp(_), do: 0
 
-  defp save_chat(session, chat) do
-    store = get_store(session)
+  defp save_chat(target, chat) do
+    store = resolve_store(target)
 
     if store do
       data = Store.load!(store)
-      updated_data = put_in(data, [:chats, chat.jid], chat)
+      chats = Map.get(data, :chats, %{})
+      updated_data = Map.put(data, :chats, Map.put(chats, chat.jid, chat))
       Store.persist(store, updated_data)
     end
 
     :ok
   end
 
-  defp update_chat(session, jid, update_fn) do
-    case get(session, jid) do
+  defp update_chat(target, jid, update_fn) do
+    case get(target, jid) do
       {:ok, chat} ->
-        save_chat(session, update_fn.(chat))
+        save_chat(target, update_fn.(chat))
 
       {:error, _} ->
         :ok

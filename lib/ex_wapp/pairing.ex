@@ -46,7 +46,12 @@ defmodule ExWapp.Pairing do
 
   defp handle_pair_device(state, attrs, pair_device) do
     refs = extract_refs(state, pair_device)
-    codes = Enum.map(refs, &qr_from_ref(state, &1))
+
+    qr_event =
+      case List.first(refs) do
+        ref when is_binary(ref) -> [{:qr, qr_from_ref(state, ref)}]
+        _ -> []
+      end
 
     ack_attrs = %{
       "to" => Map.get(attrs, "from"),
@@ -56,9 +61,9 @@ defmodule ExWapp.Pairing do
 
     ack_node = %Binary.Node{tag: "iq", attrs: ack_attrs, content: nil}
 
-    events =
-      [{:send_node, ack_node}] ++
-        Enum.map(codes, fn code -> {:qr, code} end)
+    # WhatsApp returns multiple refs, but only the first one should be shown
+    # immediately. Emitting all refs at once causes invalid/stale QR scans.
+    events = [{:send_node, ack_node}] ++ qr_event
 
     new_state = %{
       state
@@ -289,8 +294,6 @@ defmodule ExWapp.Pairing do
       {:ok, parsed}
     end
   end
-
-  defp parse_adv_identity(_data, _), do: {:error, :invalid_adv_identity}
 
   defp fetch_adv_secret(%{adv_secret: <<_::binary-size(32)>> = secret}), do: {:ok, secret}
 

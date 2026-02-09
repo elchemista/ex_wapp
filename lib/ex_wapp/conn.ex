@@ -7,6 +7,7 @@ defmodule ExWapp.Conn do
   """
 
   use WebSockex
+  @behaviour ExWapp.Transport
   require Logger
 
   alias ExWapp.{Binary, Noise, Store}
@@ -28,6 +29,17 @@ defmodule ExWapp.Conn do
               header_sent?: false,
               header_seen?: false,
               stream_started?: false
+
+    @type t :: %__MODULE__{
+            session: pid() | nil,
+            store: ExWapp.Store.t() | nil,
+            noise: ExWapp.Noise.t() | nil,
+            noise_opts: keyword(),
+            buffer: binary(),
+            header_sent?: boolean(),
+            header_seen?: boolean(),
+            stream_started?: boolean()
+          }
   end
 
   @type options :: [
@@ -39,6 +51,7 @@ defmodule ExWapp.Conn do
   @doc """
   Starts the WebSocket process.
   """
+  @impl ExWapp.Transport
   @spec start_link(options()) :: GenServer.on_start()
   def start_link(opts) do
     Logger.debug("[CONN] start_link called")
@@ -68,14 +81,19 @@ defmodule ExWapp.Conn do
   @doc """
   Asks the connection process to send a binary node.
   """
+  @impl ExWapp.Transport
   @spec send_node(pid(), Binary.binary_node() | tuple()) :: :ok
   def send_node(pid, node), do: WebSockex.cast(pid, {:send_node, node})
 
   @doc "Restarts the XML stream after SASL success."
+  @impl ExWapp.Transport
   @spec restart_stream(pid()) :: :ok
   def restart_stream(pid), do: WebSockex.cast(pid, :restart_stream)
 
   @impl true
+  @doc false
+  @spec handle_connect(term(), State.t()) ::
+          {:ok, State.t()} | {:close, State.t()}
   def handle_connect(_conn, %State{} = state) do
     Logger.debug("[CONN] WebSocket connected, starting Noise handshake")
     notify_session(state.session, {:transport, :connected})
@@ -105,11 +123,6 @@ defmodule ExWapp.Conn do
           IO.puts("[CONN] ✗ Noise.init failed: #{inspect(reason)}")
           notify_session(state.session, {:error, reason})
           {:close, state}
-
-        other ->
-          IO.puts("[CONN] ✗ Noise.init unexpected: #{inspect(other)}")
-          notify_session(state.session, {:error, {:unexpected_noise_result, other}})
-          {:close, state}
       end
     rescue
       e in _ ->
@@ -121,13 +134,19 @@ defmodule ExWapp.Conn do
   end
 
   @impl true
+  @doc false
+  @spec handle_disconnect(term(), State.t()) :: {:ok, State.t()}
   def handle_disconnect(reason, state) do
-    IO.puts("[CONN] ✗ WebSocket disconnected: #{inspect(reason)}")
-    notify_session(state.session, {:transport, :closed})
+    Logger.warning("[CONN] WebSocket disconnected: #{inspect(reason)}")
+    notify_session(state.session, {:transport, {:closed, reason}})
+    # Returning {:ok, state} allows WebSockex to terminate this process.
     {:ok, state}
   end
 
   @impl true
+  @doc false
+  @spec handle_frame(term(), State.t()) ::
+          {:ok, State.t()} | {:reply, term(), State.t()} | {:close, State.t()}
   def handle_frame(frame_data, %State{} = state) do
     Logger.debug("[CONN] Received frame from server")
     handle_binary_frame(frame_data, state)
@@ -166,6 +185,9 @@ defmodule ExWapp.Conn do
   end
 
   @impl true
+  @doc false
+  @spec handle_cast(term(), State.t()) ::
+          {:reply, term(), State.t()} | {:noreply, State.t()}
   def handle_cast({:send_node, node}, %State{noise: %Noise{phase: :transport} = noise} = state) do
     with {:ok, encoded} <- Binary.encode(node),
          :ok <- log_outgoing_node(node, encoded),
@@ -182,11 +204,13 @@ defmodule ExWapp.Conn do
     end
   end
 
+  @doc false
   def handle_cast({:send_node, _node}, state) do
     Logger.warning("dropping outbound node before Noise handshake completes")
     {:noreply, state}
   end
 
+  @doc false
   def handle_cast(:restart_stream, %State{} = state) do
     state = %{state | stream_started?: false}
 
@@ -197,6 +221,9 @@ defmodule ExWapp.Conn do
   end
 
   @impl true
+  @doc false
+  @spec handle_info(term(), State.t()) ::
+          {:reply, term(), State.t()} | {:ok, State.t()}
   def handle_info({:send_raw_frame, frame}, state) do
     Logger.debug("[CONN] Sending raw frame (#{byte_size(elem(frame, 1))} bytes)")
     {:reply, frame, state}
@@ -334,9 +361,7 @@ defmodule ExWapp.Conn do
 
   defp notify_session(pid, message) when is_pid(pid), do: send(pid, {:connection_event, message})
 
-  defp normalize_replies(nil), do: []
   defp normalize_replies(replies) when is_list(replies), do: replies
-  defp normalize_replies(reply), do: [reply]
 
   defp maybe_send_stream_start(%State{noise: %Noise{phase: :transport} = noise} = state) do
     Logger.info("[CONN] Sending stream_start only (no handshake for initial pairing)")
@@ -374,18 +399,42 @@ defmodule ExWapp.Conn do
   defp log_outgoing_node(node, encoded) do
     case Binary.decode(encoded) do
       {:ok, decoded} ->
-        Logger.info("Sending node: #{node_to_xml(decoded)}")
+        log_outgoing_node_line(node, "Sending node: #{node_to_xml(decoded)}")
 
       {:error, _} ->
-        Logger.info("Sending node: #{inspect(node)}")
+        log_outgoing_node_line(node, "Sending node: #{inspect(node)}")
     end
 
     :ok
   rescue
     _ ->
-      Logger.info("Sending node: #{inspect(node)}")
+      log_outgoing_node_line(node, "Sending node: #{inspect(node)}")
       :ok
   end
+
+  defp log_outgoing_node_line(node, message) do
+    if quiet_iq_result?(node) do
+      Logger.debug(message)
+    else
+      Logger.info(message)
+    end
+  end
+
+  # Server pings are answered with bare-domain IQ results and can be frequent.
+  # Keep them at debug level so message/receipt flow is easier to inspect.
+  defp quiet_iq_result?(%Node{tag: "iq", attrs: attrs}) do
+    Map.get(attrs, "type") == "result" and
+      Map.get(attrs, "id") in [nil, ""] and
+      server_jid?(Map.get(attrs, "to"))
+  end
+
+  defp quiet_iq_result?(_), do: false
+
+  defp server_jid?(%ExWapp.JID{server: "s.whatsapp.net", user: user}) when user in [nil, ""],
+    do: true
+
+  defp server_jid?("s.whatsapp.net"), do: true
+  defp server_jid?(_), do: false
 
   defp node_to_xml(%Node{tag: tag, attrs: attrs, content: nil}) do
     "<#{tag}#{attrs_to_string(attrs)}/>"
@@ -454,6 +503,5 @@ defmodule ExWapp.Conn do
     |> Base.encode16(case: :lower)
   end
 
-  defp maybe_put_attr(attrs, _key, nil), do: attrs
   defp maybe_put_attr(attrs, key, value), do: Map.put(attrs, key, value)
 end

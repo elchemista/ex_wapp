@@ -19,7 +19,8 @@ defmodule ExWapp.Noise.Certificate do
     with {:ok, %CertChain{} = chain} <- CertChain.decode(cert_bytes),
          %NoiseCertificate{details: int_details_raw, signature: int_signature} = _intermediate
          when is_binary(int_details_raw) and is_binary(int_signature) <- chain.intermediate,
-         64 <- byte_size(int_signature) || {:error, :invalid_intermediate_signature_length},
+         true <-
+           byte_size(int_signature) == 64 || {:error, :invalid_intermediate_signature_length},
          true <-
            verify_signature(@wa_cert_pub_key, int_details_raw, int_signature) ||
              {:error, :invalid_intermediate_signature},
@@ -30,7 +31,7 @@ defmodule ExWapp.Noise.Certificate do
          true <- byte_size(intermediate_details.key) == 32 || {:error, :invalid_intermediate_key},
          %NoiseCertificate{details: leaf_details_raw, signature: leaf_signature} = _leaf
          when is_binary(leaf_details_raw) and is_binary(leaf_signature) <- chain.leaf,
-         64 <- byte_size(leaf_signature) || {:error, :invalid_leaf_signature_length},
+         true <- byte_size(leaf_signature) == 64 || {:error, :invalid_leaf_signature_length},
          true <-
            verify_signature(intermediate_details.key, leaf_details_raw, leaf_signature) ||
              {:error, :invalid_leaf_signature},

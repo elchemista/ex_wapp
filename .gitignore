@@ -10,12 +10,6 @@
 # Where third-party dependencies like ExDoc output generated docs.
 /doc/
 
-/whatsapp-rust/
-
-/whatsmeow/
-
-/native/signal_nif/target/
-
 .elixir_ls/
 
 .codex/
@@ -31,6 +25,3 @@ ex_wapp-*.tar
 
 # Temporary files, for example, from tests.
 /tmp/
-
-# Rust binary artifacts
-/target/

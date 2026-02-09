@@ -25,7 +25,6 @@ defmodule ExWapp.MixProject do
       {:protox, "~> 1.7"},
       {:telemetry, "~> 1.2"},
       {:qr_code, "~> 3.2.0"},
-      {:rustler, "~> 0.36.0"},
       {:credo, "~> 1.6", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.3", only: [:dev, :test], runtime: false}
     ]

@@ -21,9 +21,10 @@ defmodule ExWapp.MessageHandler do
 
   require Logger
 
-  alias ExWapp.{Binary, Chat}
+  alias ExWapp.{Binary, Chat, JID}
   alias ExWapp.Binary.Node
 
+  @type chat_target :: pid() | struct()
   @type handler_result :: {:ok, map()} | {:ok, map(), [term()]} | {:error, term()}
 
   @doc """
@@ -71,7 +72,13 @@ defmodule ExWapp.MessageHandler do
   # ============================================================================
 
   defp handle_message(%Node{attrs: attrs, content: content} = _node, session, state) do
-    from = Map.get(attrs, "from", "")
+    from =
+      case Map.get(attrs, "from", "") do
+        %JID{} = jid -> jid
+        jid when is_binary(jid) -> jid
+        _ -> ""
+      end
+
     id = Map.get(attrs, "id", "")
     type = Map.get(attrs, "type", "text")
     timestamp = parse_timestamp(Map.get(attrs, "t"))
@@ -98,10 +105,12 @@ defmodule ExWapp.MessageHandler do
     }
 
     # Store message in chat
-    if is_pid(session) do
-      Chat.add_message(session, from, message)
+    if target = chat_target(session, state) do
+      Chat.add_message(target, from, message)
+    end
 
-      # Notify subscribers of new message
+    # Notify subscribers of new message
+    if is_pid(session) do
       send(session, {:new_message, from, message})
     end
 
@@ -121,8 +130,6 @@ defmodule ExWapp.MessageHandler do
     new_stats = Map.put(stats, key, new_count)
     Map.put(state, :stats, new_stats)
   end
-
-  defp update_stats(state, _key), do: state
 
   defp extract_message_content(nil, _type), do: %{text: nil, media: nil}
 
@@ -219,8 +226,8 @@ defmodule ExWapp.MessageHandler do
       %Node{tag: "subject", attrs: subj_attrs} ->
         subject = Map.get(subj_attrs, "subject", "")
 
-        if is_pid(session) do
-          Chat.update_name(session, group_jid, subject)
+        if target = chat_target(session, state) do
+          Chat.update_name(target, group_jid, subject)
         end
 
       _ ->
@@ -235,7 +242,7 @@ defmodule ExWapp.MessageHandler do
     case find_child_node(content, "collection") do
       %Node{attrs: %{"name" => "regular_high"}, content: items} when is_list(items) ->
         # Process history sync items
-        process_history_items(items, session)
+        process_history_items(items, chat_target(session, state))
 
       _ ->
         :ok
@@ -248,7 +255,7 @@ defmodule ExWapp.MessageHandler do
     # Server sync can contain chat/message data
     case find_child_node(content, "collection") do
       %Node{content: items} when is_list(items) ->
-        process_history_items(items, session)
+        process_history_items(items, chat_target(session, state))
 
       _ ->
         :ok
@@ -269,16 +276,16 @@ defmodule ExWapp.MessageHandler do
 
   defp process_history_items(_, _), do: :ok
 
-  defp process_history_item(content, session) when is_list(content) do
+  defp process_history_item(content, target) when is_list(content) do
     # Look for conversation data
     case find_child_node(content, "chat") do
       %Node{attrs: chat_attrs} ->
         jid = Map.get(chat_attrs, "jid", "")
         name = Map.get(chat_attrs, "name")
 
-        if jid != "" and is_pid(session) do
+        if jid != "" and not is_nil(target) do
           # Create or update chat
-          Chat.get_or_create(session, jid, name: name)
+          Chat.get_or_create(target, jid, name: name)
         end
 
       _ ->
@@ -307,8 +314,8 @@ defmodule ExWapp.MessageHandler do
         _ -> :delivered
       end
 
-    if is_pid(session) do
-      Chat.update_message_status(session, from, id, status)
+    if target = chat_target(session, state) do
+      Chat.update_message_status(target, from, id, status)
     end
 
     {:ok, state}
@@ -389,4 +396,13 @@ defmodule ExWapp.MessageHandler do
   defp normalize_content(%Binary.Raw{data: data}), do: data
   defp normalize_content(content) when is_binary(content), do: content
   defp normalize_content(_), do: nil
+
+  @spec chat_target(pid() | term(), map()) :: chat_target() | nil
+  defp chat_target(session, state) do
+    case Map.get(state, :store) do
+      nil -> if(is_pid(session), do: session, else: nil)
+      %{__struct__: _} = store -> store
+      _ -> if(is_pid(session), do: session, else: nil)
+    end
+  end
 end
