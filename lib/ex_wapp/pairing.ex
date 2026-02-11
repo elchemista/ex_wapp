@@ -187,17 +187,19 @@ defmodule ExWapp.Pairing do
     # The signal.identity_key was sent to the server in the handshake payload.
     # Using a different identity for QR code will cause prekey upload to fail (406).
     case data do
-      # First priority: use existing data.identity if set
-      %{identity: %{public: pub}} when is_binary(pub) and byte_size(pub) == 32 ->
-        {data, pub}
-
-      # Second priority: use signal.identity_key (from registration handshake)
+      # First priority: use signal.identity_key (from registration handshake)
       %{signal: %{identity_key: %{public: pub, private: priv}}}
       when is_binary(pub) and byte_size(pub) == 32 ->
         identity = %{public: pub, private: priv}
         {Map.put(data, :identity, identity), pub}
 
-      # Fallback: generate new identity (only if no signal state yet)
+      # Fallback: reuse existing pairing identity if signal is unavailable
+      %{identity: %{public: pub, private: priv}}
+      when is_binary(pub) and byte_size(pub) == 32 and
+             is_binary(priv) and byte_size(priv) == 32 ->
+        {data, pub}
+
+      # Last resort: generate new identity (only if no signal state yet)
       _ ->
         %{public: pub, private: priv} = ExWapp.Signal.Keys.generate_key_pair()
         identity = %{public: pub, private: priv}
@@ -228,9 +230,8 @@ defmodule ExWapp.Pairing do
          {:ok, device_attrs} <- fetch_child_attrs(node, "device"),
          {:ok, biz_attrs} <- fetch_child_attrs(node, "biz", optional: true),
          {:ok, platform_attrs} <- fetch_child_attrs(node, "platform", optional: true),
-         # IMPORTANT: Pass the pairing identity to Signal.bootstrap so it uses
-         # the SAME identity key that was in the QR code. Otherwise prekey upload
-         # will use a different identity and the server will reject us.
+         # Keep Signal identity from current signal state when present.
+         # Pair-success must not replace it with a stale QR identity.
          signal_with_identity = merge_pairing_identity(data),
          {:ok, signal_info, signal_state} <-
            Signal.bootstrap(%{
@@ -310,9 +311,21 @@ defmodule ExWapp.Pairing do
   defp fetch_identity_keypair(%{identity: %{}}), do: {:error, :invalid_identity_keypair}
   defp fetch_identity_keypair(_), do: {:error, :missing_identity_keypair}
 
-  # Merge the pairing identity into the signal state so Signal.bootstrap uses it
-  # instead of generating a new one. This is CRITICAL - the prekey upload must
-  # use the same identity key that was in the QR code!
+  # Preserve Signal identity from current signal state.
+  # Only fall back to pairing identity when signal identity is missing.
+  defp merge_pairing_identity(%{
+         signal:
+           %{
+             identity_key: %{public: pub, private: priv} = identity
+           } = signal
+       })
+       when is_binary(pub) and byte_size(pub) == 32 and
+              is_binary(priv) and byte_size(priv) == 32 do
+    require Logger
+    Logger.info("[PAIRING] Keeping existing Signal identity: #{Base.encode64(pub)}")
+    Map.put(signal, :identity_key, identity)
+  end
+
   defp merge_pairing_identity(%{
          identity: %{public: pub, private: priv} = identity,
          signal: signal
@@ -320,8 +333,26 @@ defmodule ExWapp.Pairing do
        when is_binary(pub) and byte_size(pub) == 32 and
               is_binary(priv) and byte_size(priv) == 32 do
     require Logger
-    Logger.info("[PAIRING] Using pairing identity for Signal: #{Base.encode64(pub)}")
+
+    Logger.warning(
+      "[PAIRING] Signal identity missing, falling back to pairing identity: #{Base.encode64(pub)}"
+    )
+
     Map.put(signal || %{}, :identity_key, identity)
+  end
+
+  defp merge_pairing_identity(%{
+         identity: %{public: pub, private: priv} = identity
+       })
+       when is_binary(pub) and byte_size(pub) == 32 and
+              is_binary(priv) and byte_size(priv) == 32 do
+    require Logger
+
+    Logger.warning(
+      "[PAIRING] Signal identity missing, creating state from pairing identity: #{Base.encode64(pub)}"
+    )
+
+    %{identity_key: identity}
   end
 
   defp merge_pairing_identity(%{identity: identity}) do

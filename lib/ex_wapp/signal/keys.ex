@@ -70,7 +70,15 @@ defmodule ExWapp.Signal.Keys do
              is_binary(curve25519_public) and byte_size(curve25519_public) == 32 and
              is_binary(signature) and byte_size(signature) == 64 do
     message = <<5, curve25519_public::binary>>
+    verify_message(identity_public, message, signature)
+  end
 
+  @doc """
+  Verify a signature produced by `sign_message/2` for an arbitrary message.
+  """
+  def verify_message(identity_public, message, signature)
+      when is_binary(identity_public) and byte_size(identity_public) == 32 and
+             is_binary(message) and is_binary(signature) and byte_size(signature) == 64 do
     <<sig_prefix::binary-size(63), sig_last>> = signature
     sign_bit = sig_last &&& 0x80
     cleared_signature = sig_prefix <> <<sig_last &&& 0x7F>>

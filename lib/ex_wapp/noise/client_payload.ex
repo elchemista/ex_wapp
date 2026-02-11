@@ -229,13 +229,13 @@ defmodule ExWapp.Noise.ClientPayload do
       >>
 
     # Build DeviceProps message
-    os_name = "ExWapp"
+    os_name = "whatsmeow"
     os_len = byte_size(os_name)
     version_len = byte_size(version)
     history_len = byte_size(history_sync_config)
 
     <<
-      # os = "ExWapp" (field 1, wire type 2)
+      # os = "whatsmeow" (field 1, wire type 2)
       0x0A,
       os_len::8,
       os_name::binary,

@@ -140,7 +140,12 @@ defmodule ExWapp.Signal.SessionStore do
         {:ok, ciphertext, updated_session} ->
           updated_store = update_session(store, jid, updated_session)
 
-          if base_key do
+          # If caller already created the session in a previous step (e.g. prekey fetch
+          # worker), base_key will be nil here. Preserve first-message wrapping by honoring
+          # the provided remote_bundle base_key.
+          prekey_base_key = base_key || Map.get(remote_bundle || %{}, :base_key)
+
+          if prekey_base_key do
             prekey_id = get_in(remote_bundle, [:prekey, :id]) || 0
             signed_prekey_id = get_in(remote_bundle, [:signed_prekey, :id]) || 0
             identity_pub = local_identity.public
@@ -150,7 +155,7 @@ defmodule ExWapp.Signal.SessionStore do
                 local_registration_id,
                 prekey_id,
                 signed_prekey_id,
-                base_key,
+                prekey_base_key,
                 identity_pub,
                 ciphertext
               )
@@ -171,14 +176,20 @@ defmodule ExWapp.Signal.SessionStore do
   def decrypt_message(store, jid, ciphertext, is_prekey_message, local_identity, local_prekeys) do
     jid = normalize_jid(jid)
 
+    Logger.info(
+      "[SESSION_STORE] decrypt_message: jid=#{jid} is_prekey=#{is_prekey_message} ct_size=#{byte_size(ciphertext)} existing_session=#{has_session?(store, jid)}"
+    )
+
     if is_prekey_message do
       # PreKeySignalMessage - creates new session
       case Signal.decrypt_prekey_message(ciphertext, local_identity, local_prekeys) do
         {:ok, plaintext, session} ->
+          Logger.info("[SESSION_STORE] PreKey decrypt succeeded for #{jid}")
           updated_store = put_session(store, jid, session)
           {:ok, plaintext, updated_store}
 
         {:error, reason} ->
+          Logger.warning("[SESSION_STORE] PreKey decrypt failed for #{jid}: #{inspect(reason)}")
           {:error, reason}
       end
     else
@@ -191,10 +202,15 @@ defmodule ExWapp.Signal.SessionStore do
               {:ok, plaintext, updated_store}
 
             {:error, reason} ->
+              Logger.warning(
+                "[SESSION_STORE] Whisper decrypt failed for #{jid}: #{inspect(reason)}"
+              )
+
               {:error, reason}
           end
 
         :not_found ->
+          Logger.warning("[SESSION_STORE] No session found for #{jid} (whisper message)")
           {:error, :no_session}
       end
     end
@@ -202,12 +218,18 @@ defmodule ExWapp.Signal.SessionStore do
 
   # Normalize JID to consistent format
   defp normalize_jid(jid) when is_binary(jid) do
-    # Remove device number if present (e.g., "123:5@s.whatsapp.net" -> "123@s.whatsapp.net")
-    case String.split(jid, [":", "@"]) do
-      [user, _device, domain] -> "#{user}@#{domain}"
-      [user, domain] -> "#{user}@#{domain}"
-      _ -> jid
-    end
+    jid
+    |> String.trim()
+    |> String.replace("@whatsapp.net", "@s.whatsapp.net")
+  end
+
+  defp normalize_jid(%{user: user, device: device, server: server})
+       when is_integer(device) and device > 0 and is_binary(server) and server != "" do
+    "#{user}:#{device}@#{server}"
+  end
+
+  defp normalize_jid(%{user: user, server: server}) when is_binary(server) and server != "" do
+    "#{user}@#{server}"
   end
 
   defp normalize_jid(%{user: user}), do: "#{user}@s.whatsapp.net"

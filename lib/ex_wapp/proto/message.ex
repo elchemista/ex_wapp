@@ -49,7 +49,7 @@ defmodule ExWapp.Proto.Message do
 
   defp encode_conversation(acc, %{conversation: value}) when is_binary(value) do
     len = byte_size(value)
-    [acc, <<0x0A, len::8>>, value]
+    [acc, <<0x0A>>, encode_varint(len), value]
   end
 
   # Field 6: extendedTextMessage - tag 0x32 (field 6, wire type 2)

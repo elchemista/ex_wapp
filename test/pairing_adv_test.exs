@@ -3,6 +3,7 @@ defmodule ExWapp.PairingADVTest do
   use ExUnit.Case, async: true
 
   alias ExWapp.Pairing.ADV
+  alias ExWapp.Signal.Keys
   alias WAAdv.{ADVDeviceIdentity, ADVSignedDeviceIdentity, ADVSignedDeviceIdentityHMAC}
 
   @adv_prefix_account_signature <<6, 0>>
@@ -19,9 +20,8 @@ defmodule ExWapp.PairingADVTest do
   end
 
   defp do_adv_roundtrip(account_type) do
-    # Identity keypair (Ed25519)
-    identity_priv = :crypto.strong_rand_bytes(32)
-    identity_pub = Ed25519.derive_public_key(identity_priv)
+    # Identity keypair (Curve25519, same as runtime Signal identity)
+    %{private: identity_priv, public: identity_pub} = Keys.generate_key_pair()
 
     # Account signing keypair (Ed25519)
     account_priv = :crypto.strong_rand_bytes(32)
@@ -105,7 +105,7 @@ defmodule ExWapp.PairingADVTest do
       end
 
     device_message = dev_prefix <> details_inner <> identity_pub <> account_pub
-    assert Ed25519.valid_signature?(parsed.device_signature, device_message, identity_pub)
+    assert Keys.verify_message(identity_pub, device_message, parsed.device_signature)
 
     # self_signed blob should decode to a SignedDeviceIdentity missing the account key
     {:ok, self_signed} = ADVSignedDeviceIdentity.decode(parsed.self_signed)

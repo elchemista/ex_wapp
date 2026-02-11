@@ -127,9 +127,39 @@ defmodule ExWapp.Signal.Encryption do
   @spec decrypt_from_sender(pid(), String.t(), binary(), atom()) ::
           {:ok, binary()} | {:error, term()}
   def decrypt_from_sender(session, jid, ciphertext, enc_type) do
-    with {:ok, local_identity, local_prekeys} <- get_local_keys(session),
-         {:ok, signal_store} <- get_or_init_session_store(session) do
-      is_prekey = enc_type in [:pkmsg, :prekey, 3]
+    store = GenServer.call(session, :get_store)
+    signal_store = GenServer.call(session, :get_signal_sessions)
+
+    case decrypt_from_sender_sync(store, signal_store, jid, ciphertext, enc_type) do
+      {:ok, plaintext, updated_store} ->
+        GenServer.call(session, {:update_signal_sessions, updated_store})
+        Logger.info("[ENCRYPTION] Decrypted message from #{jid}")
+        {:ok, plaintext}
+
+      {:error, reason} ->
+        Logger.error("[ENCRYPTION] Failed to decrypt from #{jid}: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Decrypts an incoming message without GenServer calls (safe inside Session handlers).
+  """
+  @spec decrypt_from_sender_sync(any(), any(), String.t(), binary(), atom() | String.t()) ::
+          {:ok, binary(), any()} | {:error, term()}
+  def decrypt_from_sender_sync(store, signal_sessions, jid, ciphertext, enc_type) do
+    is_prekey = prekey_message?(enc_type)
+
+    Logger.info(
+      "[ENCRYPTION] decrypt_from_sender_sync: jid=#{jid} enc_type=#{inspect(enc_type)} is_prekey=#{is_prekey} ct_size=#{byte_size(ciphertext)}"
+    )
+
+    with {:ok, local_identity, local_prekeys} <- get_local_keys_from_store(store) do
+      signal_store = signal_sessions || SessionStore.new()
+
+      Logger.info(
+        "[ENCRYPTION] Have identity, signed_prekeys=#{map_size(local_prekeys.signed_prekeys)} prekeys=#{map_size(local_prekeys.prekeys)}"
+      )
 
       case SessionStore.decrypt_message(
              signal_store,
@@ -140,14 +170,17 @@ defmodule ExWapp.Signal.Encryption do
              local_prekeys
            ) do
         {:ok, plaintext, updated_store} ->
-          GenServer.call(session, {:update_signal_sessions, updated_store})
-          Logger.info("[ENCRYPTION] Decrypted message from #{jid}")
-          {:ok, plaintext}
+          Logger.info("[ENCRYPTION] Decrypt succeeded, plaintext_size=#{byte_size(plaintext)}")
+          {:ok, plaintext, updated_store}
 
         {:error, reason} ->
-          Logger.error("[ENCRYPTION] Failed to decrypt from #{jid}: #{inspect(reason)}")
+          Logger.warning("[ENCRYPTION] Decrypt failed: #{inspect(reason)}")
           {:error, reason}
       end
+    else
+      {:error, reason} ->
+        Logger.warning("[ENCRYPTION] get_local_keys failed: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 
@@ -174,18 +207,49 @@ defmodule ExWapp.Signal.Encryption do
   Unpads a decrypted message.
   """
   @spec unpad_message(binary()) :: binary()
-  def unpad_message(padded) when byte_size(padded) > 0 do
-    # WhatsApp padding: last byte indicates padding length
-    pad_len = :binary.last(padded)
+  def unpad_message(padded), do: unpad_message(padded, nil)
 
-    if pad_len > 0 and pad_len <= 16 and pad_len <= byte_size(padded) do
-      binary_part(padded, 0, byte_size(padded) - pad_len)
-    else
+  @spec unpad_message(binary(), integer() | String.t() | nil) :: binary()
+  def unpad_message(padded, version) when byte_size(padded) > 0 do
+    # Whatsmeow parity: v=3 payloads are not WA-padded.
+    if parse_enc_version(version) == 3 do
       padded
+    else
+      # WhatsApp padding: last byte indicates padding length
+      pad_len = :binary.last(padded)
+
+      if pad_len > 0 and pad_len <= 16 and pad_len <= byte_size(padded) do
+        payload_len = byte_size(padded) - pad_len
+        <<payload::binary-size(payload_len), padding::binary-size(pad_len)>> = padded
+
+        if valid_padding?(padding, pad_len) do
+          payload
+        else
+          padded
+        end
+      else
+        padded
+      end
     end
   end
 
-  def unpad_message(data), do: data
+  def unpad_message(data, _version), do: data
+
+  defp valid_padding?(padding, pad_len) when is_binary(padding) do
+    expected = :binary.copy(<<pad_len>>, byte_size(padding))
+    padding == expected
+  end
+
+  defp parse_enc_version(version) when is_integer(version), do: version
+
+  defp parse_enc_version(version) when is_binary(version) do
+    case Integer.parse(version) do
+      {value, ""} -> value
+      _ -> nil
+    end
+  end
+
+  defp parse_enc_version(_), do: nil
 
   # ============================================================================
   # Private Helpers
@@ -193,6 +257,10 @@ defmodule ExWapp.Signal.Encryption do
 
   defp get_local_keys(session) do
     store = GenServer.call(session, :get_store)
+    get_local_keys_from_store(store)
+  end
+
+  defp get_local_keys_from_store(store) do
     data = ExWapp.Store.load!(store)
 
     # Debug: show what keys are in the store
@@ -222,6 +290,10 @@ defmodule ExWapp.Signal.Encryption do
       {:error, :no_identity_key}
     end
   end
+
+  defp prekey_message?(enc_type) when enc_type in [:pkmsg, :prekey, 3], do: true
+  defp prekey_message?(enc_type) when enc_type in ["pkmsg", "prekey", "3"], do: true
+  defp prekey_message?(_), do: false
 
   defp get_or_init_session_store(session) do
     case GenServer.call(session, :get_signal_sessions) do

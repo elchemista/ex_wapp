@@ -219,33 +219,51 @@ defmodule ExWapp.Signal.Session do
   """
   @spec decrypt(session_state(), binary()) :: {:ok, binary(), session_state()} | {:error, term()}
   def decrypt(session, ciphertext) do
-    # Parse the message
-    case parse_signal_message(ciphertext) do
-      {:ok, counter, _prev_counter, ratchet_key, iv, encrypted_data, tag} ->
-        # Check if we need to ratchet
-        session =
-          if ratchet_key != session.remote_ratchet_key do
-            perform_dh_ratchet(session, ratchet_key)
-          else
-            session
-          end
+    with {:ok, parsed} <- parse_signal_message(ciphertext) do
+      needs_ratchet = parsed.ratchet_key != session.remote_ratchet_key
 
-        # Get or derive message key for this counter
-        case get_or_derive_message_key(session.receiving_chain, counter) do
-          {:ok, message_key, updated_chain} ->
-            case aes_gcm_decrypt(message_key, iv, encrypted_data, tag) do
-              {:ok, plaintext} ->
-                {:ok, plaintext, %{session | receiving_chain: updated_chain}}
+      Logger.info(
+        "[SIGNAL] decrypt: counter=#{parsed.counter} prev_counter=#{parsed.previous_counter} " <>
+          "needs_ratchet=#{needs_ratchet} ct_size=#{byte_size(parsed.ciphertext)}"
+      )
 
-              :error ->
-                {:error, :decryption_failed}
-            end
-
-          {:error, reason} ->
-            {:error, reason}
+      session =
+        if needs_ratchet do
+          Logger.info("[SIGNAL] Performing DH ratchet step")
+          perform_dh_ratchet(session, parsed.ratchet_key)
+        else
+          session
         end
 
+      with {:ok, message_keys, updated_chain} <-
+             get_or_derive_message_key(session.receiving_chain, parsed.counter) do
+        mac_valid =
+          WireFormat.valid_signal_mac?(
+            parsed.mac,
+            message_keys.mac_key,
+            session.remote_identity_key,
+            session.local_identity_key.public,
+            parsed.version_and_proto
+          )
+
+        Logger.info("[SIGNAL] MAC verification: #{mac_valid}")
+
+        if mac_valid do
+          plaintext =
+            WireFormat.decrypt_aes_cbc(
+              parsed.ciphertext,
+              message_keys.cipher_key,
+              message_keys.iv
+            )
+
+          {:ok, plaintext, %{session | receiving_chain: updated_chain}}
+        else
+          {:error, :invalid_mac}
+        end
+      end
+    else
       {:error, reason} ->
+        Logger.warning("[SIGNAL] Failed to parse SignalMessage: #{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -256,13 +274,41 @@ defmodule ExWapp.Signal.Session do
   @spec decrypt_prekey_message(binary(), map(), map()) ::
           {:ok, binary(), session_state()} | {:error, term()}
   def decrypt_prekey_message(message, local_identity, local_prekeys) do
+    Logger.info(
+      "[SIGNAL] decrypt_prekey_message: msg_size=#{byte_size(message)} first_byte=0x#{Base.encode16(binary_part(message, 0, 1))}"
+    )
+
     case parse_prekey_signal_message(message) do
-      {:ok, _reg_id, prekey_id, signed_prekey_id, base_key, remote_identity, inner_ciphertext} ->
+      {:ok, reg_id, prekey_id, signed_prekey_id, base_key, remote_identity, inner_ciphertext} ->
+        Logger.info(
+          "[SIGNAL] Parsed pkmsg: reg_id=#{reg_id} prekey_id=#{inspect(prekey_id)} " <>
+            "signed_prekey_id=#{signed_prekey_id} base_key_size=#{byte_size(base_key)} " <>
+            "inner_size=#{byte_size(inner_ciphertext)}"
+        )
+
         # Look up our prekeys
+        available_signed_ids = Map.keys(local_prekeys.signed_prekeys)
+        available_prekey_ids = Map.keys(local_prekeys.prekeys)
+
+        Logger.info(
+          "[SIGNAL] Available signed_prekey_ids=#{inspect(available_signed_ids)} " <>
+            "prekey_ids_count=#{length(available_prekey_ids)} " <>
+            "looking_for signed=#{signed_prekey_id} prekey=#{inspect(prekey_id)}"
+        )
+
         signed_prekey = Map.get(local_prekeys.signed_prekeys, signed_prekey_id)
         one_time_prekey = if prekey_id, do: Map.get(local_prekeys.prekeys, prekey_id), else: nil
 
+        Logger.info(
+          "[SIGNAL] Lookup result: signed_prekey=#{if signed_prekey, do: "found", else: "MISSING"} " <>
+            "one_time_prekey=#{if one_time_prekey, do: "found", else: if(prekey_id, do: "MISSING", else: "not_needed")}"
+        )
+
         unless signed_prekey do
+          Logger.warning(
+            "[SIGNAL] Unknown signed prekey #{signed_prekey_id}, available: #{inspect(available_signed_ids)}"
+          )
+
           {:error, :unknown_signed_prekey}
         else
           # X3DH from recipient side
@@ -283,33 +329,39 @@ defmodule ExWapp.Signal.Session do
               <<>>
             end
 
-          shared_secret = <<0xFF::size(256)>> <> dh1 <> dh2 <> dh3 <> dh4
-          # Use "WhisperText" for initial X3DH derivation (Bob's side)
-          {root_key, chain_key} = hkdf_derive_initial(shared_secret)
+          Logger.info(
+            "[SIGNAL] X3DH DH outputs: dh1=#{Base.encode16(binary_part(dh1, 0, 4))}... " <>
+              "dh2=#{Base.encode16(binary_part(dh2, 0, 4))}... " <>
+              "dh3=#{Base.encode16(binary_part(dh3, 0, 4))}... " <>
+              "dh4=#{if dh4 == <<>>, do: "empty", else: Base.encode16(binary_part(dh4, 0, 4)) <> "..."}"
+          )
 
-          # Initialize receiving chain
-          receiving_chain = %{
-            key: chain_key,
-            counter: 0,
-            message_keys: %{}
-          }
+          case decrypt_prekey_inner_with_compat(
+                 local_identity,
+                 signed_prekey,
+                 remote_identity,
+                 base_key,
+                 inner_ciphertext,
+                 dh1,
+                 dh2,
+                 dh3,
+                 dh4
+               ) do
+            {:ok, plaintext, updated_session, variant} ->
+              Logger.info(
+                "[SIGNAL] Inner decrypt succeeded with #{variant}, plaintext_size=#{byte_size(plaintext)}"
+              )
 
-          session = %{
-            remote_identity_key: remote_identity,
-            local_identity_key: local_identity,
-            root_key: root_key,
-            sending_chain: nil,
-            receiving_chain: receiving_chain,
-            previous_counter: 0,
-            ratchet_key: nil,
-            remote_ratchet_key: base_key
-          }
+              {:ok, plaintext, updated_session}
 
-          # Now decrypt the inner message
-          decrypt(session, inner_ciphertext)
+            {:error, reason} ->
+              Logger.warning("[SIGNAL] Inner decrypt failed: #{inspect(reason)}")
+              {:error, reason}
+          end
         end
 
       {:error, reason} ->
+        Logger.warning("[SIGNAL] Failed to parse PreKeySignalMessage: #{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -317,6 +369,105 @@ defmodule ExWapp.Signal.Session do
   # ============================================================================
   # Double Ratchet
   # ============================================================================
+
+  defp decrypt_prekey_inner_with_compat(
+         local_identity,
+         signed_prekey,
+         remote_identity,
+         base_key,
+         inner_ciphertext,
+         dh1,
+         dh2,
+         dh3,
+         dh4
+       ) do
+    variants = x3dh_secret_variants(dh1, dh2, dh3, dh4)
+
+    Enum.reduce_while(variants, {:error, :invalid_mac}, fn {variant, shared_secret}, _acc ->
+      {root_key, chain_key} = hkdf_derive_initial(shared_secret)
+
+      Logger.info(
+        "[SIGNAL] Trying #{variant}: root_key=#{Base.encode16(binary_part(root_key, 0, 4))}... " <>
+          "chain_key=#{Base.encode16(binary_part(chain_key, 0, 4))}..."
+      )
+
+      session =
+        build_prekey_initial_session(
+          local_identity,
+          signed_prekey,
+          remote_identity,
+          base_key,
+          root_key,
+          chain_key
+        )
+
+      case decrypt(session, inner_ciphertext) do
+        {:ok, plaintext, updated_session} ->
+          {:halt, {:ok, plaintext, updated_session, variant}}
+
+        {:error, reason} ->
+          {:cont, {:error, reason}}
+      end
+    end)
+  end
+
+  defp build_prekey_initial_session(
+         local_identity,
+         signed_prekey,
+         remote_identity,
+         _base_key,
+         root_key,
+         chain_key
+       ) do
+    # Match libsignal receiver bootstrap:
+    # - X3DH chain key initializes our *sender* chain
+    # - first inner SignalMessage ratchets into receiver chain
+    sending_chain = %{
+      key: chain_key,
+      counter: 0,
+      message_keys: %{}
+    }
+
+    %{
+      remote_identity_key: remote_identity,
+      local_identity_key: local_identity,
+      root_key: root_key,
+      sending_chain: sending_chain,
+      receiving_chain: nil,
+      previous_counter: 0,
+      # Bob side starts from signed prekey as current ratchet private key.
+      ratchet_key: %{public: signed_prekey.public, private: signed_prekey.private},
+      # Force the first inner SignalMessage to perform a DH ratchet from root_key.
+      # The sender's ratchet key comes from the inner SignalMessage, not PreKey base_key.
+      remote_ratchet_key: nil
+    }
+  end
+
+  # Compatibility fallback list for runtimes that produce slightly different
+  # prekey shared-secret composition. We still require a valid Signal MAC.
+  defp x3dh_secret_variants(dh1, dh2, dh3, dh4) do
+    [
+      {"ff:dh1,dh2,dh3,dh4", true, [dh1, dh2, dh3, dh4]},
+      {"noff:dh1,dh2,dh3,dh4", false, [dh1, dh2, dh3, dh4]},
+      {"ff:dh1,dh3,dh2,dh4", true, [dh1, dh3, dh2, dh4]},
+      {"ff:dh2,dh1,dh3,dh4", true, [dh2, dh1, dh3, dh4]},
+      {"ff:dh2,dh3,dh1,dh4", true, [dh2, dh3, dh1, dh4]},
+      {"ff:dh3,dh1,dh2,dh4", true, [dh3, dh1, dh2, dh4]}
+    ]
+    |> Enum.map(fn {name, with_ff_prefix?, parts} ->
+      secret = shared_secret_from_parts(parts, with_ff_prefix?)
+      {name, secret}
+    end)
+  end
+
+  defp shared_secret_from_parts(parts, with_ff_prefix?) when is_list(parts) do
+    prefix = if with_ff_prefix?, do: <<0xFF::size(256)>>, else: <<>>
+
+    Enum.reduce(parts, prefix, fn
+      <<>>, acc -> acc
+      part, acc -> acc <> part
+    end)
+  end
 
   defp perform_dh_ratchet(session, new_remote_ratchet_key) do
     # Save previous sending chain counter
@@ -349,19 +500,6 @@ defmodule ExWapp.Signal.Session do
     }
   end
 
-  defp derive_message_key(chain) do
-    # KDF chain step
-    {chain_key, message_key} = hkdf_derive_chain(chain.key)
-
-    updated_chain = %{
-      chain
-      | key: chain_key,
-        counter: chain.counter + 1
-    }
-
-    {message_key, updated_chain}
-  end
-
   defp get_or_derive_message_key(nil, _counter), do: {:error, :no_receiving_chain}
 
   defp get_or_derive_message_key(chain, counter) do
@@ -383,7 +521,7 @@ defmodule ExWapp.Signal.Session do
   end
 
   defp advance_chain_to(chain, target_counter) do
-    if chain.counter > target_counter + 1000 do
+    if target_counter > chain.counter + 1000 do
       {:error, :too_many_skipped_messages}
     else
       advance_chain_to_impl(chain, target_counter)
@@ -397,17 +535,18 @@ defmodule ExWapp.Signal.Session do
   end
 
   defp advance_chain_to_impl(chain, target_counter) do
-    {chain_key, message_key} = hkdf_derive_chain(chain.key)
+    {chain_key, message_key_seed} = hkdf_derive_chain(chain.key)
+    message_keys = derive_message_keys_from_seed(message_key_seed)
 
     updated_chain = %{
       chain
       | key: chain_key,
         counter: chain.counter + 1,
-        message_keys: Map.put(chain.message_keys, chain.counter, message_key)
+        message_keys: Map.put(chain.message_keys, chain.counter, message_keys)
     }
 
     if chain.counter == target_counter do
-      {:ok, message_key,
+      {:ok, message_keys,
        %{updated_chain | message_keys: Map.delete(updated_chain.message_keys, target_counter)}}
     else
       advance_chain_to_impl(updated_chain, target_counter)
@@ -464,7 +603,18 @@ defmodule ExWapp.Signal.Session do
   # Returns: cipher_key (32 bytes), mac_key (32 bytes), iv (16 bytes)
   defp derive_message_keys(chain) do
     {new_chain_key, message_key_seed} = hkdf_derive_chain(chain.key)
+    message_keys = derive_message_keys_from_seed(message_key_seed)
 
+    updated_chain = %{
+      chain
+      | key: new_chain_key,
+        counter: chain.counter + 1
+    }
+
+    {message_keys, updated_chain}
+  end
+
+  defp derive_message_keys_from_seed(message_key_seed) do
     # Use HKDF to expand message_key_seed into cipher_key, mac_key, iv
     # Total: 32 + 32 + 16 = 80 bytes
     salt = :binary.copy(<<0>>, 32)
@@ -480,102 +630,29 @@ defmodule ExWapp.Signal.Session do
     <<cipher_key::binary-size(32), mac_key::binary-size(32), iv::binary-size(16), _rest::binary>> =
       expanded
 
-    message_keys = %{
+    %{
       cipher_key: cipher_key,
       mac_key: mac_key,
       iv: iv
     }
-
-    updated_chain = %{
-      chain
-      | key: new_chain_key,
-        counter: chain.counter + 1
-    }
-
-    {message_keys, updated_chain}
-  end
-
-  # Keep old functions for backward compatibility / decryption
-  defp aes_gcm_encrypt(key, iv, plaintext) do
-    :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, plaintext, <<>>, 16, true)
-  end
-
-  defp aes_gcm_decrypt(key, iv, ciphertext, tag) do
-    case :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, ciphertext, <<>>, tag, false) do
-      :error -> :error
-      plaintext -> {:ok, plaintext}
-    end
   end
 
   # ============================================================================
   # Message Parsing/Building
   # ============================================================================
 
-  defp parse_signal_message(<<
-         counter::32,
-         prev_counter::32,
-         ratchet_key::binary-size(32),
-         iv::binary-size(12),
-         rest::binary
-       >>) do
-    # Last 16 bytes are the tag
-    tag_size = 16
-    ciphertext_size = byte_size(rest) - tag_size
+  defp parse_signal_message(payload) do
+    WireFormat.parse_signal_message(payload)
+  end
 
-    if ciphertext_size >= 0 do
-      <<ciphertext::binary-size(ciphertext_size), tag::binary-size(16)>> = rest
-      {:ok, counter, prev_counter, ratchet_key, iv, ciphertext, tag}
-    else
-      {:error, :invalid_message_format}
+  defp parse_prekey_signal_message(payload) do
+    case WireFormat.parse_prekey_signal_message(payload) do
+      {:ok, parsed} ->
+        {:ok, parsed.registration_id, parsed.prekey_id, parsed.signed_prekey_id, parsed.base_key,
+         parsed.identity_key, parsed.message}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
-
-  defp parse_signal_message(_), do: {:error, :invalid_message_format}
-
-  defp build_prekey_signal_message(
-         reg_id,
-         prekey_id,
-         signed_prekey_id,
-         base_key,
-         identity_key,
-         inner_ciphertext
-       ) do
-    # Simple binary format for PreKeySignalMessage
-    # In real WhatsApp, this uses protobuf, but this is a simplified version
-    prekey_id_bytes = if prekey_id, do: <<prekey_id::32>>, else: <<0xFFFFFFFF::32>>
-
-    <<
-      # Version
-      3::8,
-      # Registration ID
-      reg_id::32,
-      # PreKey ID (0xFFFFFFFF if not used)
-      prekey_id_bytes::binary,
-      # Signed PreKey ID
-      signed_prekey_id::32,
-      # Base key (ephemeral public key)
-      base_key::binary-size(32),
-      # Identity key
-      identity_key::binary-size(32),
-      # Inner ciphertext length and data
-      byte_size(inner_ciphertext)::32,
-      inner_ciphertext::binary
-    >>
-  end
-
-  defp parse_prekey_signal_message(<<
-         3::8,
-         reg_id::32,
-         prekey_id::32,
-         signed_prekey_id::32,
-         base_key::binary-size(32),
-         identity_key::binary-size(32),
-         inner_len::32,
-         inner_ciphertext::binary-size(inner_len)
-       >>) do
-    prekey_id = if prekey_id == 0xFFFFFFFF, do: nil, else: prekey_id
-    {:ok, reg_id, prekey_id, signed_prekey_id, base_key, identity_key, inner_ciphertext}
-  end
-
-  defp parse_prekey_signal_message(_), do: {:error, :invalid_prekey_message}
 end

@@ -121,6 +121,12 @@ defmodule ExWapp.Binary do
   """
   @spec decode!(binary()) :: binary_node()
   def decode!(payload) when is_binary(payload) do
+    payload =
+      case maybe_strip_transport_flags(payload) do
+        {:ok, unpacked} -> unpacked
+        :no_change -> payload
+      end
+
     decoder = Decoder.new(payload)
     {node, decoder} = Decoder.read_node(decoder)
 
@@ -130,6 +136,23 @@ defmodule ExWapp.Binary do
 
     node
   end
+
+  defp maybe_strip_transport_flags(<<flags, _rest::binary>> = payload) when flags < 8 do
+    case unpack(payload) do
+      {:ok, unpacked} ->
+        if starts_with_node_list?(unpacked), do: {:ok, unpacked}, else: :no_change
+
+      _ -> :no_change
+    end
+  end
+
+  defp maybe_strip_transport_flags(_payload), do: :no_change
+
+  defp starts_with_node_list?(<<tag, _::binary>>) do
+    tag == Token.list8() or tag == Token.list16()
+  end
+
+  defp starts_with_node_list?(_), do: false
 
   @spec normalize_node(any()) :: binary_node()
   defp normalize_node(%Node{} = node) do

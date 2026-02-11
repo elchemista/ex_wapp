@@ -21,7 +21,7 @@ defmodule ExWapp.Pairing.ADV do
   @type parsed_identity :: %{
           container: struct(),
           signed: struct(),
-          details: struct(),
+          details: struct() | map(),
           hosted?: boolean(),
           device_signature: binary(),
           self_signed: binary(),
@@ -52,8 +52,31 @@ defmodule ExWapp.Pairing.ADV do
       # This is the most common case for QR pairing
       case parse_direct_signed_identity(adv_bytes, identity_pub, identity_priv) do
         {:ok, result} ->
-          Logger.info("[ADV] ✓ Direct parsing succeeded")
-          {:ok, result}
+          if should_try_hmac_after_direct?(result) do
+            Logger.warning(
+              "[ADV] Direct parse looks wrapped/incomplete, retrying as HMAC container"
+            )
+
+            case decode_container(adv_bytes) do
+              {:ok, container}
+              when is_binary(container.details) and byte_size(container.details) > 0 ->
+                case parse_hmac_wrapped(container, adv_secret, identity_pub, identity_priv) do
+                  {:ok, wrapped} ->
+                    {:ok, wrapped}
+
+                  {:error, _reason} ->
+                    Logger.info("[ADV] Falling back to direct parse result")
+                    {:ok, result}
+                end
+
+              _ ->
+                Logger.info("[ADV] Falling back to direct parse result")
+                {:ok, result}
+            end
+          else
+            Logger.info("[ADV] ✓ Direct parsing succeeded")
+            {:ok, result}
+          end
 
         {:error, direct_error} ->
           Logger.warning(
@@ -75,6 +98,34 @@ defmodule ExWapp.Pairing.ADV do
 
   def parse_signed_device_identity(_adv_bytes, _adv_secret, _identity),
     do: {:error, :invalid_adv_payload}
+
+  @doc """
+  Encodes an `ADVSignedDeviceIdentity` payload.
+
+  By default it includes `accountSignatureKey` (required for outgoing messages).
+  Pass `include_signature_key: false` for pair-device-sign payloads.
+  """
+  def encode_signed_device_identity(signed, opts \\ [])
+
+  @spec encode_signed_device_identity(struct(), keyword()) ::
+          {:ok, binary()} | {:error, term()}
+  def encode_signed_device_identity(%ADVSignedDeviceIdentity{} = signed, opts) do
+    include_signature_key? = Keyword.get(opts, :include_signature_key, true)
+
+    payload =
+      if include_signature_key? do
+        signed
+      else
+        %{signed | accountSignatureKey: nil}
+      end
+
+    case ADVSignedDeviceIdentity.encode(payload) do
+      {:ok, iodata} -> {:ok, IO.iodata_to_binary(iodata)}
+      {:error, reason} -> {:error, {:adv_signed_identity_encode, reason}}
+    end
+  end
+
+  def encode_signed_device_identity(_, _opts), do: {:error, :invalid_signed_device_identity}
 
   # Parse HMAC-wrapped ADV (from adv-device-identity node)
   defp parse_hmac_wrapped(container, adv_secret, identity_pub, identity_priv) do
@@ -112,7 +163,7 @@ defmodule ExWapp.Pairing.ADV do
            ),
          _ = Logger.info("[ADV-HMAC] device_signature size: #{byte_size(device_signature)}"),
          signed_with_device <- %{signed_identity | deviceSignature: device_signature},
-         {:ok, details} <- decode_details(signed_with_device.details),
+         {:ok, details} <- decode_details_relaxed(signed_with_device.details),
          {:ok, self_signed} <- encode_self_signed(signed_with_device),
          _ = Logger.info("[ADV-HMAC] self_signed size: #{byte_size(self_signed)}") do
       {:ok,
@@ -154,8 +205,11 @@ defmodule ExWapp.Pairing.ADV do
          _ =
            Logger.info("[ADV] Generated device signature (#{byte_size(device_signature)} bytes)"),
          signed_with_device <- %{signed_identity | deviceSignature: device_signature},
-         {:ok, details} <- decode_details(signed_with_device.details),
-         _ = Logger.info("[ADV] Decoded details: keyIndex=#{inspect(details.keyIndex)}"),
+         {:ok, details} <- decode_details_relaxed(signed_with_device.details),
+         _ =
+           Logger.info(
+             "[ADV] Decoded details (relaxed): keyIndex=#{inspect(extract_key_index(details))}"
+           ),
          {:ok, self_signed} <- encode_self_signed(signed_with_device),
          _ = Logger.info("[ADV] Encoded self_signed (#{byte_size(self_signed)} bytes)") do
       {:ok,
@@ -286,23 +340,135 @@ defmodule ExWapp.Pairing.ADV do
     end
   end
 
+  # WhatsApp can add new fields to ADVDeviceIdentity that older generated proto
+  # modules do not understand. For pairing we only need stable fields such as keyIndex.
+  defp decode_details_relaxed(details) do
+    case decode_details(details) do
+      {:ok, decoded} ->
+        {:ok, decoded}
+
+      {:error, reason} ->
+        require Logger
+        key_index = extract_key_index_from_details_blob(details)
+
+        Logger.warning(
+          "[ADV] decode_details_relaxed: falling back to partial details, " <>
+            "keyIndex=#{inspect(key_index)} reason=#{inspect(reason)}"
+        )
+
+        {:ok, %{keyIndex: key_index, decode_error: reason}}
+    end
+  end
+
+  defp should_try_hmac_after_direct?(%{
+         signed: %ADVSignedDeviceIdentity{} = signed,
+         details: details
+       }) do
+    details_decode_failed? = is_map(details) and Map.has_key?(details, :decode_error)
+
+    account_signature_valid? =
+      is_binary(signed.accountSignature) and byte_size(signed.accountSignature) == 64
+
+    details_decode_failed? and not account_signature_valid?
+  end
+
+  defp should_try_hmac_after_direct?(_), do: false
+
+  defp extract_key_index(%ADVDeviceIdentity{keyIndex: value}), do: value
+
+  defp extract_key_index(%{} = details),
+    do: Map.get(details, :keyIndex) || Map.get(details, "keyIndex")
+
+  defp extract_key_index(_), do: nil
+
+  # Minimal protobuf parser for ADVDeviceIdentity keyIndex (field 3, varint).
+  # This keeps pairing resilient when the generated proto cannot parse new fields.
+  defp extract_key_index_from_details_blob(blob) when is_binary(blob) do
+    do_extract_key_index(blob)
+  end
+
+  defp extract_key_index_from_details_blob(_), do: nil
+
+  defp do_extract_key_index(<<>>), do: nil
+
+  defp do_extract_key_index(binary) do
+    with {:ok, tag, rest} <- decode_varint(binary) do
+      field_num = Bitwise.bsr(tag, 3)
+      wire_type = Bitwise.band(tag, 0x07)
+
+      case wire_type do
+        0 ->
+          with {:ok, value, tail} <- decode_varint(rest) do
+            if field_num == 3, do: value, else: do_extract_key_index(tail)
+          else
+            _ -> nil
+          end
+
+        1 ->
+          if byte_size(rest) >= 8 do
+            <<_skip::binary-size(8), tail::binary>> = rest
+            do_extract_key_index(tail)
+          else
+            nil
+          end
+
+        2 ->
+          with {:ok, len, tail} <- decode_varint(rest),
+               true <- byte_size(tail) >= len do
+            <<_value::binary-size(len), next::binary>> = tail
+            do_extract_key_index(next)
+          else
+            _ -> nil
+          end
+
+        5 ->
+          if byte_size(rest) >= 4 do
+            <<_skip::binary-size(4), tail::binary>> = rest
+            do_extract_key_index(tail)
+          else
+            nil
+          end
+
+        _ ->
+          nil
+      end
+    else
+      _ -> nil
+    end
+  end
+
+  defp decode_varint(binary), do: decode_varint(binary, 0, 0)
+
+  defp decode_varint(_, _, shift) when shift > 63, do: {:error, :invalid_varint}
+  defp decode_varint(<<>>, _, _), do: {:error, :invalid_varint}
+
+  defp decode_varint(<<byte, rest::binary>>, acc, shift) do
+    value = Bitwise.bor(acc, Bitwise.bsl(Bitwise.band(byte, 0x7F), shift))
+
+    if Bitwise.band(byte, 0x80) == 0 do
+      {:ok, value, rest}
+    else
+      decode_varint(rest, value, shift + 7)
+    end
+  end
+
   defp encode_self_signed(%ADVSignedDeviceIdentity{} = signed) do
-    # Note: Rust implementation KEEPS accountSignatureKey, Go removes it.
-    # Trying Rust approach - encode without removing accountSignatureKey
     require Logger
 
     Logger.info(
-      "[ADV] encode_self_signed: details=#{byte_size(signed.details)}, acctSigKey=#{byte_size(signed.accountSignatureKey)}, acctSig=#{byte_size(signed.accountSignature)}, devSig=#{byte_size(signed.deviceSignature)}"
+      "[ADV] encode_self_signed: details=#{byte_size(signed.details)}, acctSigKey=#{maybe_size(signed.accountSignatureKey)}, acctSig=#{maybe_size(signed.accountSignature)}, devSig=#{maybe_size(signed.deviceSignature)}"
     )
 
-    with {:ok, iodata} <- ADVSignedDeviceIdentity.encode(signed) do
-      result = IO.iodata_to_binary(iodata)
+    with {:ok, result} <- encode_signed_device_identity(signed, include_signature_key: false) do
       Logger.info("[ADV] encode_self_signed result: #{byte_size(result)} bytes")
       {:ok, result}
     else
       {:error, reason} -> {:error, {:adv_self_signed_encode, reason}}
     end
   end
+
+  defp maybe_size(nil), do: 0
+  defp maybe_size(value) when is_binary(value), do: byte_size(value)
 
   defp ensure_binary_length(value, expected, _field)
        when is_binary(value) and byte_size(value) == expected,

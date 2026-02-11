@@ -293,4 +293,265 @@ defmodule ExWapp.Signal.WireFormat do
   end
 
   def message_type(_), do: :invalid
+
+  @doc """
+  Parses a serialized SignalMessage.
+
+  Returns map keys:
+  - `:version_byte`
+  - `:version_and_proto` (used for MAC verification)
+  - `:mac`
+  - `:ratchet_key` (32 bytes)
+  - `:counter`
+  - `:previous_counter`
+  - `:ciphertext`
+  """
+  @spec parse_signal_message(binary()) :: {:ok, map()} | {:error, term()}
+  def parse_signal_message(<<version_byte, rest::binary>>) when byte_size(rest) > @mac_length do
+    version = version_byte >>> 4
+
+    if version != @current_version do
+      {:error, {:unknown_version, version}}
+    else
+      proto_size = byte_size(rest) - @mac_length
+      <<proto::binary-size(proto_size), mac::binary-size(@mac_length)>> = rest
+
+      with {:ok, fields, <<>>} <- decode_fields(proto, %{}),
+           {:ok, serialized_ratchet_key} <- fetch_required_bytes(fields, 1),
+           {:ok, ratchet_key} <- deserialize_public_key(serialized_ratchet_key),
+           {:ok, ciphertext} <- fetch_required_bytes(fields, 4),
+           {:ok, counter} <- fetch_uint(fields, 2, 0),
+           {:ok, previous_counter} <- fetch_uint(fields, 3, 0) do
+        {:ok,
+         %{
+           version_byte: version_byte,
+           version_and_proto: <<version_byte>> <> proto,
+           mac: mac,
+           ratchet_key: ratchet_key,
+           counter: counter,
+           previous_counter: previous_counter,
+           ciphertext: ciphertext
+         }}
+      end
+    end
+  end
+
+  def parse_signal_message(_), do: {:error, :invalid_signal_message}
+
+  @doc """
+  Parses a serialized PreKeySignalMessage.
+
+  Returns map keys:
+  - `:version_byte`
+  - `:registration_id`
+  - `:prekey_id`
+  - `:signed_prekey_id`
+  - `:base_key`
+  - `:identity_key`
+  - `:message` (inner SignalMessage bytes)
+  """
+  @spec parse_prekey_signal_message(binary()) :: {:ok, map()} | {:error, term()}
+  def parse_prekey_signal_message(<<version_byte, proto::binary>>) do
+    version = version_byte >>> 4
+
+    if version != @current_version do
+      {:error, {:unknown_version, version}}
+    else
+      with {:ok, fields, <<>>} <- decode_fields(proto, %{}),
+           {:ok, serialized_base_key} <- fetch_required_bytes(fields, 2),
+           {:ok, serialized_identity_key} <- fetch_required_bytes(fields, 3),
+           {:ok, base_key} <- deserialize_public_key(serialized_base_key),
+           {:ok, identity_key} <- deserialize_public_key(serialized_identity_key),
+           {:ok, inner_message} <- fetch_required_bytes(fields, 4),
+           {:ok, registration_id} <- fetch_uint(fields, 5, 0),
+           {:ok, signed_prekey_id} <- fetch_uint(fields, 6, 0),
+           {:ok, prekey_id} <- fetch_optional_uint(fields, 1) do
+        {:ok,
+         %{
+           version_byte: version_byte,
+           registration_id: registration_id,
+           prekey_id: prekey_id,
+           signed_prekey_id: signed_prekey_id,
+           base_key: base_key,
+           identity_key: identity_key,
+           message: inner_message
+         }}
+      end
+    end
+  end
+
+  def parse_prekey_signal_message(_), do: {:error, :invalid_prekey_signal_message}
+
+  @doc """
+  Verifies the Signal MAC over `version_and_proto`.
+  """
+  @spec valid_signal_mac?(binary(), binary(), binary(), binary(), binary()) :: boolean()
+  def valid_signal_mac?(mac, mac_key, sender_identity, receiver_identity, version_and_proto)
+      when is_binary(mac) and is_binary(mac_key) and is_binary(sender_identity) and
+             is_binary(receiver_identity) and is_binary(version_and_proto) do
+    match?(
+      {:ok, _strategy},
+      verify_signal_mac(
+        mac,
+        mac_key,
+        sender_identity,
+        receiver_identity,
+        version_and_proto
+      )
+    )
+  end
+
+  def valid_signal_mac?(_, _, _, _, _), do: false
+
+  @doc """
+  Verifies a Signal MAC with compatibility fallbacks used by production WA clients.
+
+  Returns `{:ok, strategy}` when a check matches, or `:error` otherwise.
+  """
+  @spec verify_signal_mac(binary(), binary(), binary(), binary(), binary()) ::
+          {:ok, atom()} | :error
+  def verify_signal_mac(mac, mac_key, sender_identity, receiver_identity, version_and_proto)
+      when is_binary(mac) and is_binary(mac_key) and is_binary(sender_identity) and
+             is_binary(receiver_identity) and is_binary(version_and_proto) do
+    checks = [
+      {:prefixed_sender_receiver, &serialized_identity_bytes/1, sender_identity, receiver_identity},
+      {:prefixed_receiver_sender, &serialized_identity_bytes/1, receiver_identity, sender_identity},
+      {:raw_sender_receiver, &raw_identity_bytes/1, sender_identity, receiver_identity},
+      {:raw_receiver_sender, &raw_identity_bytes/1, receiver_identity, sender_identity}
+    ]
+
+    Enum.reduce_while(checks, :error, fn {strategy, decode_fun, lhs, rhs}, _acc ->
+      with {:ok, lhs_bytes} <- decode_fun.(lhs),
+           {:ok, rhs_bytes} <- decode_fun.(rhs) do
+        expected = calculate_mac_bytes(mac_key, lhs_bytes, rhs_bytes, version_and_proto)
+
+        if secure_compare(mac, expected) do
+          {:halt, {:ok, strategy}}
+        else
+          {:cont, :error}
+        end
+      else
+        _ -> {:cont, :error}
+      end
+    end)
+  end
+
+  def verify_signal_mac(_, _, _, _, _), do: :error
+
+  # ============================================================================
+  # Protobuf Decoding (minimal parser for required fields)
+  # ============================================================================
+
+  defp decode_fields(<<>>, acc), do: {:ok, acc, <<>>}
+
+  defp decode_fields(binary, acc) when is_binary(binary) do
+    with {:ok, tag, rest} <- decode_varint(binary) do
+      field_num = tag >>> 3
+      wire_type = tag &&& 0x07
+
+      case wire_type do
+        0 ->
+          with {:ok, value, tail} <- decode_varint(rest) do
+            decode_fields(tail, Map.put(acc, field_num, value))
+          end
+
+        2 ->
+          with {:ok, len, tail} <- decode_varint(rest),
+               true <- byte_size(tail) >= len do
+            <<value::binary-size(len), next::binary>> = tail
+            decode_fields(next, Map.put(acc, field_num, value))
+          else
+            false -> {:error, :invalid_length_delimited_field}
+          end
+
+        # fixed64
+        1 when byte_size(rest) >= 8 ->
+          <<_skip::binary-size(8), tail::binary>> = rest
+          decode_fields(tail, acc)
+
+        # fixed32
+        5 when byte_size(rest) >= 4 ->
+          <<_skip::binary-size(4), tail::binary>> = rest
+          decode_fields(tail, acc)
+
+        _ ->
+          {:error, {:unsupported_wire_type, wire_type}}
+      end
+    end
+  end
+
+  defp decode_varint(binary), do: decode_varint(binary, 0, 0)
+
+  defp decode_varint(_, _, shift) when shift > 63, do: {:error, :invalid_varint}
+  defp decode_varint(<<>>, _, _), do: {:error, :invalid_varint}
+
+  defp decode_varint(<<byte, rest::binary>>, acc, shift) do
+    value = acc ||| (byte &&& 0x7F) <<< shift
+
+    if (byte &&& 0x80) == 0 do
+      {:ok, value, rest}
+    else
+      decode_varint(rest, value, shift + 7)
+    end
+  end
+
+  defp fetch_required_bytes(fields, field_num) do
+    case Map.get(fields, field_num) do
+      value when is_binary(value) -> {:ok, value}
+      nil -> {:error, {:missing_field, field_num}}
+      _ -> {:error, {:invalid_field_type, field_num}}
+    end
+  end
+
+  defp fetch_uint(fields, field_num, default) do
+    case Map.get(fields, field_num, default) do
+      value when is_integer(value) and value >= 0 -> {:ok, value}
+      _ -> {:error, {:invalid_uint_field, field_num}}
+    end
+  end
+
+  defp fetch_optional_uint(fields, field_num) do
+    case Map.get(fields, field_num) do
+      nil -> {:ok, nil}
+      value when is_integer(value) and value >= 0 -> {:ok, value}
+      _ -> {:error, {:invalid_uint_field, field_num}}
+    end
+  end
+
+  defp serialized_identity_bytes(identity) do
+    case identity do
+      <<@djb_type, _::binary-size(32)>> = key -> {:ok, key}
+      <<_::binary-size(32)>> = key -> {:ok, serialize_public_key(key)}
+      _ -> {:error, :invalid_identity}
+    end
+  end
+
+  defp raw_identity_bytes(identity) do
+    case identity do
+      <<@djb_type, raw::binary-size(32)>> -> {:ok, raw}
+      <<_::binary-size(32)>> = raw -> {:ok, raw}
+      _ -> {:error, :invalid_identity}
+    end
+  end
+
+  defp calculate_mac_bytes(mac_key, sender_identity_bytes, receiver_identity_bytes, data) do
+    full_mac =
+      :crypto.mac(:hmac, :sha256, mac_key, [
+        sender_identity_bytes,
+        receiver_identity_bytes,
+        data
+      ])
+
+    binary_part(full_mac, 0, @mac_length)
+  end
+
+  defp secure_compare(a, b) when is_binary(a) and is_binary(b) and byte_size(a) == byte_size(b) do
+    a
+    |> :crypto.exor(b)
+    |> :binary.bin_to_list()
+    |> Enum.reduce(0, fn byte, acc -> acc ||| byte end)
+    |> Kernel.==(0)
+  end
+
+  defp secure_compare(_, _), do: false
 end

@@ -222,6 +222,39 @@ defmodule ExWapp.Chat do
   end
 
   @doc """
+  Updates a message status by message ID across all chats.
+
+  Useful for ACK nodes that do not provide a chat JID we can trust.
+  """
+  @spec update_message_status_by_id(target(), String.t(), message_status()) :: :ok
+  def update_message_status_by_id(target, message_id, status) when is_binary(message_id) do
+    store = resolve_store(target)
+
+    if store do
+      data = Store.load!(store)
+      chats = Map.get(data, :chats, %{})
+
+      updated_chats =
+        Enum.reduce(chats, %{}, fn {jid, chat}, acc ->
+          updated_messages =
+            Enum.map(chat.messages, fn msg ->
+              if msg.id == message_id do
+                %{msg | status: status}
+              else
+                msg
+              end
+            end)
+
+          Map.put(acc, jid, %{chat | messages: updated_messages})
+        end)
+
+      Store.persist(store, Map.put(data, :chats, updated_chats))
+    end
+
+    :ok
+  end
+
+  @doc """
   Deletes a chat.
   """
   @spec delete(target(), String.t()) :: :ok
@@ -346,8 +379,18 @@ defmodule ExWapp.Chat do
   end
 
   # Normalize JID to string format
-  defp normalize_jid(%JID{} = jid), do: JID.to_string(jid)
-  defp normalize_jid(jid) when is_binary(jid), do: jid
+  defp normalize_jid(%JID{} = jid), do: normalize_jid(JID.to_string(jid))
+
+  defp normalize_jid(jid) when is_binary(jid) do
+    jid
+    |> String.replace("@whatsapp.net", "@s.whatsapp.net")
+    |> then(fn value ->
+      case String.split(value, "@", parts: 2) do
+        [user, domain] -> Regex.replace(~r/:(\d+)$/, user, "") <> "@" <> domain
+        _ -> value
+      end
+    end)
+  end
 
   # Parse timestamp (may be string or integer)
   defp parse_timestamp(ts) when is_integer(ts), do: ts

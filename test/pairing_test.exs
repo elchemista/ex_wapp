@@ -4,6 +4,7 @@ defmodule ExWapp.PairingTest do
 
   alias ExWapp.{Binary, Pairing, Store}
   alias ExWapp.Pairing.ADV
+  alias ExWapp.Signal.Keys
   alias Ed25519
   alias WAAdv.{ADVDeviceIdentity, ADVSignedDeviceIdentity, ADVSignedDeviceIdentityHMAC}
 
@@ -30,13 +31,24 @@ defmodule ExWapp.PairingTest do
     assert ack_node.attrs["id"] == "req-123"
 
     expected_key_index = parsed_adv.details.keyIndex
-    expected_self_signed = parsed_adv.self_signed
 
     assert [%Binary.Node{tag: "pair-device-sign", content: [identity_node]}] = ack_node.content
 
     assert identity_node.tag == "device-identity"
     assert identity_node.attrs["key-index"] == Integer.to_string(expected_key_index)
-    assert %Binary.Raw{data: ^expected_self_signed} = identity_node.content
+
+    assert %Binary.Raw{data: self_signed_payload} = identity_node.content
+    {:ok, self_signed} = ADVSignedDeviceIdentity.decode(self_signed_payload)
+
+    assert self_signed.accountSignatureKey == nil
+    assert self_signed.details == parsed_adv.signed.details
+    assert self_signed.accountSignature == parsed_adv.signed.accountSignature
+    assert byte_size(self_signed.deviceSignature) == 64
+
+    device_message =
+      <<6, 1>> <> parsed_adv.signed.details <> identity.public <> parsed_adv.signed.accountSignatureKey
+
+    assert Keys.verify_message(identity.public, device_message, self_signed.deviceSignature)
 
     assert Enum.any?(actions, &(&1 == {:status, :success}))
   end
@@ -73,7 +85,7 @@ defmodule ExWapp.PairingTest do
   end
 
   defp identity_fixture do
-    {priv, pub} = Ed25519.generate_key_pair()
+    %{private: priv, public: pub} = Keys.generate_key_pair()
     {%{public: pub, private: priv}, :crypto.strong_rand_bytes(32)}
   end
 
