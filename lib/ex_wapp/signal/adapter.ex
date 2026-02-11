@@ -89,6 +89,15 @@ defmodule ExWapp.Signal.Adapter do
     Session.decrypt_prekey_message(ciphertext, local_identity, local_prekeys)
   end
 
+  @doc """
+  Decrypts a PreKeySignalMessage using an existing session.
+  """
+  @spec decrypt_prekey_message_with_session(map(), binary()) ::
+          {:ok, binary(), map()} | {:error, term()}
+  def decrypt_prekey_message_with_session(session, ciphertext) do
+    Session.decrypt_prekey_message_with_session(session, ciphertext)
+  end
+
   # ============================================================================
   # Key Generation
   # ============================================================================

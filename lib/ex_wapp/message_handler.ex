@@ -22,7 +22,8 @@ defmodule ExWapp.MessageHandler do
   require Logger
 
   alias ExWapp.{Binary, Chat, JID, Store}
-  alias ExWapp.Signal.Encryption
+  alias ExWapp.Proto.HistorySync
+  alias ExWapp.Signal.{Encryption, SenderKey}
   alias ExWapp.Binary.Node
 
   @type chat_target :: pid() | struct()
@@ -90,6 +91,7 @@ defmodule ExWapp.MessageHandler do
     # Extract message content
     message_data = extract_message_content(content, type)
     {message_data, state} = maybe_decrypt_message(message_data, state, from, participant, attrs)
+    state = maybe_ingest_history_sync(message_data, session, state, from, id)
 
     # Build message struct
     message = %{
@@ -838,7 +840,8 @@ defmodule ExWapp.MessageHandler do
                store,
                Map.get(state, :signal_sessions),
                candidates,
-               payloads
+               payloads,
+               from
              ) do
           {:ok, padded_plaintext, updated_sessions, sender_jid, payload} ->
             plaintext =
@@ -847,7 +850,12 @@ defmodule ExWapp.MessageHandler do
                 Map.get(payload, :enc_version) || Map.get(message_data, :enc_version)
               )
 
-            {content_type, decoded_text} = classify_decrypted_content(plaintext)
+            {sender_key_dist_count, state} =
+              maybe_process_sender_key_distributions(state, from, sender_jid, plaintext)
+
+            {content_type, decoded_text} =
+              classify_decrypted_content(plaintext, sender_key_dist_count)
+
             text = decoded_text || "(encrypted: #{Map.get(payload, :enc_type, enc_type)})"
 
             if content_type == :protocol do
@@ -871,13 +879,20 @@ defmodule ExWapp.MessageHandler do
 
             updated_state = Map.put(state, :signal_sessions, updated_sessions)
 
-            {
+            decoded_message_data =
               message_data
               |> Map.put(:text, text)
               |> Map.put(:decrypt_status, :ok)
-              |> Map.put(:message_content_type, content_type),
-              updated_state
-            }
+              |> Map.put(:message_content_type, content_type)
+
+            decoded_message_data =
+              if content_type == :protocol do
+                Map.put(decoded_message_data, :protocol_payload, plaintext)
+              else
+                decoded_message_data
+              end
+
+            {decoded_message_data, updated_state}
 
           {:error, reason} ->
             Logger.warning("[DECRYPT] Failed to decrypt message: #{inspect(reason)}")
@@ -888,6 +903,124 @@ defmodule ExWapp.MessageHandler do
 
   defp maybe_decrypt_message(message_data, state, _from, _participant, _attrs),
     do: {message_data, state}
+
+  defp maybe_ingest_history_sync(
+         %{message_content_type: :protocol, protocol_payload: payload},
+         session,
+         state,
+         from,
+         id
+       )
+       when is_binary(payload) do
+    case HistorySync.extract_from_message(payload) do
+      {:ok, %{sync_type: sync_type, conversations: conversations, lid_mappings: lid_mappings}} ->
+        target = chat_target(session, state)
+
+        if target do
+          Enum.each(conversations, &upsert_chat_from_history_sync(target, &1))
+        end
+
+        persist_history_sync_lid_mappings(state, lid_mappings)
+
+        Logger.info(
+          "[HISTORY_SYNC] Applied protocol history sync from=#{normalize_jid(from)} id=#{id} sync_type=#{inspect(sync_type)} conversations=#{length(conversations)} lid_mappings=#{length(lid_mappings)}"
+        )
+
+        state
+
+      :not_history_sync ->
+        state
+
+      {:error, :history_sync_download_required} ->
+        Logger.debug(
+          "[HISTORY_SYNC] History sync notification requires blob download (inline payload missing) from=#{normalize_jid(from)} id=#{id}"
+        )
+
+        state
+
+      {:error, reason} ->
+        Logger.warning(
+          "[HISTORY_SYNC] Failed to parse protocol history sync from=#{normalize_jid(from)} id=#{id}: #{inspect(reason)}"
+        )
+
+        state
+    end
+  end
+
+  defp maybe_ingest_history_sync(_message_data, _session, state, _from, _id), do: state
+
+  defp upsert_chat_from_history_sync(target, %{jid: jid} = conversation)
+       when not is_nil(target) do
+    metadata =
+      %{}
+      |> maybe_put_sync_metadata(:name, Map.get(conversation, :name))
+      |> maybe_put_sync_metadata(:unread_count, Map.get(conversation, :unread_count))
+      |> maybe_put_sync_metadata(
+        :last_message_timestamp,
+        Map.get(conversation, :last_message_timestamp)
+      )
+      |> maybe_put_sync_metadata(:pinned, Map.get(conversation, :pinned))
+      |> maybe_put_sync_metadata(:archived, Map.get(conversation, :archived))
+      |> maybe_put_sync_metadata(:muted_until, Map.get(conversation, :muted_until))
+      |> maybe_put_sync_metadata(:is_group, Map.get(conversation, :is_group))
+
+    Chat.merge_metadata(target, jid, metadata)
+  end
+
+  defp upsert_chat_from_history_sync(_target, _conversation), do: :ok
+
+  defp persist_history_sync_lid_mappings(state, lid_mappings)
+       when is_map(state) and is_list(lid_mappings) do
+    case {Map.get(state, :store), normalize_lid_mappings(lid_mappings)} do
+      {nil, _} ->
+        :ok
+
+      {_store, []} ->
+        :ok
+
+      {store, normalized_mappings} ->
+        data = Store.load!(store)
+        existing_mappings = Map.get(data, :lid_mapping, %{})
+
+        updated_mappings =
+          Enum.reduce(normalized_mappings, existing_mappings, fn {lid, pn}, acc ->
+            acc
+            |> Map.put({:pn_to_lid, pn}, lid)
+            |> Map.put({:lid_to_pn, lid}, pn)
+          end)
+
+        if updated_mappings != existing_mappings do
+          Store.persist(store, Map.put(data, :lid_mapping, updated_mappings))
+        end
+    end
+  rescue
+    error ->
+      Logger.warning("[HISTORY_SYNC] Failed storing LID mappings: #{inspect(error)}")
+      :ok
+  end
+
+  defp persist_history_sync_lid_mappings(_state, _lid_mappings), do: :ok
+
+  defp normalize_lid_mappings(lid_mappings) when is_list(lid_mappings) do
+    lid_mappings
+    |> Enum.reduce([], fn
+      {lid, pn}, acc ->
+        normalized_lid = normalize_jid(lid)
+        normalized_pn = normalize_jid(pn)
+
+        if normalized_lid != "" and normalized_pn != "" do
+          [{normalized_lid, normalized_pn} | acc]
+        else
+          acc
+        end
+
+      _other, acc ->
+        acc
+    end)
+    |> Enum.uniq()
+  end
+
+  defp normalize_lid_mappings(_), do: []
 
   defp encrypted_payload_candidates(message_data) when is_map(message_data) do
     candidates = Map.get(message_data, :enc_candidates, [])
@@ -1042,20 +1175,33 @@ defmodule ExWapp.MessageHandler do
     do_extract_enc_candidates(rest, current_to_jid, acc)
   end
 
-  defp decrypt_with_payload_candidates(_store, _signal_sessions, _candidates, []) do
+  defp decrypt_with_payload_candidates(_store, _signal_sessions, _candidates, [], _chat_jid) do
     {:error, :no_payload_candidates}
   end
 
-  defp decrypt_with_payload_candidates(store, signal_sessions, candidates, [payload | rest]) do
+  defp decrypt_with_payload_candidates(
+         store,
+         signal_sessions,
+         candidates,
+         [payload | rest],
+         chat_jid
+       ) do
     ciphertext = Map.get(payload, :ciphertext)
     enc_type = Map.get(payload, :enc_type, "msg")
 
-    case decrypt_with_candidates(store, signal_sessions, candidates, ciphertext, enc_type) do
+    case decrypt_with_candidates(
+           store,
+           signal_sessions,
+           candidates,
+           ciphertext,
+           enc_type,
+           chat_jid
+         ) do
       {:ok, plaintext, updated_sessions, sender_jid} ->
         {:ok, plaintext, updated_sessions, sender_jid, payload}
 
       {:error, reason} ->
-        case decrypt_with_payload_candidates(store, signal_sessions, candidates, rest) do
+        case decrypt_with_payload_candidates(store, signal_sessions, candidates, rest, chat_jid) do
           {:ok, _plaintext, _updated_sessions, _sender_jid, _payload} = success ->
             success
 
@@ -1065,23 +1211,40 @@ defmodule ExWapp.MessageHandler do
     end
   end
 
-  defp decrypt_with_candidates(_store, _signal_sessions, [], _ciphertext, _enc_type) do
+  defp decrypt_with_candidates(_store, _signal_sessions, [], _ciphertext, _enc_type, _chat_jid) do
     {:error, :no_sender_candidates}
   end
 
-  defp decrypt_with_candidates(store, signal_sessions, [candidate | rest], ciphertext, enc_type) do
-    case Encryption.decrypt_from_sender_sync(
-           store,
-           signal_sessions,
-           candidate,
-           ciphertext,
-           enc_type
-         ) do
+  defp decrypt_with_candidates(
+         store,
+         signal_sessions,
+         [candidate | rest],
+         ciphertext,
+         enc_type,
+         chat_jid
+       ) do
+    decrypt_result =
+      if sender_key_message?(enc_type, chat_jid) do
+        case SenderKey.decrypt_group_message(store, chat_jid, candidate, ciphertext) do
+          {:ok, plaintext} -> {:ok, plaintext, signal_sessions}
+          {:error, reason} -> {:error, reason}
+        end
+      else
+        Encryption.decrypt_from_sender_sync(
+          store,
+          signal_sessions,
+          candidate,
+          ciphertext,
+          enc_type
+        )
+      end
+
+    case decrypt_result do
       {:ok, plaintext, updated_sessions} ->
         {:ok, plaintext, updated_sessions, candidate}
 
       {:error, reason} ->
-        case decrypt_with_candidates(store, signal_sessions, rest, ciphertext, enc_type) do
+        case decrypt_with_candidates(store, signal_sessions, rest, ciphertext, enc_type, chat_jid) do
           {:ok, _plaintext, _updated_sessions, _candidate} = success ->
             success
 
@@ -1090,6 +1253,45 @@ defmodule ExWapp.MessageHandler do
         end
     end
   end
+
+  defp sender_key_message?(enc_type, chat_jid) do
+    enc_type in [:skmsg, "skmsg"] and group_jid?(chat_jid)
+  end
+
+  defp group_jid?(jid) do
+    jid
+    |> normalize_jid()
+    |> JID.is_group?()
+  end
+
+  defp maybe_process_sender_key_distributions(state, from, sender_jid, plaintext)
+       when is_binary(plaintext) do
+    store = Map.get(state, :store)
+
+    cond do
+      is_nil(store) ->
+        {0, state}
+
+      not group_jid?(from) ->
+        {0, state}
+
+      true ->
+        case SenderKey.process_distributions_from_plaintext(store, from, sender_jid, plaintext) do
+          {:ok, count} ->
+            {count, state}
+
+          {:error, reason} ->
+            Logger.warning(
+              "[SENDER_KEY] Failed processing sender key distribution: #{inspect(reason)}"
+            )
+
+            {0, state}
+        end
+    end
+  end
+
+  defp maybe_process_sender_key_distributions(state, _from, _sender_jid, _plaintext),
+    do: {0, state}
 
   defp build_receipt_actions(from, id, participant, attrs, message_data, state) do
     cond do
@@ -1262,7 +1464,13 @@ defmodule ExWapp.MessageHandler do
 
   @max_message_decode_depth 6
 
-  defp classify_decrypted_content(payload) when is_binary(payload) do
+  defp classify_decrypted_content(_payload, sender_key_distribution_count)
+       when sender_key_distribution_count > 0 do
+    {:protocol, nil}
+  end
+
+  defp classify_decrypted_content(payload, _sender_key_distribution_count)
+       when is_binary(payload) do
     # Check if this is a protocolMessage (field 12) - history sync, app state, etc.
     case find_length_delimited_field(payload, 12) do
       {:ok, _protocol_msg} ->
@@ -1277,7 +1485,7 @@ defmodule ExWapp.MessageHandler do
     end
   end
 
-  defp classify_decrypted_content(_), do: {:user_message, nil}
+  defp classify_decrypted_content(_, _), do: {:user_message, nil}
 
   defp decode_message_text_recursive(_payload, depth) when depth > @max_message_decode_depth,
     do: :error

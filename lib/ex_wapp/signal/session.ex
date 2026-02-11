@@ -366,6 +366,24 @@ defmodule ExWapp.Signal.Session do
     end
   end
 
+  @doc """
+  Decrypts a PreKeySignalMessage using an already-established session.
+
+  WhatsApp can keep wrapping sync traffic as `pkmsg` even when a session already exists.
+  In that case, we must decrypt the inner SignalMessage with the current ratchet state
+  instead of re-running X3DH and replacing the session.
+  """
+  @spec decrypt_prekey_message_with_session(session_state(), binary()) ::
+          {:ok, binary(), session_state()} | {:error, term()}
+  def decrypt_prekey_message_with_session(session, message) do
+    with {:ok, _reg_id, _prekey_id, _signed_prekey_id, _base_key, remote_identity,
+          inner_ciphertext} <-
+           parse_prekey_signal_message(message),
+         :ok <- verify_remote_identity(session.remote_identity_key, remote_identity) do
+      decrypt(session, inner_ciphertext)
+    end
+  end
+
   # ============================================================================
   # Double Ratchet
   # ============================================================================
@@ -655,4 +673,7 @@ defmodule ExWapp.Signal.Session do
         {:error, reason}
     end
   end
+
+  defp verify_remote_identity(expected, actual) when expected == actual, do: :ok
+  defp verify_remote_identity(_expected, _actual), do: {:error, :remote_identity_mismatch}
 end

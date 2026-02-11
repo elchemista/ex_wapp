@@ -79,31 +79,56 @@ defmodule ExWapp.Signal.SessionStore do
   """
   @spec get_or_create_session(t(), String.t(), map(), map(), non_neg_integer()) ::
           {:ok, map(), binary() | nil, t()} | {:error, term()}
-  def get_or_create_session(store, jid, local_identity, remote_bundle, _local_registration_id) do
+  def get_or_create_session(store, jid, local_identity, remote_bundle, local_registration_id) do
+    get_or_create_session(
+      store,
+      jid,
+      local_identity,
+      remote_bundle,
+      local_registration_id,
+      []
+    )
+  end
+
+  @doc """
+  Creates or gets a session for a recipient with options.
+
+  ## Options
+    * `:force` - force creation from the supplied bundle even if a session exists.
+  """
+  @spec get_or_create_session(t(), String.t(), map(), map(), non_neg_integer(), keyword()) ::
+          {:ok, map(), binary() | nil, t()} | {:error, term()}
+  def get_or_create_session(
+        store,
+        jid,
+        local_identity,
+        remote_bundle,
+        _local_registration_id,
+        opts
+      ) do
     jid = normalize_jid(jid)
+    force? = Keyword.get(opts, :force, false)
 
-    case get_session(store, jid) do
-      {:ok, session} ->
-        # Existing session - return it with nil base_key (not a prekey message)
-        {:ok, session, nil, store}
+    cond do
+      force? and remote_bundle in [nil, %{}] ->
+        {:error, :missing_bundle}
 
-      :not_found ->
-        cond do
-          remote_bundle in [nil, %{}] ->
-            {:error, :missing_bundle}
+      force? ->
+        create_session_from_bundle(store, jid, local_identity, remote_bundle)
 
-          true ->
-            case Signal.create_session(local_identity, remote_bundle) do
-              {:ok, session, base_key} ->
-                Logger.info(
-                  "[SESSION_STORE] Created session using #{Signal.get_impl()} implementation"
-                )
+      true ->
+        case get_session(store, jid) do
+          {:ok, session} ->
+            # Existing session - return it with nil base_key (not a prekey message)
+            {:ok, session, nil, store}
 
-                updated_store = put_session(store, jid, session)
-                {:ok, session, base_key, updated_store}
+          :not_found ->
+            cond do
+              remote_bundle in [nil, %{}] ->
+                {:error, :missing_bundle}
 
-              {:error, reason} ->
-                {:error, reason}
+              true ->
+                create_session_from_bundle(store, jid, local_identity, remote_bundle)
             end
         end
     end
@@ -181,33 +206,30 @@ defmodule ExWapp.Signal.SessionStore do
     )
 
     if is_prekey_message do
-      # PreKeySignalMessage - but if we already have a valid session, try it first
-      # (whatsapp-rust: avoid replacing an existing valid session; prevents MAC failures)
+      # PreKeySignalMessage - if a session exists, decrypt inner SignalMessage with it first.
+      # This matches libsignal/whatsmeow behavior where pkmsg can wrap traffic even after
+      # session establishment, and avoids resetting ratchet state on every incoming pkmsg.
       existing_result =
         case get_session(store, jid) do
           {:ok, session} ->
             Logger.info(
-              "[SESSION_STORE] Trying existing session first for prekey msg from #{jid}"
+              "[SESSION_STORE] Trying existing session ratchet for prekey msg from #{jid}"
             )
 
-            case Signal.decrypt_prekey_message(ciphertext, local_identity, local_prekeys) do
-              {:ok, plaintext, new_session} ->
-                Logger.info("[SESSION_STORE] PreKey decrypt succeeded (new session) for #{jid}")
-                {:ok, plaintext, new_session}
+            case Signal.decrypt_prekey_message_with_session(session, ciphertext) do
+              {:ok, plaintext, updated_session} ->
+                Logger.info(
+                  "[SESSION_STORE] PreKey decrypt succeeded on existing session for #{jid}"
+                )
 
-              {:error, _prekey_err} ->
-                # Fallback: try as regular message on existing session
-                case Signal.decrypt(session, ciphertext) do
-                  {:ok, plaintext, updated_session} ->
-                    Logger.info(
-                      "[SESSION_STORE] Decrypt on existing session succeeded for #{jid}"
-                    )
+                {:ok, plaintext, updated_session}
 
-                    {:ok, plaintext, updated_session}
+              {:error, reason} ->
+                Logger.info(
+                  "[SESSION_STORE] Existing session prekey decrypt failed for #{jid}, trying fresh X3DH: #{inspect(reason)}"
+                )
 
-                  {:error, _} ->
-                    :try_fresh
-                end
+                :try_fresh
             end
 
           :not_found ->
@@ -275,4 +297,17 @@ defmodule ExWapp.Signal.SessionStore do
   end
 
   defp normalize_jid(%{user: user}), do: "#{user}@s.whatsapp.net"
+
+  defp create_session_from_bundle(store, jid, local_identity, remote_bundle) do
+    case Signal.create_session(local_identity, remote_bundle) do
+      {:ok, session, base_key} ->
+        Logger.info("[SESSION_STORE] Created session using #{Signal.get_impl()} implementation")
+
+        updated_store = put_session(store, jid, session)
+        {:ok, session, base_key, updated_store}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
 end

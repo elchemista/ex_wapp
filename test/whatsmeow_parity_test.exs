@@ -1,5 +1,6 @@
 defmodule ExWapp.WhatsmeowParityTest do
   use ExUnit.Case, async: false
+  import Bitwise
 
   alias ExWapp.Binary
   alias ExWapp.Binary.Node
@@ -358,6 +359,197 @@ defmodule ExWapp.WhatsmeowParityTest do
 
     GenServer.stop(session)
   end
+
+  test "protocol history sync inline payload populates chat and group metadata" do
+    alice_identity = Keys.generate_key_pair()
+    bob_identity = Keys.generate_key_pair()
+
+    signed_id = 700
+    prekey_id = 701
+
+    bob_signed_prekey = Keys.generate_signed_prekey(bob_identity, signed_id)
+    bob_one_time_prekey = Keys.generate_prekey(prekey_id)
+
+    bob_store =
+      ExWapp.Store.Memory.new(
+        initial_data: %{
+          signal: %{
+            identity_key: bob_identity,
+            registration_id: 11_901,
+            signed_prekeys: %{signed_id => bob_signed_prekey},
+            prekeys: %{prekey_id => bob_one_time_prekey}
+          },
+          chats: %{}
+        }
+      )
+
+    bob_bundle = %{
+      registration_id: 11_901,
+      identity_key: bob_identity.public,
+      signed_prekey: %{
+        id: signed_id,
+        public: bob_signed_prekey.public,
+        signature: bob_signed_prekey.signature
+      },
+      prekey: %{id: prekey_id, public: bob_one_time_prekey.public}
+    }
+
+    sender_jid = "393519534944@s.whatsapp.net"
+
+    history_sync_payload =
+      build_history_sync_protocol_message([
+        %{
+          jid: "111111111@s.whatsapp.net",
+          name: "Alice",
+          unread_count: 3,
+          last_message_timestamp: 1_730_000_001,
+          pinned: true,
+          archived: false,
+          muted_until: 0
+        },
+        %{
+          jid: "123456789@g.us",
+          name: "Team Ops",
+          unread_count: 7,
+          last_message_timestamp: 1_730_000_009,
+          pinned: false,
+          archived: true,
+          muted_until: 1_730_001_234
+        }
+      ])
+
+    {:ok, ciphertext, :prekey, _alice_sessions} =
+      SessionStore.encrypt_message(
+        SessionStore.new(),
+        sender_jid,
+        ExWapp.Signal.Encryption.pad_message(history_sync_payload),
+        alice_identity,
+        888,
+        bob_bundle
+      )
+
+    node = %Node{
+      tag: "message",
+      attrs: %{
+        "from" => sender_jid,
+        "id" => "HISTORY_SYNC_INLINE_1",
+        "type" => "text",
+        "t" => "1730000300"
+      },
+      content: [
+        %Node{
+          tag: "enc",
+          attrs: %{"type" => "pkmsg", "v" => "2"},
+          content: Binary.raw(ciphertext)
+        }
+      ]
+    }
+
+    initial_state = %{
+      store: bob_store,
+      signal_sessions: SessionStore.new(),
+      stats: %{messages_received: 0}
+    }
+
+    assert {:ok, _state_after, _actions} = MessageHandler.handle_node(node, self(), initial_state)
+
+    chats = ExWapp.Chat.list(bob_store)
+    assert length(chats) == 2
+
+    alice = Enum.find(chats, &(&1.jid == "111111111@s.whatsapp.net"))
+    assert alice
+    assert alice.name == "Alice"
+    assert alice.unread_count == 3
+    assert alice.last_message_timestamp == 1_730_000_001
+    assert alice.pinned
+    refute alice.archived
+    assert is_nil(alice.muted_until)
+    refute alice.is_group
+
+    group = Enum.find(chats, &(&1.jid == "123456789@g.us"))
+    assert group
+    assert group.name == "Team Ops"
+    assert group.unread_count == 7
+    assert group.last_message_timestamp == 1_730_000_009
+    refute group.pinned
+    assert group.archived
+    assert group.muted_until == 1_730_001_234
+    assert group.is_group
+
+    groups = ExWapp.Chat.list_groups(bob_store)
+    assert Enum.map(groups, & &1.jid) == ["123456789@g.us"]
+  end
+
+  defp build_history_sync_protocol_message(conversations) do
+    history_sync =
+      [
+        encode_varint_field(1, 0),
+        Enum.map(conversations, fn conversation ->
+          encode_length_delimited_field(2, encode_history_sync_conversation(conversation))
+        end)
+      ]
+      |> IO.iodata_to_binary()
+
+    history_sync_notification =
+      [
+        encode_varint_field(6, 0),
+        encode_length_delimited_field(11, :zlib.compress(history_sync))
+      ]
+      |> IO.iodata_to_binary()
+
+    protocol_message =
+      encode_length_delimited_field(6, history_sync_notification)
+      |> IO.iodata_to_binary()
+
+    encode_length_delimited_field(12, protocol_message)
+    |> IO.iodata_to_binary()
+  end
+
+  defp encode_history_sync_conversation(conversation) do
+    []
+    |> maybe_append_length_delimited_field(1, Map.get(conversation, :jid))
+    |> maybe_append_length_delimited_field(13, Map.get(conversation, :name))
+    |> maybe_append_varint_field(6, Map.get(conversation, :unread_count))
+    |> maybe_append_varint_field(5, Map.get(conversation, :last_message_timestamp))
+    |> maybe_append_varint_field(24, boolean_to_int(Map.get(conversation, :pinned)))
+    |> maybe_append_varint_field(16, boolean_to_int(Map.get(conversation, :archived)))
+    |> maybe_append_varint_field(25, Map.get(conversation, :muted_until))
+    |> IO.iodata_to_binary()
+  end
+
+  defp maybe_append_length_delimited_field(acc, _field_num, value)
+       when value in [nil, ""] do
+    acc
+  end
+
+  defp maybe_append_length_delimited_field(acc, field_num, value) when is_binary(value) do
+    [acc, encode_length_delimited_field(field_num, value)]
+  end
+
+  defp maybe_append_varint_field(acc, _field_num, nil), do: acc
+
+  defp maybe_append_varint_field(acc, field_num, value)
+       when is_integer(value) and value >= 0 do
+    [acc, encode_varint_field(field_num, value)]
+  end
+
+  defp encode_length_delimited_field(field_num, value) when is_binary(value) do
+    [encode_varint(field_num <<< 3 ||| 2), encode_varint(byte_size(value)), value]
+  end
+
+  defp encode_varint_field(field_num, value) when is_integer(value) and value >= 0 do
+    [encode_varint(field_num <<< 3), encode_varint(value)]
+  end
+
+  defp encode_varint(value) when is_integer(value) and value < 128, do: <<value::8>>
+
+  defp encode_varint(value) when is_integer(value) and value >= 128 do
+    <<(value &&& 0x7F) ||| 0x80::8, encode_varint(value >>> 7)::binary>>
+  end
+
+  defp boolean_to_int(true), do: 1
+  defp boolean_to_int(false), do: 0
+  defp boolean_to_int(_), do: nil
 
   defp wait_for_groups(session, expected_count, attempts \\ 20)
 
