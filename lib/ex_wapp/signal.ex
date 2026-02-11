@@ -107,26 +107,58 @@ defmodule ExWapp.Signal do
     {:ok, :rand.uniform(65_535)}
   end
 
-  defp ensure_device_id(%{} = attrs, _current) do
-    attrs
-    |> Map.get("device-id")
-    |> case do
-      nil -> attrs |> Map.get(:device_id) |> ensure_device_id(nil)
-      value -> ensure_device_id(value, nil)
+  defp ensure_device_id(%{} = attrs, current) do
+    # Priority: explicit device-id attr > device from JID > stored value > 0
+    candidates = [
+      Map.get(attrs, "device-id"),
+      Map.get(attrs, :device_id),
+      extract_device_from_jid(Map.get(attrs, "jid")),
+      extract_device_from_jid(Map.get(attrs, :jid))
+    ]
+
+    case Enum.find(candidates, &valid_device_id?/1) do
+      nil -> ensure_device_id(nil, current)
+      value -> parse_device_id(value)
     end
   end
 
   defp ensure_device_id(value, _current) when is_integer(value) and value >= 0, do: {:ok, value}
 
   defp ensure_device_id(value, _current) when is_binary(value) do
-    case Integer.parse(value) do
-      {int, ""} when int >= 0 -> {:ok, int}
-      _ -> {:ok, 0}
-    end
+    parse_device_id(value)
   end
 
   defp ensure_device_id(_value, %{device_id: id}) when is_integer(id) and id >= 0, do: {:ok, id}
   defp ensure_device_id(_value, _current), do: {:ok, 0}
+
+  defp parse_device_id(value) when is_integer(value) and value >= 0, do: {:ok, value}
+
+  defp parse_device_id(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {int, _} when int >= 0 -> {:ok, int}
+      _ -> {:ok, 0}
+    end
+  end
+
+  defp parse_device_id(_), do: {:ok, 0}
+
+  defp extract_device_from_jid(nil), do: nil
+
+  defp extract_device_from_jid(jid) when is_binary(jid) do
+    # Extract device component from JID like "user:device@server"
+    case Regex.run(~r/^[^@]+:(\d+)@/, jid) do
+      [_, device_str] -> device_str
+      _ -> nil
+    end
+  end
+
+  defp extract_device_from_jid(%{device: device}) when is_integer(device), do: device
+  defp extract_device_from_jid(_), do: nil
+
+  defp valid_device_id?(nil), do: false
+  defp valid_device_id?(v) when is_integer(v) and v >= 0, do: true
+  defp valid_device_id?(v) when is_binary(v), do: v != ""
+  defp valid_device_id?(_), do: false
 
   defp ensure_signed_prekey(current, identity, now) do
     existing = Map.get(current, :signed_prekeys) || %{}

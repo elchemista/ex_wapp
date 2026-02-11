@@ -106,15 +106,19 @@ defmodule ExWapp.MessageHandler do
       }
     }
 
-    # Store message in chat
-    if target = chat_target(session, state) do
-      maybe_update_chat_name(target, from, attrs)
-      Chat.add_message(target, from, message)
-    end
+    # Only store user-visible messages in chat (skip protocol messages like history sync)
+    is_protocol = message_data[:message_content_type] == :protocol
 
-    # Notify subscribers of new message
-    if is_pid(session) do
-      send(session, {:new_message, from, message})
+    if not is_protocol do
+      if target = chat_target(session, state) do
+        maybe_update_chat_name(target, from, attrs)
+        Chat.add_message(target, from, message)
+      end
+
+      # Notify subscribers of new message
+      if is_pid(session) do
+        send(session, {:new_message, from, message})
+      end
     end
 
     {actions, state} = build_receipt_actions(from, id, participant, attrs, message_data, state)
@@ -206,6 +210,9 @@ defmodule ExWapp.MessageHandler do
       "devices" ->
         handle_devices_notification(content, session, state)
 
+      "privacy_token" ->
+        handle_privacy_token_notification(attrs, content, state)
+
       "picture" ->
         {:ok, state}
 
@@ -230,6 +237,61 @@ defmodule ExWapp.MessageHandler do
   defp handle_encrypt_notification(_content, _session, state) do
     Logger.info("Received encryption notification (identity key change)")
     {:ok, state}
+  end
+
+  # Reference: Baileys messages-recv.ts handlePrivacyTokenNotification
+  defp handle_privacy_token_notification(attrs, content, state) do
+    from = normalize_jid(Map.get(attrs, "from", ""))
+    tokens_node = find_child_node(content, "tokens")
+
+    if tokens_node do
+      token_nodes =
+        case tokens_node do
+          %Node{content: children} when is_list(children) ->
+            Enum.filter(children, fn
+              %Node{tag: "token"} -> true
+              _ -> false
+            end)
+
+          _ ->
+            []
+        end
+
+      Enum.each(token_nodes, fn %Node{attrs: token_attrs, content: token_content} ->
+        type = Map.get(token_attrs, "type")
+        timestamp = Map.get(token_attrs, "t")
+
+        if type == "trusted_contact" do
+          token_data = normalize_content(token_content)
+
+          if is_binary(token_data) and from != "" do
+            Logger.info(
+              "[PRIVACY_TOKEN] Storing trusted_contact token for #{from} (#{byte_size(token_data)} bytes)"
+            )
+
+            store_tctoken(state, from, token_data, timestamp)
+          end
+        end
+      end)
+    end
+
+    {:ok, state}
+  end
+
+  defp store_tctoken(state, jid, token, timestamp) do
+    store = Map.get(state, :store)
+    if is_nil(store), do: :ok, else: do_store_tctoken(store, jid, token, timestamp)
+  rescue
+    error ->
+      Logger.warning("[PRIVACY_TOKEN] Failed to store tctoken: #{inspect(error)}")
+      :ok
+  end
+
+  defp do_store_tctoken(store, jid, token, timestamp) do
+    data = Store.load!(store)
+    tctokens = Map.get(data, :tctokens, %{})
+    tctokens = Map.put(tctokens, jid, %{token: token, timestamp: timestamp})
+    Store.persist(store, Map.put(data, :tctokens, tctokens))
   end
 
   defp handle_devices_notification(content, _session, state) do
@@ -329,20 +391,28 @@ defmodule ExWapp.MessageHandler do
   # Receipt Handling
   # ============================================================================
 
-  defp handle_receipt(%Node{attrs: attrs}, session, state) do
+  defp handle_receipt(%Node{attrs: attrs, content: content}, session, state) do
     from = normalize_jid(Map.get(attrs, "from", ""))
     id = Map.get(attrs, "id", "")
     type = Map.get(attrs, "type", "delivery")
 
-    Logger.debug("Receipt from=#{from} id=#{id} type=#{type}")
+    retry_info = extract_retry_info(content)
+
+    case {type, retry_info} do
+      {"retry", %{count: count, error: error}} ->
+        Logger.warning(
+          "[RECEIPT] Retry requested from=#{from} id=#{id} retry_count=#{count || "?"} error=#{error || "?"}"
+        )
+
+      {"retry", _} ->
+        Logger.warning("[RECEIPT] Retry requested from=#{from} id=#{id}")
+
+      _ ->
+        Logger.info("[RECEIPT] from=#{from} id=#{id} type=#{type}")
+    end
 
     # Update message status
-    status =
-      case type do
-        "read" -> :read
-        "played" -> :read
-        _ -> :delivered
-      end
+    status = receipt_status(type)
 
     if target = chat_target(session, state) do
       if from != "" do
@@ -352,7 +422,14 @@ defmodule ExWapp.MessageHandler do
       Chat.update_message_status_by_id(target, id, status)
     end
 
-    {:ok, state}
+    actions =
+      if type == "retry" and from != "" and id != "" do
+        [{:retry_outgoing_message, from, id}]
+      else
+        []
+      end
+
+    {:ok, state, actions}
   end
 
   # ============================================================================
@@ -366,7 +443,12 @@ defmodule ExWapp.MessageHandler do
     from = normalize_jid(Map.get(attrs, "from", ""))
     to = normalize_jid(Map.get(attrs, "to", ""))
 
-    Logger.debug("ACK id=#{id} class=#{class} type=#{type}")
+    if class in ["message", "chat", "receipt"] or type == "error" do
+      log_fn = if type == "error", do: :warning, else: :info
+      Logger.log(log_fn, "[ACK] id=#{id} class=#{class} type=#{type} from=#{from} to=#{to}")
+    else
+      Logger.debug("ACK id=#{id} class=#{class} type=#{type}")
+    end
 
     status =
       cond do
@@ -392,6 +474,28 @@ defmodule ExWapp.MessageHandler do
 
     {:ok, state}
   end
+
+  defp extract_retry_info(content) when is_list(content) do
+    case find_child_node(content, "retry") do
+      %Node{attrs: retry_attrs} ->
+        %{
+          count: Map.get(retry_attrs, "count"),
+          error: Map.get(retry_attrs, "error"),
+          id: Map.get(retry_attrs, "id"),
+          timestamp: Map.get(retry_attrs, "t")
+        }
+
+      _ ->
+        nil
+    end
+  end
+
+  defp extract_retry_info(_), do: nil
+
+  defp receipt_status("read"), do: :read
+  defp receipt_status("played"), do: :read
+  defp receipt_status("retry"), do: :failed
+  defp receipt_status(_), do: :delivered
 
   # ============================================================================
   # Presence Handling
@@ -503,7 +607,7 @@ defmodule ExWapp.MessageHandler do
          participant,
          attrs
        ) do
-    sender_candidates = signal_sender_jids(from, participant, attrs)
+    sender_candidates = signal_sender_jids(from, participant, attrs, state)
     payload_candidates = encrypted_payload_candidates(message_data)
 
     ordered_payload_candidates =
@@ -549,28 +653,35 @@ defmodule ExWapp.MessageHandler do
                 Map.get(payload, :enc_version) || Map.get(message_data, :enc_version)
               )
 
-            decoded_text = decode_message_text(plaintext)
+            {content_type, decoded_text} = classify_decrypted_content(plaintext)
             text = decoded_text || "(encrypted: #{Map.get(payload, :enc_type, enc_type)})"
 
-            if is_nil(decoded_text) do
-              preview_size = min(byte_size(plaintext), 24)
-              preview = Base.encode16(binary_part(plaintext, 0, preview_size), case: :lower)
+            if content_type == :protocol do
+              Logger.info(
+                "[DECRYPT] Protocol message (#{Map.get(payload, :enc_type)}), plaintext_size=#{byte_size(plaintext)} — skipping chat display"
+              )
+            else
+              if is_nil(decoded_text) do
+                preview_size = min(byte_size(plaintext), 24)
+                preview = Base.encode16(binary_part(plaintext, 0, preview_size), case: :lower)
 
-              Logger.warning(
-                "[DECRYPT] Decrypted payload but could not extract text. sender_jid=#{sender_jid} enc_type=#{Map.get(payload, :enc_type)} plaintext_size=#{byte_size(plaintext)} preview=#{preview}"
+                Logger.warning(
+                  "[DECRYPT] Decrypted payload but could not extract text. sender_jid=#{sender_jid} enc_type=#{Map.get(payload, :enc_type)} plaintext_size=#{byte_size(plaintext)} preview=#{preview}"
+                )
+              end
+
+              Logger.info(
+                "[DECRYPT] Success! sender_jid=#{sender_jid} enc_type=#{Map.get(payload, :enc_type)} plaintext_size=#{byte_size(plaintext)} text=#{inspect(String.slice(text || "", 0, 50))}"
               )
             end
-
-            Logger.info(
-              "[DECRYPT] Success! sender_jid=#{sender_jid} enc_type=#{Map.get(payload, :enc_type)} plaintext_size=#{byte_size(plaintext)} text=#{inspect(String.slice(text || "", 0, 50))}"
-            )
 
             updated_state = Map.put(state, :signal_sessions, updated_sessions)
 
             {
               message_data
               |> Map.put(:text, text)
-              |> Map.put(:decrypt_status, :ok),
+              |> Map.put(:decrypt_status, :ok)
+              |> Map.put(:message_content_type, content_type),
               updated_state
             }
 
@@ -638,7 +749,7 @@ defmodule ExWapp.MessageHandler do
     end
   end
 
-  defp signal_sender_jids(from, participant, attrs) do
+  defp signal_sender_jids(from, participant, attrs, state) do
     raw_candidates = [
       participant,
       from,
@@ -658,8 +769,46 @@ defmodule ExWapp.MessageHandler do
       |> Enum.map(&strip_device_from_jid/1)
       |> Enum.reject(&(&1 == ""))
 
-    (with_device ++ without_device)
+    base_candidates =
+      (with_device ++ without_device)
+      |> Enum.uniq()
+
+    # Expand candidates via PN<->LID mapping (Baileys: getDecryptionJid)
+    mapped_candidates = resolve_lid_mapping_candidates(base_candidates, state)
+
+    (base_candidates ++ mapped_candidates)
     |> Enum.uniq()
+  end
+
+  defp resolve_lid_mapping_candidates(candidates, state) do
+    store = Map.get(state, :store)
+    if is_nil(store), do: [], else: do_resolve_lid_mappings(candidates, store)
+  rescue
+    _ -> []
+  end
+
+  defp do_resolve_lid_mappings(candidates, store) do
+    data = Store.load!(store)
+    lid_mapping = Map.get(data, :lid_mapping, %{})
+
+    if map_size(lid_mapping) == 0 do
+      # Also store envelope mappings from attrs for future use
+      []
+    else
+      Enum.flat_map(candidates, fn jid ->
+        normalized = strip_device_from_jid(jid)
+
+        mapped =
+          [
+            Map.get(lid_mapping, {:pn_to_lid, normalized}),
+            Map.get(lid_mapping, {:lid_to_pn, normalized})
+          ]
+          |> Enum.reject(&is_nil/1)
+
+        mapped ++ Enum.map(mapped, &strip_device_from_jid/1)
+      end)
+      |> Enum.reject(&(&1 == ""))
+    end
   end
 
   defp extract_enc_candidates(content) when is_list(content) do
@@ -789,7 +938,11 @@ defmodule ExWapp.MessageHandler do
          ], updated_state}
 
       true ->
-        {[{:send_receipt, from, id, participant, "delivery"}], state}
+        # Peer category messages (protocol msgs) need no type attribute
+        # Regular messages use "delivery" type
+        category = Map.get(attrs, "category")
+        receipt_type = if category == "peer", do: nil, else: "delivery"
+        {[{:send_receipt, from, id, participant, receipt_type}], state}
     end
   end
 
@@ -915,14 +1068,22 @@ defmodule ExWapp.MessageHandler do
 
   @max_message_decode_depth 6
 
-  defp decode_message_text(payload) when is_binary(payload) do
-    case decode_message_text_recursive(payload, 0) do
-      {:ok, text} -> text
-      :error -> nil
+  defp classify_decrypted_content(payload) when is_binary(payload) do
+    # Check if this is a protocolMessage (field 12) - history sync, app state, etc.
+    case find_length_delimited_field(payload, 12) do
+      {:ok, _protocol_msg} ->
+        {:protocol, nil}
+
+      _ ->
+        # Try to extract user-visible text
+        case decode_message_text_recursive(payload, 0) do
+          {:ok, text} -> {:user_message, text}
+          :error -> {:user_message, nil}
+        end
     end
   end
 
-  defp decode_message_text(_), do: nil
+  defp classify_decrypted_content(_), do: {:user_message, nil}
 
   defp decode_message_text_recursive(_payload, depth) when depth > @max_message_decode_depth,
     do: :error

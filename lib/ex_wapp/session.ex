@@ -53,6 +53,8 @@ defmodule ExWapp.Session do
   @backoff_multiplier 2
   @max_reconnect_attempts :infinity
   @health_check_interval_ms 30_000
+  @min_prekey_threshold 5
+  @max_outgoing_retry_attempts 2
 
   @typedoc "Human readable events emitted during the pairing flow."
   @type qr_event :: {:code, String.t()} | :success | {:error, term()}
@@ -82,6 +84,7 @@ defmodule ExWapp.Session do
     pending_iqs: %{},
     signal_sessions: nil,
     retry_counters: %{},
+    prekey_count_query_id: nil,
     stats: %{
       messages_sent: 0,
       messages_received: 0,
@@ -495,6 +498,10 @@ defmodule ExWapp.Session do
     {:noreply, %{state | signal_sessions: sessions}}
   end
 
+  def handle_info({:retry_outgoing_message, jid, message_id}, state) do
+    {:noreply, maybe_retry_outgoing_message(state, jid, message_id)}
+  end
+
   def handle_info(msg, state) do
     Logger.debug("Unhandled message: #{inspect(msg)}")
     {:noreply, state}
@@ -817,6 +824,11 @@ defmodule ExWapp.Session do
           pong = build_iq_result(attrs)
           {state, [{:send_node, pong}]}
 
+        # Handle prekey count response (from count-driven upload flow)
+        state.prekey_count_query_id != nil and iq_id == state.prekey_count_query_id and
+            iq_type == "result" ->
+          handle_prekey_count_response(node, state)
+
         # Handle other IQ types through pairing
         true ->
           {pairing, actions} = Pairing.apply_node(state.pairing, node)
@@ -825,6 +837,19 @@ defmodule ExWapp.Session do
             case maybe_reset_pairing(actions, pairing) do
               {:ok, new_pairing} -> new_pairing
               :noop -> pairing
+            end
+
+          # If pairing didn't produce actions AND this is a get/set IQ,
+          # we MUST respond with a result to prevent server timeout
+          actions =
+            if actions == [] and iq_type in ["get", "set"] do
+              Logger.info(
+                "[SESSION] Auto-responding to unhandled IQ: xmlns=#{xmlns} type=#{iq_type} id=#{iq_id}"
+              )
+
+              [{:send_node, build_iq_result(attrs)}]
+            else
+              actions
             end
 
           {%{state | pairing: pairing}, actions}
@@ -875,72 +900,39 @@ defmodule ExWapp.Session do
   defp handle_connection_node(%Binary.Node{tag: "success", attrs: attrs}, state) do
     Logger.info("[SESSION] Received success node - login successful!")
 
-    # Store LID if present
+    # Persist LID if present (Baileys: CB:success -> creds.update me.lid)
     lid = Map.get(attrs, "lid")
+    state = persist_lid_and_mapping(state, lid)
 
-    if lid do
-      Logger.info("[SESSION] LID from success: #{inspect(lid)}")
-      # TODO: Store LID in session data
-    end
-
-    # Reference: whatsmeow/connectionevents.go handleConnectSuccess()
-    # After success, we need to:
-    # 1. Check/upload prekeys (CRITICAL for device linking!)
+    # Reference: Baileys socket.ts CB:success handler
+    # 1. Query server prekey count (count-driven upload, not unconditional)
     # 2. Send SetPassive(false)
-
-    prekey_actions =
-      case ExWapp.Prekeys.build_prekey_upload(state.store, initial: true) do
-        {:ok, prekey_node, prekeys} ->
-          persist_uploaded_prekeys(state.store, prekeys)
-          Logger.info("[SESSION] Uploading initial prekeys")
-          [{:send_node, prekey_node}]
-
-        {:error, reason} ->
-          Logger.warning("[SESSION] Cannot upload prekeys: #{inspect(reason)}")
-          []
-      end
+    # 3. digestKeyBundle (optional, skip for now)
+    prekey_count_query = ExWapp.Prekeys.build_prekey_count_query()
+    query_id = Map.get(prekey_count_query.attrs, "id")
 
     passive_iq = build_set_passive_iq(false)
 
-    actions = prekey_actions ++ [{:send_node, passive_iq}]
-    Logger.info("[SESSION] Sending #{length(actions)} post-success actions")
+    state = %{state | prekey_count_query_id: query_id}
+
+    # Send presence available to show as online (Baileys: sendPresenceUpdate)
+    presence_node = %Binary.Node{
+      tag: "presence",
+      attrs: %{"type" => "available"},
+      content: nil
+    }
+
+    actions = [
+      {:send_node, prekey_count_query},
+      {:send_node, passive_iq},
+      {:send_node, presence_node}
+    ]
+
+    Logger.info(
+      "[SESSION] Sending prekey count query (id=#{query_id}) + passive IQ + presence available"
+    )
+
     {state, actions}
-  end
-
-  defp persist_uploaded_prekeys(store, prekeys) when is_list(prekeys) do
-    data = Store.load!(store)
-    signal = Map.get(data, :signal, %{})
-    existing_prekeys = Map.get(signal, :prekeys, %{})
-
-    merged_prekeys =
-      Enum.reduce(prekeys, existing_prekeys, fn
-        %{key_id: id, public: pub, private: priv}, acc ->
-          Map.put(acc, id, %{id: id, public: pub, private: priv})
-
-        _, acc ->
-          acc
-      end)
-
-    next_prekey_id =
-      prekeys
-      |> Enum.map(&Map.get(&1, :key_id))
-      |> Enum.filter(&is_integer/1)
-      |> case do
-        [] -> Map.get(signal, :next_prekey_id, 1)
-        ids -> Enum.max(ids) + 1
-      end
-
-    updated_signal =
-      signal
-      |> Map.put(:prekeys, merged_prekeys)
-      |> Map.put(:next_prekey_id, next_prekey_id)
-
-    Store.persist(store, Map.put(data, :signal, updated_signal))
-    :ok
-  rescue
-    error ->
-      Logger.warning("[SESSION] Failed to persist uploaded prekeys: #{inspect(error)}")
-      :ok
   end
 
   # Handle ib (initialization) node - server sends this after successful login
@@ -1030,11 +1022,12 @@ defmodule ExWapp.Session do
 
     new_state =
       cond do
-        code == "401" and conflict_type == "device_removed" ->
-          Logger.error("[SESSION] Device was removed! Need to re-pair from scratch.")
+        code == "401" or (code == "401" and conflict_type == "device_removed") ->
+          Logger.error("[SESSION] Device was removed (401)! Need to re-pair from scratch.")
           Logger.error("[SESSION] Delete session file and scan QR code again.")
           notify_qr(state, {:error, :device_removed})
-          state
+          # Stop reconnection - device is permanently invalid
+          %{state | status: :disconnected, reconnect_attempts: 999}
 
         code == "515" ->
           Logger.warning("[SESSION] Got 515, will reconnect...")
@@ -1094,13 +1087,156 @@ defmodule ExWapp.Session do
     {update_stats(state, :messages_received), []}
   end
 
+  # --- Helpers for handle_connection_node("success") ---
+
+  defp persist_lid_and_mapping(state, nil), do: state
+
+  defp persist_lid_and_mapping(state, lid) when is_binary(lid) do
+    Logger.info("[SESSION] LID from success: #{inspect(lid)}")
+
+    data = Store.load!(state.store)
+
+    # Persist LID in client_info
+    client_info = Map.get(data, :client_info, %{})
+    client_info = Map.put(client_info, :lid, lid)
+
+    # Create own PN<->LID mapping (Baileys: storeLIDPNMappings)
+    own_pn =
+      get_in(data, [:pairing, :device, "jid"]) ||
+        get_in(data, [:pairing, :device, :jid]) ||
+        get_in(data, [:client_info, :jid])
+
+    lid_mapping = Map.get(data, :lid_mapping, %{})
+
+    lid_mapping =
+      if own_pn do
+        pn_normalized = normalize_jid_string(to_string(own_pn))
+        lid_normalized = normalize_jid_string(to_string(lid))
+
+        Logger.info(
+          "[SESSION] Storing own PN<->LID mapping: #{pn_normalized} <-> #{lid_normalized}"
+        )
+
+        lid_mapping
+        |> Map.put({:pn_to_lid, pn_normalized}, lid_normalized)
+        |> Map.put({:lid_to_pn, lid_normalized}, pn_normalized)
+      else
+        lid_mapping
+      end
+
+    data =
+      data
+      |> Map.put(:client_info, client_info)
+      |> Map.put(:lid_mapping, lid_mapping)
+
+    Store.persist(state.store, data)
+    state
+  end
+
+  defp persist_lid_and_mapping(state, _), do: state
+
+  # Handle prekey count response from server (Baileys: uploadPreKeysToServerIfRequired)
+  defp handle_prekey_count_response(%Binary.Node{content: content}, state) do
+    state = %{state | prekey_count_query_id: nil}
+
+    server_count = ExWapp.Prekeys.parse_count_response(content)
+    Logger.info("[SESSION] Server prekey count: #{server_count}")
+
+    data = Store.load!(state.store)
+    signal = Map.get(data, :signal, %{})
+    local_count = signal |> Map.get(:prekeys, %{}) |> map_size()
+
+    # Baileys logic: if server count == 0 -> INITIAL (812), low -> refill (50)
+    # For fresh devices, server_count == 0 always needs full initial upload
+    cond do
+      server_count == 0 ->
+        Logger.info(
+          "[SESSION] No prekeys on server, uploading initial batch (local=#{local_count})"
+        )
+
+        do_prekey_upload(state, initial: true)
+
+      server_count <= @min_prekey_threshold ->
+        Logger.info("[SESSION] Server prekeys low (#{server_count}), uploading refill batch")
+        do_prekey_upload(state, initial: false)
+
+      true ->
+        Logger.info(
+          "[SESSION] Prekey count OK (server=#{server_count}, local=#{local_count}), skipping upload"
+        )
+
+        {state, []}
+    end
+  end
+
+  defp do_prekey_upload(state, opts) do
+    case ExWapp.Prekeys.build_prekey_upload(state.store, opts) do
+      {:ok, prekey_node, prekeys} ->
+        persist_uploaded_prekeys(state.store, prekeys)
+        initial = Keyword.get(opts, :initial, false)
+        Logger.info("[SESSION] Uploading prekeys (initial=#{initial}, count=#{length(prekeys)})")
+        {state, [{:send_node, prekey_node}]}
+
+      {:error, reason} ->
+        Logger.warning("[SESSION] Cannot upload prekeys: #{inspect(reason)}")
+        {state, []}
+    end
+  end
+
+  defp normalize_jid_string(jid) when is_binary(jid) do
+    jid
+    |> String.trim()
+    |> String.replace("@whatsapp.net", "@s.whatsapp.net")
+  end
+
+  defp normalize_jid_string(_), do: ""
+
+  defp persist_uploaded_prekeys(store, prekeys) when is_list(prekeys) do
+    data = Store.load!(store)
+    signal = Map.get(data, :signal, %{})
+    existing_prekeys = Map.get(signal, :prekeys, %{})
+
+    merged_prekeys =
+      Enum.reduce(prekeys, existing_prekeys, fn
+        %{key_id: id, public: pub, private: priv}, acc ->
+          Map.put(acc, id, %{id: id, public: pub, private: priv})
+
+        _, acc ->
+          acc
+      end)
+
+    next_prekey_id =
+      prekeys
+      |> Enum.map(&Map.get(&1, :key_id))
+      |> Enum.filter(&is_integer/1)
+      |> case do
+        [] -> Map.get(signal, :next_prekey_id, 1)
+        ids -> Enum.max(ids) + 1
+      end
+
+    updated_signal =
+      signal
+      |> Map.put(:prekeys, merged_prekeys)
+      |> Map.put(:next_prekey_id, next_prekey_id)
+
+    Store.persist(store, Map.put(data, :signal, updated_signal))
+    :ok
+  rescue
+    error ->
+      Logger.warning("[SESSION] Failed to persist uploaded prekeys: #{inspect(error)}")
+      :ok
+  end
+
+  # --- End helpers for handle_connection_node("success") ---
+
   defp build_receipt_ack(to, id, participant, type) do
     attrs = %{
       "id" => id,
-      "to" => to,
-      "type" => type
+      "to" => to
     }
 
+    # Only add type if non-nil (peer category messages omit it)
+    attrs = if type, do: Map.put(attrs, "type", type), else: attrs
     attrs = if participant, do: Map.put(attrs, "participant", participant), else: attrs
 
     %Binary.Node{
@@ -1370,7 +1506,121 @@ defmodule ExWapp.Session do
     OutboundQueue.restart_stream(outbound_queue)
   end
 
+  defp handle_pairing_action({:retry_outgoing_message, jid, message_id}, _state) do
+    send(self(), {:retry_outgoing_message, jid, message_id})
+  end
+
   defp handle_pairing_action(_action, _state), do: :ok
+
+  defp maybe_retry_outgoing_message(state, jid, message_id) do
+    normalized_jid = normalize_jid_for_signal(jid)
+    counter_key = outbound_retry_counter_key(normalized_jid, message_id)
+    attempts = Map.get(state.retry_counters, counter_key, 0)
+
+    cond do
+      attempts >= @max_outgoing_retry_attempts ->
+        Logger.warning(
+          "[SEND] Skipping retry for message id=#{message_id} to=#{normalized_jid}: max attempts reached"
+        )
+
+        state
+
+      true ->
+        case find_outgoing_message_text(state.store, normalized_jid, message_id) do
+          {:ok, text} ->
+            Logger.warning(
+              "[SEND] Retrying outbound message id=#{message_id} to=#{normalized_jid} (attempt #{attempts + 1}/#{@max_outgoing_retry_attempts})"
+            )
+
+            session_pid = self()
+
+            worker =
+              spawn_link(fn ->
+                result = do_send_text_worker(session_pid, state, normalized_jid, text)
+
+                case result do
+                  {:ok, new_id} ->
+                    Logger.info(
+                      "[SEND] Retry for message id=#{message_id} succeeded with new id=#{new_id}"
+                    )
+
+                  {:error, reason} ->
+                    Logger.warning(
+                      "[SEND] Retry for message id=#{message_id} failed: #{inspect(reason)}"
+                    )
+                end
+              end)
+
+            retry_counters = Map.put(state.retry_counters, counter_key, attempts + 1)
+            send_workers = Map.put(state.send_workers, worker, normalized_jid)
+
+            %{state | retry_counters: retry_counters, send_workers: send_workers}
+
+          {:error, reason} ->
+            Logger.warning(
+              "[SEND] Cannot retry message id=#{message_id} for #{normalized_jid}: #{inspect(reason)}"
+            )
+
+            state
+        end
+    end
+  end
+
+  defp outbound_retry_counter_key(jid, message_id) do
+    "outbound_retry|#{jid}|#{message_id}"
+  end
+
+  defp find_outgoing_message_text(nil, _jid, _message_id), do: {:error, :missing_store}
+
+  defp find_outgoing_message_text(store, jid, message_id) do
+    case find_outgoing_message_text_in_chat(store, jid, message_id) do
+      {:ok, _text} = ok ->
+        ok
+
+      {:error, _} ->
+        find_outgoing_message_text_any_chat(store, message_id)
+    end
+  rescue
+    error ->
+      {:error, {:lookup_failed, error}}
+  end
+
+  defp find_outgoing_message_text_in_chat(store, jid, message_id) do
+    store
+    |> ExWapp.Chat.messages(jid, limit: 500)
+    |> Enum.find_value(fn message ->
+      if Map.get(message, :id) == message_id and Map.get(message, :from_me) and
+           is_binary(Map.get(message, :text)) do
+        {:ok, Map.get(message, :text)}
+      else
+        nil
+      end
+    end)
+    |> case do
+      nil -> {:error, :message_not_found}
+      {:ok, _text} = result -> result
+    end
+  end
+
+  defp find_outgoing_message_text_any_chat(store, message_id) do
+    store
+    |> ExWapp.Chat.list()
+    |> Enum.find_value(fn chat ->
+      chat.messages
+      |> Enum.find_value(fn message ->
+        if Map.get(message, :id) == message_id and Map.get(message, :from_me) and
+             is_binary(Map.get(message, :text)) do
+          {:ok, Map.get(message, :text)}
+        else
+          nil
+        end
+      end)
+    end)
+    |> case do
+      nil -> {:error, :message_not_found}
+      {:ok, _text} = result -> result
+    end
+  end
 
   # ============================================================================
   # Message Sending
@@ -1392,13 +1642,50 @@ defmodule ExWapp.Session do
 
   defp ensure_signal_session_worker(state, jid) do
     signal_sessions = state.signal_sessions || ExWapp.Signal.SessionStore.new()
+    own_base_jid = local_account_base_jid(state.store)
 
-    if ExWapp.Signal.SessionStore.has_session?(signal_sessions, jid) do
-      Logger.info("[SEND] Have session for #{jid}")
+    with {:ok, sessions_after_target, target_bundles} <-
+           ensure_sessions_for_identity_worker(state, jid, signal_sessions),
+         {:ok, sessions_after_self, self_bundles} <-
+           ensure_own_device_sessions_worker(state, own_base_jid, jid, sessions_after_target) do
+      {:ok, sessions_after_self, Map.merge(target_bundles, self_bundles)}
+    end
+  end
+
+  defp ensure_sessions_for_identity_worker(state, jid, signal_sessions) do
+    existing_targets = list_session_targets_for_jid(signal_sessions, jid)
+
+    if existing_targets != [] do
+      Logger.info(
+        "[SEND] Have #{length(existing_targets)} session target(s) for #{jid}: #{inspect(existing_targets)}"
+      )
+
       {:ok, signal_sessions, %{}}
     else
-      Logger.info("[SEND] No session for #{jid}, fetching prekeys...")
+      Logger.info("[SEND] No session targets for #{jid}, fetching prekeys...")
       fetch_prekeys_worker(state, jid, signal_sessions)
+    end
+  end
+
+  defp ensure_own_device_sessions_worker(_state, "", _recipient_jid, signal_sessions) do
+    {:ok, signal_sessions, %{}}
+  end
+
+  defp ensure_own_device_sessions_worker(state, own_base_jid, recipient_jid, signal_sessions) do
+    if own_base_jid == recipient_jid do
+      {:ok, signal_sessions, %{}}
+    else
+      case ensure_sessions_for_identity_worker(state, own_base_jid, signal_sessions) do
+        {:ok, updated_sessions, bundles} ->
+          {:ok, updated_sessions, bundles}
+
+        {:error, reason} ->
+          Logger.warning(
+            "[SEND] Own-device prekey/session preparation failed for #{own_base_jid}: #{inspect(reason)}"
+          )
+
+          {:ok, signal_sessions, %{}}
+      end
     end
   end
 
@@ -1472,18 +1759,38 @@ defmodule ExWapp.Session do
 
     case ExWapp.Proto.Message.encode(proto) do
       {:ok, payload} ->
-        padded_payload = ExWapp.Signal.Encryption.pad_message(payload)
+        recipient_payload = ExWapp.Signal.Encryption.pad_message(payload)
 
-        targets = resolve_encryption_targets(signal_sessions, jid, prekey_bundles || %{})
+        own_payload =
+          case build_own_devices_payload(proto, jid) do
+            {:ok, own_payload} -> ExWapp.Signal.Encryption.pad_message(own_payload)
+            {:error, _reason} -> recipient_payload
+          end
 
-        Logger.info("[SEND] Encrypting for #{length(targets)} targets: #{inspect(targets)}")
+        all_prekey_bundles = prekey_bundles || %{}
+
+        recipient_prekey_bundles =
+          filter_prekey_bundles_for_identity(all_prekey_bundles, jid)
+
+        recipient_targets =
+          resolve_encryption_targets(signal_sessions, jid, recipient_prekey_bundles)
+
+        own_base_jid = local_account_base_jid(store)
+        own_device_id = local_account_device_id(store)
+        own_targets = resolve_own_device_targets(signal_sessions, own_base_jid, own_device_id)
+
+        target_specs = build_dm_target_specs(recipient_targets, own_targets)
+
+        Logger.info("[SEND] Recipient targets for #{jid}: #{inspect(recipient_targets)}")
+        Logger.info("[SEND] Own-device targets: #{inspect(own_targets)}")
+        Logger.info("[SEND] Final fanout targets: #{inspect(target_specs)}")
 
         case encrypt_for_targets(
                store,
                signal_sessions,
-               targets,
-               padded_payload,
-               prekey_bundles || %{}
+               target_specs,
+               %{recipient: recipient_payload, own: own_payload},
+               all_prekey_bundles
              ) do
           {:ok, participant_nodes, updated_sessions, include_identity} ->
             persist_signal_sessions(session_pid, updated_sessions)
@@ -1749,6 +2056,10 @@ defmodule ExWapp.Session do
       else
         [participants_node]
       end
+
+    # Append tctoken for 1:1 messages if available (Baileys: messages-send.ts)
+    base_jid = strip_device_from_jid(jid)
+    content = maybe_append_tctoken(content, base_jid, store)
 
     %Binary.Node{
       tag: "message",
@@ -2280,11 +2591,43 @@ defmodule ExWapp.Session do
         [participants_node]
       end
 
+    # Append tctoken for 1:1 messages if available (Baileys: messages-send.ts)
+    content = maybe_append_tctoken(content, base_jid, store)
+
     %Binary.Node{
       tag: "message",
       attrs: attrs,
       content: content
     }
+  end
+
+  defp maybe_append_tctoken(content, jid, store) do
+    is_group = String.contains?(jid, "@g.us")
+
+    if is_group do
+      content
+    else
+      data = Store.load!(store)
+      tctokens = Map.get(data, :tctokens, %{})
+
+      case Map.get(tctokens, jid) do
+        %{token: token} when is_binary(token) ->
+          Logger.debug("[SEND] Appending tctoken for #{jid}")
+
+          tctoken_node = %Binary.Node{
+            tag: "tctoken",
+            attrs: %{},
+            content: Binary.raw(token)
+          }
+
+          content ++ [tctoken_node]
+
+        _ ->
+          content
+      end
+    end
+  rescue
+    _ -> content
   end
 
   defp get_device_identity_node(store) do

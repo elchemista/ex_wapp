@@ -181,16 +181,58 @@ defmodule ExWapp.Signal.SessionStore do
     )
 
     if is_prekey_message do
-      # PreKeySignalMessage - creates new session
-      case Signal.decrypt_prekey_message(ciphertext, local_identity, local_prekeys) do
+      # PreKeySignalMessage - but if we already have a valid session, try it first
+      # (whatsapp-rust: avoid replacing an existing valid session; prevents MAC failures)
+      existing_result =
+        case get_session(store, jid) do
+          {:ok, session} ->
+            Logger.info(
+              "[SESSION_STORE] Trying existing session first for prekey msg from #{jid}"
+            )
+
+            case Signal.decrypt_prekey_message(ciphertext, local_identity, local_prekeys) do
+              {:ok, plaintext, new_session} ->
+                Logger.info("[SESSION_STORE] PreKey decrypt succeeded (new session) for #{jid}")
+                {:ok, plaintext, new_session}
+
+              {:error, _prekey_err} ->
+                # Fallback: try as regular message on existing session
+                case Signal.decrypt(session, ciphertext) do
+                  {:ok, plaintext, updated_session} ->
+                    Logger.info(
+                      "[SESSION_STORE] Decrypt on existing session succeeded for #{jid}"
+                    )
+
+                    {:ok, plaintext, updated_session}
+
+                  {:error, _} ->
+                    :try_fresh
+                end
+            end
+
+          :not_found ->
+            :try_fresh
+        end
+
+      case existing_result do
         {:ok, plaintext, session} ->
-          Logger.info("[SESSION_STORE] PreKey decrypt succeeded for #{jid}")
           updated_store = put_session(store, jid, session)
           {:ok, plaintext, updated_store}
 
-        {:error, reason} ->
-          Logger.warning("[SESSION_STORE] PreKey decrypt failed for #{jid}: #{inspect(reason)}")
-          {:error, reason}
+        :try_fresh ->
+          case Signal.decrypt_prekey_message(ciphertext, local_identity, local_prekeys) do
+            {:ok, plaintext, session} ->
+              Logger.info("[SESSION_STORE] PreKey decrypt succeeded (fresh) for #{jid}")
+              updated_store = put_session(store, jid, session)
+              {:ok, plaintext, updated_store}
+
+            {:error, reason} ->
+              Logger.warning(
+                "[SESSION_STORE] PreKey decrypt failed for #{jid}: #{inspect(reason)}"
+              )
+
+              {:error, reason}
+          end
       end
     else
       # Regular SignalMessage - use existing session

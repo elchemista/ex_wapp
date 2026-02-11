@@ -12,17 +12,20 @@ defmodule ExWapp.Proto.Message do
   - 1: conversation (string)
   - 6: extendedTextMessage
   - 12: protocolMessage
+  - 31: deviceSentMessage
   """
 
   defstruct conversation: nil,
             extendedTextMessage: nil,
             protocolMessage: nil,
+            deviceSentMessage: nil,
             __uf__: []
 
   @type t :: %__MODULE__{
           conversation: binary() | nil,
           extendedTextMessage: ExWapp.Proto.ExtendedTextMessage.t() | nil,
           protocolMessage: ExWapp.Proto.ProtocolMessage.t() | nil,
+          deviceSentMessage: ExWapp.Proto.DeviceSentMessage.t() | nil,
           __uf__: list()
         }
 
@@ -41,6 +44,7 @@ defmodule ExWapp.Proto.Message do
     |> encode_conversation(msg)
     |> encode_extended_text_message(msg)
     |> encode_protocol_message(msg)
+    |> encode_device_sent_message(msg)
     |> IO.iodata_to_binary()
   end
 
@@ -68,6 +72,15 @@ defmodule ExWapp.Proto.Message do
     encoded = ExWapp.Proto.ProtocolMessage.encode!(value)
     len = byte_size(encoded)
     [acc, <<0x62>>, encode_varint(len), encoded]
+  end
+
+  # Field 31: deviceSentMessage - tag 0xFA 0x01 (field 31, wire type 2)
+  defp encode_device_sent_message(acc, %{deviceSentMessage: nil}), do: acc
+
+  defp encode_device_sent_message(acc, %{deviceSentMessage: value}) do
+    encoded = ExWapp.Proto.DeviceSentMessage.encode!(value)
+    len = byte_size(encoded)
+    [acc, <<0xFA, 0x01>>, encode_varint(len), encoded]
   end
 
   defp encode_varint(n) when n < 128, do: <<n::8>>
@@ -187,6 +200,66 @@ defmodule ExWapp.Proto.ContextInfo do
   defp encode_is_forwarded(acc, %{isForwarded: nil}), do: acc
   defp encode_is_forwarded(acc, %{isForwarded: true}), do: [acc, <<0x90, 0x01, 0x01>>]
   defp encode_is_forwarded(acc, %{isForwarded: false}), do: [acc, <<0x90, 0x01, 0x00>>]
+
+  defp encode_varint(n) when n < 128, do: <<n::8>>
+
+  defp encode_varint(n) do
+    <<1::1, n::7, encode_varint(n >>> 7)::binary>>
+  end
+end
+
+defmodule ExWapp.Proto.DeviceSentMessage do
+  import Bitwise
+
+  @moduledoc """
+  Wrapper used when fanning out direct messages to the sender's other devices.
+  """
+
+  defstruct destinationJid: nil,
+            message: nil,
+            phash: nil,
+            __uf__: []
+
+  @type t :: %__MODULE__{
+          destinationJid: binary() | nil,
+          message: ExWapp.Proto.Message.t() | nil,
+          phash: binary() | nil,
+          __uf__: list()
+        }
+
+  @spec encode!(struct()) :: binary()
+  def encode!(msg) do
+    []
+    |> encode_destination_jid(msg)
+    |> encode_message(msg)
+    |> encode_phash(msg)
+    |> IO.iodata_to_binary()
+  end
+
+  # Field 1: destinationJid (string)
+  defp encode_destination_jid(acc, %{destinationJid: nil}), do: acc
+
+  defp encode_destination_jid(acc, %{destinationJid: value}) when is_binary(value) do
+    len = byte_size(value)
+    [acc, <<0x0A>>, encode_varint(len), value]
+  end
+
+  # Field 2: message (Message)
+  defp encode_message(acc, %{message: nil}), do: acc
+
+  defp encode_message(acc, %{message: value}) do
+    encoded = ExWapp.Proto.Message.encode!(value)
+    len = byte_size(encoded)
+    [acc, <<0x12>>, encode_varint(len), encoded]
+  end
+
+  # Field 3: phash (string)
+  defp encode_phash(acc, %{phash: nil}), do: acc
+
+  defp encode_phash(acc, %{phash: value}) when is_binary(value) do
+    len = byte_size(value)
+    [acc, <<0x1A>>, encode_varint(len), value]
+  end
 
   defp encode_varint(n) when n < 128, do: <<n::8>>
 

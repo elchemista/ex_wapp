@@ -86,6 +86,39 @@ defmodule ExWapp.Prekeys do
   end
 
   @doc """
+  Parses the server's response to a prekey count query.
+
+  The response contains a `<count>` child node with a `value` attribute.
+  Reference: Baileys getAvailablePreKeysOnServer()
+  """
+  def parse_count_response(content) when is_list(content) do
+    Enum.find_value(content, 0, fn
+      %Node{tag: "count", attrs: attrs} ->
+        case Map.get(attrs, "value") do
+          nil ->
+            0
+
+          val when is_integer(val) ->
+            val
+
+          val when is_binary(val) ->
+            case Integer.parse(val) do
+              {n, _} -> n
+              :error -> 0
+            end
+
+          _ ->
+            0
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  def parse_count_response(_), do: 0
+
+  @doc """
   Check if prekeys need to be uploaded based on server response.
   """
   def needs_upload?(server_count, local_count) do

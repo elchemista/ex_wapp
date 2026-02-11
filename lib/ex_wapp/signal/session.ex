@@ -97,7 +97,7 @@ defmodule ExWapp.Signal.Session do
 
       # Concatenate all DH outputs and derive root key
       # The 32-byte 0xFF prefix is required by Signal spec
-      shared_secret = <<0xFF::size(256)>> <> dh1 <> dh2 <> dh3 <> dh4
+      shared_secret = :binary.copy(<<0xFF>>, 32) <> dh1 <> dh2 <> dh3 <> dh4
       # Use "WhisperText" for initial X3DH derivation
       {root_key, chain_key} = hkdf_derive_initial(shared_secret)
 
@@ -461,7 +461,7 @@ defmodule ExWapp.Signal.Session do
   end
 
   defp shared_secret_from_parts(parts, with_ff_prefix?) when is_list(parts) do
-    prefix = if with_ff_prefix?, do: <<0xFF::size(256)>>, else: <<>>
+    prefix = if with_ff_prefix?, do: :binary.copy(<<0xFF>>, 32), else: <<>>
 
     Enum.reduce(parts, prefix, fn
       <<>>, acc -> acc

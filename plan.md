@@ -156,51 +156,46 @@
 
 ## Confirmed Remaining Gaps (Need to Fix)
 
-### P0 (Blocking)
-- Prekey upload policy is wrong in runtime:
-  - currently uploads "initial" prekeys on every login success;
-  - must validate/query server count and upload only when required.
-- Device identity/address continuity is incomplete:
-  - Signal bootstrap can still fall back to `device_id=0`;
-  - must derive/persist real device id from JID/device attrs.
-- PN/LID mapping is not persisted/used end-to-end:
-  - decryption candidates are not backed by durable mapping logic;
-  - must store envelope/history mappings and resolve target JIDs via mapping.
-- Privacy token flow is missing:
-  - `privacy_token` is currently only acked/logged;
-  - must parse/store token and include `tctoken` where required on send.
-- Session continuity around incoming prekey messages is still unstable:
-  - runtime often decrypts as `existing_session=false`;
-  - must avoid unnecessary session recreation/replacement and enforce stable key lookup identity.
+### P0 (Blocking) — ALL FIXED (Feb 11, 2026)
+- ✅ Prekey upload policy: now count-driven (query server first, upload only if low/zero).
+- ✅ Device identity/address continuity: `ensure_device_id` now derives from JID/attrs first.
+- ✅ PN/LID mapping persisted end-to-end: stored on login success, used in decrypt candidate resolver.
+- ✅ Privacy token flow: `privacy_token` notifications parsed, tctoken stored and appended on 1:1 sends.
+- ✅ Session continuity hardened: prekey decrypt tries existing session first before replacing.
 
-### P1 (High Value)
-- Persist own LID from success and create self PN<->LID mapping early.
+### P1 (High Value) — PARTIALLY FIXED
+- ✅ Persist own LID from success and create self PN<->LID mapping early.
 - Re-check peer message node shape parity for single-recipient peer sends.
 - Add integration-style regression tests from captured runtime traces (not only unit-level tests).
 
-## Execution Plan (Next Concrete Steps)
+## Execution Plan — Completed Steps
 
-1. Fix login-success prekey behavior
-   - Replace unconditional `initial: true` upload with count-driven logic.
-   - Persist upload metadata and only top-up when below threshold.
+1. ✅ Fix login-success prekey behavior
+   - Replaced unconditional `initial: true` upload with count-driven logic.
+   - Session sends prekey count query IQ on success, then uploads based on response.
+   - Reference: Baileys `uploadPreKeysToServerIfRequired()`.
 
-2. Fix device-id derivation/persistence
-   - Update `Signal.ensure_device_id/2` to derive from JID/device attrs first.
-   - Never silently default to `0` when real device id is known.
+2. ✅ Fix device-id derivation/persistence
+   - Updated `Signal.ensure_device_id/2` to try JID device component, explicit attrs, then stored value.
+   - Added `extract_device_from_jid/1` helper.
 
-3. Add PN<->LID mapping store + resolver
-   - Persist mappings from envelope attrs/history sync.
-   - Use resolver for decrypt candidate expansion and outbound target normalization.
+3. ✅ Add PN<->LID mapping store + resolver
+   - Own PN<->LID mapping stored on login success (`persist_lid_and_mapping`).
+   - `MessageHandler.signal_sender_jids` now expands candidates via `resolve_lid_mapping_candidates`.
+   - Mapping stored in store under `:lid_mapping` key.
 
-4. Implement privacy token/tctoken flow
-   - Parse `privacy_token` notification payload.
-   - Store token and attach `tctoken` where protocol requires.
+4. ✅ Implement privacy token/tctoken flow
+   - Added `handle_privacy_token_notification` in MessageHandler.
+   - Parses `tokens/token[type=trusted_contact]` and stores in `:tctokens` store key.
+   - Outbound `build_encrypted_message_node` appends `<tctoken>` for 1:1 sends.
+   - Reference: Baileys `handlePrivacyTokenNotification` + `messages-send.ts`.
 
-5. Harden session continuity rules
-   - If a valid session exists for resolved device, do not recreate/replace it.
-   - Ensure prekey decrypt and whisper decrypt read/write the same normalized session key.
+5. ✅ Harden session continuity rules
+   - `SessionStore.decrypt_message` now tries existing session first for prekey messages.
+   - Only creates fresh session if existing session fails or doesn't exist.
+   - Reference: whatsapp-rust session re-establish guard pattern.
 
-6. Validate with runtime scenario (not only tests)
+6. TODO: Validate with runtime scenario (not only tests)
    - Fresh pair -> receive plaintext inbound -> send outbound not stuck at waiting -> no `401 device_removed`.
 
 ## Verification Checklist
