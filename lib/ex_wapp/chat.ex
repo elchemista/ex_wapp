@@ -78,7 +78,7 @@ defmodule ExWapp.Chat do
       data
       |> Map.get(:chats, %{})
       |> Map.values()
-      |> Enum.sort_by(& &1.last_message_timestamp, :desc)
+      |> Enum.sort_by(&(&1.last_message_timestamp || 0), :desc)
     else
       []
     end
@@ -309,6 +309,54 @@ defmodule ExWapp.Chat do
     update_chat(target, jid, fn chat -> %{chat | name: name} end)
   end
 
+  @doc """
+  Upserts metadata fields for a chat from sync/notification payloads.
+
+  Supported keys:
+  - `:name`
+  - `:unread_count`
+  - `:last_message_timestamp`
+  - `:pinned`
+  - `:muted_until`
+  - `:archived`
+  - `:is_group`
+  """
+  @spec merge_metadata(target(), String.t() | JID.t(), map() | keyword()) :: :ok
+  def merge_metadata(target, jid, metadata) when is_list(metadata) do
+    merge_metadata(target, jid, Map.new(metadata))
+  end
+
+  def merge_metadata(target, jid, metadata) when is_map(metadata) do
+    jid_str = normalize_jid(jid)
+
+    chat =
+      case get(target, jid_str) do
+        {:ok, existing_chat} ->
+          existing_chat
+
+        {:error, :not_found} ->
+          name =
+            case fetch_metadata(metadata, :name) do
+              {:ok, value} when is_binary(value) and value != "" -> value
+              _ -> nil
+            end
+
+          new_chat(jid_str, name: name)
+      end
+
+    updated_chat =
+      chat
+      |> maybe_update_name(metadata)
+      |> maybe_update_non_neg_integer(:unread_count, metadata)
+      |> maybe_update_non_neg_integer(:last_message_timestamp, metadata)
+      |> maybe_update_boolean_field(:pinned, metadata)
+      |> maybe_update_muted_until(metadata)
+      |> maybe_update_boolean_field(:archived, metadata)
+      |> maybe_update_boolean_field(:is_group, metadata)
+
+    save_chat(target, updated_chat)
+  end
+
   # ============================================================================
   # Message Parsing
   # ============================================================================
@@ -396,6 +444,62 @@ defmodule ExWapp.Chat do
   defp parse_timestamp(ts) when is_integer(ts), do: ts
   defp parse_timestamp(ts) when is_binary(ts), do: String.to_integer(ts)
   defp parse_timestamp(_), do: 0
+
+  defp maybe_update_name(chat, metadata) do
+    case fetch_metadata(metadata, :name) do
+      {:ok, value} when is_binary(value) and value != "" ->
+        %{chat | name: value}
+
+      _ ->
+        chat
+    end
+  end
+
+  defp maybe_update_non_neg_integer(chat, field, metadata) do
+    case fetch_metadata(metadata, field) do
+      {:ok, value} when is_integer(value) and value >= 0 ->
+        Map.put(chat, field, value)
+
+      _ ->
+        chat
+    end
+  end
+
+  defp maybe_update_boolean_field(chat, field, metadata) do
+    case fetch_metadata(metadata, field) do
+      {:ok, value} when is_boolean(value) ->
+        Map.put(chat, field, value)
+
+      _ ->
+        chat
+    end
+  end
+
+  defp maybe_update_muted_until(chat, metadata) do
+    case fetch_metadata(metadata, :muted_until) do
+      {:ok, nil} ->
+        %{chat | muted_until: nil}
+
+      {:ok, value} when is_integer(value) and value > 0 ->
+        %{chat | muted_until: value}
+
+      {:ok, 0} ->
+        %{chat | muted_until: nil}
+
+      _ ->
+        chat
+    end
+  end
+
+  defp fetch_metadata(metadata, key) do
+    key_str = Atom.to_string(key)
+
+    cond do
+      Map.has_key?(metadata, key) -> {:ok, Map.get(metadata, key)}
+      Map.has_key?(metadata, key_str) -> {:ok, Map.get(metadata, key_str)}
+      true -> :error
+    end
+  end
 
   defp save_chat(target, chat) do
     store = resolve_store(target)

@@ -1655,15 +1655,34 @@ defmodule ExWapp.Session do
   defp ensure_sessions_for_identity_worker(state, jid, signal_sessions) do
     existing_targets = list_session_targets_for_jid(signal_sessions, jid)
 
-    if existing_targets != [] do
-      Logger.info(
-        "[SEND] Have #{length(existing_targets)} session target(s) for #{jid}: #{inspect(existing_targets)}"
-      )
+    cond do
+      existing_targets == [] ->
+        Logger.info("[SEND] No session targets for #{jid}, fetching prekeys...")
+        fetch_prekeys_worker(state, jid, signal_sessions)
 
-      {:ok, signal_sessions, %{}}
-    else
-      Logger.info("[SEND] No session targets for #{jid}, fetching prekeys...")
-      fetch_prekeys_worker(state, jid, signal_sessions)
+      Enum.any?(existing_targets, &jid_has_explicit_device?/1) ->
+        Logger.info(
+          "[SEND] Have #{length(existing_targets)} session target(s) for #{jid}: #{inspect(existing_targets)}"
+        )
+
+        {:ok, signal_sessions, %{}}
+
+      true ->
+        Logger.info(
+          "[SEND] Session target for #{jid} is base alias only, refreshing prekeys for device fanout"
+        )
+
+        case fetch_prekeys_worker(state, jid, signal_sessions) do
+          {:ok, updated_sessions, bundles} ->
+            {:ok, updated_sessions, bundles}
+
+          {:error, reason} ->
+            Logger.warning(
+              "[SEND] Prekey refresh failed for #{jid}, keeping base session target: #{inspect(reason)}"
+            )
+
+            {:ok, signal_sessions, %{}}
+        end
     end
   end
 
@@ -1763,8 +1782,15 @@ defmodule ExWapp.Session do
 
         own_payload =
           case build_own_devices_payload(proto, jid) do
-            {:ok, own_payload} -> ExWapp.Signal.Encryption.pad_message(own_payload)
-            {:error, _reason} -> recipient_payload
+            {:ok, own_payload} ->
+              ExWapp.Signal.Encryption.pad_message(own_payload)
+
+            {:error, reason} ->
+              Logger.warning(
+                "[SEND] Failed to build own-device payload for #{jid}, reusing primary payload: #{inspect(reason)}"
+              )
+
+              recipient_payload
           end
 
         all_prekey_bundles = prekey_bundles || %{}
@@ -1944,6 +1970,122 @@ defmodule ExWapp.Session do
     |> drop_base_alias_targets()
   end
 
+  defp filter_prekey_bundles_for_identity(prekey_bundles, jid)
+       when is_map(prekey_bundles) and map_size(prekey_bundles) > 0 do
+    identity = jid_identity(jid)
+
+    prekey_bundles
+    |> Enum.filter(fn {candidate, _bundle} -> jid_identity(candidate) == identity end)
+    |> Map.new()
+  end
+
+  defp filter_prekey_bundles_for_identity(_prekey_bundles, _jid), do: %{}
+
+  defp resolve_own_device_targets(signal_sessions, own_base_jid, own_device_id) do
+    if own_base_jid == "" do
+      []
+    else
+      signal_sessions
+      |> list_session_targets_for_jid(own_base_jid)
+      |> Enum.map(&normalize_jid_with_device/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+      |> drop_base_alias_targets()
+      |> Enum.reject(&current_device_target?(&1, own_device_id))
+    end
+  end
+
+  defp build_dm_target_specs(recipient_targets, own_targets) do
+    (Enum.map(recipient_targets, &%{jid: &1, payload_kind: :recipient}) ++
+       Enum.map(own_targets, &%{jid: &1, payload_kind: :own}))
+    |> Enum.reduce({MapSet.new(), []}, fn %{jid: jid} = spec, {seen, acc} ->
+      if MapSet.member?(seen, jid) do
+        {seen, acc}
+      else
+        {MapSet.put(seen, jid), [spec | acc]}
+      end
+    end)
+    |> elem(1)
+    |> Enum.reverse()
+  end
+
+  defp current_device_target?(jid, own_device_id)
+       when is_integer(own_device_id) and own_device_id >= 0 do
+    case jid_device_id(jid) do
+      nil -> own_device_id == 0
+      device_id -> device_id == own_device_id
+    end
+  end
+
+  defp current_device_target?(_jid, _own_device_id), do: false
+
+  defp jid_device_id(jid) when is_binary(jid) do
+    case Regex.run(~r/^[^@]+:(\d+)@/, jid) do
+      [_, value] ->
+        case Integer.parse(value) do
+          {device_id, ""} -> device_id
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp jid_device_id(%ExWapp.JID{device: device}) when is_integer(device), do: device
+  defp jid_device_id(_), do: nil
+
+  defp local_account_base_jid(nil), do: ""
+
+  defp local_account_base_jid(store) do
+    data = Store.load!(store)
+
+    data
+    |> local_account_jid_value()
+    |> normalize_jid_with_device()
+    |> strip_device_from_jid()
+  rescue
+    _ -> ""
+  end
+
+  defp local_account_device_id(nil), do: 0
+
+  defp local_account_device_id(store) do
+    data = Store.load!(store)
+    signal_device_id = get_in(data, [:signal, :device_id])
+
+    case local_account_jid_value(data) do
+      %ExWapp.JID{device: device} when is_integer(device) and device >= 0 ->
+        device
+
+      jid when is_binary(jid) ->
+        jid_device_id(jid) || signal_device_id || 0
+
+      _ ->
+        signal_device_id || 0
+    end
+  rescue
+    _ -> 0
+  end
+
+  defp local_account_jid_value(data) do
+    get_in(data, [:pairing, :device, "jid"]) ||
+      get_in(data, [:pairing, :device, :jid]) ||
+      get_in(data, [:client_info, :jid])
+  end
+
+  defp build_own_devices_payload(proto_message, destination_jid) do
+    wrapped = %ExWapp.Proto.Message{
+      deviceSentMessage: %ExWapp.Proto.DeviceSentMessage{
+        destinationJid: strip_device_from_jid(destination_jid),
+        message: proto_message,
+        phash: ""
+      }
+    }
+
+    ExWapp.Proto.Message.encode(wrapped)
+  end
+
   defp list_session_targets_for_jid(signal_sessions, jid) do
     target_identity = jid_identity(jid)
     sessions = Map.get(signal_sessions || %{}, :sessions, %{})
@@ -1961,39 +2103,45 @@ defmodule ExWapp.Session do
     end
   end
 
-  defp encrypt_for_targets(store, signal_sessions, targets, padded_payload, prekey_bundles) do
+  defp encrypt_for_targets(store, signal_sessions, target_specs, payloads, prekey_bundles) do
     result =
       Enum.reduce(
-        targets,
+        target_specs,
         %{nodes: [], sessions: signal_sessions, include_identity: false, errors: []},
-        fn target_jid, acc ->
+        fn %{jid: target_jid, payload_kind: payload_kind}, acc ->
           target_jid = normalize_jid_with_device(target_jid)
+          padded_payload = Map.get(payloads, payload_kind, Map.get(payloads, :recipient))
           bundle = Map.get(prekey_bundles, target_jid, %{})
           bundle_for_encrypt = if is_binary(Map.get(bundle, :base_key)), do: bundle, else: %{}
 
-          case ExWapp.Signal.Encryption.encrypt_for_recipient_sync(
-                 store,
-                 acc.sessions,
-                 target_jid,
-                 padded_payload,
-                 bundle_for_encrypt
-               ) do
-            {:ok, ciphertext, enc_type, updated_sessions} ->
-              node = build_participant_encrypted_node(target_jid, ciphertext, enc_type)
+          if is_binary(padded_payload) do
+            case ExWapp.Signal.Encryption.encrypt_for_recipient_sync(
+                   store,
+                   acc.sessions,
+                   target_jid,
+                   padded_payload,
+                   bundle_for_encrypt
+                 ) do
+              {:ok, ciphertext, enc_type, updated_sessions} ->
+                node = build_participant_encrypted_node(target_jid, ciphertext, enc_type)
 
-              %{
-                acc
-                | nodes: [node | acc.nodes],
-                  sessions: updated_sessions,
-                  include_identity: acc.include_identity or enc_type == :prekey
-              }
+                %{
+                  acc
+                  | nodes: [node | acc.nodes],
+                    sessions: updated_sessions,
+                    include_identity: acc.include_identity or enc_type == :prekey
+                }
 
-            {:error, reason} ->
-              Logger.warning(
-                "[SEND] Failed to encrypt for target=#{target_jid}: #{inspect(reason)}"
-              )
+              {:error, reason} ->
+                Logger.warning(
+                  "[SEND] Failed to encrypt for target=#{target_jid}: #{inspect(reason)}"
+                )
 
-              %{acc | errors: [{target_jid, reason} | acc.errors]}
+                %{acc | errors: [{target_jid, reason} | acc.errors]}
+            end
+          else
+            Logger.warning("[SEND] Missing payload for target=#{target_jid} kind=#{payload_kind}")
+            %{acc | errors: [{target_jid, :missing_payload} | acc.errors]}
           end
         end
       )
@@ -2026,16 +2174,18 @@ defmodule ExWapp.Session do
          jid,
          message_id,
          participant_nodes,
-         timestamp,
+         _timestamp,
          store,
          include_identity
        ) do
     attrs = %{
       "id" => message_id,
       "to" => strip_device_from_jid(jid),
-      "type" => "text",
-      "t" => Integer.to_string(timestamp)
+      "type" => "text"
     }
+
+    participant_jids = extract_participant_jids(participant_nodes)
+    attrs = maybe_put_message_attr(attrs, "phash", generate_participant_hash_v2(participant_jids))
 
     participants_node = %Binary.Node{
       tag: "participants",
@@ -2067,6 +2217,37 @@ defmodule ExWapp.Session do
       content: content
     }
   end
+
+  defp extract_participant_jids(participant_nodes) when is_list(participant_nodes) do
+    participant_nodes
+    |> Enum.map(fn
+      %Binary.Node{attrs: attrs} -> Map.get(attrs, "jid", "")
+      _ -> ""
+    end)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp extract_participant_jids(_), do: []
+
+  defp generate_participant_hash_v2([]), do: nil
+
+  defp generate_participant_hash_v2(participants) when is_list(participants) do
+    participants =
+      participants
+      |> Enum.map(&to_string/1)
+      |> Enum.sort()
+
+    hash =
+      participants
+      |> Enum.join("")
+      |> then(&:crypto.hash(:sha256, &1))
+      |> Base.encode64()
+
+    "2:" <> binary_part(hash, 0, min(6, byte_size(hash)))
+  end
+
+  defp maybe_put_message_attr(attrs, _key, nil), do: attrs
+  defp maybe_put_message_attr(attrs, key, value), do: Map.put(attrs, key, value)
 
   # Main entry point - ensures session exists before sending (deprecated, use worker)
   defp do_send_text_with_session(
@@ -2540,7 +2721,7 @@ defmodule ExWapp.Session do
          message_id,
          ciphertext,
          enc_type,
-         timestamp,
+         _timestamp,
          store,
          include_identity
        ) do
@@ -2550,8 +2731,7 @@ defmodule ExWapp.Session do
     attrs = %{
       "id" => message_id,
       "to" => base_jid,
-      "type" => "text",
-      "t" => Integer.to_string(timestamp)
+      "type" => "text"
     }
 
     enc_node = %Binary.Node{

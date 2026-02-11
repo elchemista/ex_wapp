@@ -227,7 +227,7 @@ defmodule ExWapp.WhatsmeowParityTest do
     assert message.text == "second enc candidate works"
   end
 
-  test "history sync collections are reflected in chat list" do
+  test "history sync collections are reflected in chat/group metadata" do
     {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
 
     notification = %Node{
@@ -240,7 +240,7 @@ defmodule ExWapp.WhatsmeowParityTest do
       content: [
         %Node{
           tag: "collection",
-          attrs: %{"name" => "regular_high"},
+          attrs: %{"name" => "regular_low"},
           content: [
             %Node{
               tag: "item",
@@ -248,7 +248,15 @@ defmodule ExWapp.WhatsmeowParityTest do
               content: [
                 %Node{
                   tag: "chat",
-                  attrs: %{"jid" => "111111111@s.whatsapp.net", "name" => "Alice"},
+                  attrs: %{
+                    "jid" => "111111111@s.whatsapp.net",
+                    "name" => "Alice",
+                    "count" => "3",
+                    "t" => "1730000001",
+                    "pin" => "1",
+                    "archive" => "0",
+                    "mute" => "0"
+                  },
                   content: nil
                 }
               ]
@@ -259,7 +267,15 @@ defmodule ExWapp.WhatsmeowParityTest do
               content: [
                 %Node{
                   tag: "chat",
-                  attrs: %{"jid" => "222222222@s.whatsapp.net", "name" => "Bob"},
+                  attrs: %{
+                    "jid" => "123456789@g.us",
+                    "subject" => "Team Ops",
+                    "count" => "7",
+                    "last" => "1730000009",
+                    "pin" => "0",
+                    "archived" => "1",
+                    "mute_t" => "1730001234"
+                  },
                   content: nil
                 }
               ]
@@ -273,10 +289,89 @@ defmodule ExWapp.WhatsmeowParityTest do
 
     chats = wait_for_chats(session, 2)
 
-    assert Enum.any?(chats, &(&1.jid == "111111111@s.whatsapp.net" and &1.name == "Alice"))
-    assert Enum.any?(chats, &(&1.jid == "222222222@s.whatsapp.net" and &1.name == "Bob"))
+    alice = Enum.find(chats, &(&1.jid == "111111111@s.whatsapp.net"))
+    assert alice
+    assert alice.name == "Alice"
+    assert alice.unread_count == 3
+    assert alice.last_message_timestamp == 1_730_000_001
+    assert alice.pinned
+    refute alice.archived
+    assert is_nil(alice.muted_until)
+    refute alice.is_group
+
+    group = Enum.find(chats, &(&1.jid == "123456789@g.us"))
+    assert group
+    assert group.name == "Team Ops"
+    assert group.unread_count == 7
+    assert group.last_message_timestamp == 1_730_000_009
+    refute group.pinned
+    assert group.archived
+    assert group.muted_until == 1_730_001_234
+    assert group.is_group
+
+    groups = ExWapp.list_groups(session)
+    assert Enum.map(groups, & &1.jid) == ["123456789@g.us"]
 
     GenServer.stop(session)
+  end
+
+  test "group create notifications upsert group chats" do
+    {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
+
+    notification = %Node{
+      tag: "notification",
+      attrs: %{
+        "id" => "GROUP_CREATE_1",
+        "type" => "w:gp2",
+        "from" => "987654321@g.us"
+      },
+      content: [
+        %Node{
+          tag: "create",
+          attrs: %{},
+          content: [
+            %Node{
+              tag: "group",
+              attrs: %{
+                "id" => "987654321@g.us",
+                "subject" => "Project Squad",
+                "creation" => "1730000200"
+              },
+              content: nil
+            }
+          ]
+        }
+      ]
+    }
+
+    send(session, {:connection_event, {:connection_message, notification}})
+
+    _chats = wait_for_chats(session, 1)
+    groups = wait_for_groups(session, 1)
+
+    assert length(groups) == 1
+    group = hd(groups)
+    assert group.jid == "987654321@g.us"
+    assert group.name == "Project Squad"
+    assert group.last_message_timestamp == 1_730_000_200
+    assert group.is_group
+
+    GenServer.stop(session)
+  end
+
+  defp wait_for_groups(session, expected_count, attempts \\ 20)
+
+  defp wait_for_groups(session, _expected_count, 0), do: ExWapp.list_groups(session)
+
+  defp wait_for_groups(session, expected_count, attempts) do
+    groups = ExWapp.list_groups(session)
+
+    if length(groups) >= expected_count do
+      groups
+    else
+      Process.sleep(25)
+      wait_for_groups(session, expected_count, attempts - 1)
+    end
   end
 
   defp wait_for_chats(session, expected_count, attempts \\ 20)

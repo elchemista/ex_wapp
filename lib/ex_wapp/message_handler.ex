@@ -310,56 +310,53 @@ defmodule ExWapp.MessageHandler do
   end
 
   defp handle_group_notification(attrs, content, session, state) do
-    group_jid = Map.get(attrs, "from", "")
+    group_jid = normalize_jid(Map.get(attrs, "from", ""))
 
-    # Extract group info changes
-    case find_child_node(content, "add") || find_child_node(content, "remove") ||
-           find_child_node(content, "subject") do
-      %Node{tag: "subject", attrs: subj_attrs} ->
-        subject = Map.get(subj_attrs, "subject", "")
+    if target = chat_target(session, state) do
+      if group_jid != "" do
+        metadata =
+          %{is_group: true}
+          |> maybe_put_sync_metadata(:name, extract_group_subject(content))
+          |> maybe_put_sync_metadata(
+            :last_message_timestamp,
+            extract_group_event_timestamp(content)
+          )
 
-        if target = chat_target(session, state) do
-          Chat.update_name(target, group_jid, subject)
-        end
-
-      _ ->
-        :ok
+        Chat.merge_metadata(target, group_jid, metadata)
+      end
     end
 
     {:ok, state}
   end
 
   defp handle_account_sync(content, session, state) do
-    # Look for history sync blob
-    case find_child_node(content, "collection") do
-      %Node{attrs: %{"name" => "regular_high"}, content: items} when is_list(items) ->
-        # Process history sync items
-        process_history_items(items, chat_target(session, state))
-
-      _ ->
-        :ok
-    end
+    process_sync_collections(content, chat_target(session, state))
 
     {:ok, state}
   end
 
   defp handle_server_sync(content, session, state) do
-    # Server sync can contain chat/message data
-    case find_child_node(content, "collection") do
-      %Node{content: items} when is_list(items) ->
-        process_history_items(items, chat_target(session, state))
-
-      _ ->
-        :ok
-    end
+    process_sync_collections(content, chat_target(session, state))
 
     {:ok, state}
   end
 
-  defp process_history_items(items, session) when is_list(items) do
+  defp process_sync_collections(content, target) when is_list(content) and not is_nil(target) do
+    Enum.each(content, fn
+      %Node{tag: "collection", content: items} when is_list(items) ->
+        process_history_items(items, target)
+
+      _ ->
+        :ok
+    end)
+  end
+
+  defp process_sync_collections(_, _), do: :ok
+
+  defp process_history_items(items, target) when is_list(items) and not is_nil(target) do
     Enum.each(items, fn
       %Node{tag: "item", content: item_content} ->
-        process_history_item(item_content, session)
+        process_history_item(item_content, target)
 
       _ ->
         :ok
@@ -368,17 +365,18 @@ defmodule ExWapp.MessageHandler do
 
   defp process_history_items(_, _), do: :ok
 
-  defp process_history_item(content, target) when is_list(content) do
-    # Look for conversation data
+  defp process_history_item(content, target) when is_list(content) and not is_nil(target) do
     case find_child_node(content, "chat") do
       %Node{attrs: chat_attrs} ->
-        jid = Map.get(chat_attrs, "jid", "")
-        name = Map.get(chat_attrs, "name")
+        upsert_chat_from_sync_attrs(target, chat_attrs)
 
-        if jid != "" and not is_nil(target) do
-          # Create or update chat
-          Chat.get_or_create(target, jid, name: name)
-        end
+      _ ->
+        :ok
+    end
+
+    case find_child_node(content, "group") do
+      %Node{attrs: group_attrs} ->
+        upsert_chat_from_sync_attrs(target, group_attrs, %{is_group: true})
 
       _ ->
         :ok
@@ -572,6 +570,202 @@ defmodule ExWapp.MessageHandler do
   end
 
   defp parse_timestamp(ts) when is_integer(ts), do: ts
+
+  defp upsert_chat_from_sync_attrs(target, attrs, extra_metadata \\ %{})
+
+  defp upsert_chat_from_sync_attrs(target, attrs, extra_metadata)
+       when is_map(attrs) and is_map(extra_metadata) do
+    jid =
+      attrs
+      |> find_first_attr(["jid", "id", "chat_jid"])
+      |> normalize_jid()
+
+    if jid != "" do
+      metadata =
+        %{}
+        |> maybe_put_sync_metadata(:name, extract_sync_name(attrs))
+        |> maybe_put_sync_metadata(
+          :unread_count,
+          extract_sync_non_neg_integer(attrs, ["count", "unread", "unread_count"])
+        )
+        |> maybe_put_sync_metadata(
+          :last_message_timestamp,
+          extract_sync_non_neg_integer(attrs, ["t", "last", "last_message_timestamp", "timestamp"])
+        )
+        |> maybe_put_sync_metadata(:pinned, extract_sync_boolean(attrs, ["pin", "pinned"]))
+        |> maybe_put_sync_metadata(
+          :archived,
+          extract_sync_boolean(attrs, ["archive", "archived"])
+        )
+        |> maybe_put_sync_metadata(:is_group, JID.is_group?(jid))
+        |> maybe_put_sync_mute(attrs)
+        |> Map.merge(extra_metadata)
+
+      Chat.merge_metadata(target, jid, metadata)
+    end
+  end
+
+  defp upsert_chat_from_sync_attrs(_target, _attrs, _extra_metadata), do: :ok
+
+  defp maybe_put_sync_mute(metadata, attrs) do
+    case extract_sync_integer(attrs, ["mute", "mute_t", "mute_until", "muted_until"]) do
+      {:ok, value} when value > 0 -> Map.put(metadata, :muted_until, value)
+      {:ok, _value} -> Map.put(metadata, :muted_until, nil)
+      :error -> metadata
+    end
+  end
+
+  defp extract_group_subject(content) when is_list(content) do
+    create_node = find_child_node(content, "create")
+    subject_node = find_child_node(content, "subject")
+
+    create_group_node =
+      case create_node do
+        %Node{content: create_content} when is_list(create_content) ->
+          find_child_node(create_content, "group")
+
+        _ ->
+          nil
+      end
+
+    first_non_empty([
+      node_attr(subject_node, "subject"),
+      node_attr(create_group_node, "subject"),
+      node_attr(create_group_node, "name"),
+      node_attr(create_node, "subject")
+    ])
+  end
+
+  defp extract_group_subject(_), do: nil
+
+  defp extract_group_event_timestamp(content) when is_list(content) do
+    create_node = find_child_node(content, "create")
+    subject_node = find_child_node(content, "subject")
+
+    create_group_node =
+      case create_node do
+        %Node{content: create_content} when is_list(create_content) ->
+          find_child_node(create_content, "group")
+
+        _ ->
+          nil
+      end
+
+    first_integer_value([
+      node_attr(subject_node, "t"),
+      node_attr(create_group_node, "creation"),
+      node_attr(create_group_node, "t"),
+      node_attr(create_node, "t")
+    ])
+  end
+
+  defp extract_group_event_timestamp(_), do: nil
+
+  defp maybe_put_sync_metadata(metadata, _key, nil), do: metadata
+  defp maybe_put_sync_metadata(metadata, key, value), do: Map.put(metadata, key, value)
+
+  defp extract_sync_name(attrs) when is_map(attrs) do
+    attrs
+    |> find_first_attr(["name", "display_name", "subject", "title"])
+    |> normalize_optional_text()
+  end
+
+  defp extract_sync_name(_), do: nil
+
+  defp find_first_attr(attrs, keys) when is_map(attrs) and is_list(keys) do
+    Enum.find_value(keys, fn key ->
+      case Map.get(attrs, key) do
+        nil -> nil
+        value -> value
+      end
+    end)
+  end
+
+  defp find_first_attr(_, _), do: nil
+
+  defp extract_sync_non_neg_integer(attrs, keys) do
+    case extract_sync_integer(attrs, keys) do
+      {:ok, value} when value >= 0 -> value
+      _ -> nil
+    end
+  end
+
+  defp extract_sync_integer(attrs, keys) when is_map(attrs) and is_list(keys) do
+    Enum.reduce_while(keys, :error, fn key, _acc ->
+      case parse_sync_integer(Map.get(attrs, key)) do
+        {:ok, value} -> {:halt, {:ok, value}}
+        :error -> {:cont, :error}
+      end
+    end)
+  end
+
+  defp extract_sync_integer(_, _), do: :error
+
+  defp extract_sync_boolean(attrs, keys) when is_map(attrs) and is_list(keys) do
+    Enum.reduce_while(keys, nil, fn key, _acc ->
+      case parse_sync_boolean(Map.get(attrs, key)) do
+        {:ok, value} -> {:halt, value}
+        :error -> {:cont, nil}
+      end
+    end)
+  end
+
+  defp extract_sync_boolean(_, _), do: nil
+
+  defp first_integer_value(values) when is_list(values) do
+    Enum.reduce_while(values, nil, fn value, _acc ->
+      case parse_sync_integer(value) do
+        {:ok, parsed} -> {:halt, parsed}
+        :error -> {:cont, nil}
+      end
+    end)
+  end
+
+  defp parse_sync_integer(value) when is_integer(value), do: {:ok, value}
+
+  defp parse_sync_integer(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> Integer.parse()
+    |> case do
+      {parsed, _rest} -> {:ok, parsed}
+      :error -> :error
+    end
+  end
+
+  defp parse_sync_integer(_), do: :error
+
+  defp parse_sync_boolean(value) when is_boolean(value), do: {:ok, value}
+  defp parse_sync_boolean(1), do: {:ok, true}
+  defp parse_sync_boolean(0), do: {:ok, false}
+
+  defp parse_sync_boolean(value) when is_binary(value) do
+    case String.downcase(String.trim(value)) do
+      "1" -> {:ok, true}
+      "true" -> {:ok, true}
+      "yes" -> {:ok, true}
+      "on" -> {:ok, true}
+      "0" -> {:ok, false}
+      "false" -> {:ok, false}
+      "no" -> {:ok, false}
+      "off" -> {:ok, false}
+      _ -> :error
+    end
+  end
+
+  defp parse_sync_boolean(_), do: :error
+
+  defp normalize_optional_text(%JID{} = jid), do: normalize_optional_text(JID.to_string(jid))
+
+  defp normalize_optional_text(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: value
+  end
+
+  defp normalize_optional_text(_), do: nil
+
+  defp node_attr(%Node{attrs: attrs}, key), do: Map.get(attrs, key)
+  defp node_attr(_, _), do: nil
 
   defp parse_enc_version(version) when is_integer(version), do: version
 
