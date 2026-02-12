@@ -59,7 +59,12 @@ defmodule ExWapp.Session.Outbound do
 
     with {:ok, group_info} <- query_group_info_worker(state, group_jid),
          {:ok, updated_sessions, prekey_bundles, distribution_targets} <-
-           ensure_group_sender_key_sessions_worker(state, group_jid, group_info.participants),
+           ensure_group_sender_key_sessions_worker(
+             state,
+             group_jid,
+             group_info.participants,
+             group_info.addressing_mode
+           ),
          proto <- Messages.build_text_proto(text, []),
          {:ok, payload} <- Message.encode(proto),
          {:ok, distribution_payload, skmsg_payload} <-
@@ -153,14 +158,27 @@ defmodule ExWapp.Session.Outbound do
     end
   end
 
-  defp ensure_group_sender_key_sessions_worker(state, group_jid, participant_jids) do
+  defp ensure_group_sender_key_sessions_worker(
+         state,
+         group_jid,
+         participant_jids,
+         addressing_mode
+       ) do
     signal_sessions = state.signal_sessions || SessionStore.new()
     own_base_jid = Account.local_account_base_jid(state.store)
     own_lid_jid = Account.local_account_lid_jid(state.store)
     own_device_id = Account.local_account_device_id(state.store)
 
+    # Only add the own JID variant that matches the group's addressing_mode.
+    # Mixing PN and LID in a LID-addressed message causes the server to drop it.
+    own_jids_for_query =
+      case addressing_mode do
+        "lid" -> [own_lid_jid]
+        _ -> [own_base_jid]
+      end
+
     query_jids =
-      (participant_jids ++ [own_base_jid, own_lid_jid])
+      (participant_jids ++ own_jids_for_query)
       |> Enum.reject(&(&1 in [nil, ""]))
       |> Enum.map(&strip_device_from_jid/1)
       |> Enum.uniq()
@@ -188,6 +206,7 @@ defmodule ExWapp.Session.Outbound do
         end
       end)
       |> JIDUtils.normalize_target_list()
+      |> filter_group_targets_for_addressing_mode(addressing_mode)
       |> Enum.reject(
         &group_current_device_target?(&1, own_device_id, [own_base_jid, own_lid_jid])
       )
@@ -203,14 +222,19 @@ defmodule ExWapp.Session.Outbound do
       |> Enum.reject(fn {user, server} -> user == "" or server == "" end)
       |> MapSet.new()
 
+    lid_mapping = Account.load_lid_mapping(state.store)
+
     devices_needing_prekeys =
       Enum.filter(distribution_targets, fn device_jid ->
+        device_jid = normalize_jid_with_device(device_jid)
+        signal_jid = JIDUtils.resolve_signal_encryption_jid(device_jid, lid_mapping)
         target_identity = JIDUtils.identity(device_jid)
 
         # Pragmatic sync fix: always refresh our own targets so distribution fanout
         # to phone/other linked devices starts with a clean pkmsg bootstrap.
         MapSet.member?(own_identity_set, target_identity) or
-          not SessionStore.has_session?(signal_sessions, device_jid)
+          not (SessionStore.has_session?(signal_sessions, signal_jid) or
+                 SessionStore.has_session?(signal_sessions, device_jid))
       end)
 
     {updated_sessions, prekey_bundles} =
@@ -264,6 +288,25 @@ defmodule ExWapp.Session.Outbound do
     MapSet.member?(own_identity_set, target_identity) and
       current_device_target?(target_jid, own_device_id)
   end
+
+  defp filter_group_targets_for_addressing_mode(targets, "lid") when is_list(targets) do
+    {lid_targets, mismatched_targets} =
+      Enum.split_with(targets, fn target_jid ->
+        target_jid
+        |> strip_device_from_jid()
+        |> JIDUtils.lid_jid?()
+      end)
+
+    if mismatched_targets != [] do
+      Logger.warning(
+        "[SEND] Dropping non-LID targets in lid addressing mode: #{inspect(mismatched_targets)}"
+      )
+    end
+
+    lid_targets
+  end
+
+  defp filter_group_targets_for_addressing_mode(targets, _), do: targets
 
   defp build_group_encrypted_message_node(
          group_jid,
@@ -391,10 +434,13 @@ defmodule ExWapp.Session.Outbound do
     if is_nil(group_node) do
       {:error, :missing_group_node}
     else
+      addressing_mode = Map.get(group_node.attrs || %{}, "addressing_mode")
+
       participants =
         (group_node.content || [])
         |> Enum.filter(&match?(%Binary.Node{tag: "participant"}, &1))
-        |> Enum.flat_map(&extract_group_participant_identities/1)
+        |> Enum.map(&extract_group_participant_identity(&1, addressing_mode))
+        |> Enum.reject(&(&1 == ""))
         |> JIDUtils.normalize_target_list()
         |> Enum.map(&strip_device_from_jid/1)
         |> Enum.reject(&(&1 == group_jid))
@@ -403,7 +449,6 @@ defmodule ExWapp.Session.Outbound do
       if participants == [] do
         {:error, :empty_group_participants}
       else
-        addressing_mode = Map.get(group_node.attrs || %{}, "addressing_mode")
         {:ok, %{participants: participants, addressing_mode: addressing_mode}}
       end
     end
@@ -415,18 +460,18 @@ defmodule ExWapp.Session.Outbound do
   defp parse_group_info_response(_response, _group_jid),
     do: {:error, :invalid_group_info_response}
 
-  defp extract_group_participant_identities(%Binary.Node{attrs: attrs}) when is_map(attrs) do
-    [
-      attrs["jid"],
-      attrs["lid"],
-      attrs["phone_number"],
-      attrs["pn"]
-    ]
-    |> Enum.map(&normalize_jid_with_device/1)
-    |> Enum.reject(&(&1 == ""))
+  defp extract_group_participant_identity(%Binary.Node{attrs: attrs}, addressing_mode)
+       when is_map(attrs) do
+    lid = normalize_jid_with_device(attrs["lid"])
+    pn = normalize_jid_with_device(attrs["jid"] || attrs["pn"] || attrs["phone_number"])
+
+    case addressing_mode do
+      "lid" -> if lid != "", do: lid, else: pn
+      _ -> if pn != "", do: pn, else: lid
+    end
   end
 
-  defp extract_group_participant_identities(_), do: []
+  defp extract_group_participant_identity(_, _), do: ""
 
   defp ensure_signal_session_worker(state, jid) do
     signal_sessions = state.signal_sessions || SessionStore.new()
@@ -974,7 +1019,8 @@ defmodule ExWapp.Session.Outbound do
                       signal_jid,
                       local_identity,
                       bundle,
-                      local_reg_id
+                      local_reg_id,
+                      force: true
                     ) do
                  {:ok, created_session, base_key, updated_sessions} ->
                    updated_sessions =

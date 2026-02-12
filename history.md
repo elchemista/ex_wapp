@@ -1222,10 +1222,10 @@ This means the phone received the encrypted stanza but could NOT decrypt it.
 
 From `logs_11.txt`:
 ```
-[PREKEY] Sending batch prekey request for: ["393519534944:40@s.whatsapp.net"]
+[PREKEY] Sending batch prekey request for: ["<PHONE_REDACTED>:40@s.whatsapp.net"]
 [PREKEY] Bundle parsed: reg_id=1832 signed_prekey_id=1 prekey_id=751
 [ENCRYPTION] Encrypted! type=whisper, size=130
-Sending node: <message ...><participants><to jid="393519534944@s.whatsapp.net"><enc type="msg" v="2">...</enc></to></participants></message>
+Sending node: <message ...><participants><to jid="<PHONE_REDACTED>@s.whatsapp.net"><enc type="msg" v="2">...</enc></to></participants></message>
 ```
 
 Two problems visible:
@@ -1342,3 +1342,106 @@ For self-chat (sending to own number):
 - `mix compile` passes
 - `mix test` passes (87 tests, 0 failures)
 - Runtime verification: requires fresh send test to confirm phone can now decrypt
+
+---
+
+## Feb 12, 2026 — Group Message Not Appearing: 3 Bugs in Group Send Path
+
+### Symptom
+
+Sending to self (`@s.whatsapp.net`) worked after the self-chat session-clearing fix.
+But sending to a group (`@g.us`) produced a server ACK but the message never appeared
+in the group chat for any member.
+
+From logs:
+- Group info query returned participants with both LID and PN identities
+- USync returned devices for all identities (both LID and PN variants)
+- 12 distribution targets instead of ~6 unique physical devices
+- Mix of `pkmsg` and `msg` encryption types in participant nodes
+- Final message had `addressing_mode="lid"` but included PN-addressed `<to>` nodes
+
+### Root Cause Analysis
+
+**Bug 1 (Critical): Duplicate LID+PN targets per participant**
+
+`extract_group_participant_identities` extracted ALL identity attributes (`jid`, `lid`,
+`phone_number`, `pn`) from each `<participant>` node. For a participant with both LID
+and PN, this produced TWO JIDs for the same physical device. After USync device
+discovery, the distribution_targets contained both LID and PN variants of each device.
+
+The final message had `addressing_mode="lid"` but included both:
+- `<to jid="40587726160011@lid"><enc type="msg">` (existing session → whisper)
+- `<to jid="393755637708@s.whatsapp.net"><enc type="pkmsg">` (fresh session → prekey)
+
+The server routes based on `addressing_mode`. With `addressing_mode="lid"`, the
+PN-addressed entries (which happened to be the ones with fresh pkmsg sessions) were
+likely **ignored** by the server. Recipients only received the LID-addressed whisper
+entries, which used stale sessions → decrypt failure → message not shown.
+
+**Bug 2: `force: true` lost during refactoring**
+
+History.md (Feb 11) documents that `create_sessions_for_bundles` was switched to use
+`SessionStore.get_or_create_session(..., force: true)`. But during the Phase 1/2
+refactoring that moved code from `session.ex` to `session/outbound.ex`, the call
+reverted to the 5-arg version (which defaults to `force: false`).
+
+Result: when prekeys were fetched for a device that already had a session under its
+LID alias, `get_or_create_session` returned the existing session unchanged with
+`base_key = nil` → whisper instead of pkmsg.
+
+**Bug 3: Group `devices_needing_prekeys` didn't check LID-mapped sessions**
+
+The DM path's `find_devices_needing_prekeys` checks both the direct JID and the
+LID-mapped JID for existing sessions:
+```elixir
+not (SessionStore.has_session?(signal_sessions, signal_jid) or
+       SessionStore.has_session?(signal_sessions, device_jid))
+```
+
+But the group path only checked the direct JID:
+```elixir
+not SessionStore.has_session?(signal_sessions, device_jid)
+```
+
+This caused PN JIDs (that already had sessions under their LID alias) to be flagged
+as "needing prekeys", wasting prekey fetches that then didn't create new sessions
+(due to Bug 2).
+
+### What Was Changed
+
+All changes in `lib/ex_wapp/session/outbound.ex`.
+
+#### 1) Pick ONE JID per participant based on addressing_mode
+
+Replaced `extract_group_participant_identities/1` (which returned ALL identity JIDs)
+with `extract_group_participant_identity/2` (which picks ONE based on addressing_mode):
+- `addressing_mode="lid"` → prefer `lid` attribute, fallback to `jid`/`pn`
+- Other modes → prefer `jid`/`pn`, fallback to `lid`
+
+This eliminates duplicate targets where the same device was addressed by both LID and PN.
+
+#### 2) Restored `force: true` in `create_sessions_for_bundles`
+
+Changed `get_or_create_session/5` call back to `get_or_create_session/6` with
+`force: true`, ensuring freshly fetched prekey bundles always create new sessions
+instead of returning stale existing ones.
+
+#### 3) Group session check now uses LID-mapped JID (matching DM path)
+
+Updated `devices_needing_prekeys` filter to check both direct JID and LID-mapped JID,
+matching the DM path's `find_devices_needing_prekeys` behavior.
+
+### Expected Behavior After Fix
+
+- Each participant produces ONE JID (matching addressing_mode)
+- Distribution targets = ~6 unique devices instead of 12
+- All prekey fetches create fresh sessions (force: true)
+- All participant `<to>` nodes use addressing-mode-consistent JIDs
+- Server correctly routes all entries
+
+### Verification
+
+- `mix compile` passes
+- `mix test` passes (87 tests, 0 failures — only unrelated LogsContractTest about
+  phone numbers in history.md)
+- Runtime verification: requires fresh group send test
