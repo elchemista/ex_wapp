@@ -228,12 +228,11 @@ defmodule ExWapp.MessageHandler do
     |> append_actions(ack_actions)
   end
 
-  defp append_actions({:ok, state}, extra_actions) do
-    {:ok, state, extra_actions}
-  end
-
-  defp append_actions({:ok, state, actions}, extra_actions) do
-    {:ok, state, actions ++ extra_actions}
+  defp append_actions(result, extra_actions) do
+    case result do
+      {:ok, state} -> {:ok, state, extra_actions}
+      {:ok, state, actions} -> {:ok, state, actions ++ extra_actions}
+    end
   end
 
   defp handle_encrypt_notification(_content, _session, state) do

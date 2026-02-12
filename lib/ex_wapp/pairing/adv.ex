@@ -10,7 +10,6 @@ defmodule ExWapp.Pairing.ADV do
   alias Ed25519
   alias WAAdv.{ADVDeviceIdentity, ADVSignedDeviceIdentity, ADVSignedDeviceIdentityHMAC}
 
-  @adv_prefix_account_signature <<6, 0>>
   @adv_prefix_device_signature_generate <<6, 1>>
   @adv_hosted_prefix_device_identity_account_signature <<6, 5>>
   @adv_hosted_prefix_device_identity_device_signature_verification <<6, 6>>
@@ -291,22 +290,6 @@ defmodule ExWapp.Pairing.ADV do
     {:error, :adv_invalid_account_signature_fields}
   end
 
-  defp verify_account_signature(
-         %ADVSignedDeviceIdentity{} = signed,
-         _details,
-         identity_pub,
-         hosted?
-       ) do
-    details_inner = signed.details
-    message = account_signature_prefix(hosted?) <> details_inner <> identity_pub
-
-    if Ed25519.valid_signature?(signed.accountSignature, message, signed.accountSignatureKey) do
-      :ok
-    else
-      {:error, :adv_invalid_account_signature}
-    end
-  end
-
   defp generate_device_signature(
          %ADVSignedDeviceIdentity{} = signed,
          _details,
@@ -484,9 +467,6 @@ defmodule ExWapp.Pairing.ADV do
        do: {:ok, {pub, priv}}
 
   defp extract_identity(_), do: {:error, :invalid_identity_keypair}
-
-  defp account_signature_prefix(true), do: @adv_hosted_prefix_device_identity_account_signature
-  defp account_signature_prefix(false), do: @adv_prefix_account_signature
 
   defp device_signature_prefix(true),
     do: @adv_hosted_prefix_device_identity_device_signature_verification

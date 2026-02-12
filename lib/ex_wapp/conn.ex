@@ -479,10 +479,6 @@ defmodule ExWapp.Conn do
     {:ok, %Binary.Node{tag: "xmlstreamstart", attrs: attrs, content: nil}}
   end
 
-  defp build_handshake_node do
-    {:ok, %Binary.Node{tag: "handshake", attrs: %{}, content: nil}}
-  end
-
   defp stream_resource(%{stream_resource: resource}) when is_binary(resource) and resource != "",
     do: resource
 
@@ -493,15 +489,6 @@ defmodule ExWapp.Conn do
     do: phone_id
 
   defp stream_resource(_), do: "EX_WAPP"
-
-  defp stream_id(%{stream_id: id}) when is_binary(id) and id != "", do: id
-  defp stream_id(_), do: generate_stream_id()
-
-  defp generate_stream_id do
-    4
-    |> :crypto.strong_rand_bytes()
-    |> Base.encode16(case: :lower)
-  end
 
   defp maybe_put_attr(attrs, key, value), do: Map.put(attrs, key, value)
 end

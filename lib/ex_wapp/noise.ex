@@ -403,9 +403,6 @@ defmodule ExWapp.Noise do
   defp ensure_binary(value) when is_list(value), do: :erlang.list_to_binary(value)
   defp ensure_binary(value), do: value
 
-  defp maybe_persist(store, data) when is_map(data), do: Store.persist(store, data)
-  defp maybe_persist(_store, _data), do: :ok
-
   defp hex(data) do
     Base.encode16(data, case: :lower)
   end

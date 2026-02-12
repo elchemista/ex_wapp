@@ -814,3 +814,268 @@ This closes partial batch-response gaps that could leave some own targets on sta
   4. send stanza with correct participant payload types and sender-key envelope for groups
 - Remaining validation is live runtime parity check on a fresh log:
   - confirm own-device participants are consistently refreshed and emitted as expected during real sends.
+
+---
+
+## Feb 12, 2026 — Sent Messages Not Visible on Phone: Device-Identity Missing accountSignatureKey
+
+### Symptom
+
+Outgoing messages were accepted by server (`ack class=message`), encrypted for both
+recipient and own device (phone), but did NOT appear on the sender's phone or other
+linked devices. From `logs_10.txt`:
+
+```
+[SEND] Using adv_self_signed device identity: 152 bytes
+[SEND] Including device-identity in message
+[ACK] id=... class=message
+```
+
+Message was sent, server ACKed, but phone silently dropped it.
+
+### Root Cause Analysis
+
+**Three bugs identified by comparing with whatsmeow and Baileys:**
+
+#### Bug 1 (Critical): `device-identity` encoded WITHOUT `accountSignatureKey`
+
+The `<device-identity>` node in outgoing messages used the `adv_self_signed` payload,
+which was specifically encoded **without** `accountSignatureKey` for the pair-device-sign
+ACK during pairing. But outgoing **messages** require the full ADV identity **with**
+`accountSignatureKey` so that recipients can verify our device identity.
+
+From whatsmeow `send.go`:
+```go
+// For pairing ACK: removes accountSignatureKey
+ownDeviceIdentity := proto.Clone(cli.Store.Account).(*waProto.ADVSignedDeviceIdentity)
+ownDeviceIdentity.AccountSignatureKey = nil
+
+// For messages: uses full Store.Account (WITH accountSignatureKey)
+func (cli *Client) makeDeviceIdentityNode() waBinary.Node {
+    identity := cli.Store.Account  // Full identity
+    return waBinary.Node{Tag: "device-identity", Content: identity}
+}
+```
+
+In ex_wapp, the `get_device_identity_node` function matched `adv_self_signed` FIRST
+(the pairing-only encoding), so message device-identity was always missing
+`accountSignatureKey`. Without it, the phone can't verify our device identity and
+silently drops the message.
+
+**Fix**: Reordered `get_device_identity_node` to prefer `adv.signed` struct encoded
+with `include_signature_key: true` (matching whatsmeow). The `adv_self_signed` payload
+is now only used for pair-device-sign ACK (in `pairing.ex`), never for messages.
+
+#### Bug 2: Self-chat detection failed (user-part comparison)
+
+When sending to your own number, `self_chat_destination?` was always `false` because it
+compared `{user, server}` tuples. If the own JID came from a different source or had
+different server suffix, the tuples wouldn't match.
+
+whatsmeow compares **user parts only**:
+```go
+if jid.User == ownJID.User || jid.User == ownLID.User { ... }
+```
+
+**Fix**: Changed self-chat detection to compare user parts only via new `jid_user_part/1`
+helper. This matches whatsmeow behavior and handles PN/LID addressing differences.
+
+#### Bug 3: `phash` computation slightly wrong
+
+The participant hash used `first 6 chars of base64(full_hash)` instead of
+`base64(first 6 bytes of hash)` (whatsmeow format). While the server accepted both,
+aligning with whatsmeow is safer.
+
+**Fix**: Changed to `Base.encode64(first_6_bytes, padding: false)`.
+
+### What Was Changed
+
+All changes in `lib/ex_wapp/session.ex`:
+
+1. **`get_device_identity_node/1`**: Reordered to prefer `adv.signed` struct with
+   `include_signature_key: true` over `adv_self_signed`. Removed the `adv_self_signed`
+   path entirely from message sending.
+
+2. **Self-chat detection** (in `do_send_encrypted`): Changed from `MapSet` of
+   `{user, server}` identity tuples to `MapSet` of user parts only. Added
+   `jid_user_part/1` helper.
+
+3. **`generate_participant_hash_v2/1`**: Changed from `binary_part(Base.encode64(hash), 0, 6)`
+   to `Base.encode64(binary_part(hash, 0, 6), padding: false)` to match whatsmeow.
+
+### Key Takeaway
+
+WhatsApp `device-identity` has **two different encoding requirements**:
+- **Pair-device-sign ACK**: `ADVSignedDeviceIdentity` **without** `accountSignatureKey`
+- **Outgoing messages**: `ADVSignedDeviceIdentity` **with** `accountSignatureKey`
+
+Using the pairing-only encoding for messages causes recipients to silently drop the
+message because they can't verify the sender's device identity.
+
+### Verification
+
+- `mix compile` passes
+- `mix test` passes (70 tests, 0 failures)
+- Runtime verification: requires fresh pair + send test to confirm messages now
+  appear on phone
+
+---
+
+## Feb 12, 2026 — Messages Not Arriving: Prekey Fetch Using LID Instead of PN JIDs
+
+### Symptom
+
+After applying the device-identity fix, messages were sent (server ACKed) but still not
+arriving at the recipient's phone. Logs showed:
+
+```
+Discovered recipient devices: ["6287865904022@s.whatsapp.net"]    ← USync returned PN
+Fetching prekeys for 2 devices: ["203139403767907@lid", ...]      ← Prekey fetched for LID!
+Encrypting target=6287865904022@s.whatsapp.net using mapped signal_jid=203139403767907@lid
+```
+
+The prekey IQ request sent `203139403767907@lid` to the server instead of
+`6287865904022@s.whatsapp.net`.
+
+### Root Cause
+
+In `session.ex` line ~2094 (the DM send worker), `devices_needing_prekeys` was being
+remapped through `resolve_signal_encryption_jid()` via `lid_mapping` **before** the
+prekey fetch IQ was sent to the server:
+
+```elixir
+# BEFORE (BUG):
+devices_needing_prekeys =
+  Enum.filter(all_device_jids, fn device_jid -> ... end)
+  |> Enum.map(&resolve_signal_encryption_jid(&1, lid_mapping))  # ← remaps PN to LID
+  |> normalize_target_list()
+```
+
+This caused the `<iq xmlns="encrypt">` prekey request to use LID JIDs. But whatsmeow
+fetches prekeys using the **original PN JIDs** from usync, NOT LID-mapped JIDs.
+
+In whatsmeow `send.go:1261-1289`:
+- `sessionAddressToJID` maps LID signal addresses **back** to original PN JIDs
+- `retryDevices` contains PN JIDs (mapped back from LID addresses)
+- `fetchPreKeysNoError(retryDevices)` sends prekey request with PN JIDs
+- LID mapping is used **only** for Signal session storage/encryption, not server requests
+
+The prekey response for a LID may return a bundle for a different device identity or
+fail silently, causing the recipient to be unable to decrypt the message.
+
+### Fix
+
+Removed the LID remapping from the prekey fetch list. The `resolve_signal_encryption_jid`
+mapping is still used correctly in `encrypt_for_targets()` for Signal session encryption,
+but the prekey IQ request now uses the original PN JIDs from usync:
+
+```elixir
+# AFTER (FIXED):
+devices_needing_prekeys =
+  Enum.filter(all_device_jids, fn device_jid -> ... end)
+  |> normalize_target_list()   # ← no LID remapping, use PN JIDs for server request
+```
+
+### Key Insight
+
+WhatsApp protocol uses two JID identities for the same device:
+- **Wire JID (PN)**: Used for server-facing operations (usync, prekey fetch, `<to>` nodes)
+- **Encryption JID (LID)**: Used for Signal session storage and encryption
+
+These must NOT be mixed. Prekey fetch = server request = PN. Encryption = Signal session = LID.
+
+### Verification
+
+- `mix test` passes (80 tests, 0 failures)
+
+## Feb 12, 2026 — Wire JID vs Encryption JID Session Migration Fix
+
+### Symptom
+
+Sends were ACKed by server but still not rendering on phone/linked devices.
+Logs showed prekeys fetched and sessions created, but delivery/decrypt behavior was inconsistent.
+
+### Root Cause
+
+Our send path still diverged from whatsmeow in a critical place:
+
+1. We fetched prekeys by wire JID (PN) (correct), but then
+2. We did not consistently migrate/alias sessions to the mapped encryption JID (LID) before encryption.
+
+whatsmeow uses two identities simultaneously:
+- **wireIdentity**: PN JID for `<to jid="...">` and prekey fetch
+- **encryptionIdentity**: LID JID for Signal session address when mapping exists
+
+Without this split, sessions can be created under one identity and encrypted under another,
+causing devices to fail decrypt even though transport ACK is received.
+
+### Fix Implemented
+
+In `lib/ex_wapp/session.ex`:
+
+- `process_prekey_response/4` now loads LID mapping and passes it into session creation.
+- `create_sessions_for_bundles/6` now:
+  - resolves `signal_jid` via mapping for each wire bundle,
+  - creates session under `signal_jid`,
+  - aliases wire/session JIDs in store to keep continuity,
+  - stores bundle metadata for both wire and signal keys.
+- `encrypt_for_targets/5` now:
+  - always computes `signal_jid` from mapping,
+  - migrates/aliases existing wire session -> signal session when needed,
+  - encrypts using `signal_jid` while still emitting `<to jid="wire_jid">`.
+- Added helper `ensure_signal_session_alias/3` for deterministic PN->LID session aliasing.
+
+### Why This Matches Other Libraries
+
+This follows whatsmeow's `encryptMessageForDeviceAndWrap(wireIdentity, encryptionIdentity, ...)`
+pattern and its PN->LID session migration intent (`migrateSessionStore` behavior).
+
+### Verification
+
+- `mix compile` passes
+- `mix test test/send_path_test.exs` passes (10 tests, 0 failures)
+- `mix test test/send_path_test.exs test/whatsmeow_parity_test.exs test/signal_session_store_test.exs` passes (20 tests, 0 failures)
+
+## Feb 12, 2026 — Messages Still Not Arriving: Double Session Creation + Wrong phash
+
+### Symptom
+
+After the prekey fetch LID fix above, messages still didn't arrive at the recipient.
+Logs showed prekeys were now fetched using PN JIDs (correct), but encryption still failed
+because `encrypt_for_targets` unconditionally remapped wire JIDs to LID via
+`resolve_signal_encryption_jid`, creating a NEW session under the LID even though a
+valid session already existed under the PN JID from prekey fetch.
+
+### Root Cause 1: Double Session Creation in encrypt_for_targets
+
+`encrypt_for_targets` always called `resolve_signal_encryption_jid(target_jid, lid_mapping)`
+and used the resulting LID for encryption. Since no session existed under the LID (only under
+the PN from prekey fetch), it created a brand new session from the bundle — wasting the
+prekey-fetch session and producing ciphertext encrypted under the wrong session state.
+
+**Fix**: Added session-aware JID resolution in `encrypt_for_targets`:
+- If LID == wire JID (no mapping), use wire JID
+- If session exists under LID (migrated), use LID
+- If session exists under wire JID but NOT LID, use wire JID (preserves prekey-fetch session)
+- If no session under either, use wire JID (so prekey fetch session will be found)
+
+This matches whatsmeow's behavior where `migrateSessionStore` migrates sessions from PN→LID
+before encryption. Without that migration step, we must use whichever JID the session was
+created under.
+
+### Root Cause 2: phash Computed from Wrong Device Set
+
+`build_multi_device_encrypted_message_node` computed phash from `participant_nodes` — the
+encrypted `<to>` nodes, which exclude the current device. But whatsmeow computes phash from
+ALL usync-returned devices INCLUDING the current device (see `send.go:859`):
+```go
+phash := participantListHashV2(allDevices)  // allDevices includes current device
+```
+
+**Fix**: Added `all_usync_devices` list (before current-device filtering) through the send
+pipeline: `discover_and_fetch_prekeys` → `target_hints` → `do_send_encrypted` →
+`build_multi_device_encrypted_message_node`. phash is now computed from this full list.
+
+### Verification
+
+- `mix test` passes (80 tests, 0 failures)

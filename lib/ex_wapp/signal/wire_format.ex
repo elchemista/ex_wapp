@@ -19,8 +19,7 @@ defmodule ExWapp.Signal.WireFormat do
   require Logger
   import Bitwise
 
-  # Current Signal protocol version (message_version=3, current_version=3) - matches Go whatsmeow
-  @message_version 3
+  # Current Signal protocol version (current_version=3) - matches Go whatsmeow
   @current_version 3
   @version_byte 0x33
 
