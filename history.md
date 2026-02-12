@@ -1,5 +1,92 @@
 # ExWapp Development History
 
+## Feb 12, 2026 — Session Refactor Phase 1 (Isolation + OTP Worker Supervision)
+
+### Why
+
+The send path in `ExWapp.Session` had grown too large and hard to reason about:
+- many protocol/JID helper concerns were mixed into one module
+- send workers were started with raw `spawn_link/1`
+- worker lifecycle cleanup relied on link exits instead of explicit supervision/monitoring
+
+This made debugging send/sync failures difficult and increased risk of accidental regressions.
+
+### What changed
+
+1. Extracted pure helper modules from `Session`:
+- `lib/ex_wapp/session/jid_utils.ex`
+- `lib/ex_wapp/session/targets.ex`
+- `lib/ex_wapp/session/message_node.ex`
+
+2. Kept behavior but moved logic behind explicit module boundaries:
+- JID normalization, identity matching, PN/LID encryption JID resolution
+- target fanout resolution for recipient + own devices
+- participant node building and participant hash generation
+
+3. Replaced raw `spawn_link` send workers with per-session `Task.Supervisor`:
+- `Session` now starts a dedicated `Task.Supervisor` in `init/1`
+- `send_text` and retry path both start supervised workers through `start_send_worker/4`
+- workers are tracked with monitor refs (`send_worker_mons`) for deterministic cleanup
+- if send worker supervisor exits, it is restarted and worker maps are reset safely
+
+### Outcome
+
+- `mix compile` passes
+- `mix test` passes (`80 tests, 0 failures`)
+- code is now easier to inspect in smaller units while preserving current behavior
+- send worker execution is now more OTP-aligned and isolated from the main session process
+
+### Notes
+
+This is intentionally phase 1 refactoring of the critical message/session path.
+It improves structure and observability but does not claim, by itself, to fully solve
+every live multi-device delivery issue. Further protocol-level work (if needed) should
+now be easier to implement and verify thanks to these boundaries.
+
+## Feb 12, 2026 — Session Refactor Phase 2 (Module Split + Noise Simplification)
+
+### Why
+
+`lib/ex_wapp/session.ex` was still too large for fast debugging, and Noise still had
+an unnecessary backend behaviour abstraction even though only the Elixir engine is used.
+
+### What changed
+
+1. Split more `Session` responsibilities into dedicated modules:
+- `lib/ex_wapp/session/account.ex`
+  - account identity lookup (`base/lid/device`)
+  - lid mapping load
+  - `device-identity` node selection/encoding
+  - local registration/prekey node builders
+  - `tctoken` append logic
+- `lib/ex_wapp/session/iq.ex`
+  - prekey IQ request builder
+  - usync device query builder
+  - usync + prekey IQ response parsers
+- `lib/ex_wapp/session/retry.ex`
+  - outbound retry orchestration
+  - persisted outgoing-message text lookup
+- `lib/ex_wapp/session/subscribers.ex`
+  - QR/message subscriber management and cleanup
+
+2. `Session` now delegates to these modules; `session.ex` size dropped below 3k LOC.
+
+3. Simplified Noise architecture:
+- removed `lib/ex_wapp/noise/backend.ex` (behaviour abstraction)
+- `lib/ex_wapp/noise.ex` now uses only `ExWapp.Noise.Backends.Elixir`
+- removed runtime backend selection/options from Noise state
+
+4. Replaced core runtime `IO.puts` diagnostics in `lib/ex_wapp/conn.ex` with `Logger`
+calls (`error`/`warning`) to align with OTP logging practices.
+
+### Outcome
+
+- `lib/ex_wapp/session.ex` reduced to ~2993 LOC
+- `mix compile` passes
+- `mix test` passes (`80 tests, 0 failures`)
+- core transport/session flow is now split into more isolated components, with less
+  protocol parsing logic embedded directly in `Session`
+
 ## Feb 11, 2026 — Multi-Device Send: Own Devices Not Receiving Sent Messages
 
 ### Symptom

@@ -1,17 +1,15 @@
-defmodule ExWapp.Noise.Backends.Elixir do
+defmodule ExWapp.Noise.Engine do
   @moduledoc """
-  Pure Elixir implementation of the Noise handshake backend.
+  Pure Elixir implementation of the Noise handshake engine.
   """
-
-  @behaviour ExWapp.Noise.Backend
 
   alias ExWapp.Noise.Handshake
   alias ExWapp.Noise.HandshakeSecrets
   alias ExWapp.Transport.Frame
   alias WAWebProtobufsWa6.HandshakeMessage
-  alias WAWebProtobufsWa6.HandshakeMessage.ServerHello
   alias WAWebProtobufsWa6.HandshakeMessage.ClientFinish
   alias WAWebProtobufsWa6.HandshakeMessage.ClientHello
+  alias WAWebProtobufsWa6.HandshakeMessage.ServerHello
 
   require Logger
 
@@ -29,7 +27,6 @@ defmodule ExWapp.Noise.Backends.Elixir do
     ]
   end
 
-  @impl true
   def init_handshake(payload, static_key, opts) do
     s_kp = ensure_keypair(static_key)
     e_kp = ExWapp.Signal.Keys.generate_key_pair()
@@ -40,7 +37,7 @@ defmodule ExWapp.Noise.Backends.Elixir do
     noise = Handshake.authenticate(noise, e_kp.public)
 
     Logger.info(
-      "noise backend init: header=#{Base.encode16(wa_header, case: :lower)} eph_pub=#{Base.encode16(e_kp.public, case: :lower)} payload_len=#{byte_size(payload)}"
+      "[NOISE] engine init: header=#{Base.encode16(wa_header, case: :lower)} eph_pub=#{Base.encode16(e_kp.public, case: :lower)} payload_len=#{byte_size(payload)}"
     )
 
     state = %State{
@@ -55,7 +52,6 @@ defmodule ExWapp.Noise.Backends.Elixir do
     {:ok, state, client_hello, %{priv: s_kp.private, pub: s_kp.public}}
   end
 
-  @impl true
   def write_client_finish(%State{} = state, server_hello_payload) do
     with {:ok, server_hello} <- decode_server_hello(server_hello_payload),
          {:ok, state, client_finish} <- process_server_hello(state, server_hello) do
@@ -63,7 +59,6 @@ defmodule ExWapp.Noise.Backends.Elixir do
     end
   end
 
-  @impl true
   def complete_handshake(%State{} = state) do
     {write_key, read_key} = Handshake.derive_transport_keys(state.noise)
 
@@ -79,7 +74,6 @@ defmodule ExWapp.Noise.Backends.Elixir do
     {:ok, secrets}
   end
 
-  @impl true
   def setup_transport(%HandshakeSecrets{} = secrets) do
     write_cipher = %{key: secrets.write_key, counter: 0}
     read_cipher = %{key: secrets.read_key, counter: 0}
@@ -87,13 +81,11 @@ defmodule ExWapp.Noise.Backends.Elixir do
     {:ok, {write_cipher, read_cipher, secrets.handshake_hash}}
   end
 
-  @impl true
   def encrypt({write_cipher, read_cipher, hash}, plaintext, _counter) do
     {ciphertext, new_write_cipher} = encrypt_payload(write_cipher, hash, plaintext)
     {:ok, {new_write_cipher, read_cipher, hash}, ciphertext}
   end
 
-  @impl true
   def decrypt({write_cipher, read_cipher, hash}, ciphertext, _counter) do
     case decrypt_payload(read_cipher, hash, ciphertext) do
       {:ok, plaintext, new_read_cipher} ->
@@ -103,8 +95,6 @@ defmodule ExWapp.Noise.Backends.Elixir do
         {:error, reason}
     end
   end
-
-  # Helpers
 
   defp ensure_keypair(%{priv: priv, pub: pub}), do: %{private: priv, public: pub}
   defp ensure_keypair(_), do: ExWapp.Signal.Keys.generate_key_pair()
@@ -136,22 +126,14 @@ defmodule ExWapp.Noise.Backends.Elixir do
     Logger.debug("our ephemeral private: #{Base.encode16(state.e_kp.private, case: :lower)}")
     Logger.debug("our static public: #{Base.encode16(state.s_kp.public, case: :lower)}")
 
-    # 1. mix_hash(re)
     noise = Handshake.authenticate(state.noise, re)
 
-    # 2. mix_dh(e, re)
     with {:ok, noise} <- Handshake.mix_shared_secret(noise, state.e_kp.private, re),
-         # 3. decrypt rs_ct -> rs
          {:ok, noise, rs} <- Handshake.decrypt(noise, rs_ct),
-         # 4. mix_dh(e, rs)
          {:ok, noise} <- Handshake.mix_shared_secret(noise, state.e_kp.private, rs),
-         # 5. decrypt cert_ct -> cert
          {:ok, noise, cert} <- Handshake.decrypt(noise, cert_ct),
-         # 6. Encrypt client static public (s_pub)
          {noise, s_pub_ct} <- Handshake.encrypt(noise, state.s_kp.public),
-         # 7. mix_dh(s, re)
          {:ok, noise} <- Handshake.mix_shared_secret(noise, state.s_kp.private, re),
-         # 8. Encrypt payload
          {noise, payload_ct} <- Handshake.encrypt(noise, state.payload) do
       client_finish = build_client_finish(s_pub_ct, payload_ct)
 
@@ -194,17 +176,15 @@ defmodule ExWapp.Noise.Backends.Elixir do
 
   defp encrypt_payload(%{key: key, counter: counter} = cipher, _hash, plaintext) do
     iv = generate_iv(counter)
-    # Transport encryption uses nil AAD (not hash like handshake)
+
     {cipher_body, tag} =
       :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, plaintext, <<>>, true)
 
     payload = cipher_body <> tag
-
     {payload, %{cipher | counter: counter + 1}}
   end
 
   defp decrypt_payload(%{key: key, counter: counter} = cipher, _hash, ciphertext) do
-    # AES-GCM appends a 16-byte tag
     tag_len = 16
 
     if byte_size(ciphertext) < tag_len do
@@ -214,7 +194,7 @@ defmodule ExWapp.Noise.Backends.Elixir do
       <<body::binary-size(body_len), tag::binary-size(tag_len)>> = ciphertext
 
       iv = generate_iv(counter)
-      # Transport decryption uses nil AAD (not hash like handshake)
+
       case :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, body, <<>>, tag, false) do
         plaintext when is_binary(plaintext) ->
           {:ok, plaintext, %{cipher | counter: counter + 1}}

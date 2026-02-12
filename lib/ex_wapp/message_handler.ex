@@ -21,7 +21,7 @@ defmodule ExWapp.MessageHandler do
 
   require Logger
 
-  alias ExWapp.{Binary, Chat, JID, Store}
+  alias ExWapp.{Binary, Chat, JID, MapPath, Store}
   alias ExWapp.Proto.HistorySync
   alias ExWapp.Signal.{Encryption, SenderKey}
   alias ExWapp.Binary.Node
@@ -1397,14 +1397,12 @@ defmodule ExWapp.MessageHandler do
           data = Store.load!(store)
 
           [
-            get_in(data, [:pairing, :device, "jid"]),
-            get_in(data, [:pairing, :device, :jid]),
-            get_in(data, [:client_info, :jid]),
-            get_in(data, [:client_info, "jid"]),
-            get_in(data, [:client_info, :wid]),
-            get_in(data, [:client_info, "wid"]),
-            get_in(data, [:client_info, :lid]),
-            get_in(data, [:client_info, "lid"])
+            MapPath.first(data, [
+              ["pairing", "device", "jid"],
+              ["client_info", "jid"]
+            ]),
+            MapPath.get(data, ["client_info", "wid"]),
+            MapPath.get(data, ["client_info", "lid"])
           ]
       end
 

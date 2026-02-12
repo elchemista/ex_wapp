@@ -7,12 +7,18 @@ Experimental WhatsApp Web client in pure Elixir.
 Working flows (debug-focused):
 - QR pairing
 - connect / reconnect / disconnect
-- basic incoming node handling (including messages)
-- sending encrypted messages through the current Session pipeline
+- inbound message/notification handling with ACK + receipts
+- multi-device send pipeline aligned with `SPEC.md` core rules
+- wire identity (PN JID) separated from encryption identity (LID-mapped Signal JID)
+- USync device discovery for recipient + own identity
+- prekey fetch via `xmlns="encrypt"` and per-device session reuse checks
+- DeviceSentMessage payload for own devices
+- `phash` from all USync devices (raw base64, no padding)
+- `device-identity` included when any target uses `pkmsg`
 
 Still unstable and protocol-sensitive:
 - full message delivery reliability across protocol changes
-- complete incoming Signal decryption and history sync
+- complete parity for all retry and cache-invalidation edge cases
 
 ## Quickstart
 
@@ -22,7 +28,8 @@ iex -S mix
 ```
 
 ```elixir
-{:ok, session} = ExWapp.Example.run()
+{:ok, result} = ExWapp.Live.run()
+session = result.session
 
 # Send a text
 ExWapp.send_message(session, "1234567890@s.whatsapp.net", "hello")
@@ -32,8 +39,6 @@ ExWapp.message_stream(session)
 |> Stream.each(&IO.inspect/1)
 |> Stream.run()
 ```
-
-`ExWapp.Example.run/1` saves QR updates to `/tmp/whatsapp_qr.svg`.
 
 ## Live Pairing + Group Listing (Real Number)
 
@@ -90,8 +95,6 @@ ExWapp.Live.wait_new_messages(session, timeout_ms: 120_000, limit: 5)
 ExWapp.Live.list_chats(session)
 ```
 
-`ExWapp.LiveTest` is still available as a compatibility alias.
-
 ## Multiple Sessions (No Conflict)
 
 Use `run_session/2` so each session is isolated by `session_id` and store path.
@@ -133,19 +136,39 @@ ExWapp.list_groups(session)
 Only the pure Elixir Signal path is active.
 
 ```elixir
-ExWapp.Example.signal_info()
-ExWapp.Example.use_elixir_signal()
-ExWapp.Example.test_signal()
+ExWapp.Signal.Adapter.info()
+ExWapp.Signal.Adapter.set_impl(:elixir)
 ```
 
-`ExWapp.Example.use_native_signal/0` is kept only for backward compatibility and still resolves to Elixir mode.
+## SPEC Conformance Snapshot
+
+Validated against `SPEC.md` in the current codebase:
+
+- Wire vs encryption identity split is implemented in send path (`Session.Outbound`)
+- USync uses `xmlns="usync"` with `context="message"` and includes recipient + own identity
+- Prekey fetch uses `xmlns="encrypt"` and PN/wire JIDs in `<user jid="...">`
+- Session checks reuse existing sessions before prekey fetch (PN and LID-aware)
+- Own-device payload uses `DeviceSentMessage` wrapper; recipient payload uses plain message proto
+- Current device is excluded from encryption targets and included in `phash` input set
+- `phash` is computed from sorted participant list and encoded with base64 no padding
+- `device-identity` is attached when any encrypted participant node is `pkmsg`
+- Notification ACK uses `<ack class="notification" ...>`
+- Sender resolution for decrypt attempts includes `sender_lid` / `participant_lid` + stored PN<->LID mappings
+
+Known gaps vs full spec ambitions:
+
+- explicit phash-mismatch driven device-cache invalidation is not fully wired yet
+- retry policy limits/cooldowns are not fully aligned to the strict limits documented in `SPEC.md`
 
 ## How It Works
 
 ExWapp is an OTP-based pipeline with clear process boundaries:
 
 - `ExWapp.Session.Supervisor`: dynamic parent for many sessions.
-- `ExWapp.Session`: per-session coordinator/state machine.
+- `ExWapp.Session`: public API facade.
+- `ExWapp.Session.Worker`: per-session GenServer state machine/lifecycle coordinator.
+- `ExWapp.Session.Outbound`: send orchestration (USync, prekeys, fanout encryption, DM/group node assembly).
+- `ExWapp.Session.Inbound`: inbound action conversion from `MessageHandler` outputs.
 - `ExWapp.Conn`: websocket transport process implementing `ExWapp.Transport`.
 - `ExWapp.Session.OutboundQueue`: buffers outbound nodes and flushes when connected.
 - `ExWapp.Session.InboundRouter`: routes inbound nodes to session handling logic.
@@ -191,17 +214,19 @@ QR stream contract:
 
 Outgoing text (`ExWapp.send_message/3`):
 
-1. ensure Signal session for recipient
-2. fetch prekeys if session missing
-3. encrypt message payload
-4. enqueue/send binary node through outbound queue + transport
-5. update local chat projection
+1. build primary payload and own-device DSM payload
+2. USync query for recipient + own devices
+3. resolve wire JIDs vs encryption JIDs (PN/LID mapping)
+4. reuse sessions where present; fetch prekeys for missing devices
+5. encrypt per target (`pkmsg` for new session, `msg` for existing), include DSM only for own devices
+6. build participant fanout + `phash` + optional `device-identity`
+7. send through transport and persist message projection/status
 
 Incoming nodes:
 
 1. transport receives encrypted frame
 2. session gets decoded node via inbound router
-3. message handler updates local chat/messages
+3. message handler processes decrypt/receipt/notification logic
 4. subscribers receive `{:ex_wapp_message, ref, jid, message}`
 
 ## Multi-Session Safety
@@ -296,6 +321,9 @@ For protocol-level internals and message structure details, see `FLOW.md`.
 
 - `lib/ex_wapp/conn.ex`
 - `lib/ex_wapp/session.ex`
+- `lib/ex_wapp/session/worker.ex`
+- `lib/ex_wapp/session/outbound.ex`
+- `lib/ex_wapp/session/inbound.ex`
 - `lib/ex_wapp/session/outbound_queue.ex`
 - `lib/ex_wapp/session/inbound_router.ex`
 - `lib/ex_wapp/transport.ex`

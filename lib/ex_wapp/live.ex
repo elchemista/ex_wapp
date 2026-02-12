@@ -304,7 +304,7 @@ defmodule ExWapp.Live do
     store = GenServer.call(session, :get_store)
     data = Store.load!(store)
 
-    case get_in(data, [:pairing, :device, "jid"]) do
+    case ExWapp.MapPath.get(data, ["pairing", "device", "jid"]) do
       nil -> false
       _jid -> true
     end

@@ -86,10 +86,10 @@ defmodule ExWappTest do
     end
   end
 
-  describe "LiveTest helpers" do
+  describe "Live helpers" do
     test "wait_new_messages returns timeout when no messages arrive" do
       {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
-      assert {:error, :timeout} = ExWapp.LiveTest.wait_new_messages(session, timeout_ms: 10)
+      assert {:error, :timeout} = ExWapp.Live.wait_new_messages(session, timeout_ms: 10)
       GenServer.stop(session)
     end
   end

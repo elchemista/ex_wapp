@@ -8,13 +8,12 @@ defmodule ExWapp.Noise do
   """
 
   alias ExWapp.Noise.ClientPayload
+  alias ExWapp.Noise.Engine, as: NoiseEngine
   alias ExWapp.Noise.HandshakeSecrets, as: Secrets
   alias ExWapp.Store
   alias ExWapp.Transport.Frame
   alias WAWebProtobufsWa6.HandshakeMessage
   require Logger
-
-  @default_backend Application.compile_env(:ex_wapp, :noise_backend, ExWapp.Noise.Backends.Elixir)
 
   defstruct phase: :handshake,
             handshake_ref: nil,
@@ -30,8 +29,7 @@ defmodule ExWapp.Noise do
             handshake_hash: nil,
             handshake_salt: nil,
             cipher_ref: nil,
-            backend: nil,
-            backend_opts: []
+            handshake_header: Frame.header()
 
   @type certificate_verifier_fun :: (binary(), binary() -> :ok | {:error, term()})
 
@@ -56,8 +54,7 @@ defmodule ExWapp.Noise do
           handshake_hash: binary() | nil,
           handshake_salt: binary() | nil,
           cipher_ref: term() | nil,
-          backend: module(),
-          backend_opts: keyword()
+          handshake_header: binary()
         }
 
   @doc """
@@ -74,13 +71,7 @@ defmodule ExWapp.Noise do
       certificate_verifier =
         Keyword.get(opts, :certificate_verifier, &ExWapp.Noise.Certificate.verify/2)
 
-      backend = Keyword.get(opts, :backend, @default_backend)
       handshake_header = Keyword.get(opts, :handshake_header, Frame.header())
-
-      backend_opts =
-        opts
-        |> Keyword.get(:backend_opts, [])
-        |> Keyword.put_new(:handshake_header, handshake_header)
 
       static_key = load_static_key(store)
 
@@ -89,8 +80,7 @@ defmodule ExWapp.Noise do
         static_key: static_key,
         client_payload_fun: client_payload_fun,
         certificate_verifier: certificate_verifier,
-        backend: backend,
-        backend_opts: backend_opts
+        handshake_header: handshake_header
       }
 
       Logger.debug("[NOISE] init: static_key_loaded=#{not is_nil(static_key)}")
@@ -142,10 +132,7 @@ defmodule ExWapp.Noise do
   Encrypts a transport payload once the handshake has completed.
   """
   @spec encrypt(t(), binary()) :: {:ok, binary(), t()} | {:error, term()}
-  def encrypt(
-        %__MODULE__{phase: :transport, cipher_ref: cipher, backend: backend} = state,
-        plaintext
-      )
+  def encrypt(%__MODULE__{phase: :transport, cipher_ref: cipher} = state, plaintext)
       when is_binary(plaintext) do
     if is_nil(cipher) do
       {:error, :invalid_state}
@@ -154,10 +141,7 @@ defmodule ExWapp.Noise do
         "Noise plaintext (counter=#{state.tx_counter}, #{byte_size(plaintext)} bytes): #{hex(plaintext)}"
       )
 
-      case backend.encrypt(cipher, plaintext, state.tx_counter) do
-        {:error, reason} ->
-          {:error, {:encrypt_failed, reason}}
-
+      case NoiseEngine.encrypt(cipher, plaintext, state.tx_counter) do
         {:ok, new_cipher, payload} when is_binary(payload) or is_list(payload) ->
           payload = ensure_binary(payload)
 
@@ -167,6 +151,9 @@ defmodule ExWapp.Noise do
 
           new_state = %{state | cipher_ref: new_cipher, tx_counter: state.tx_counter + 1}
           {:ok, payload, new_state}
+
+        other ->
+          {:error, {:encrypt_failed, other}}
       end
     end
   end
@@ -177,10 +164,7 @@ defmodule ExWapp.Noise do
   Decrypts a transport payload once the handshake has completed.
   """
   @spec decrypt(t(), binary()) :: {:ok, binary(), t()} | {:error, term()}
-  def decrypt(
-        %__MODULE__{phase: :transport, cipher_ref: cipher, backend: backend} = state,
-        payload
-      )
+  def decrypt(%__MODULE__{phase: :transport, cipher_ref: cipher} = state, payload)
       when is_binary(payload) do
     if is_nil(cipher) do
       {:error, :invalid_state}
@@ -189,7 +173,7 @@ defmodule ExWapp.Noise do
         "Noise ciphertext (counter=#{state.rx_counter}, #{byte_size(payload)} bytes): #{hex(payload)}"
       )
 
-      case backend.decrypt(cipher, payload, state.rx_counter) do
+      case NoiseEngine.decrypt(cipher, payload, state.rx_counter) do
         {:error, reason} ->
           {:error, {:decrypt_failed, reason}}
 
@@ -224,9 +208,9 @@ defmodule ExWapp.Noise do
     end
   end
 
-  defp build_client_finish(%__MODULE__{backend: backend, handshake_ref: handshake_ref}, payload)
+  defp build_client_finish(%__MODULE__{handshake_ref: handshake_ref}, payload)
        when not is_nil(handshake_ref) do
-    case backend.write_client_finish(handshake_ref, payload) do
+    case NoiseEngine.write_client_finish(handshake_ref, payload) do
       {:error, reason} -> {:error, {:handshake_client_finish, reason}}
       {:ok, new_handshake, bin} when is_binary(bin) -> {:ok, new_handshake, bin}
       {:ok, new_handshake, list} when is_list(list) -> {:ok, new_handshake, ensure_binary(list)}
@@ -235,9 +219,8 @@ defmodule ExWapp.Noise do
 
   defp build_client_finish(_state, _payload), do: {:error, :invalid_state}
 
-  defp complete_handshake(%__MODULE__{backend: backend}, handshake_ref) do
-    case backend.complete_handshake(handshake_ref) do
-      {:error, reason} -> {:error, {:handshake_finish, reason}}
+  defp complete_handshake(%__MODULE__{}, handshake_ref) do
+    case NoiseEngine.complete_handshake(handshake_ref) do
       {:ok, %Secrets{} = secrets} -> {:ok, secrets}
       other -> {:error, {:handshake_finish, other}}
     end
@@ -291,9 +274,8 @@ defmodule ExWapp.Noise do
     end
   end
 
-  defp build_transport_cipher(%__MODULE__{backend: backend}, %Secrets{} = secrets) do
-    case backend.setup_transport(secrets) do
-      {:error, reason} -> {:error, {:noise_cipher_new, reason}}
+  defp build_transport_cipher(%__MODULE__{}, %Secrets{} = secrets) do
+    case NoiseEngine.setup_transport(secrets) do
       {:ok, cipher_ref} -> {:ok, cipher_ref}
       other -> {:error, {:noise_cipher_new, other}}
     end
@@ -335,15 +317,8 @@ defmodule ExWapp.Noise do
 
   defp build_client_payload(%__MODULE__{}), do: {:ok, <<>>, nil}
 
-  defp start_handshake(
-         %__MODULE__{backend: backend, backend_opts: backend_opts},
-         payload,
-         static_key
-       ) do
-    case backend.init_handshake(payload, static_key, backend_opts) do
-      {:error, reason} ->
-        {:error, {:handshake_new, reason}}
-
+  defp start_handshake(%__MODULE__{handshake_header: handshake_header}, payload, static_key) do
+    case NoiseEngine.init_handshake(payload, static_key, handshake_header: handshake_header) do
       {:ok, handshake_ref, client_hello, static_map} ->
         {:ok, handshake_ref, ensure_binary(client_hello), normalize_static_key(static_map)}
 
@@ -351,8 +326,6 @@ defmodule ExWapp.Noise do
         {:error, {:handshake_new, other}}
     end
   end
-
-  defp normalize_static_key(nil), do: nil
 
   defp normalize_static_key(%{priv: priv, pub: pub}) do
     %{priv: ensure_binary(priv), pub: ensure_binary(pub)}

@@ -120,14 +120,14 @@ defmodule ExWapp.Conn do
           {:ok, state}
 
         {:error, reason} ->
-          IO.puts("[CONN] ✗ Noise.init failed: #{inspect(reason)}")
+          Logger.error("[CONN] Noise.init failed: #{inspect(reason)}")
           notify_session(state.session, {:error, reason})
           {:close, state}
       end
     rescue
       e in _ ->
         stacktrace = __STACKTRACE__
-        IO.puts("[CONN] ✗ Noise.init crashed: #{Exception.format(:error, e, stacktrace)}")
+        Logger.error("[CONN] Noise.init crashed: #{Exception.format(:error, e, stacktrace)}")
         notify_session(state.session, {:error, {:crash, e}})
         {:close, state}
     end
@@ -270,7 +270,7 @@ defmodule ExWapp.Conn do
         {:ok, state, []}
 
       {:error, reason} ->
-        IO.puts("[CONN] ✗ Noise handshake failed: #{inspect(reason)}")
+        Logger.error("[CONN] Noise handshake failed: #{inspect(reason)}")
         notify_session(state.session, {:error, reason})
         {:close, state}
     end
@@ -286,14 +286,14 @@ defmodule ExWapp.Conn do
         handle_decrypted_payload(state, plaintext)
 
       {:error, reason} ->
-        IO.puts("[CONN] ✗ Decrypt failed: #{inspect(reason)}")
+        Logger.warning("[CONN] Decrypt failed: #{inspect(reason)}")
         notify_session(state.session, {:error, {:decrypt_failed, reason, frame}})
         {:ok, state, []}
     end
   end
 
   defp handle_payload_frame(state, _frame) do
-    IO.puts("[CONN] ✗ Unknown frame in unknown phase, closing")
+    Logger.error("[CONN] Unknown frame in unknown phase, closing")
     {:close, state}
   end
 
@@ -315,7 +315,7 @@ defmodule ExWapp.Conn do
       {:ok, state, []}
     else
       {:error, reason} ->
-        IO.puts("[CONN] ✗ Failed to decode payload: #{inspect(reason)}")
+        Logger.warning("[CONN] Failed to decode payload: #{inspect(reason)}")
         notify_session(state.session, {:connection_binary, plaintext})
         {:ok, state, []}
     end

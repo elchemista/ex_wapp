@@ -1,7 +1,7 @@
 defmodule ExWapp.Noise.ClientPayload do
   @moduledoc false
 
-  alias ExWapp.Noise
+  alias ExWapp.{MapPath, Noise}
   alias ExWapp.Signal
   alias ExWapp.Store
   alias WAWebProtobufsWa6.ClientPayload
@@ -18,7 +18,7 @@ defmodule ExWapp.Noise.ClientPayload do
     data = Store.load!(store)
 
     # Check if we're already paired (have a JID stored)
-    case get_in(data, [:pairing, :device, "jid"]) do
+    case MapPath.get(data, ["pairing", "device", "jid"]) do
       %ExWapp.JID{} = jid ->
         # Already paired - use login payload
         build_login_payload(data, jid)
