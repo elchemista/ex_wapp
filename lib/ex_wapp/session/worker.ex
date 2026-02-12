@@ -799,94 +799,81 @@ defmodule ExWapp.Session.Worker do
     iq_type = Map.get(attrs, "type", "")
     iq_id = Map.get(attrs, "id")
 
-    # Check if this is a prekey response - forward to any waiting workers
-    state =
-      if iq_type in ["result", "error"] and iq_id do
-        workers = Map.get(state, :send_workers, %{})
+    state = forward_iq_to_workers(state, iq_type, iq_id, node)
+    {state, pending_handled} = resolve_pending_iq(state, iq_type, iq_id, node)
 
-        if map_size(workers) > 0 do
-          Logger.info("[SESSION] Forwarding IQ #{iq_id} to #{map_size(workers)} workers")
-          # Forward to all workers (they'll match on message_id)
-          Enum.each(workers, fn {worker_pid, _jid} ->
-            if Process.alive?(worker_pid) do
-              if iq_type == "result" do
-                send(worker_pid, {:prekey_response, iq_id, node})
-              else
-                send(worker_pid, {:prekey_error, iq_id, node})
-              end
-            end
-          end)
-        end
-
-        state
-      else
-        state
-      end
-
-    # Check if this is a response to a pending IQ request
-    {state, pending_handled} =
-      if iq_type in ["result", "error"] and iq_id do
-        case Map.pop(state.pending_iqs, iq_id) do
-          {nil, _} ->
-            {state, false}
-
-          {%{from: from, timer: timer}, pending_iqs} ->
-            Process.cancel_timer(timer)
-
-            if iq_type == "result" do
-              GenServer.reply(from, {:ok, node})
-            else
-              GenServer.reply(from, {:error, node})
-            end
-
-            {%{state | pending_iqs: pending_iqs}, true}
-        end
-      else
-        {state, false}
-      end
-
-    # If we handled it as a pending IQ, we're done
     if pending_handled do
       {state, []}
     else
-      cond do
-        # Handle ping requests - respond with pong
-        xmlns == "urn:xmpp:ping" and iq_type == "get" ->
-          Logger.debug("[SESSION] Received ping, sending pong")
-          pong = build_iq_result(attrs)
-          {state, [{:send_node, pong}]}
-
-        # Handle prekey count response (from count-driven upload flow)
-        state.prekey_count_query_id != nil and iq_id == state.prekey_count_query_id and
-            iq_type == "result" ->
-          handle_prekey_count_response(node, state)
-
-        # Handle other IQ types through pairing
-        true ->
-          {pairing, actions} = Pairing.apply_node(state.pairing, node)
-
-          pairing =
-            case maybe_reset_pairing(actions, pairing) do
-              {:ok, new_pairing} -> new_pairing
-              :noop -> pairing
-            end
-
-          # If pairing didn't produce actions AND this is a get/set IQ,
-          # we MUST respond with a result to prevent server timeout
-          actions =
-            if actions == [] and iq_type in ["get", "set"] do
-              Logger.info(
-                "[SESSION] Auto-responding to unhandled IQ: xmlns=#{xmlns} type=#{iq_type} id=#{iq_id}"
-              )
-
-              [{:send_node, build_iq_result(attrs)}]
-            else
-              actions
-            end
-
-          {%{state | pairing: pairing}, actions}
-      end
+      dispatch_iq(state, node, attrs, xmlns, iq_type, iq_id)
     end
+  end
+
+  defp forward_iq_to_workers(state, iq_type, iq_id, node)
+       when iq_type in ["result", "error"] and iq_id != nil do
+    workers = Map.get(state, :send_workers, %{})
+
+    if map_size(workers) > 0 do
+      Logger.debug("[SESSION] Forwarding IQ #{iq_id} to #{map_size(workers)} workers")
+      msg_tag = if iq_type == "result", do: :prekey_response, else: :prekey_error
+
+      Enum.each(workers, fn {worker_pid, _jid} ->
+        if Process.alive?(worker_pid), do: send(worker_pid, {msg_tag, iq_id, node})
+      end)
+    end
+
+    state
+  end
+
+  defp forward_iq_to_workers(state, _iq_type, _iq_id, _node), do: state
+
+  defp resolve_pending_iq(state, iq_type, iq_id, node)
+       when iq_type in ["result", "error"] and iq_id != nil do
+    case Map.pop(state.pending_iqs, iq_id) do
+      {nil, _} ->
+        {state, false}
+
+      {%{from: from, timer: timer}, pending_iqs} ->
+        Process.cancel_timer(timer)
+        reply = if iq_type == "result", do: {:ok, node}, else: {:error, node}
+        GenServer.reply(from, reply)
+        {%{state | pending_iqs: pending_iqs}, true}
+    end
+  end
+
+  defp resolve_pending_iq(state, _iq_type, _iq_id, _node), do: {state, false}
+
+  defp dispatch_iq(state, _node, attrs, "urn:xmpp:ping", "get", _iq_id) do
+    Logger.debug("[SESSION] Received ping, sending pong")
+    {state, [{:send_node, build_iq_result(attrs)}]}
+  end
+
+  defp dispatch_iq(state, node, _attrs, _xmlns, "result", iq_id)
+       when state.prekey_count_query_id != nil and iq_id == state.prekey_count_query_id do
+    handle_prekey_count_response(node, state)
+  end
+
+  defp dispatch_iq(state, node, attrs, xmlns, iq_type, iq_id) do
+    {pairing, actions} = Pairing.apply_node(state.pairing, node)
+
+    pairing =
+      case maybe_reset_pairing(actions, pairing) do
+        {:ok, new_pairing} -> new_pairing
+        :noop -> pairing
+      end
+
+    actions =
+      if actions == [] and iq_type in ["get", "set"] do
+        Logger.debug(
+          "[SESSION] Auto-responding to unhandled IQ: xmlns=#{xmlns} type=#{iq_type} id=#{iq_id}"
+        )
+
+        [{:send_node, build_iq_result(attrs)}]
+      else
+        actions
+      end
+
+    {%{state | pairing: pairing}, actions}
   end
 
   defp handle_connection_node(%Binary.Node{tag: "success", attrs: attrs}, state) do
@@ -1014,7 +1001,7 @@ defmodule ExWapp.Session.Worker do
 
     new_state =
       cond do
-        code == "401" or (code == "401" and conflict_type == "device_removed") ->
+        code == "401" ->
           Logger.error("[SESSION] Device was removed (401)! Need to re-pair from scratch.")
           Logger.error("[SESSION] Delete session file and scan QR code again.")
           notify_qr(state, {:error, :device_removed})

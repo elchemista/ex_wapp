@@ -5,6 +5,7 @@ defmodule ExWapp.Session.MessageNode do
 
   alias ExWapp.Binary
 
+  @spec enc_type_to_wire(atom() | String.t()) :: String.t()
   def enc_type_to_wire(:prekey), do: "pkmsg"
   def enc_type_to_wire(:whisper), do: "msg"
   def enc_type_to_wire("prekey"), do: "pkmsg"
@@ -12,6 +13,8 @@ defmodule ExWapp.Session.MessageNode do
   def enc_type_to_wire("msg"), do: "msg"
   def enc_type_to_wire(_), do: "msg"
 
+  @spec build_participant_encrypted_node(String.t(), binary(), atom() | String.t()) ::
+          Binary.Node.t()
   def build_participant_encrypted_node(jid, ciphertext, enc_type) do
     %Binary.Node{
       tag: "to",
@@ -29,6 +32,7 @@ defmodule ExWapp.Session.MessageNode do
     }
   end
 
+  @spec extract_participant_jids(term()) :: [String.t()]
   def extract_participant_jids(participant_nodes) when is_list(participant_nodes) do
     participant_nodes
     |> Enum.map(fn
@@ -40,6 +44,7 @@ defmodule ExWapp.Session.MessageNode do
 
   def extract_participant_jids(_), do: []
 
+  @spec generate_participant_hash_v2(list()) :: String.t() | nil
   def generate_participant_hash_v2([]), do: nil
 
   def generate_participant_hash_v2(participants) when is_list(participants) do
@@ -56,6 +61,7 @@ defmodule ExWapp.Session.MessageNode do
     "2:" <> Base.encode64(first_6_bytes, padding: false)
   end
 
+  @spec maybe_put_message_attr(map(), String.t(), term()) :: map()
   def maybe_put_message_attr(attrs, _key, nil), do: attrs
   def maybe_put_message_attr(attrs, key, value), do: Map.put(attrs, key, value)
 end

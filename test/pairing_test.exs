@@ -46,7 +46,8 @@ defmodule ExWapp.PairingTest do
     assert byte_size(self_signed.deviceSignature) == 64
 
     device_message =
-      <<6, 1>> <> parsed_adv.signed.details <> identity.public <> parsed_adv.signed.accountSignatureKey
+      <<6, 1>> <>
+        parsed_adv.signed.details <> identity.public <> parsed_adv.signed.accountSignatureKey
 
     assert Keys.verify_message(identity.public, device_message, self_signed.deviceSignature)
 

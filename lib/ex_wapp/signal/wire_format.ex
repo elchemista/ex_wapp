@@ -413,8 +413,10 @@ defmodule ExWapp.Signal.WireFormat do
       when is_binary(mac) and is_binary(mac_key) and is_binary(sender_identity) and
              is_binary(receiver_identity) and is_binary(version_and_proto) do
     checks = [
-      {:prefixed_sender_receiver, &serialized_identity_bytes/1, sender_identity, receiver_identity},
-      {:prefixed_receiver_sender, &serialized_identity_bytes/1, receiver_identity, sender_identity},
+      {:prefixed_sender_receiver, &serialized_identity_bytes/1, sender_identity,
+       receiver_identity},
+      {:prefixed_receiver_sender, &serialized_identity_bytes/1, receiver_identity,
+       sender_identity},
       {:raw_sender_receiver, &raw_identity_bytes/1, sender_identity, receiver_identity},
       {:raw_receiver_sender, &raw_identity_bytes/1, receiver_identity, sender_identity}
     ]

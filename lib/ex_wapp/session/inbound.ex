@@ -1,10 +1,12 @@
 defmodule ExWapp.Session.Inbound do
-  @moduledoc false
+  @moduledoc """
+  Converts inbound message handler outputs into sendable action nodes.
+  """
 
-  @spec handle_message_node(
-          ExWapp.Binary.Node.t(),
-          map(),
-          (String.t(), String.t(), String.t() | nil, String.t() | nil -> any()),
+  @type receipt_builder ::
+          (String.t(), String.t(), String.t() | nil, String.t() | nil -> term())
+
+  @type retry_receipt_builder ::
           (String.t(),
            String.t(),
            String.t()
@@ -18,9 +20,14 @@ defmodule ExWapp.Session.Inbound do
            | nil,
            map()
            | nil ->
-             any())
-        ) ::
-          {map(), list()}
+             term())
+
+  @spec handle_message_node(
+          ExWapp.Binary.Node.t(),
+          map(),
+          receipt_builder(),
+          retry_receipt_builder()
+        ) :: {map(), list()}
   def handle_message_node(node, state, build_receipt_ack, build_retry_receipt_ack) do
     case ExWapp.MessageHandler.handle_node(node, self(), state) do
       {:ok, new_state} ->

@@ -140,6 +140,33 @@ ExWapp.Signal.Adapter.info()
 ExWapp.Signal.Adapter.set_impl(:elixir)
 ```
 
+## Protobuf Strategy (Generated + Custom)
+
+This project intentionally uses a hybrid protobuf approach.
+
+Generated `Protox` modules (default path):
+
+- Dependency: `{:protox, "~> 1.7"}` in `mix.exs`
+- Generated modules live in `lib/ex_wapp/wa_proto/*`
+- Used for stable WhatsApp schemas such as:
+- `WAWebProtobufsWa6.HandshakeMessage` in `lib/ex_wapp/noise.ex` (Noise handshake/client-server envelopes)
+- `WAAdv.*` structs in `lib/ex_wapp/pairing/adv.ex` for normal ADV decode/encode paths
+
+Custom minimal protobuf handling (intentional):
+
+- `lib/ex_wapp/signal/wire_format.ex`: manual SignalMessage/PreKeySignalMessage protobuf encode/decode for strict wire-level control and parity work
+- `lib/ex_wapp/signal/sender_key.ex`: minimal protobuf helpers for SenderKey distribution/message parsing in group encryption flows
+- `lib/ex_wapp/proto/history_sync.ex`: minimal parser for protocol history sync payloads used to populate local chat/group metadata
+- `lib/ex_wapp/proto/message.ex`: minimal outbound E2E message protobuf encoder for the subset currently needed by send flows
+- `lib/ex_wapp/pairing/adv.ex`: fallback parser that extracts stable fields (for example `keyIndex`) when full generated decode fails due to schema drift/new fields
+- `lib/ex_wapp/message_handler.ex`: lightweight wire scanning to classify decrypted content and extract text/protocol markers without full schema decode
+
+Why not only generated protobuf everywhere:
+
+- WhatsApp can add/shift fields quickly; minimal parsers keep critical paths resilient by decoding only stable fields and ignoring unknowns
+- Signal payloads are byte-sensitive; manual encoding/decoding gives deterministic control where wire compatibility is critical
+- Some hot paths only need a small subset of fields, so targeted parsers reduce coupling to large evolving protobuf schemas
+
 ## SPEC Conformance Snapshot
 
 Validated against `SPEC.md` in the current codebase:

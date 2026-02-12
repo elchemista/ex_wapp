@@ -6,8 +6,10 @@ defmodule ExWapp.Session.Account do
   require Logger
 
   alias ExWapp.{Binary, MapPath, Store}
+  alias ExWapp.Pairing.ADV
   alias ExWapp.Session.JIDUtils
 
+  @spec prekey_to_node(pos_integer(), binary()) :: Binary.Node.t()
   def prekey_to_node(id, public)
       when is_integer(id) and id > 0 and is_binary(public) and byte_size(public) == 32 do
     <<_::8, id3::binary-3>> = <<id::big-32>>
@@ -22,6 +24,7 @@ defmodule ExWapp.Session.Account do
     }
   end
 
+  @spec signed_prekey_to_node(map()) :: Binary.Node.t()
   def signed_prekey_to_node(%{id: id, public: public, signature: signature})
       when is_integer(id) and is_binary(public) and byte_size(public) == 32 and
              is_binary(signature) and byte_size(signature) == 64 do
@@ -38,6 +41,7 @@ defmodule ExWapp.Session.Account do
     }
   end
 
+  @spec local_registration_node(term()) :: Binary.Node.t() | nil
   def local_registration_node(nil), do: nil
 
   def local_registration_node(store) do
@@ -59,9 +63,12 @@ defmodule ExWapp.Session.Account do
       nil
     end
   rescue
-    _ -> nil
+    e ->
+      Logger.warning("[ACCOUNT] local_registration_node failed: #{inspect(e)}")
+      nil
   end
 
+  @spec load_lid_mapping(term()) :: map()
   def load_lid_mapping(nil), do: %{}
 
   def load_lid_mapping(store) do
@@ -69,9 +76,12 @@ defmodule ExWapp.Session.Account do
     |> Store.load!()
     |> Map.get(:lid_mapping, %{})
   rescue
-    _ -> %{}
+    e ->
+      Logger.warning("[ACCOUNT] load_lid_mapping failed: #{inspect(e)}")
+      %{}
   end
 
+  @spec local_account_base_jid(term()) :: String.t()
   def local_account_base_jid(nil), do: ""
 
   def local_account_base_jid(store) do
@@ -82,9 +92,12 @@ defmodule ExWapp.Session.Account do
     |> JIDUtils.normalize_with_device()
     |> JIDUtils.strip_device()
   rescue
-    _ -> ""
+    e ->
+      Logger.warning("[ACCOUNT] local_account_base_jid failed: #{inspect(e)}")
+      ""
   end
 
+  @spec local_account_device_id(term()) :: non_neg_integer()
   def local_account_device_id(nil), do: 0
 
   def local_account_device_id(store) do
@@ -102,9 +115,12 @@ defmodule ExWapp.Session.Account do
         signal_device_id || 0
     end
   rescue
-    _ -> 0
+    e ->
+      Logger.warning("[ACCOUNT] local_account_device_id failed: #{inspect(e)}")
+      0
   end
 
+  @spec local_account_lid_jid(term()) :: String.t()
   def local_account_lid_jid(nil), do: ""
 
   def local_account_lid_jid(store) do
@@ -115,9 +131,12 @@ defmodule ExWapp.Session.Account do
     |> JIDUtils.normalize_with_device()
     |> JIDUtils.strip_device()
   rescue
-    _ -> ""
+    e ->
+      Logger.warning("[ACCOUNT] local_account_lid_jid failed: #{inspect(e)}")
+      ""
   end
 
+  @spec local_account_sender_key_jid(term()) :: String.t()
   def local_account_sender_key_jid(nil), do: ""
 
   def local_account_sender_key_jid(store) do
@@ -125,6 +144,7 @@ defmodule ExWapp.Session.Account do
     if lid != "", do: lid, else: local_account_base_jid(store)
   end
 
+  @spec local_account_sender_identity_for_destination(term(), String.t()) :: String.t()
   def local_account_sender_identity_for_destination(nil, _destination_jid), do: ""
 
   def local_account_sender_identity_for_destination(store, destination_jid) do
@@ -147,10 +167,9 @@ defmodule ExWapp.Session.Account do
     end
   end
 
+  @spec maybe_append_tctoken(list(), String.t(), term()) :: list()
   def maybe_append_tctoken(content, jid, store) do
-    is_group = String.contains?(jid, "@g.us")
-
-    if is_group do
+    if String.contains?(jid, "@g.us") do
       content
     else
       data = Store.load!(store)
@@ -173,30 +192,28 @@ defmodule ExWapp.Session.Account do
       end
     end
   rescue
-    _ -> content
+    e ->
+      Logger.warning("[ACCOUNT] maybe_append_tctoken failed: #{inspect(e)}")
+      content
   end
 
+  @spec get_device_identity_node(term()) ::
+          {:ok, Binary.Node.t()} | {:error, term()}
   def get_device_identity_node(store) do
     data = Store.load!(store)
 
     case Map.get(data, :pairing) do
       %{adv: %{signed: signed}} ->
-        case ExWapp.Pairing.ADV.encode_signed_device_identity(
+        case ADV.encode_signed_device_identity(
                signed,
                include_signature_key: true
              ) do
           {:ok, payload} ->
-            Logger.info(
+            Logger.debug(
               "[SEND] Using ADV signed identity with accountSignatureKey: #{byte_size(payload)} bytes"
             )
 
-            node = %Binary.Node{
-              tag: "device-identity",
-              attrs: %{},
-              content: Binary.raw(payload)
-            }
-
-            {:ok, node}
+            {:ok, build_device_identity_node(payload)}
 
           {:error, reason} ->
             Logger.warning(
@@ -206,65 +223,36 @@ defmodule ExWapp.Session.Account do
             get_device_identity_node_fallback(data)
         end
 
-      %{device_identity: device_identity} when is_binary(device_identity) ->
-        Logger.info("[SEND] Found device_identity: #{byte_size(device_identity)} bytes")
-
-        node = %Binary.Node{
-          tag: "device-identity",
-          attrs: %{},
-          content: Binary.raw(device_identity)
-        }
-
-        {:ok, node}
-
-      %{adv_device_identity: adv_identity} when is_binary(adv_identity) ->
-        Logger.info("[SEND] Found adv_device_identity: #{byte_size(adv_identity)} bytes")
-
-        node = %Binary.Node{
-          tag: "device-identity",
-          attrs: %{},
-          content: Binary.raw(adv_identity)
-        }
-
-        {:ok, node}
-
-      _ ->
-        get_device_identity_node_fallback(data)
+      pairing ->
+        build_device_identity_from_raw(pairing)
     end
   end
 
   defp get_device_identity_node_fallback(data) do
-    case Map.get(data, :pairing) do
-      %{device_identity: device_identity} when is_binary(device_identity) ->
-        Logger.info(
-          "[SEND] Falling back to raw device_identity: #{byte_size(device_identity)} bytes"
-        )
+    build_device_identity_from_raw(Map.get(data, :pairing))
+  end
 
-        node = %Binary.Node{
-          tag: "device-identity",
-          attrs: %{},
-          content: Binary.raw(device_identity)
-        }
+  defp build_device_identity_from_raw(%{device_identity: di}) when is_binary(di) do
+    Logger.debug("[SEND] Using raw device_identity: #{byte_size(di)} bytes")
+    {:ok, build_device_identity_node(di)}
+  end
 
-        {:ok, node}
+  defp build_device_identity_from_raw(%{adv_device_identity: adi}) when is_binary(adi) do
+    Logger.debug("[SEND] Using raw adv_device_identity: #{byte_size(adi)} bytes")
+    {:ok, build_device_identity_node(adi)}
+  end
 
-      %{adv_device_identity: adv_identity} when is_binary(adv_identity) ->
-        Logger.info(
-          "[SEND] Falling back to raw adv_device_identity: #{byte_size(adv_identity)} bytes"
-        )
+  defp build_device_identity_from_raw(_) do
+    Logger.warning("[SEND] No device identity found in pairing data")
+    {:error, :no_device_identity}
+  end
 
-        node = %Binary.Node{
-          tag: "device-identity",
-          attrs: %{},
-          content: Binary.raw(adv_identity)
-        }
-
-        {:ok, node}
-
-      _ ->
-        Logger.warning("[SEND] No device identity found in pairing data")
-        {:error, :no_device_identity}
-    end
+  defp build_device_identity_node(payload) do
+    %Binary.Node{
+      tag: "device-identity",
+      attrs: %{},
+      content: Binary.raw(payload)
+    }
   end
 
   defp local_account_jid_value(data) do

@@ -6,6 +6,9 @@ defmodule ExWapp.Session.JIDUtils do
   to reason about and test.
   """
 
+  alias ExWapp.JID
+
+  @spec normalize_for_signal(term()) :: String.t()
   def normalize_for_signal(jid) when is_binary(jid) do
     jid
     |> normalize_with_device()
@@ -14,24 +17,27 @@ defmodule ExWapp.Session.JIDUtils do
 
   def normalize_for_signal(_), do: ""
 
+  @spec normalize_with_device(term()) :: String.t()
   def normalize_with_device(jid) when is_binary(jid) do
     jid
     |> String.trim()
     |> String.replace("@whatsapp.net", "@s.whatsapp.net")
   end
 
-  def normalize_with_device(%ExWapp.JID{} = jid),
-    do: ExWapp.JID.to_string(jid) |> normalize_with_device()
+  def normalize_with_device(%JID{} = jid),
+    do: JID.to_string(jid) |> normalize_with_device()
 
   def normalize_with_device(_), do: ""
 
+  @spec strip_device(term()) :: String.t()
   def strip_device(jid) when is_binary(jid) do
     String.replace(jid, ~r/:(\d+)@/, "@")
   end
 
-  def strip_device(%ExWapp.JID{} = jid), do: jid |> ExWapp.JID.to_string() |> strip_device()
+  def strip_device(%JID{} = jid), do: jid |> JID.to_string() |> strip_device()
   def strip_device(_), do: ""
 
+  @spec has_explicit_device?(term()) :: boolean()
   def has_explicit_device?(jid) when is_binary(jid) do
     case String.split(jid, "@", parts: 2) do
       [user, _server] -> String.contains?(user, ":")
@@ -41,6 +47,7 @@ defmodule ExWapp.Session.JIDUtils do
 
   def has_explicit_device?(_), do: false
 
+  @spec identity(term()) :: {String.t(), String.t()}
   def identity(jid) do
     jid =
       jid
@@ -53,6 +60,7 @@ defmodule ExWapp.Session.JIDUtils do
     end
   end
 
+  @spec user_part(term()) :: String.t()
   def user_part(jid) when is_binary(jid) do
     jid
     |> normalize_with_device()
@@ -66,6 +74,7 @@ defmodule ExWapp.Session.JIDUtils do
 
   def user_part(_), do: ""
 
+  @spec device_id(term()) :: non_neg_integer() | nil
   def device_id(jid) when is_binary(jid) do
     case Regex.run(~r/^[^@]+:(\d+)@/, jid) do
       [_, value] ->
@@ -79,9 +88,10 @@ defmodule ExWapp.Session.JIDUtils do
     end
   end
 
-  def device_id(%ExWapp.JID{device: device}) when is_integer(device), do: device
+  def device_id(%JID{device: device}) when is_integer(device), do: device
   def device_id(_), do: nil
 
+  @spec current_device_target?(term(), integer()) :: boolean()
   def current_device_target?(jid, own_device_id)
       when is_integer(own_device_id) and own_device_id >= 0 do
     case device_id(jid) do
@@ -92,12 +102,14 @@ defmodule ExWapp.Session.JIDUtils do
 
   def current_device_target?(_jid, _own_device_id), do: false
 
+  @spec lid_jid?(term()) :: boolean()
   def lid_jid?(jid) when is_binary(jid) do
     String.ends_with?(jid, "@lid") or String.ends_with?(jid, "@hosted.lid")
   end
 
   def lid_jid?(_), do: false
 
+  @spec resolve_signal_encryption_jid(term(), map() | nil) :: String.t()
   def resolve_signal_encryption_jid(target_jid, lid_mapping) do
     target_jid = normalize_with_device(target_jid)
     base_target_jid = strip_device(target_jid)
@@ -122,6 +134,7 @@ defmodule ExWapp.Session.JIDUtils do
     end
   end
 
+  @spec normalize_target_list(term()) :: [String.t()]
   def normalize_target_list(targets) when is_list(targets) do
     targets
     |> Enum.map(&normalize_with_device/1)
@@ -131,15 +144,18 @@ defmodule ExWapp.Session.JIDUtils do
 
   def normalize_target_list(_), do: []
 
+  @spec build_dm_target_specs([String.t()], [String.t()]) ::
+          [%{jid: String.t(), payload_kind: :recipient | :own}]
   def build_dm_target_specs(recipient_targets, own_targets) do
     specs =
       Enum.map(recipient_targets, &%{jid: &1, payload_kind: :recipient}) ++
         Enum.map(own_targets, &%{jid: &1, payload_kind: :own})
 
-    Enum.reduce(specs, [], fn %{jid: jid, payload_kind: payload_kind} = spec, acc ->
+    specs
+    |> Enum.reduce([], fn %{jid: jid, payload_kind: payload_kind} = spec, acc ->
       case Enum.find_index(acc, fn existing -> existing.jid == jid end) do
         nil ->
-          acc ++ [spec]
+          [spec | acc]
 
         idx when payload_kind == :own ->
           existing = Enum.at(acc, idx)
@@ -152,6 +168,7 @@ defmodule ExWapp.Session.JIDUtils do
           acc
       end
     end)
+    |> Enum.reverse()
   end
 
   defp maybe_apply_device_to_mapped_jid(source_jid, mapped_jid) do

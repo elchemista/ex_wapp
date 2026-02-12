@@ -1,217 +1,134 @@
-# ex_wapp Recovery Plan (Compressed)
+# ExWapp Code Quality Improvement Plan
 
-## Current Runtime Status
-- Still failing in real usage:
-  - inbound messages remain `"(encrypted: pkmsg)"`,
-  - recipient shows "waiting for message" for outbound,
-  - stream eventually hits `401` (`device_removed`) and session is invalidated.
-- Latest logs consistently show:
-  - `decrypt_prekey_message` parses OK,
-  - keys/prekeys are found,
-  - inner Signal MAC verification fails (`:invalid_mac`),
-  - many decrypt attempts run with `existing_session=false`,
-  - post-login uploads a full initial prekey batch (`812`) again.
+## Context
 
-## What Has Already Been Done
+Post-refactor review (Feb 12, 2026). The session monolith was split into
+`session/worker.ex`, `session/outbound.ex`, and 10+ submodules. Tests pass
+(80/0). This plan addresses gaps found against `Code Guidelines.md` and
+`Refactor Agent.md`.
 
-### Signal / Message Path
-- Added robust wire parsing for SignalMessage + PreKeySignalMessage.
-- Added broader MAC verification strategies and decrypt diagnostics.
-- Implemented version-aware unpadding and multi-candidate decrypt path (`enc` + sender candidates).
-- Added session aliasing and worker/session synchronization improvements.
+---
 
-### Send Path
-- First-message wrapping logic improved so `pkmsg` can be emitted when needed.
-- Multi-device participant message structure implemented (`participants -> to -> enc`).
-- Device identity injection logic for prekey sends improved.
+## Phase 1: @spec + @type coverage (8 modules, ~43 public functions)
 
-### Pairing / ADV
-- Pair-success ADV parsing hardened (direct + HMAC wrapper fallback).
-- Relaxed decoding for proto drift in ADV details.
-- Preserved Signal identity across pairing bootstrap to reduce identity drift.
-- Added explicit ADV signed identity encoding helper.
+### 1.1 jid_utils.ex — 12 public functions
+- Add `@spec` to all 12 public functions
+- Alias `ExWapp.JID` (used fully qualified 3x)
 
-### Chat / ACK / Notifications
-- Better chat name fallback (`notify`, `pushname`, phone number fallback).
-- Message status updates through `ack` and receipt.
-- Notification ACK coverage expanded.
+### 1.2 account.ex — 11 public functions
+- Add `@spec` to all 11 public functions
+- Fix 6x bare `rescue _ ->` (log the error, don't swallow)
+- Alias `ExWapp.Pairing.ADV`
 
-### Tests
-- Many targeted tests added/updated and passing locally (including signal/parity/pairing suites).
-- Important note: passing unit tests did not eliminate runtime interop failures.
+### 1.3 targets.ex — 5 public functions
+- Add `@spec` to all 5 public functions
+- Fix double negation: `Enum.reject(... not ...)` -> `Enum.filter`
 
-## What External References Confirmed
-- `libsignal-protocol-go`: receiver bootstrap and ratchet semantics are strict; session continuity is critical.
-- `whatsapp-rust`: avoid replacing an existing valid session; session replacement can cause MAC failures.
-- `Baileys`:
-  - keeps PN<->LID mappings and uses them for decryption address resolution,
-  - handles `privacy_token` and uses `tctoken` in outbound paths,
-  - has peer-specific send/decrypt handling that differs from generic wrappers.
+### 1.4 message_node.ex — 5 public functions
+- Add `@spec` to all 5 public functions
 
-## Cross-Library Diff Inventory (Requested)
+### 1.5 subscribers.ex — 5 public functions
+- Add `@spec` to all 5 public functions
+- Remove unused `@type telemetry_fun` or use it in a spec
 
-### 1) Prekey upload lifecycle after login
-- Reference behavior:
-  - Baileys validates prekeys on server (`count`) and uploads only if needed; also checks current prekey exists locally.
-  - Evidence: `/tmp/Baileys/src/Socket/socket.ts` (`uploadPreKeysToServerIfRequired`, `getAvailablePreKeysOnServer`, `verifyCurrentPreKeyExists`).
-- `ex_wapp` status:
-  - Missing.
-  - Current code uploads `initial: true` on every success path.
-  - Evidence: `lib/ex_wapp/session.ex` (`handle_connection_node("success")`).
-- Gap to close:
-  - Use count-driven/top-up logic instead of unconditional initial upload.
+### 1.6 iq.ex — 4 public functions
+- Add `@spec` to all 4 public functions
+- Alias `ExWapp.JID`
 
-### 2) Persist own LID + own PN<->LID mapping at login success
-- Reference behavior:
-  - Baileys persists `me.lid`, stores own mapping (`lid` <-> `pn`), and migrates session.
-  - Evidence: `/tmp/Baileys/src/Socket/socket.ts` (`CB:success` handling).
-- `ex_wapp` status:
-  - Missing.
-  - LID is logged but not persisted (`TODO`).
-  - Evidence: `lib/ex_wapp/session.ex` (`LID from success`, `TODO: Store LID in session data`).
-- Gap to close:
-  - Persist `client_info.lid` + mapping and run local session migration hooks.
+### 1.7 retry.ex — 1 public function
+- Add `@spec` to `maybe_retry_outgoing_message/4`
+- Alias `ExWapp.Chat`
 
-### 3) PN/LID decrypt address resolution + envelope mapping
-- Reference behavior:
-  - Baileys resolves decrypt JID via mapping (`getDecryptionJid`) and stores mapping from envelope attrs before decrypt (`storeMappingFromEnvelope`).
-  - Evidence: `/tmp/Baileys/src/Utils/decode-wa-message.ts`.
-- `ex_wapp` status:
-  - Partial.
-  - Candidate attrs are tried (`sender_lid/sender_pn/...`), but durable mapping/migration layer is missing.
-  - Evidence: `lib/ex_wapp/message_handler.ex` (sender candidate extraction).
-- Gap to close:
-  - Add persistent PN<->LID mapping store + use it as primary decrypt target resolution.
+### 1.8 outbound.ex — 1 public function
+- Add `@spec` to `send_text_worker/4`
+- Add missing aliases: `Signal.Encryption`, `Signal.SessionStore`,
+  `Signal.SenderKey`, `Messages`, `Chat`, `Proto.Message`
 
-### 4) Session re-establish guard to prevent MAC failures
-- Reference behavior:
-  - libsignal-go skips prekey session rebuild when state already exists for that prekey base key.
-  - whatsapp-rust explicitly refuses risky re-establish paths when session checks fail (to avoid MAC failures).
-  - Evidence: `/tmp/libsignal-protocol-go/session/Session.go` (`HasSessionState`), `/tmp/whatsapp-rust/src/client/sessions.rs`.
-- `ex_wapp` status:
-  - Missing/insufficient.
-  - Runtime still frequently logs inbound prekey decrypt with `existing_session=false`.
-- Gap to close:
-  - Add strict dedupe/session-exists checks before creating/replacing sessions, keyed by normalized identity + base key.
+### 1.9 inbound.ex
+- Replace `@moduledoc false` with descriptive doc (consistency with siblings)
+- Extract named `@type` from the verbose 18-line inline spec
 
-### 5) `privacy_token` -> `tctoken` pipeline
-- Reference behavior:
-  - Baileys parses `privacy_token` notifications, stores trusted-contact token, and appends `<tctoken>` in outbound message.
-  - Evidence:
-    - `/tmp/Baileys/src/Socket/messages-recv.ts` (`handlePrivacyTokenNotification`)
-    - `/tmp/Baileys/src/Socket/messages-send.ts` (append `tctoken`).
-- `ex_wapp` status:
-  - Missing.
-  - Currently just logs unhandled notification and sends ack.
-- Gap to close:
-  - Parse/store trusted-contact token and include `tctoken` on 1:1 sends.
+---
 
-### 6) Prekey bundle JID normalization consistency
-- Reference behavior:
-  - whatsapp-rust normalizes JIDs for prekey-bundle lookup and session addressing to avoid key mismatch.
-  - Evidence: `/tmp/whatsapp-rust/wacore/src/prekeys.rs`, `/tmp/whatsapp-rust/wacore/src/send.rs`.
-- `ex_wapp` status:
-  - Partial.
-  - Device JID parsing/normalization exists, but end-to-end normalization consistency is still not guaranteed in all paths.
-- Gap to close:
-  - Normalize once at fetch-parse stage and use exact normalized key for create/encrypt/decrypt lookup.
+## Phase 2: Anti-pattern fixes
 
-### 7) Retry semantics for `invalid_mac` / missing session
-- Reference behavior:
-  - whatsapp-rust aggressively uses retry receipts to trigger fresh prekey/session recovery on invalid message/no-session states.
-- `ex_wapp` status:
-  - Partial.
-  - Retry receipt machinery exists (`type=retry`, optional keys).
-  - Evidence: `lib/ex_wapp/message_handler.ex`, `lib/ex_wapp/session.ex`.
-- Gap to close:
-  - Align retry triggers and key-inclusion policy with observed runtime failure patterns (especially repeated `invalid_mac` prekey flows).
+### 2.1 One-branch cond -> if/else
+- outbound.ex ~L1022: `cond` with 2 branches -> `if/else`
+- retry.ex ~L23: two-branch `cond` -> `if/else`
 
-### 8) Post-login key bundle validation
-- Reference behavior:
-  - Baileys runs digest/validation of key bundle after opening connection.
-  - Evidence: `/tmp/Baileys/src/Socket/socket.ts` (`digestKeyBundle`).
-- `ex_wapp` status:
-  - Missing.
-- Gap to close:
-  - Add optional key-bundle digest/consistency check after login success.
+### 2.2 Dead logic
+- worker.ex ~L1017: `code == "401" or (code == "401" and ...)` — second
+  disjunct is subsumed. Simplify or split into separate branches.
 
-### 9) Avoid dual PN/LID session conflicts
-- Reference behavior:
-  - whatsapp-rust avoids proactive PN primary-phone prekey establishment to prevent PN/LID dual-session conflicts.
-  - Evidence: `/tmp/whatsapp-rust/src/client/sessions.rs` comments and checks.
-- `ex_wapp` status:
-  - Missing/unknown.
-  - Current behavior may create/alias sessions without full PN/LID conflict policy.
-- Gap to close:
-  - Enforce a single authoritative addressing/session strategy per peer device.
+### 2.3 Double negation
+- targets.ex ~L18: `Enum.reject(... not ...)` -> `Enum.filter(...)`
 
-### 10) Outbound peer metadata parity
-- Reference behavior:
-  - Baileys conditionally augments outbound 1:1 messages with privacy/reporting metadata nodes (`tctoken`, reporting token).
-- `ex_wapp` status:
-  - Partial.
-  - Core encrypted node path exists, metadata parity not complete.
-- Gap to close:
-  - Implement missing metadata nodes required by modern WA peers where applicable.
+### 2.4 O(n^2) list append
+- jid_utils.ex ~L141: `acc ++ [spec]` -> `[spec | acc]` + reverse
 
-## Confirmed Remaining Gaps (Need to Fix)
+### 2.5 Silent rescues
+- account.ex: 6x `rescue _ ->` that swallow errors. Add `Logger.warning`.
+- outbound.ex ~L1309: `persist_signal_sessions` rescue -> add logging.
 
-### P0 (Blocking) — ALL FIXED (Feb 11, 2026)
-- ✅ Prekey upload policy: now count-driven (query server first, upload only if low/zero).
-- ✅ Device identity/address continuity: `ensure_device_id` now derives from JID/attrs first.
-- ✅ PN/LID mapping persisted end-to-end: stored on login success, used in decrypt candidate resolver.
-- ✅ Privacy token flow: `privacy_token` notifications parsed, tctoken stored and appended on 1:1 sends.
-- ✅ Session continuity hardened: prekey decrypt tries existing session first before replacing.
+---
 
-### P1 (High Value) — PARTIALLY FIXED
-- ✅ Persist own LID from success and create self PN<->LID mapping early.
-- Re-check peer message node shape parity for single-recipient peer sends.
-- Add integration-style regression tests from captured runtime traces (not only unit-level tests).
+## Phase 3: Large function splits
 
-## Execution Plan — Completed Steps
+### 3.1 outbound.ex — do_send_encrypted/7 (161 lines)
+Split into:
+- `build_send_payloads/4` — proto encoding + DSM wrapping
+- `resolve_and_encrypt_targets/5` — target resolution + encryption
+- `assemble_and_send_message/7` — node building + transport send
 
-1. ✅ Fix login-success prekey behavior
-   - Replaced unconditional `initial: true` upload with count-driven logic.
-   - Session sends prekey count query IQ on success, then uploads based on response.
-   - Reference: Baileys `uploadPreKeysToServerIfRequired()`.
+### 3.2 outbound.ex — ensure_signal_session_worker/3 (120 lines)
+Split into:
+- `discover_devices/3` — usync query + response parsing
+- `fetch_missing_prekeys/4` — prekey fetch + retry for missing bundles
 
-2. ✅ Fix device-id derivation/persistence
-   - Updated `Signal.ensure_device_id/2` to try JID device component, explicit attrs, then stored value.
-   - Added `extract_device_from_jid/1` helper.
+### 3.3 outbound.ex — encrypt_for_targets/5 (105 lines)
+Extract reduce callback body into `encrypt_single_target/6`
 
-3. ✅ Add PN<->LID mapping store + resolver
-   - Own PN<->LID mapping stored on login success (`persist_lid_and_mapping`).
-   - `MessageHandler.signal_sender_jids` now expands candidates via `resolve_lid_mapping_candidates`.
-   - Mapping stored in store under `:lid_mapping` key.
+### 3.4 worker.ex — handle_connection_node/2 for "iq" (93 lines)
+Split into:
+- `forward_iq_to_workers/3`
+- `resolve_pending_iq/3`
+- `handle_iq_by_xmlns/3`
 
-4. ✅ Implement privacy token/tctoken flow
-   - Added `handle_privacy_token_notification` in MessageHandler.
-   - Parses `tokens/token[type=trusted_contact]` and stores in `:tctokens` store key.
-   - Outbound `build_encrypted_message_node` appends `<tctoken>` for 1:1 sends.
-   - Reference: Baileys `handlePrivacyTokenNotification` + `messages-send.ts`.
+### 3.5 iq.ex — parse_usync_device_response/1 (72 lines)
+Extract inner reduce into `parse_user_device_list/2`
 
-5. ✅ Harden session continuity rules
-   - `SessionStore.decrypt_message` now tries existing session first for prekey messages.
-   - Only creates fresh session if existing session fails or doesn't exist.
-   - Reference: whatsapp-rust session re-establish guard pattern.
+### 3.6 retry.ex — maybe_retry_outgoing_message/4 (68 lines)
+Extract nested case chain into `build_and_send_retry/4`
 
-6. TODO: Validate with runtime scenario (not only tests)
-   - Fresh pair -> receive plaintext inbound -> send outbound not stuck at waiting -> no `401 device_removed`.
+### 3.7 worker.ex — build_retry_receipt_ack/8 (60 lines, 8 params)
+Accept a map/struct instead of 8 positional params.
 
-## Verification Checklist
-- Inbound decrypt:
-  - no repeated `:invalid_mac` for normal 1:1 messages,
-  - `text` contains plaintext, not `(encrypted: pkmsg)`.
-- Outbound:
-  - recipient receives and decrypts immediately (no waiting banner).
-- Stability:
-  - no forced `401 device_removed` during normal run.
-- Logs:
-  - no full initial prekey upload on every reconnect.
+---
 
-## Session Reset Note
-- After any `401 device_removed`, old local session data is invalid.
-- Required for valid verification run:
-  - delete session file,
-  - pair again from QR,
-  - re-test with the fixed runtime.
+## Phase 4: Cleanup
+
+### 4.1 Remove ~25 trivial delegation wrappers in outbound.ex
+Replace with direct module calls or `import` where appropriate.
+
+### 4.2 Remove unused _timestamp parameter
+outbound.ex `build_multi_device_encrypted_message_node` — remove `_timestamp`.
+
+### 4.3 Logger level audit
+Downgrade routine `Logger.info` calls to `Logger.debug` in outbound.ex (~30 calls).
+
+### 4.4 Code duplication in account.ex
+Merge `get_device_identity_node/1` and `get_device_identity_node_fallback/1`
+(nearly identical branch logic).
+
+---
+
+## Acceptance Criteria
+
+- `mix test` passes (80 tests, 0 failures)
+- `mix format --check-formatted` passes
+- Every public function in session/* has `@spec`
+- No function body exceeds ~50 lines
+- No bare `rescue _ ->` without logging
+- No one-branch `cond`
+- No `Enum.reject(... not ...)`
+- No `acc ++ [item]` in loops

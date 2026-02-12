@@ -142,7 +142,8 @@ defmodule ExWapp.Binary do
       {:ok, unpacked} ->
         if starts_with_node_list?(unpacked), do: {:ok, unpacked}, else: :no_change
 
-      _ -> :no_change
+      _ ->
+        :no_change
     end
   end
 

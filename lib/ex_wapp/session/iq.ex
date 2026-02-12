@@ -5,9 +5,10 @@ defmodule ExWapp.Session.IQ do
 
   require Logger
 
-  alias ExWapp.Binary
+  alias ExWapp.{Binary, JID}
   alias ExWapp.Session.JIDUtils
 
+  @spec build_prekey_request(String.t() | [String.t()], String.t()) :: Binary.Node.t()
   def build_prekey_request(jid, message_id) when is_binary(jid) do
     build_prekey_request([jid], message_id)
   end
@@ -40,6 +41,7 @@ defmodule ExWapp.Session.IQ do
     }
   end
 
+  @spec build_usync_device_query([String.t()], String.t()) :: Binary.Node.t()
   def build_usync_device_query(jids, message_id) when is_list(jids) do
     user_nodes =
       Enum.map(jids, fn jid ->
@@ -91,6 +93,7 @@ defmodule ExWapp.Session.IQ do
     }
   end
 
+  @spec parse_usync_device_response(term()) :: {:ok, map()} | {:error, term()}
   def parse_usync_device_response(%Binary.Node{
         tag: "iq",
         attrs: %{"type" => "result"},
@@ -110,55 +113,9 @@ defmodule ExWapp.Session.IQ do
 
     device_map =
       Enum.reduce(user_nodes, %{}, fn user_node, acc ->
-        user_jid = extract_user_jid(user_node)
-
-        if user_jid do
-          base_jid = JIDUtils.strip_device(user_jid)
-
-          {user_part, server} =
-            case String.split(base_jid, "@", parts: 2) do
-              [user, srv] when user != "" and srv != "" -> {user, srv}
-              _ -> {"", ""}
-            end
-
-          devices_node = find_child(user_node.content || [], "devices")
-
-          device_list_node =
-            if devices_node, do: find_child(devices_node.content || [], "device-list")
-
-          device_jids =
-            if device_list_node and user_part != "" and server != "" do
-              (device_list_node.content || [])
-              |> Enum.filter(&match?(%Binary.Node{tag: "device"}, &1))
-              |> Enum.map(fn device_node ->
-                device_id =
-                  case Map.get(device_node.attrs || %{}, "id") do
-                    id when is_integer(id) ->
-                      id
-
-                    id when is_binary(id) ->
-                      case Integer.parse(id) do
-                        {parsed, ""} -> parsed
-                        _ -> 0
-                      end
-
-                    _ ->
-                      0
-                  end
-
-                if device_id == 0 do
-                  "#{user_part}@#{server}"
-                else
-                  "#{user_part}:#{device_id}@#{server}"
-                end
-              end)
-            else
-              [base_jid]
-            end
-
-          Map.put(acc, base_jid, device_jids)
-        else
-          acc
+        case parse_user_device_list(user_node) do
+          {base_jid, device_jids} -> Map.put(acc, base_jid, device_jids)
+          nil -> acc
         end
       end)
 
@@ -171,6 +128,7 @@ defmodule ExWapp.Session.IQ do
 
   def parse_usync_device_response(_), do: {:error, :invalid_usync_response}
 
+  @spec parse_prekey_response(term()) :: {:ok, [map()]} | {:error, term()}
   def parse_prekey_response(%Binary.Node{
         tag: "iq",
         attrs: %{"type" => "result"},
@@ -191,7 +149,7 @@ defmodule ExWapp.Session.IQ do
                   |> extract_user_jid()
                   |> JIDUtils.normalize_with_device()
 
-                Logger.info("[PREKEY] Parsed bundle for device_jid=#{inspect(device_jid)}")
+                Logger.debug("[PREKEY] Parsed bundle for device_jid=#{inspect(device_jid)}")
                 [Map.put(bundle, :device_jid, device_jid) | acc]
 
               {:error, reason} ->
@@ -277,9 +235,68 @@ defmodule ExWapp.Session.IQ do
 
   defp parse_prekey_node(_), do: nil
 
+  defp parse_user_device_list(user_node) do
+    case extract_user_jid(user_node) do
+      nil ->
+        nil
+
+      user_jid ->
+        base_jid = JIDUtils.strip_device(user_jid)
+
+        {user_part, server} =
+          case String.split(base_jid, "@", parts: 2) do
+            [user, srv] when user != "" and srv != "" -> {user, srv}
+            _ -> {"", ""}
+          end
+
+        device_jids = extract_device_jids(user_node, user_part, server, base_jid)
+        {base_jid, device_jids}
+    end
+  end
+
+  defp extract_device_jids(user_node, user_part, server, base_jid) do
+    devices_node = find_child(user_node.content || [], "devices")
+
+    device_list_node =
+      if devices_node, do: find_child(devices_node.content || [], "device-list")
+
+    if device_list_node && user_part != "" && server != "" do
+      (device_list_node.content || [])
+      |> Enum.filter(&match?(%Binary.Node{tag: "device"}, &1))
+      |> Enum.map(fn device_node ->
+        device_id = parse_device_id(device_node)
+
+        if device_id == 0 do
+          "#{user_part}@#{server}"
+        else
+          "#{user_part}:#{device_id}@#{server}"
+        end
+      end)
+    else
+      [base_jid]
+    end
+  end
+
+  defp parse_device_id(%Binary.Node{attrs: attrs}) do
+    case Map.get(attrs || %{}, "id") do
+      id when is_integer(id) -> id
+      id when is_binary(id) -> parse_int_or_zero(id)
+      _ -> 0
+    end
+  end
+
+  defp parse_device_id(_), do: 0
+
+  defp parse_int_or_zero(str) do
+    case Integer.parse(str) do
+      {parsed, ""} -> parsed
+      _ -> 0
+    end
+  end
+
   defp extract_user_jid(%Binary.Node{attrs: attrs}) do
     case Map.get(attrs, "jid") do
-      %ExWapp.JID{} = jid -> ExWapp.JID.to_string(jid)
+      %JID{} = jid -> JID.to_string(jid)
       jid when is_binary(jid) -> jid
       _ -> nil
     end
