@@ -1,0 +1,41 @@
+ExWapp.Live.send_message(result.session, "393519534944@s.whatsapp.net", "nota comprare late")
+21:13:23.362 [info] Sending node: <iq id="t8FXjpOdS6MgPbj7" to="s.whatsapp.net" type="get" xmlns="usync"><usync context="message" index="0" last="true" mode="query" sid="OMtUVfXfCw0DBtki"><query><devices version="2"/></query><list><user jid="393519534944@s.whatsapp.net"/></list></usync></iq>
+21:13:23.362 [info] sending frame include_header=false header_hex=none payload=131 bytes frame=134 bytes
+21:13:23.362 [info] sending encrypted node size=131
+21:13:23.639 [info] Sending node: <iq id="e6EJGfeAQxUoArDV" to="s.whatsapp.net" type="get" xmlns="encrypt"><key><user jid="393519534944:40@s.whatsapp.net"/></key></iq>
+21:13:23.639 [info] sending frame include_header=false header_hex=none payload=88 bytes frame=91 bytes
+21:13:23.639 [info] sending encrypted node size=88
+21:13:23.912 [info] [PREKEY] Bundle parsed: reg_id=1832 signed_prekey_id=1 prekey_id=751
+21:13:24.053 [info] [SIGNAL] Session created with X3DH + initial ratchet
+21:13:24.053 [info] [SESSION_STORE] Created session using elixir implementation
+21:13:24.062 [info] [SEND] Self-chat detected: DSM payload for all non-current targets
+21:13:24.062 [info] [SEND] Self-chat target specs: [%{jid: "393519534944@s.whatsapp.net", payload_kind: :own}]
+21:13:24.068 [info] [ENCRYPTION] Attempting to encrypt message for 393519534944@s.whatsapp.net (sync)
+21:13:24.068 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :chats, :pairing, :noise, :lid_mapping, :adv_secret]
+21:13:24.068 [info] [ENCRYPTION] Signal data keys: [:sessions, :next_prekey_id, :prekeys, :updated_at, :identity_key, :signed_prekeys, :registration_id, :device_id]
+21:13:24.068 [info] [ENCRYPTION] Found identity key
+21:13:24.068 [info] [ENCRYPTION] Encrypted! type=whisper, size=130
+21:13:24.085 [info] [SEND] Sent encrypted message to 393519534944@s.whatsapp.net id=3EB0C24E29478A59475F17
+{:ok, "3EB0C24E29478A59475F17"}
+21:13:24.086 [info] Sending node: <message id="3EB0C24E29478A59475F17" to="393519534944@s.whatsapp.net" type="text"><participants><to jid="393519534944@s.whatsapp.net"><enc type="msg" v="2">[raw 130 bytes]</enc></to></participants></message>
+21:13:24.086 [info] sending frame include_header=false header_hex=none payload=247 bytes frame=250 bytes
+21:13:24.086 [info] sending encrypted node size=247
+21:13:24.317 [info] [ACK] id=3EB0C24E29478A59475F17 class=message type= from=393519534944@s.whatsapp.net to=
+21:13:30.087 [warning] [SEND] Message id=3EB0C24E29478A59475F17 to=393519534944@s.whatsapp.net remained unconfirmed after 6000ms; retrying with fallback self-chat strategy
+21:13:30.105 [info] Sending node: <iq id="hgp1d8lEe7FzJ7n8" to="s.whatsapp.net" type="get" xmlns="usync"><usync context="message" index="0" last="true" mode="query" sid="3h5qkvIW/xouATSD"><query><devices version="2"/></query><list><user jid="393519534944@s.whatsapp.net"/></list></usync></iq>
+21:13:30.105 [info] sending frame include_header=false header_hex=none payload=131 bytes frame=134 bytes
+21:13:30.105 [info] sending encrypted node size=131
+21:13:30.466 [warning] [SEND] Self-chat fallback mode: recipient payload primary
+21:13:30.466 [info] [SEND] Self-chat target specs: [%{jid: "393519534944@s.whatsapp.net", payload_kind: :recipient}]
+21:13:30.466 [info] [ENCRYPTION] Attempting to encrypt message for 393519534944@s.whatsapp.net (sync)
+21:13:30.467 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :chats, :pairing, :noise, :lid_mapping, :adv_secret]
+21:13:30.467 [info] [ENCRYPTION] Signal data keys: [:sessions, :next_prekey_id, :prekeys, :updated_at, :identity_key, :signed_prekeys, :registration_id, :device_id]
+21:13:30.467 [info] [ENCRYPTION] Found identity key
+21:13:30.467 [info] [ENCRYPTION] Encrypted! type=whisper, size=82
+21:13:30.477 [info] [SEND] Sent encrypted message to 393519534944@s.whatsapp.net id=3EB060D6FE898682B3BAB1
+21:13:30.477 [warning] [SEND] Fallback resend for 393519534944@s.whatsapp.net previous_id=3EB0C24E29478A59475F17 new_id=3EB060D6FE898682B3BAB1
+21:13:30.477 [info] Sending node: <message id="3EB060D6FE898682B3BAB1" to="393519534944@s.whatsapp.net" type="text"><participants><to jid="393519534944@s.whatsapp.net"><enc type="msg" v="2">[raw 82 bytes]</enc></to></participants></message>
+21:13:30.477 [info] sending frame include_header=false header_hex=none payload=199 bytes frame=202 bytes
+21:13:30.477 [info] sending encrypted node size=199
+21:13:30.776 [info] [ACK] id=3EB060D6FE898682B3BAB1 class=message type= from=393519534944@s.whatsapp.net to=
+21:13:36.479 [error] [SEND] Message id=3EB060D6FE898682B3BAB1 to=393519534944@s.whatsapp.net still unconfirmed after fallback; marking as failed

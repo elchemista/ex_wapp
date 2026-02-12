@@ -12,8 +12,8 @@
 
 | Type | Server | Example | Usage |
 |------|--------|---------|-------|
-| **PN (Phone Number)** | `s.whatsapp.net` | `393519534944@s.whatsapp.net` | User-facing, server-facing (usync, prekey IQ, `<to>` attr) |
-| **PN with Device** | `s.whatsapp.net` | `393519534944:2@s.whatsapp.net` | Device-specific targeting |
+| **PN (Phone Number)** | `s.whatsapp.net` | `15550001111@s.whatsapp.net` | User-facing, server-facing (usync, prekey IQ, `<to>` attr) |
+| **PN with Device** | `s.whatsapp.net` | `15550001111:2@s.whatsapp.net` | Device-specific targeting |
 | **LID (Linked Identity)** | `lid` | `203139403767907@lid` | Signal session storage, encryption identity |
 | **LID with Device** | `lid` | `203139403767907:2@lid` | Device-specific LID |
 | **Group** | `g.us` | `120363043214477337@g.us` | Group chat addressing |
@@ -87,7 +87,7 @@ would be more robust.
 ### 2.3 Response Processing
 
 The response contains `<device>` nodes for each user. Each device has:
-- `jid`: The device JID (PN with device suffix, e.g., `393519534944:2@s.whatsapp.net`)
+- `jid`: The device JID (PN with device suffix, e.g., `15550001111:2@s.whatsapp.net`)
 - `key-index`: Device key index
 
 **ALL returned devices must be targeted** (except current device — see Section 5.3).
@@ -107,8 +107,8 @@ USync responses may include LID data. Store these mappings immediately:
 ```xml
 <iq xmlns="encrypt" type="get" to="s.whatsapp.net">
   <key>
-    <user jid="393519534944@s.whatsapp.net" reason="identity"/>
-    <user jid="393519534944:2@s.whatsapp.net" reason="identity"/>
+    <user jid="15550001111@s.whatsapp.net" reason="identity"/>
+    <user jid="15550001111:2@s.whatsapp.net" reason="identity"/>
   </key>
 </iq>
 ```

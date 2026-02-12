@@ -1,0 +1,45 @@
+ExWapp.Live.send_message(result.session, "393519534944@s.whatsapp.net", "nota comprare late")
+02:17:40.098 [info] [USYNC] Querying device list for ["393519534944@s.whatsapp.net"]
+02:17:40.098 [info] Sending node: <iq id="/KByNfvtr+hXnLFq" to="s.whatsapp.net" type="get" xmlns="usync"><usync context="message" index="0" last="true" mode="query" sid="CRmLQkl0bel882HW"><query><devices version="2"/></query><list><user jid="393519534944@s.whatsapp.net"/></list></usync></iq>
+02:17:40.098 [info] sending frame include_header=false header_hex=none payload=131 bytes frame=134 bytes
+02:17:40.098 [info] sending encrypted node size=131
+02:17:40.305 [info] [SESSION] Forwarding IQ /KByNfvtr+hXnLFq to 1 workers
+02:17:40.305 [info] [USYNC] Got device list response
+02:17:40.306 [info] [SEND] USync device map: %{"393519534944@s.whatsapp.net" => ["393519534944@s.whatsapp.net", "393519534944:37@s.whatsapp.net"]}
+02:17:40.306 [info] [SEND] Discovered recipient devices: ["393519534944@s.whatsapp.net", "393519534944:37@s.whatsapp.net"]
+02:17:40.306 [info] [SEND] Discovered own devices (excl. self): ["393519534944@s.whatsapp.net"]
+02:17:40.306 [info] [SEND] Fetching prekeys for 2 devices: ["393519534944@s.whatsapp.net", "393519534944:37@s.whatsapp.net"]
+02:17:40.306 [info] [PREKEY] Sending batch prekey request for 2 devices
+02:17:40.306 [info] Sending node: <iq id="xEu4Y6QHDiP+OcTe" to="s.whatsapp.net" type="get" xmlns="encrypt"><key><user jid="393519534944@s.whatsapp.net"/><user jid="393519534944:37@s.whatsapp.net"/></key></iq>
+02:17:40.306 [info] sending frame include_header=false header_hex=none payload=121 bytes frame=124 bytes
+02:17:40.306 [info] sending encrypted node size=121
+02:17:40.512 [info] [SESSION] Forwarding IQ xEu4Y6QHDiP+OcTe to 1 workers
+02:17:40.512 [info] [PREKEY] Got batch prekey response
+02:17:40.513 [info] [PREKEY] Parsed bundle for device_jid="393519534944@s.whatsapp.net"
+02:17:40.513 [info] [PREKEY] Parsed bundle for device_jid="393519534944:37@s.whatsapp.net"
+02:17:40.513 [info] [PREKEY] Parsed 2 prekey bundles, creating sessions
+02:17:40.513 [info] [PREKEY] Creating session for device_jid=393519534944@s.whatsapp.net (request_jid=)
+02:17:40.626 [info] [SIGNAL] Session created with X3DH + initial ratchet
+02:17:40.626 [info] [SESSION_STORE] Created session using elixir implementation
+02:17:40.626 [info] [PREKEY] Session ready for 393519534944@s.whatsapp.net, base_key=32 bytes
+02:17:40.626 [info] [PREKEY] Creating session for device_jid=393519534944:37@s.whatsapp.net (request_jid=)
+02:17:40.729 [info] [SIGNAL] Session created with X3DH + initial ratchet
+02:17:40.729 [info] [SESSION_STORE] Created session using elixir implementation
+02:17:40.729 [info] [PREKEY] Session ready for 393519534944:37@s.whatsapp.net, base_key=32 bytes
+02:17:40.734 [info] [SEND] Self-chat detected: routing all non-self targets as own payload
+02:17:40.734 [info] [SEND] Recipient targets for 393519534944@s.whatsapp.net: ["393519534944@s.whatsapp.net"]
+02:17:40.734 [info] [SEND] Own-device targets: ["393519534944@s.whatsapp.net"]
+02:17:40.734 [info] [SEND] Final fanout targets: [%{jid: "393519534944@s.whatsapp.net", payload_kind: :own}]
+02:17:40.734 [info] [ENCRYPTION] Attempting to encrypt message for 393519534944@s.whatsapp.net (sync)
+02:17:40.734 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :pairing, :noise, :lid_mapping, :chats, :adv_secret]
+02:17:40.735 [info] [ENCRYPTION] Signal data keys: [:sessions, :prekeys, :next_prekey_id, :identity_key, :signed_prekeys, :updated_at, :registration_id, :device_id]
+02:17:40.735 [info] [ENCRYPTION] Found identity key
+02:17:40.745 [info] [ENCRYPTION] Encrypted! type=prekey, size=217
+02:17:40.757 [info] [SEND] Using ADV signed identity with accountSignatureKey: 186 bytes
+{:ok, "5892AD026CA6E064CB59D0878A93EB9E"}
+02:17:40.757 [info] [SEND] Including device-identity in message
+02:17:40.757 [info] [SEND] Sent encrypted message to 1 targets (base=393519534944@s.whatsapp.net)
+02:17:40.758 [info] Sending node: <message id="5892AD026CA6E064CB59D0878A93EB9E" phash="2:FdjEzcdW" to="393519534944@s.whatsapp.net" type="text"><participants><to jid="393519534944@s.whatsapp.net"><enc type="pkmsg" v="2">[raw 217 bytes]</enc></to></participants><device-identity>[raw 186 bytes]</device-identity></message>
+02:17:40.758 [info] sending frame include_header=false header_hex=none payload=544 bytes frame=547 bytes
+02:17:40.758 [info] sending encrypted node size=544
+02:17:40.890 [info] [ACK] id=5892AD026CA6E064CB59D0878A93EB9E class=message type= from=393519534944@s.whatsapp.net to=

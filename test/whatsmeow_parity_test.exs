@@ -41,7 +41,7 @@ defmodule ExWapp.WhatsmeowParityTest do
       prekey: %{id: prekey_id, public: bob_one_time_prekey.public}
     }
 
-    sender_jid = "393519534944@s.whatsapp.net"
+    sender_jid = "15550001111@s.whatsapp.net"
 
     {:ok, first_payload} =
       ExWapp.Messages.build_text_proto("hello from parity test", [])
@@ -161,7 +161,7 @@ defmodule ExWapp.WhatsmeowParityTest do
       prekey: %{id: prekey_id, public: bob_one_time_prekey.public}
     }
 
-    sender_jid = "393519534944@s.whatsapp.net"
+    sender_jid = "15550001111@s.whatsapp.net"
 
     {:ok, payload} =
       ExWapp.Messages.build_text_proto("second enc candidate works", [])
@@ -394,7 +394,7 @@ defmodule ExWapp.WhatsmeowParityTest do
       prekey: %{id: prekey_id, public: bob_one_time_prekey.public}
     }
 
-    sender_jid = "393519534944@s.whatsapp.net"
+    sender_jid = "15550001111@s.whatsapp.net"
 
     history_sync_payload =
       build_history_sync_protocol_message([

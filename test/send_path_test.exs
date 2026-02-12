@@ -9,6 +9,7 @@ defmodule ExWapp.SendPathTest do
   use ExUnit.Case, async: true
 
   alias ExWapp.Pairing.ADV
+  alias ExWapp.Session.JIDUtils
   alias ExWapp.Signal.Keys
   alias WAAdv.{ADVDeviceIdentity, ADVSignedDeviceIdentity}
 
@@ -55,7 +56,7 @@ defmodule ExWapp.SendPathTest do
   test "DeviceSentMessage wraps message with destinationJid" do
     inner_proto = ExWapp.Messages.build_text_proto("hello own device", [])
 
-    destination_jid = "393519534944@s.whatsapp.net"
+    destination_jid = "15550001111@s.whatsapp.net"
 
     wrapped = %ExWapp.Proto.Message{
       deviceSentMessage: %ExWapp.Proto.DeviceSentMessage{
@@ -102,18 +103,41 @@ defmodule ExWapp.SendPathTest do
     assert <<0xFA, 0x01, _rest::binary>> = encoded_bin
   end
 
+  test "DeviceSentMessage includes phash when provided" do
+    inner_proto = ExWapp.Messages.build_text_proto("test", [])
+    phash = "2:abc123"
+
+    wrapped = %ExWapp.Proto.Message{
+      deviceSentMessage: %ExWapp.Proto.DeviceSentMessage{
+        destinationJid: "111@s.whatsapp.net",
+        message: inner_proto,
+        phash: phash
+      }
+    }
+
+    {:ok, encoded} = ExWapp.Proto.Message.encode(wrapped)
+    encoded_bin = IO.iodata_to_binary(encoded)
+
+    assert :binary.match(encoded_bin, phash) != :nomatch
+  end
+
   # ── Test 3: phash computation ──
 
   test "participant hash v2 matches whatsmeow format" do
-    # Verify phash = "2:" + base64(sha256(sorted_jids)[:6], no padding)
+    # Verify phash = "2:" + base64(sha256(sorted_ad_strings)[:6], no padding)
+    # whatsmeow uses ADString format: user.agent:device@server
     participants = [
-      "393519534944:36@s.whatsapp.net",
-      "393519534944@s.whatsapp.net",
+      "15550001111:36@s.whatsapp.net",
+      "15550001111@s.whatsapp.net",
       "6287865904022:2@s.whatsapp.net"
     ]
 
-    sorted = Enum.sort(participants)
-    concatenated = Enum.join(sorted, "")
+    # ADString conversion: user.0:device@server
+    ad_strings =
+      Enum.map(participants, &ExWapp.Session.MessageNode.jid_to_ad_string/1)
+      |> Enum.sort()
+
+    concatenated = Enum.join(ad_strings, "")
     <<first_6::binary-size(6), _::binary>> = :crypto.hash(:sha256, concatenated)
     expected = "2:" <> Base.encode64(first_6, padding: false)
 
@@ -128,11 +152,11 @@ defmodule ExWapp.SendPathTest do
   test "participant hash v2 is deterministic and order-independent" do
     participants_a = [
       "6287865904022:2@s.whatsapp.net",
-      "393519534944:36@s.whatsapp.net"
+      "15550001111:36@s.whatsapp.net"
     ]
 
     participants_b = [
-      "393519534944:36@s.whatsapp.net",
+      "15550001111:36@s.whatsapp.net",
       "6287865904022:2@s.whatsapp.net"
     ]
 
@@ -143,7 +167,57 @@ defmodule ExWapp.SendPathTest do
     assert compute_phash([]) == nil
   end
 
-  # ── Test 4: padding matches whatsmeow ──
+  # ── Test 4: self-chat target payload strategy ──
+
+  test "self-chat routes all non-current targets as own payloads" do
+    recipient_targets = [
+      "15550001111@s.whatsapp.net",
+      "15550001111:38@s.whatsapp.net"
+    ]
+
+    own_targets = ["15550001111@s.whatsapp.net"]
+
+    specs =
+      JIDUtils.build_self_chat_target_specs(
+        recipient_targets,
+        own_targets,
+        "15550001111@s.whatsapp.net"
+      )
+
+    assert specs == [
+             %{jid: "15550001111@s.whatsapp.net", payload_kind: :own},
+             %{jid: "15550001111:38@s.whatsapp.net", payload_kind: :own}
+           ]
+  end
+
+  test "self-chat keeps own payload when only one explicit-device target exists" do
+    specs =
+      JIDUtils.build_self_chat_target_specs(
+        ["15550001111:38@s.whatsapp.net"],
+        [],
+        "15550001111@s.whatsapp.net"
+      )
+
+    assert specs == [
+             %{jid: "15550001111:38@s.whatsapp.net", payload_kind: :own}
+           ]
+  end
+
+  test "self-chat fallback keeps one recipient target and own payload for others" do
+    specs =
+      JIDUtils.build_self_chat_fallback_target_specs(
+        ["15550001111@s.whatsapp.net", "15550001111:38@s.whatsapp.net"],
+        ["15550001111@s.whatsapp.net"],
+        "15550001111@s.whatsapp.net"
+      )
+
+    assert specs == [
+             %{jid: "15550001111@s.whatsapp.net", payload_kind: :recipient},
+             %{jid: "15550001111:38@s.whatsapp.net", payload_kind: :own}
+           ]
+  end
+
+  # ── Test 5: padding matches whatsmeow ──
 
   test "message padding produces valid PKCS7-like padding" do
     plaintext = "hello"
@@ -160,7 +234,7 @@ defmodule ExWapp.SendPathTest do
     assert padding == :binary.copy(<<pad_len>>, pad_len)
   end
 
-  # ── Test 5: full encrypt + wrap round-trip ──
+  # ── Test 6: full encrypt + wrap round-trip ──
 
   test "encrypt for recipient and own device produces different ciphertexts with correct types" do
     alice_identity = Keys.generate_key_pair()
@@ -288,20 +362,8 @@ defmodule ExWapp.SendPathTest do
     {signed, account_pub}
   end
 
-  # Reimplementation of the private generate_participant_hash_v2 for testing
-  defp compute_phash([]), do: nil
-
-  defp compute_phash(participants) when is_list(participants) do
-    participants =
-      participants
-      |> Enum.map(&to_string/1)
-      |> Enum.sort()
-
-    <<first_6_bytes::binary-size(6), _rest::binary>> =
-      participants
-      |> Enum.join("")
-      |> then(&:crypto.hash(:sha256, &1))
-
-    "2:" <> Base.encode64(first_6_bytes, padding: false)
+  # Delegates to the real implementation in MessageNode
+  defp compute_phash(participants) do
+    ExWapp.Session.MessageNode.generate_participant_hash_v2(participants)
   end
 end

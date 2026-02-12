@@ -203,8 +203,8 @@ Response:
 </iq>
 ```
 
-The device IDs map to JIDs like: `user:device_id@s.whatsapp.net` (e.g., `393519534944:29@s.whatsapp.net`).
-Device ID 0 means the primary phone: `393519534944@s.whatsapp.net` (no `:0` suffix).
+The device IDs map to JIDs like: `user:device_id@s.whatsapp.net` (e.g., `15550001111:29@s.whatsapp.net`).
+Device ID 0 means the primary phone: `15550001111@s.whatsapp.net` (no `:0` suffix).
 
 ### What Was Changed
 
@@ -273,13 +273,13 @@ Removed `ensure_sessions_for_identity_worker/3` and `ensure_own_device_sessions_
 
 Logs should now show:
 ```
-[USYNC] Querying device list for ["393515058942@s.whatsapp.net", "393519534944@s.whatsapp.net"]
-[SEND] USync device map: %{"393515058942@..." => ["393515058942:0@..."], "393519534944@..." => ["393519534944:0@...", "393519534944:29@..."]}
+[USYNC] Querying device list for ["393515058942@s.whatsapp.net", "15550001111@s.whatsapp.net"]
+[SEND] USync device map: %{"393515058942@..." => ["393515058942:0@..."], "15550001111@..." => ["15550001111:0@...", "15550001111:29@..."]}
 [SEND] Discovered recipient devices: ["393515058942:0@s.whatsapp.net"]
-[SEND] Discovered own devices (excl. self): ["393519534944:0@s.whatsapp.net"]
+[SEND] Discovered own devices (excl. self): ["15550001111:0@s.whatsapp.net"]
 [SEND] Fetching prekeys for 2 devices: [...]
 [SEND] Recipient targets for ...: [...]
-[SEND] Own-device targets: ["393519534944:0@s.whatsapp.net"]
+[SEND] Own-device targets: ["15550001111:0@s.whatsapp.net"]
 [SEND] Sent encrypted message to 2 targets (base=393515058942@s.whatsapp.net)
 ```
 
@@ -290,7 +290,7 @@ The outbound `<message>` node should contain multiple `<to>` children:
     <to jid="393515058942:0@s.whatsapp.net">
       <enc type="pkmsg" v="2">...</enc>
     </to>
-    <to jid="393519534944:0@s.whatsapp.net">
+    <to jid="15550001111:0@s.whatsapp.net">
       <enc type="pkmsg" v="2">...</enc>
     </to>
   </participants>
@@ -329,8 +329,8 @@ and discovered both recipient devices and own devices. However, the message stil
 arrive on the sender's phone. Logs showed:
 
 ```
-[SEND] USync device map: %{"393515059842@..." => [...], "393519534944@..." => [...]}
-[SEND] Discovered own devices (excl. self): ["393519534944@s.whatsapp.net"]
+[SEND] USync device map: %{"393515059842@..." => [...], "15550001111@..." => [...]}
+[SEND] Discovered own devices (excl. self): ["15550001111@s.whatsapp.net"]
 [SEND] All 2 devices already have sessions     <-- BUG: should have fetched prekeys!
 ```
 
@@ -408,8 +408,8 @@ and new outbound X3DH session creation, regardless of existing inbound sessions.
 
 Logs should now show:
 ```
-[SEND] Discovered own devices (excl. self): ["393519534944@s.whatsapp.net"]
-[SEND] Fetching prekeys for 2 devices: ["393515059842@s.whatsapp.net", "393519534944@s.whatsapp.net"]
+[SEND] Discovered own devices (excl. self): ["15550001111@s.whatsapp.net"]
+[SEND] Fetching prekeys for 2 devices: ["393515059842@s.whatsapp.net", "15550001111@s.whatsapp.net"]
 ```
 
 Instead of "All 2 devices already have sessions", both devices get fresh prekeys.
@@ -645,9 +645,9 @@ on phone/other linked devices.
 From logs:
 - USync returned own devices including base + explicit device IDs.
 - We logged own devices as:
-  - `["393519534944@s.whatsapp.net", "393519534944:32@s.whatsapp.net"]`
+  - `["15550001111@s.whatsapp.net", "15550001111:32@s.whatsapp.net"]`
 - But final own-device fanout only used:
-  - `["393519534944:32@s.whatsapp.net"]`
+  - `["15550001111:32@s.whatsapp.net"]`
 
 So the base own JID (phone path) was dropped from participant encryption targets.
 
@@ -1166,3 +1166,179 @@ pipeline: `discover_and_fetch_prekeys` → `target_hints` → `do_send_encrypted
 ### Verification
 
 - `mix test` passes (80 tests, 0 failures)
+
+## Feb 12, 2026 — Message ID Format + phash ADString Fix
+
+### Symptom
+
+Messages sent from ex_wapp were ACKed by the WhatsApp server but silently dropped
+by the recipient phone. After comparing with all three reference libraries (whatsmeow,
+whatsapp-rust, Baileys), two protocol-level format issues were identified.
+
+### Root Cause 1: Wrong Message ID Format
+
+**All three reference libraries** generate message IDs in a specific format:
+
+```
+"3EB0" + uppercase_hex(SHA256(timestamp_8bytes + ownJID@c.us + random_16bytes)[:9])
+```
+
+Total length: 22 characters (4 prefix + 18 hex).
+
+ex_wapp was generating 32 random hex chars, producing IDs like
+`5892AD026CA6E064CB59D0878A93EB9E` — completely wrong format and length.
+
+**Fix**: Rewrote `ExWapp.Messages.generate_id/1` to match the `3EB0` + SHA256 format.
+Added optional `own_jid` parameter. Updated callers in `outbound.ex` to pass own JID.
+
+### Root Cause 2: phash Used Wrong JID Format
+
+The participant hash (phash) for groups was computed from plain JID strings like
+`user@s.whatsapp.net`, but whatsmeow and whatsapp-rust use **ADString format**:
+`user.agent:device@server` (e.g., `1234567890.0:0@s.whatsapp.net`).
+
+**Fix**: Added `MessageNode.jid_to_ad_string/1` and updated `generate_participant_hash_v2`
+to convert JIDs to ADString format before hashing.
+
+### Additional Confirmation: DM Messages Must NOT Include phash
+
+Both whatsmeow and whatsapp-rust confirm DM messages should NOT have `phash` in the
+`<message>` node attributes — only groups include it. The current code correctly omits
+phash from DM messages after the Phase 2 refactor.
+
+### Verification
+
+- `mix compile` passes
+- `mix test` passes (87 tests, 0 failures)
+- Runtime verification: requires fresh pair + send test
+
+## Feb 12, 2026 — Self-Chat Decrypt Failure: Stale Session + Current Device in Targets
+
+### Symptom
+
+After the message ID + phash ADString fixes, the message arrived on the phone but showed
+"In attesa del messaggio. Potrebbe volerci del tempo" (Waiting for message, might take time).
+This means the phone received the encrypted stanza but could NOT decrypt it.
+
+From `logs_11.txt`:
+```
+[PREKEY] Sending batch prekey request for: ["393519534944:40@s.whatsapp.net"]
+[PREKEY] Bundle parsed: reg_id=1832 signed_prekey_id=1 prekey_id=751
+[ENCRYPTION] Encrypted! type=whisper, size=130
+Sending node: <message ...><participants><to jid="393519534944@s.whatsapp.net"><enc type="msg" v="2">...</enc></to></participants></message>
+```
+
+Two problems visible:
+1. Prekey fetched for device 40 — that's the **current device**, not the phone (device 0)
+2. Encrypted as `whisper`/`msg` instead of `pkmsg` — phone can't decrypt
+
+### Root Cause Analysis
+
+**Bug 1: Current device included in send targets**
+
+`discover_devices` built `all_device_jids` from `recipient_devices ++ own_devices` and
+filtered out the current device only from `own_devices`. But for self-chat, the recipient
+IS the sender — so the current device (40) appeared in `recipient_devices` from usync.
+The usync response returned device 40 as a recipient device, and it was never filtered out.
+
+Since device 40 was the only device returned (the phone device 0 was not returned or was
+already filtered), the send targeted only the current device — which is meaningless.
+
+**Bug 2: Stale inbound session produced `whisper` instead of `pkmsg`**
+
+An inbound Signal session existed for the phone device (device 0) from sync `pkmsg` messages
+received during login. This session had stale ratchet state from previous failed send attempts
+(logs_10.txt era, with wrong message ID format). The sending chain was consumed without the
+phone ever receiving those keys, making the session permanently out of sync.
+
+When encryption ran, it found the existing session and produced `whisper` (msg) instead of
+`pkmsg`. The phone couldn't decrypt because its ratchet state didn't match — it never
+received the messages that advanced our sending chain.
+
+**Verification: Double Ratchet implementation is correct**
+
+Extensive mathematical analysis of `lib/ex_wapp/signal/session.ex` confirmed:
+- X3DH key agreement is correct
+- Chain key derivation (`HMAC(chain_key, 0x01)` for message key, `0x02` for next chain) is correct
+- DH ratchet step properly derives both sending and receiving chains
+- MAC computation and identity key ordering are correct
+- AES-256-CBC + PKCS7 padding is correct
+
+The protocol implementation itself is sound. The issue was purely stale state from
+previously failed sends corrupting the ratchet synchronization.
+
+### What Was Changed
+
+All changes in `lib/ex_wapp/session/outbound.ex`.
+
+#### Fix 1: Exclude current device from `all_device_jids`
+
+In `discover_devices`:
+
+```elixir
+# Before: current device filtered only from own_devices, not recipient_devices
+all_device_jids = JIDUtils.normalize_target_list(recipient_devices ++ own_devices)
+
+# After: filter current device from combined list (catches self-chat case)
+all_device_jids =
+  JIDUtils.normalize_target_list(recipient_devices ++ own_devices)
+  |> Enum.reject(&current_device_target?(&1, own_device_id))
+```
+
+#### Fix 2: Force fresh prekey sessions for self-chat targets
+
+In `ensure_signal_session_worker`, before `find_devices_needing_prekeys`:
+
+```elixir
+self_chat? = self_chat_destination?(state.store, jid, own_sender_jid)
+
+signal_sessions =
+  if self_chat? do
+    lid_mapping = Account.load_lid_mapping(state.store)
+    Logger.info("[SEND] Self-chat: clearing #{length(all_device_jids)} existing sessions to force fresh pkmsg")
+
+    Enum.reduce(all_device_jids, signal_sessions, fn device_jid, sessions ->
+      signal_jid = JIDUtils.resolve_signal_encryption_jid(device_jid, lid_mapping)
+      sessions = SessionStore.delete_session(sessions, device_jid)
+      if signal_jid != "" and signal_jid != device_jid do
+        SessionStore.delete_session(sessions, signal_jid)
+      else
+        sessions
+      end
+    end)
+  else
+    signal_sessions
+  end
+```
+
+This clears existing sessions (including LID-mapped variants) for all self-chat targets,
+forcing fresh prekey fetch and X3DH session establishment. The first message to each
+target will be `pkmsg`, which the phone treats as new session setup.
+
+### Why This Matches Reference Libraries
+
+whatsapp-rust (`send.rs`):
+- Self-chat detection: compares user parts, excludes current device
+- Own devices get DSM payload
+- Prekeys only fetched if `load_session().is_none()`
+
+The key difference is that whatsapp-rust doesn't accumulate stale sessions from failed
+sends because it handles message delivery more robustly. Our defensive approach of
+clearing sessions for self-chat is safe — a fresh `pkmsg` always works for establishing
+a new session pair.
+
+### Key Takeaway
+
+For self-chat (sending to own number):
+1. **Always exclude current device** from send targets — usync returns it as a recipient
+   device, but sending to yourself is meaningless
+2. **Clear existing sessions** before prekey fetch — stale ratchet state from previous
+   failed sends (or accumulated inbound sync) makes `whisper` messages undecryptable
+3. **Force `pkmsg`** for self-chat targets — fresh X3DH is the most reliable way to
+   establish a working bidirectional session
+
+### Verification
+
+- `mix compile` passes
+- `mix test` passes (87 tests, 0 failures)
+- Runtime verification: requires fresh send test to confirm phone can now decrypt

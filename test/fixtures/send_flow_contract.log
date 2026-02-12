@@ -1,0 +1,11 @@
+[USYNC] Querying device list for ["<JID_BASE>"]
+[SEND] USync device map: %{"<JID_BASE>" => ["<JID_BASE>", "<JID_DEVICE>"]}
+[PREKEY] Sending batch prekey request for 2 devices
+[SIGNAL] Session created with X3DH + initial ratchet
+[SEND] Self-chat detected: primary recipient + own-device sync payloads
+[SEND] Self-chat target specs: [%{jid: "<JID_BASE>", payload_kind: :recipient}, %{jid: "<JID_DEVICE>", payload_kind: :own}]
+[ENCRYPTION] Attempting to encrypt message for <JID_BASE> (sync)
+[ENCRYPTION] Encrypted! type=prekey, size=217
+[SEND] Sent encrypted message to <JID_BASE> id=<MESSAGE_ID>
+Sending node: <message id="<MESSAGE_ID>" phash="2:<PHASH>" to="<JID_BASE>" type="text"><participants>...</participants></message>
+[ACK] id=<MESSAGE_ID> class=message type= from=<JID_BASE> to=

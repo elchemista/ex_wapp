@@ -39,15 +39,40 @@ defmodule ExWapp.Messages do
           mentions: [String.t()]
         ]
 
-  @doc """
-  Generates a unique message ID.
+  @web_message_id_prefix "3EB0"
 
-  WhatsApp message IDs are uppercase hex strings, typically 32 characters.
+  @doc """
+  Generates a unique message ID matching whatsmeow/Baileys/whatsapp-rust format.
+
+  Format: "3EB0" + uppercase hex of SHA256(timestamp + ownJID@c.us + 16 random bytes)[:9]
+  Total length: 22 characters (4 prefix + 18 hex).
   """
-  @spec generate_id() :: String.t()
-  def generate_id do
-    :crypto.strong_rand_bytes(16)
-    |> Base.encode16(case: :upper)
+  @spec generate_id(String.t() | nil) :: String.t()
+  def generate_id(own_jid \\ nil) do
+    timestamp = System.system_time(:second)
+    <<ts::big-unsigned-64>> = <<timestamp::big-unsigned-64>>
+    random = :crypto.strong_rand_bytes(16)
+
+    jid_bytes =
+      case own_jid do
+        jid when is_binary(jid) and jid != "" ->
+          # Extract user part and append @c.us (whatsmeow format)
+          user_part =
+            jid
+            |> String.replace(~r/:(\d+)@/, "@")
+            |> String.split("@", parts: 2)
+            |> hd()
+
+          user_part <> "@c.us"
+
+        _ ->
+          ""
+      end
+
+    data = <<ts::big-unsigned-64>> <> jid_bytes <> random
+    <<first_9::binary-size(9), _rest::binary>> = :crypto.hash(:sha256, data)
+
+    @web_message_id_prefix <> Base.encode16(first_9, case: :upper)
   end
 
   @doc """

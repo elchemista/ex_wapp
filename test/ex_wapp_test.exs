@@ -101,7 +101,7 @@ defmodule ExWappTest do
       node = %ExWapp.Binary.Node{
         tag: "message",
         attrs: %{
-          "from" => "393519534944@s.whatsapp.net",
+          "from" => "15550001111@s.whatsapp.net",
           "id" => "MSG_1",
           "type" => "text",
           "t" => "1730000000"
@@ -114,7 +114,7 @@ defmodule ExWappTest do
 
       chats = ExWapp.list_chats(session)
       assert length(chats) == 1
-      assert hd(chats).jid == "393519534944@s.whatsapp.net"
+      assert hd(chats).jid == "15550001111@s.whatsapp.net"
 
       GenServer.stop(session)
     end
@@ -125,7 +125,7 @@ defmodule ExWappTest do
       node = %ExWapp.Binary.Node{
         tag: "message",
         attrs: %{
-          "from" => "393519534944@s.whatsapp.net",
+          "from" => "15550001111@s.whatsapp.net",
           "id" => "MSG_2",
           "type" => "text",
           "t" => "1730000001"
@@ -138,7 +138,7 @@ defmodule ExWappTest do
 
       chats = ExWapp.list_chats(session)
       assert length(chats) == 1
-      assert hd(chats).jid == "393519534944@s.whatsapp.net"
+      assert hd(chats).jid == "15550001111@s.whatsapp.net"
       assert hd(chats).messages |> hd() |> Map.get(:id) == "MSG_2"
 
       GenServer.stop(session)

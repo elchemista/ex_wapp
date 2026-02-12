@@ -15,9 +15,9 @@ defmodule ExWapp.Session.Outbound do
     Targets
   }
 
-  @spec send_text_worker(pid(), map(), String.t(), iodata()) ::
+  @spec send_text_worker(pid(), map(), String.t(), iodata(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
-  def send_text_worker(session_pid, state, jid, text) do
+  def send_text_worker(session_pid, state, jid, text, opts \\ []) do
     normalized_jid = normalize_jid_with_device(jid)
 
     if JID.is_group?(normalized_jid) do
@@ -35,7 +35,8 @@ defmodule ExWapp.Session.Outbound do
             jid,
             text,
             prekey_bundles,
-            target_hints
+            target_hints,
+            opts
           )
 
         {:error, reason} ->
@@ -52,7 +53,8 @@ defmodule ExWapp.Session.Outbound do
        )
        when is_pid(conn) do
     group_jid = strip_device_from_jid(normalize_jid_with_device(group_jid))
-    message_id = Messages.generate_id()
+    own_jid = Account.local_account_base_jid(store)
+    message_id = Messages.generate_id(own_jid)
     timestamp = System.system_time(:second)
 
     with {:ok, group_info} <- query_group_info_worker(state, group_jid),
@@ -435,6 +437,34 @@ defmodule ExWapp.Session.Outbound do
     {recipient_devices, own_devices, all_usync_devices, all_device_jids} =
       discover_devices(state, recipient_base_jid, own_sender_jid, own_device_id)
 
+    # For self-chat, force fresh prekey-based sessions for all targets.
+    # Existing sessions may have stale ratchet state from inbound sync or
+    # previously failed sends.  A fresh outbound pkmsg is the most reliable
+    # way to establish a working session pair (same approach as group send).
+    self_chat? = self_chat_destination?(state.store, jid, own_sender_jid)
+
+    signal_sessions =
+      if self_chat? do
+        lid_mapping = Account.load_lid_mapping(state.store)
+
+        Logger.info(
+          "[SEND] Self-chat: clearing #{length(all_device_jids)} existing sessions to force fresh pkmsg"
+        )
+
+        Enum.reduce(all_device_jids, signal_sessions, fn device_jid, sessions ->
+          signal_jid = JIDUtils.resolve_signal_encryption_jid(device_jid, lid_mapping)
+          sessions = SessionStore.delete_session(sessions, device_jid)
+
+          if signal_jid != "" and signal_jid != device_jid do
+            SessionStore.delete_session(sessions, signal_jid)
+          else
+            sessions
+          end
+        end)
+      else
+        signal_sessions
+      end
+
     devices_needing_prekeys =
       find_devices_needing_prekeys(state.store, signal_sessions, all_device_jids)
 
@@ -499,7 +529,12 @@ defmodule ExWapp.Session.Outbound do
 
     # All usync devices INCLUDING current device — needed for phash (whatsmeow parity)
     all_usync_devices = JIDUtils.normalize_target_list(recipient_devices ++ own_devices_all)
-    all_device_jids = JIDUtils.normalize_target_list(recipient_devices ++ own_devices)
+
+    # Exclude current device from send targets.  For self-chat the recipient IS us,
+    # so device 40 appears in recipient_devices — must be filtered here.
+    all_device_jids =
+      JIDUtils.normalize_target_list(recipient_devices ++ own_devices)
+      |> Enum.reject(&current_device_target?(&1, own_device_id))
 
     Logger.debug("[SEND] Discovered recipient devices: #{inspect(recipient_devices)}")
     Logger.debug("[SEND] Discovered own devices (excl. self): #{inspect(own_devices)}")
@@ -718,14 +753,19 @@ defmodule ExWapp.Session.Outbound do
          jid,
          text,
          prekey_bundles,
-         target_hints
+         target_hints,
+         opts
        ) do
-    message_id = Messages.generate_id()
+    own_jid = Account.local_account_base_jid(store)
+    message_id = Messages.generate_id(own_jid)
     timestamp = System.system_time(:second)
 
-    with {:ok, payloads} <- build_send_payloads(jid, text),
-         {target_specs, all_usync_devices} <-
-           resolve_send_targets(store, signal_sessions, jid, prekey_bundles, target_hints),
+    with {target_specs, all_usync_devices} <-
+           resolve_send_targets(store, signal_sessions, jid, prekey_bundles, target_hints, opts),
+         # Keep participant hash computation for diagnostics/parity checks, but do not
+         # include it in DM message attrs or DeviceSentMessage payloads.
+         _participant_hash <- compute_participant_hash_for_send(all_usync_devices, target_specs),
+         {:ok, payloads} <- build_send_payloads(jid, text),
          {:ok, participant_nodes, updated_sessions, include_identity} <-
            encrypt_for_targets(
              store,
@@ -752,8 +792,7 @@ defmodule ExWapp.Session.Outbound do
           message_id,
           participant_nodes,
           store,
-          include_identity,
-          all_usync_devices
+          include_identity
         )
 
       send_encrypted_node(state, conn, store, jid, message_id, node, payloads)
@@ -772,7 +811,7 @@ defmodule ExWapp.Session.Outbound do
         recipient_payload = Encryption.pad_message(payload)
 
         own_payload =
-          case build_own_devices_payload(proto, jid) do
+          case build_own_devices_payload(proto, jid, nil) do
             {:ok, own_p} ->
               Encryption.pad_message(own_p)
 
@@ -788,9 +827,23 @@ defmodule ExWapp.Session.Outbound do
     end
   end
 
-  defp resolve_send_targets(store, signal_sessions, jid, prekey_bundles, target_hints) do
+  defp compute_participant_hash_for_send(all_usync_devices, _target_specs)
+       when is_list(all_usync_devices) and all_usync_devices != [] do
+    MessageNode.generate_participant_hash_v2(all_usync_devices)
+  end
+
+  defp compute_participant_hash_for_send(_all_usync_devices, target_specs)
+       when is_list(target_specs) do
+    target_specs
+    |> Enum.map(&Map.get(&1, :jid, ""))
+    |> JIDUtils.normalize_target_list()
+    |> MessageNode.generate_participant_hash_v2()
+  end
+
+  defp resolve_send_targets(store, signal_sessions, jid, prekey_bundles, target_hints, opts) do
     all_prekey_bundles = prekey_bundles || %{}
     hints = target_hints || %{}
+    self_chat_mode = Keyword.get(opts, :self_chat_mode, :dsm_all_non_current)
 
     recipient_prekey_bundles = filter_prekey_bundles_for_identity(all_prekey_bundles, jid)
 
@@ -828,9 +881,19 @@ defmodule ExWapp.Session.Outbound do
 
     target_specs =
       if self_chat? do
-        if self_chat?, do: Logger.info("[SEND] Self-chat detected: own payload for all targets")
-        self_sync = JIDUtils.normalize_target_list(recipient_targets ++ own_targets)
-        Enum.map(self_sync, &%{jid: &1, payload_kind: :own})
+        specs =
+          case self_chat_mode do
+            :recipient_primary ->
+              Logger.warning("[SEND] Self-chat fallback mode: recipient payload primary")
+              JIDUtils.build_self_chat_fallback_target_specs(recipient_targets, own_targets, jid)
+
+            _ ->
+              Logger.info("[SEND] Self-chat detected: DSM payload for all non-current targets")
+              JIDUtils.build_self_chat_target_specs(recipient_targets, own_targets, jid)
+          end
+
+        Logger.info("[SEND] Self-chat target specs: #{inspect(specs)}")
+        specs
       else
         JIDUtils.build_dm_target_specs(recipient_targets, own_targets)
       end
@@ -975,12 +1038,12 @@ defmodule ExWapp.Session.Outbound do
 
   defp current_device_target?(_jid, _own_device_id), do: false
 
-  defp build_own_devices_payload(proto_message, destination_jid) do
+  defp build_own_devices_payload(proto_message, destination_jid, phash) do
     wrapped = %ExWapp.Proto.Message{
       deviceSentMessage: %ExWapp.Proto.DeviceSentMessage{
         destinationJid: strip_device_from_jid(destination_jid),
         message: proto_message,
-        phash: nil
+        phash: phash
       }
     }
 
@@ -1064,6 +1127,20 @@ defmodule ExWapp.Session.Outbound do
 
     case result do
       {:ok, ciphertext, enc_type, updated_sessions} ->
+        if enc_type == :prekey do
+          case ExWapp.Signal.WireFormat.parse_prekey_signal_message(ciphertext) do
+            {:ok, parsed} ->
+              Logger.info(
+                "[SEND] pkmsg wire fields target=#{target_jid} reg_id=#{parsed.registration_id} signed_prekey_id=#{parsed.signed_prekey_id} prekey_id=#{inspect(parsed.prekey_id)} base_key_size=#{byte_size(parsed.base_key)} inner_size=#{byte_size(parsed.message)}"
+              )
+
+            {:error, reason} ->
+              Logger.warning(
+                "[SEND] pkmsg wire parse failed for target=#{target_jid}: #{inspect(reason)}"
+              )
+          end
+        end
+
         updated_sessions =
           if signal_jid != target_jid,
             do: ensure_signal_session_alias(updated_sessions, signal_jid, target_jid),
@@ -1124,30 +1201,13 @@ defmodule ExWapp.Session.Outbound do
          message_id,
          participant_nodes,
          store,
-         include_identity,
-         all_usync_devices
+         include_identity
        ) do
     attrs = %{
       "id" => message_id,
       "to" => strip_device_from_jid(jid),
       "type" => "text"
     }
-
-    # Match whatsmeow: phash is computed from ALL usync devices (including current device),
-    # not just the encrypted targets. See whatsmeow send.go:859 participantListHashV2(allDevices).
-    phash_jids =
-      if all_usync_devices != [] do
-        all_usync_devices
-      else
-        MessageNode.extract_participant_jids(participant_nodes)
-      end
-
-    attrs =
-      MessageNode.maybe_put_message_attr(
-        attrs,
-        "phash",
-        MessageNode.generate_participant_hash_v2(phash_jids)
-      )
 
     participants_node = %Binary.Node{
       tag: "participants",
@@ -1263,6 +1323,6 @@ defmodule ExWapp.Session.Outbound do
         extra_metadata
       )
 
-    Telemetry.execute([:ex_wapp, :session, event], measurements, metadata)
+    Telemetry.execute(event, measurements, metadata)
   end
 end

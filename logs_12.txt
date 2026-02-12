@@ -1,0 +1,208 @@
+ExWapp.Live.send_message(result.session, "393519534944@s.whatsapp.net", "nota comprare late")
+21:38:52.841 [info] Sending node: <iq id="cgeQcEGXoiQMQ74h" to="s.whatsapp.net" type="get" xmlns="usync"><usync context="message" index="0" last="true" mode="query" sid="/a3DpNyM4/GyBm8j"><query><devices version="2"/></query><list><user jid="393519534944@s.whatsapp.net"/></list></usync></iq>
+21:38:52.842 [info] sending frame include_header=false header_hex=none payload=131 bytes frame=134 bytes
+21:38:52.842 [info] sending encrypted node size=131
+21:38:53.026 [info] [SEND] Self-chat: clearing 1 existing sessions to force fresh pkmsg
+21:38:53.028 [info] Sending node: <iq id="vK2ttIgQe9daqbQ0" to="s.whatsapp.net" type="get" xmlns="encrypt"><key><user jid="393519534944@s.whatsapp.net"/></key></iq>
+21:38:53.028 [info] sending frame include_header=false header_hex=none payload=85 bytes frame=88 bytes
+21:38:53.028 [info] sending encrypted node size=85
+21:38:53.347 [info] [PREKEY] Bundle parsed: reg_id=793902256 signed_prekey_id=10336087 prekey_id=3569143
+21:38:53.518 [info] [SIGNAL] Session created with X3DH + initial ratchet
+21:38:53.518 [info] [SESSION_STORE] Created session using elixir implementation
+21:38:53.524 [info] [SEND] Self-chat detected: DSM payload for all non-current targets
+21:38:53.524 [info] [SEND] Self-chat target specs: [%{jid: "393519534944@s.whatsapp.net", payload_kind: :own}]
+21:38:53.526 [info] [ENCRYPTION] Attempting to encrypt message for 393519534944@s.whatsapp.net (sync)
+21:38:53.526 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :lid_mapping, :pairing, :noise, :chats, :adv_secret]
+21:38:53.526 [info] [ENCRYPTION] Signal data keys: [:sessions, :identity_key, :registration_id, :prekeys, :next_prekey_id, :signed_prekeys, :updated_at, :device_id]
+21:38:53.526 [info] [ENCRYPTION] Found identity key
+21:38:53.526 [info] [ENCRYPTION] Encrypted! type=prekey, size=201
+21:38:53.526 [info] [SEND] pkmsg wire fields target=393519534944@s.whatsapp.net reg_id=48969 signed_prekey_id=10336087 prekey_id=3569143 base_key_size=32 inner_size=114
+21:38:53.545 [info] [SEND] Sent encrypted message to 393519534944@s.whatsapp.net id=3EB06C3288B2FE8B070FC2
+{:ok, "3EB06C3288B2FE8B070FC2"}
+21:38:53.546 [info] Sending node: <message id="3EB06C3288B2FE8B070FC2" to="393519534944@s.whatsapp.net" type="text"><participants><to jid="393519534944@s.whatsapp.net"><enc type="pkmsg" v="2">[raw 201 bytes]</enc></to></participants><device-identity>[raw 186 bytes]</device-identity></message>
+21:38:53.546 [info] sending frame include_header=false header_hex=none payload=509 bytes frame=512 bytes
+21:38:53.546 [info] sending encrypted node size=509
+21:38:53.829 [info] [ACK] id=3EB06C3288B2FE8B070FC2 class=message type= from=393519534944@s.whatsapp.net to=
+21:38:53.844 [info] Notification type=privacy_token from=393519534944@s.whatsapp.net id=71212750
+21:38:53.844 [info] [PRIVACY_TOKEN] Storing trusted_contact token for 393519534944@s.whatsapp.net (11 bytes)
+21:38:53.852 [info] Sending node: <ack class="notification" id="71212750" to="393519534944@s.whatsapp.net" type="privacy_token"/>
+21:38:53.852 [info] sending frame include_header=false header_hex=none payload=42 bytes frame=45 bytes
+21:38:53.852 [info] sending encrypted node size=42
+21:38:54.166 [info] [RECEIPT] from=33625382846503@lid id=3EB06C3288B2FE8B070FC2 type=sender
+21:38:59.547 [info] [SEND] Outbound confirmed id=3EB06C3288B2FE8B070FC2 status=delivered
+λ -> 
+nil
+21:39:38.978 [info] sending frame include_header=false header_hex=none payload=26 bytes frame=29 bytes
+21:39:38.978 [info] sending encrypted node size=26
+λ -> ExWapp.Live.send_message(result.session, "120363043214477337@g.us", "funziona cazzooooo ")
+21:39:47.343 [info] Sending node: <iq id="GhbTiAgGZbJiFa3l" to="120363043214477337@g.us" type="get" xmlns="w:g2"><query request="interactive"/></iq>
+21:39:47.343 [info] sending frame include_header=false header_hex=none payload=78 bytes frame=81 bytes
+21:39:47.343 [info] sending encrypted node size=78
+21:39:47.726 [info] Sending node: <iq id="pgM05qqxOOsqB3OQ" to="s.whatsapp.net" type="get" xmlns="usync"><usync context="message" index="0" last="true" mode="query" sid="50sQlTKrdAml/D8+"><query><devices version="2"/></query><list><user jid="40587726160011@lid"/><user jid="393755637708@s.whatsapp.net"/><user jid="33625382846503@lid"/><user jid="393519534944@s.whatsapp.net"/><user jid="270578829287645@lid"/><user jid="393515058942@s.whatsapp.net"/><user jid="199316597694686@lid"/><user jid="393207611780@s.whatsapp.net"/></list></usync></iq>
+21:39:47.726 [info] sending frame include_header=false header_hex=none payload=328 bytes frame=331 bytes
+21:39:47.726 [info] sending encrypted node size=328
+21:39:47.982 [info] Sending node: <iq id="bq1Zylv+7yKDKDpi" to="s.whatsapp.net" type="get" xmlns="encrypt"><key><user jid="40587726160011@lid"/><user jid="393755637708@s.whatsapp.net"/><user jid="33625382846503@lid"/><user jid="393519534944@s.whatsapp.net"/><user jid="270578829287645@lid"/><user jid="270578829287645:32@lid"/><user jid="393515058942@s.whatsapp.net"/><user jid="393515058942:32@s.whatsapp.net"/><user jid="199316597694686@lid"/><user jid="199316597694686:53@lid"/><user jid="393207611780@s.whatsapp.net"/><user jid="393207611780:53@s.whatsapp.net"/></key></iq>
+21:39:47.982 [info] sending frame include_header=false header_hex=none payload=410 bytes frame=413 bytes
+21:39:47.982 [info] sending encrypted node size=410
+21:39:48.246 [info] [PREKEY] Bundle parsed: reg_id=19587161 signed_prekey_id=4933511 prekey_id=2417
+21:39:48.246 [info] [PREKEY] Bundle parsed: reg_id=793902256 signed_prekey_id=10336087 prekey_id=3569098
+21:39:48.246 [info] [PREKEY] Bundle parsed: reg_id=134466763 signed_prekey_id=16720050 prekey_id=4217
+21:39:48.246 [info] [PREKEY] Bundle parsed: reg_id=52798749 signed_prekey_id=5052553 prekey_id=4958185
+21:39:48.246 [info] [PREKEY] Bundle parsed: reg_id=8063 signed_prekey_id=1 prekey_id=911
+21:39:48.246 [info] [PREKEY] Bundle parsed: reg_id=1378861421 signed_prekey_id=1691418 prekey_id=994
+21:39:48.246 [info] [PREKEY] Bundle parsed: reg_id=19587161 signed_prekey_id=4933511 prekey_id=2431
+21:39:48.246 [info] [PREKEY] Bundle parsed: reg_id=793902256 signed_prekey_id=10336087 prekey_id=3569107
+21:39:48.246 [info] [PREKEY] Bundle parsed: reg_id=134466763 signed_prekey_id=16720050 prekey_id=4691
+21:39:48.246 [info] [PREKEY] Bundle parsed: reg_id=52798749 signed_prekey_id=5052553 prekey_id=4958085
+21:39:48.247 [info] [PREKEY] Bundle parsed: reg_id=8063 signed_prekey_id=1 prekey_id=1586
+21:39:48.247 [info] [PREKEY] Bundle parsed: reg_id=1378861421 signed_prekey_id=1691418 prekey_id=1012
+21:39:48.326 [info] [SIGNAL] Session created with X3DH + initial ratchet
+21:39:48.326 [info] [SESSION_STORE] Created session using elixir implementation
+21:39:48.408 [info] [SIGNAL] Session created with X3DH + initial ratchet
+21:39:48.408 [info] [SESSION_STORE] Created session using elixir implementation
+21:39:48.494 [info] [SIGNAL] Session created with X3DH + initial ratchet
+21:39:48.494 [info] [SESSION_STORE] Created session using elixir implementation
+21:39:48.619 [info] [SIGNAL] Session created with X3DH + initial ratchet
+21:39:48.619 [info] [SESSION_STORE] Created session using elixir implementation
+21:39:48.755 [info] [SIGNAL] Session created with X3DH + initial ratchet
+21:39:48.755 [info] [SESSION_STORE] Created session using elixir implementation
+21:39:48.891 [info] [SIGNAL] Session created with X3DH + initial ratchet
+21:39:48.891 [info] [SESSION_STORE] Created session using elixir implementation
+21:39:48.979 [info] [ENCRYPTION] Attempting to encrypt message for 40587726160011@lid (sync)
+21:39:48.979 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :lid_mapping, :pairing, :noise, :chats, :adv_secret, :tctokens]
+21:39:48.979 [info] [ENCRYPTION] Signal data keys: [:sessions, :identity_key, :registration_id, :prekeys, :next_prekey_id, :signed_prekeys, :updated_at, :device_id, :sender_keys]
+21:39:48.979 [info] [ENCRYPTION] Found identity key
+21:39:48.979 [info] [ENCRYPTION] Encrypted! type=whisper, size=162
+21:39:48.979 [info] [ENCRYPTION] Attempting to encrypt message for 40587726160011@lid (sync)
+21:39:48.979 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :lid_mapping, :pairing, :noise, :chats, :adv_secret, :tctokens]
+21:39:48.980 [info] [ENCRYPTION] Signal data keys: [:sessions, :identity_key, :registration_id, :prekeys, :next_prekey_id, :signed_prekeys, :updated_at, :device_id, :sender_keys]
+21:39:48.980 [info] [ENCRYPTION] Found identity key
+21:39:48.980 [info] [ENCRYPTION] Encrypted! type=prekey, size=248
+21:39:48.980 [info] [SEND] pkmsg wire fields target=393755637708@s.whatsapp.net reg_id=48969 signed_prekey_id=4933511 prekey_id=2417 base_key_size=32 inner_size=162
+21:39:48.980 [info] [ENCRYPTION] Attempting to encrypt message for 33625382846503@lid (sync)
+21:39:48.980 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :lid_mapping, :pairing, :noise, :chats, :adv_secret, :tctokens]
+21:39:48.980 [info] [ENCRYPTION] Signal data keys: [:sessions, :identity_key, :registration_id, :prekeys, :next_prekey_id, :signed_prekeys, :updated_at, :device_id, :sender_keys]
+21:39:48.980 [info] [ENCRYPTION] Found identity key
+21:39:48.980 [info] [ENCRYPTION] Encrypted! type=prekey, size=250
+21:39:48.980 [info] [SEND] pkmsg wire fields target=33625382846503@lid reg_id=48969 signed_prekey_id=10336087 prekey_id=3569107 base_key_size=32 inner_size=162
+21:39:48.980 [info] [ENCRYPTION] Attempting to encrypt message for 393519534944@s.whatsapp.net (sync)
+21:39:48.981 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :lid_mapping, :pairing, :noise, :chats, :adv_secret, :tctokens]
+21:39:48.981 [info] [ENCRYPTION] Signal data keys: [:sessions, :identity_key, :registration_id, :prekeys, :next_prekey_id, :signed_prekeys, :updated_at, :device_id, :sender_keys]
+21:39:48.981 [info] [ENCRYPTION] Found identity key
+21:39:48.981 [info] [ENCRYPTION] Encrypted! type=whisper, size=162
+21:39:48.981 [info] [ENCRYPTION] Attempting to encrypt message for 270578829287645@lid (sync)
+21:39:48.981 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :lid_mapping, :pairing, :noise, :chats, :adv_secret, :tctokens]
+21:39:48.981 [info] [ENCRYPTION] Signal data keys: [:sessions, :identity_key, :registration_id, :prekeys, :next_prekey_id, :signed_prekeys, :updated_at, :device_id, :sender_keys]
+21:39:48.981 [info] [ENCRYPTION] Found identity key
+21:39:48.981 [info] [ENCRYPTION] Encrypted! type=whisper, size=162
+21:39:48.981 [info] [ENCRYPTION] Attempting to encrypt message for 270578829287645:32@lid (sync)
+21:39:48.982 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :lid_mapping, :pairing, :noise, :chats, :adv_secret, :tctokens]
+21:39:48.982 [info] [ENCRYPTION] Signal data keys: [:sessions, :identity_key, :registration_id, :prekeys, :next_prekey_id, :signed_prekeys, :updated_at, :device_id, :sender_keys]
+21:39:48.982 [info] [ENCRYPTION] Found identity key
+21:39:48.982 [info] [ENCRYPTION] Encrypted! type=whisper, size=162
+21:39:48.982 [info] [ENCRYPTION] Attempting to encrypt message for 270578829287645@lid (sync)
+21:39:48.982 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :lid_mapping, :pairing, :noise, :chats, :adv_secret, :tctokens]
+21:39:48.982 [info] [ENCRYPTION] Signal data keys: [:sessions, :identity_key, :registration_id, :prekeys, :next_prekey_id, :signed_prekeys, :updated_at, :device_id, :sender_keys]
+21:39:48.982 [info] [ENCRYPTION] Found identity key
+21:39:48.982 [info] [ENCRYPTION] Encrypted! type=prekey, size=248
+21:39:48.982 [info] [SEND] pkmsg wire fields target=393515058942@s.whatsapp.net reg_id=48969 signed_prekey_id=16720050 prekey_id=4217 base_key_size=32 inner_size=162
+21:39:48.982 [info] [ENCRYPTION] Attempting to encrypt message for 270578829287645:32@lid (sync)
+21:39:48.983 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :lid_mapping, :pairing, :noise, :chats, :adv_secret, :tctokens]
+21:39:48.983 [info] [ENCRYPTION] Signal data keys: [:sessions, :identity_key, :registration_id, :prekeys, :next_prekey_id, :signed_prekeys, :updated_at, :device_id, :sender_keys]
+21:39:48.983 [info] [ENCRYPTION] Found identity key
+21:39:48.983 [info] [ENCRYPTION] Encrypted! type=whisper, size=162
+21:39:48.983 [info] [ENCRYPTION] Attempting to encrypt message for 199316597694686@lid (sync)
+21:39:48.983 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :lid_mapping, :pairing, :noise, :chats, :adv_secret, :tctokens]
+21:39:48.983 [info] [ENCRYPTION] Signal data keys: [:sessions, :identity_key, :registration_id, :prekeys, :next_prekey_id, :signed_prekeys, :updated_at, :device_id, :sender_keys]
+21:39:48.983 [info] [ENCRYPTION] Found identity key
+21:39:48.983 [info] [ENCRYPTION] Encrypted! type=whisper, size=162
+21:39:48.983 [info] [ENCRYPTION] Attempting to encrypt message for 199316597694686:53@lid (sync)
+21:39:48.984 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :lid_mapping, :pairing, :noise, :chats, :adv_secret, :tctokens]
+21:39:48.984 [info] [ENCRYPTION] Signal data keys: [:sessions, :identity_key, :registration_id, :prekeys, :next_prekey_id, :signed_prekeys, :updated_at, :device_id, :sender_keys]
+21:39:48.984 [info] [ENCRYPTION] Found identity key
+21:39:48.984 [info] [ENCRYPTION] Encrypted! type=whisper, size=162
+21:39:48.984 [info] [ENCRYPTION] Attempting to encrypt message for 199316597694686@lid (sync)
+21:39:48.984 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :lid_mapping, :pairing, :noise, :chats, :adv_secret, :tctokens]
+21:39:48.984 [info] [ENCRYPTION] Signal data keys: [:sessions, :identity_key, :registration_id, :prekeys, :next_prekey_id, :signed_prekeys, :updated_at, :device_id, :sender_keys]
+21:39:48.984 [info] [ENCRYPTION] Found identity key
+21:39:48.984 [info] [ENCRYPTION] Encrypted! type=prekey, size=250
+21:39:48.984 [info] [SEND] pkmsg wire fields target=393207611780@s.whatsapp.net reg_id=48969 signed_prekey_id=5052553 prekey_id=4958185 base_key_size=32 inner_size=162
+21:39:48.984 [info] [ENCRYPTION] Attempting to encrypt message for 199316597694686:53@lid (sync)
+21:39:48.985 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :lid_mapping, :pairing, :noise, :chats, :adv_secret, :tctokens]
+21:39:48.985 [info] [ENCRYPTION] Signal data keys: [:sessions, :identity_key, :registration_id, :prekeys, :next_prekey_id, :signed_prekeys, :updated_at, :device_id, :sender_keys]
+21:39:48.985 [info] [ENCRYPTION] Found identity key
+21:39:48.985 [info] [ENCRYPTION] Encrypted! type=whisper, size=162
+{:ok, "3EB007437D8F7B520FB41E"}
+21:39:48.993 [info] [SEND] Sent group encrypted message to 120363043214477337@g.us (distribution_targets=12)
+21:39:48.994 [info] Sending node: <message addressing_mode="lid" id="3EB007437D8F7B520FB41E" phash="2:UzmS0fEu" to="120363043214477337@g.us" type="text"><participants><to jid="40587726160011@lid"><enc type="msg" v="2">[raw 162 bytes]</enc></to><to jid="393755637708@s.whatsapp.net"><enc type="pkmsg" v="2">[raw 248 bytes]</enc></to><to jid="33625382846503@lid"><enc type="pkmsg" v="2">[raw 250 bytes]</enc></to><to jid="393519534944@s.whatsapp.net"><enc type="msg" v="2">[raw 162 bytes]</enc></to><to jid="270578829287645@lid"><enc type="msg" v="2">[raw 162 bytes]</enc></to><to jid="270578829287645:32@lid"><enc type="msg" v="2">[raw 162 bytes]</enc></to><to jid="393515058942@s.whatsapp.net"><enc type="pkmsg" v="2">[raw 248 bytes]</enc></to><to jid="393515058942:32@s.whatsapp.net"><enc type="msg" v="2">[raw 162 bytes]</enc></to><to jid="199316597694686@lid"><enc type="msg" v="2">[raw 162 bytes]</enc></to><to jid="199316597694686:53@lid"><enc type="msg" v="2">[raw 162 bytes]</enc></to><to jid="393207611780@s.whatsapp.net"><enc type="pkmsg" v="2">[raw 250 bytes]</enc></to><to jid="393207611780:53@s.whatsapp.net"><enc type="msg" v="2">[raw 162 bytes]</enc></to></participants><device-identity>[raw 186 bytes]</device-identity><enc type="skmsg" v="2">[raw 106 bytes]</enc></message>
+21:39:48.994 [info] sending frame include_header=false header_hex=none payload=3189 bytes frame=3192 bytes
+21:39:48.994 [info] sending encrypted node size=3189
+21:39:49.195 [info] [ACK] id=3EB007437D8F7B520FB41E class=message type= from=120363043214477337@g.us to=
+
+---
+
+21:40:34.214 [info] sending frame include_header=false header_hex=none payload=26 bytes frame=29 bytes
+21:40:34.214 [info] sending encrypted node size=26
+21:40:58.382 [info] Received message from=120363043214477337@g.us id=3BA970348553A20CB578 type=media
+21:40:58.382 [info] [DECRYPT] Attempting decrypt: enc_type="pkmsg" payload_candidates=2 decryptable_payloads=2 from=%ExWapp.JID{user: "120363043214477337", raw_agent: 0, device: 0, integrator: 0, server: "g.us"} sender_candidates=["270578829287645:32@lid", "120363043214477337@g.us", "393515058942@s.whatsapp.net", "270578829287645@lid"]
+21:40:58.382 [info] [ENCRYPTION] decrypt_from_sender_sync: jid=270578829287645:32@lid enc_type="pkmsg" is_prekey=true ct_size=296
+21:40:58.382 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :lid_mapping, :pairing, :noise, :chats, :adv_secret, :tctokens]
+21:40:58.382 [info] [ENCRYPTION] Signal data keys: [:sessions, :identity_key, :registration_id, :prekeys, :next_prekey_id, :signed_prekeys, :updated_at, :device_id, :sender_keys]
+21:40:58.382 [info] [ENCRYPTION] Found identity key: public=32 bytes
+21:40:58.382 [info] [ENCRYPTION] Have identity, signed_prekeys=1 prekeys=813
+21:40:58.382 [info] [SESSION_STORE] decrypt_message: jid=270578829287645:32@lid is_prekey=true ct_size=296 existing_session=true
+21:40:58.382 [info] [SESSION_STORE] Trying existing session ratchet for prekey msg from 270578829287645:32@lid
+21:40:58.382 [info] [SIGNAL] decrypt: counter=0 prev_counter=0 needs_ratchet=true ct_size=160
+21:40:58.382 [info] [SIGNAL] Performing DH ratchet step
+21:40:58.383 [info] [SIGNAL] MAC verification: false
+21:40:58.383 [info] [SESSION_STORE] Existing session prekey decrypt failed for 270578829287645:32@lid, trying fresh X3DH: :invalid_mac
+21:40:58.383 [info] [SIGNAL] decrypt_prekey_message: msg_size=296 first_byte=0x33
+21:40:58.383 [info] [SIGNAL] Parsed pkmsg: reg_id=1378861421 prekey_id=795 signed_prekey_id=1 base_key_size=32 inner_size=211
+21:40:58.383 [info] [SIGNAL] Available signed_prekey_ids=[1] prekey_ids_count=813 looking_for signed=1 prekey=795
+21:40:58.383 [info] [SIGNAL] Lookup result: signed_prekey=found one_time_prekey=found
+21:40:58.383 [info] [SIGNAL] X3DH DH outputs: dh1=FA1B36E5... dh2=9F440017... dh3=E44AC918... dh4=E1A794A6...
+21:40:58.383 [info] [SIGNAL] Trying ff:dh1,dh2,dh3,dh4: root_key=04F4B1CD... chain_key=5A80F363...
+21:40:58.383 [info] [SIGNAL] decrypt: counter=0 prev_counter=0 needs_ratchet=true ct_size=160
+21:40:58.383 [info] [SIGNAL] Performing DH ratchet step
+21:40:58.384 [info] [SIGNAL] MAC verification: true
+21:40:58.384 [info] [SIGNAL] Inner decrypt succeeded with ff:dh1,dh2,dh3,dh4, plaintext_size=159
+21:40:58.384 [info] [SESSION_STORE] PreKey decrypt succeeded (fresh) for 270578829287645:32@lid
+21:40:58.384 [info] [ENCRYPTION] Decrypt succeeded, plaintext_size=159
+21:40:58.392 [info] [SENDER_KEY] Stored distribution: group=120363043214477337@g.us sender=270578829287645:32@lid id=399940487 iteration=0 source_field=2
+21:40:58.392 [info] [DECRYPT] Protocol message (pkmsg), plaintext_size=150 — skipping chat display
+21:40:58.392 [info] Sending node: <receipt id="3BA970348553A20CB578" participant="270578829287645:32@lid" to="120363043214477337@g.us" type="delivery"/>
+21:40:58.392 [info] sending frame include_header=false header_hex=none payload=63 bytes frame=66 bytes
+21:40:58.392 [info] sending encrypted node size=63
+21:41:01.043 [info] [RECEIPT] from=120363043214477337@g.us id=3BA970348553A20CB578 type=read
+21:41:42.625 [info] Received message from=120363043214477337@g.us id=AC15EECAED20B22482394BA3F76BB63C type=media
+21:41:42.626 [info] [DECRYPT] Attempting decrypt: enc_type="pkmsg" payload_candidates=2 decryptable_payloads=2 from=%ExWapp.JID{user: "120363043214477337", raw_agent: 0, device: 0, integrator: 0, server: "g.us"} sender_candidates=["199316597694686@lid", "120363043214477337@g.us", "393207611780@s.whatsapp.net"]
+21:41:42.626 [info] [ENCRYPTION] decrypt_from_sender_sync: jid=199316597694686@lid enc_type="pkmsg" is_prekey=true ct_size=310
+21:41:42.626 [info] [ENCRYPTION] Store keys: [:client_info, :signal, :identity, :lid_mapping, :pairing, :noise, :chats, :adv_secret, :tctokens]
+21:41:42.626 [info] [ENCRYPTION] Signal data keys: [:sessions, :identity_key, :registration_id, :prekeys, :next_prekey_id, :signed_prekeys, :updated_at, :device_id, :sender_keys]
+21:41:42.626 [info] [ENCRYPTION] Found identity key: public=32 bytes
+21:41:42.626 [info] [ENCRYPTION] Have identity, signed_prekeys=1 prekeys=813
+21:41:42.626 [info] [SESSION_STORE] decrypt_message: jid=199316597694686@lid is_prekey=true ct_size=310 existing_session=true
+21:41:42.626 [info] [SESSION_STORE] Trying existing session ratchet for prekey msg from 199316597694686@lid
+21:41:42.626 [info] [SESSION_STORE] Existing session prekey decrypt failed for 199316597694686@lid, trying fresh X3DH: :remote_identity_mismatch
+21:41:42.626 [info] [SIGNAL] decrypt_prekey_message: msg_size=310 first_byte=0x33
+21:41:42.626 [info] [SIGNAL] Parsed pkmsg: reg_id=52798749 prekey_id=77 signed_prekey_id=1 base_key_size=32 inner_size=227
+21:41:42.626 [info] [SIGNAL] Available signed_prekey_ids=[1] prekey_ids_count=813 looking_for signed=1 prekey=77
+21:41:42.627 [info] [SIGNAL] Lookup result: signed_prekey=found one_time_prekey=found
+21:41:42.627 [info] [SIGNAL] X3DH DH outputs: dh1=80011B59... dh2=4CE64700... dh3=79F09DC7... dh4=2B19924F...
+21:41:42.627 [info] [SIGNAL] Trying ff:dh1,dh2,dh3,dh4: root_key=29768303... chain_key=40BD075D...
+21:41:42.627 [info] [SIGNAL] decrypt: counter=0 prev_counter=0 needs_ratchet=true ct_size=176
+21:41:42.627 [info] [SIGNAL] Performing DH ratchet step
+21:41:42.628 [info] [SIGNAL] MAC verification: true
+21:41:42.628 [info] [SIGNAL] Inner decrypt succeeded with ff:dh1,dh2,dh3,dh4, plaintext_size=166
+21:41:42.628 [info] [SESSION_STORE] PreKey decrypt succeeded (fresh) for 199316597694686@lid
+21:41:42.629 [info] [ENCRYPTION] Decrypt succeeded, plaintext_size=166
+21:41:42.645 [info] [SENDER_KEY] Stored distribution: group=120363043214477337@g.us sender=199316597694686@lid id=1757301791 iteration=1416 source_field=2
+21:41:42.645 [info] [DECRYPT] Protocol message (pkmsg), plaintext_size=151 — skipping chat display
+21:41:42.645 [info] Sending node: <receipt id="AC15EECAED20B22482394BA3F76BB63C" participant="199316597694686@lid" to="120363043214477337@g.us" type="delivery"/>
+21:41:42.645 [info] sending frame include_header=false header_hex=none payload=68 bytes frame=71 bytes
+21:41:42.645 [info] sending encrypted node size=68
+21:42:27.979 [info] sending frame include_header=false header_hex=none payload=26 bytes frame=29 bytes
+21:42:27.979 [info] sending encrypted node size=26
+21:43:05.860 [info] [RECEIPT] from=120363043214477337@g.us id=AC15EECAED20B22482394BA3F76BB63C type=read
+21:43:13.248 [info] sending frame include_header=false header_hex=none payload=26 bytes frame=29 bytes
+21:43:13.248 [info] sending encrypted node size=26

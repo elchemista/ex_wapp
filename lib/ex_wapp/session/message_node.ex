@@ -50,7 +50,7 @@ defmodule ExWapp.Session.MessageNode do
   def generate_participant_hash_v2(participants) when is_list(participants) do
     normalized =
       participants
-      |> Enum.map(&to_string/1)
+      |> Enum.map(&jid_to_ad_string/1)
       |> Enum.sort()
 
     <<first_6_bytes::binary-size(6), _rest::binary>> =
@@ -60,6 +60,38 @@ defmodule ExWapp.Session.MessageNode do
 
     "2:" <> Base.encode64(first_6_bytes, padding: false)
   end
+
+  @doc """
+  Converts a JID string to ADString format matching whatsmeow/whatsapp-rust.
+
+  Format: `user.agent:device@server`
+  Example: `1234567890@s.whatsapp.net` → `1234567890.0:0@s.whatsapp.net`
+  Example: `1234567890:37@s.whatsapp.net` → `1234567890.0:37@s.whatsapp.net`
+  """
+  @spec jid_to_ad_string(term()) :: String.t()
+  def jid_to_ad_string(jid) when is_binary(jid) do
+    case String.split(jid, "@", parts: 2) do
+      [user_part, server] ->
+        {user, device} =
+          case String.split(user_part, ":", parts: 2) do
+            [user, device_str] ->
+              case Integer.parse(device_str) do
+                {device_id, ""} -> {user, device_id}
+                _ -> {user_part, 0}
+              end
+
+            _ ->
+              {user_part, 0}
+          end
+
+        "#{user}.0:#{device}@#{server}"
+
+      _ ->
+        jid
+    end
+  end
+
+  def jid_to_ad_string(jid), do: to_string(jid)
 
   @spec maybe_put_message_attr(map(), String.t(), term()) :: map()
   def maybe_put_message_attr(attrs, _key, nil), do: attrs

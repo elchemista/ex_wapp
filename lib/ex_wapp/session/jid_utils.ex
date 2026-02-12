@@ -171,6 +171,60 @@ defmodule ExWapp.Session.JIDUtils do
     |> Enum.reverse()
   end
 
+  @doc """
+  Builds target specs for self-chat fanout.
+
+  WhatsMeow parity: for self-chat, every non-current target gets the DSM payload.
+  There is no plain "recipient payload" branch in self-chat fanout.
+  """
+  @spec build_self_chat_target_specs([String.t()], [String.t()], String.t()) ::
+          [%{jid: String.t(), payload_kind: :recipient | :own}]
+  def build_self_chat_target_specs(recipient_targets, own_targets, destination_jid) do
+    _destination_jid = destination_jid
+    all_targets = normalize_target_list(recipient_targets ++ own_targets)
+
+    Enum.map(all_targets, fn target ->
+      %{jid: target, payload_kind: :own}
+    end)
+  end
+
+  @doc """
+  Fallback self-chat strategy used when a DSM-only send appears silently dropped.
+
+  It keeps one primary target as `:recipient` payload and uses `:own` payload for
+  the remaining fanout targets.
+  """
+  @spec build_self_chat_fallback_target_specs([String.t()], [String.t()], String.t()) ::
+          [%{jid: String.t(), payload_kind: :recipient | :own}]
+  def build_self_chat_fallback_target_specs(recipient_targets, own_targets, destination_jid) do
+    recipient_targets = normalize_target_list(recipient_targets)
+    all_targets = normalize_target_list(recipient_targets ++ own_targets)
+    normalized_destination = normalize_with_device(destination_jid)
+
+    primary_target =
+      cond do
+        normalized_destination != "" and normalized_destination in all_targets ->
+          normalized_destination
+
+        recipient_targets != [] ->
+          hd(recipient_targets)
+
+        all_targets != [] ->
+          hd(all_targets)
+
+        true ->
+          ""
+      end
+
+    Enum.map(all_targets, fn target ->
+      if target == primary_target do
+        %{jid: target, payload_kind: :recipient}
+      else
+        %{jid: target, payload_kind: :own}
+      end
+    end)
+  end
+
   defp maybe_apply_device_to_mapped_jid(source_jid, mapped_jid) do
     case {device_id(source_jid), String.split(mapped_jid, "@", parts: 2)} do
       {device_id, [user, server]} when is_integer(device_id) and device_id > 0 ->
