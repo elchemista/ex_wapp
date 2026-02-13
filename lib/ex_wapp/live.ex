@@ -196,32 +196,6 @@ defmodule ExWapp.Live do
     ExWapp.get_messages(session, jid, opts)
   end
 
-  @doc """
-  Waits for new incoming messages.
-
-  Options:
-  - `:timeout_ms` how long to wait overall (default: `60_000`)
-  - `:limit` max messages to capture (default: `1`)
-
-  Returns:
-  - `{:ok, messages}` if at least one message was received before timeout
-  - `{:error, :timeout}` if no messages arrived
-  """
-  @spec wait_new_messages(pid(), keyword()) ::
-          {:ok, [{String.t(), ExWapp.Chat.message()}]} | {:error, :timeout}
-  def wait_new_messages(session, opts \\ []) when is_pid(session) do
-    timeout_ms = Keyword.get(opts, :timeout_ms, 60_000)
-    limit = Keyword.get(opts, :limit, 1)
-    now_ms = System.monotonic_time(:millisecond)
-    deadline = now_ms + timeout_ms
-
-    with {:ok, ref} <- ExWapp.subscribe_messages(session) do
-      result = do_wait_new_messages(ref, deadline, max(limit, 1), [])
-      ExWapp.unsubscribe_messages(session, ref)
-      result
-    end
-  end
-
   defp maybe_wait_for_pairing(session, qr_path, timeout_ms) do
     if paired?(session) do
       IO.puts("Stored pairing found, skipping QR wait.")
@@ -310,31 +284,6 @@ defmodule ExWapp.Live do
     end
   rescue
     _ -> false
-  end
-
-  defp do_wait_new_messages(_ref, _deadline, 0, acc), do: {:ok, Enum.reverse(acc)}
-
-  defp do_wait_new_messages(ref, deadline, remaining, acc) do
-    now_ms = System.monotonic_time(:millisecond)
-    wait_ms = max(deadline - now_ms, 0)
-
-    if wait_ms == 0 do
-      case acc do
-        [] -> {:error, :timeout}
-        _ -> {:ok, Enum.reverse(acc)}
-      end
-    else
-      receive do
-        {:ex_wapp_message, ^ref, jid, msg} ->
-          do_wait_new_messages(ref, deadline, remaining - 1, [{jid, msg} | acc])
-      after
-        wait_ms ->
-          case acc do
-            [] -> {:error, :timeout}
-            _ -> {:ok, Enum.reverse(acc)}
-          end
-      end
-    end
   end
 
   defp print_chats([]) do

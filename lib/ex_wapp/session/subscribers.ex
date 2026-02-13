@@ -42,9 +42,60 @@ defmodule ExWapp.Session.Subscribers do
 
   @spec notify_message_subscribers(map(), String.t(), map()) :: :ok
   def notify_message_subscribers(state, jid, message) do
+    # Direct-send to legacy subscribers (backwards compatible)
     Enum.each(state.message_subscribers, fn {ref, {pid, _mon}} ->
       send(pid, {:ex_wapp_message, ref, jid, message})
     end)
+
+    # PubSub broadcast for decoupled subscribers
+    broadcast_via_pubsub(Map.get(state, :session_id), jid, message)
+  end
+
+  defp broadcast_via_pubsub(session_id, jid, message) do
+    # Per-session topic (uses session_id when available, pid as fallback)
+    topic_key = session_id || self()
+
+    Phoenix.PubSub.broadcast(
+      ExWapp.PubSub,
+      "ex_wapp:messages:#{topic_key}",
+      {:ex_wapp_message, jid, message}
+    )
+
+    # Global topic (all sessions)
+    Phoenix.PubSub.broadcast(
+      ExWapp.PubSub,
+      "ex_wapp:messages",
+      {:ex_wapp_message, topic_key, jid, message}
+    )
+  rescue
+    # PubSub may not be started in some test scenarios
+    _ -> :ok
+  end
+
+  @doc """
+  Broadcasts a session lifecycle event via PubSub.
+
+  Events are sent on two topics:
+  - Per-session: `"ex_wapp:session:<session_id>"` with payload as-is
+  - Global: `"ex_wapp:session"` with `{session_id, payload}`
+  """
+  @spec broadcast_lifecycle(term(), term()) :: :ok
+  def broadcast_lifecycle(session_id, event) do
+    topic_key = session_id || self()
+
+    Phoenix.PubSub.broadcast(
+      ExWapp.PubSub,
+      "ex_wapp:session:#{topic_key}",
+      event
+    )
+
+    Phoenix.PubSub.broadcast(
+      ExWapp.PubSub,
+      "ex_wapp:session",
+      {topic_key, event}
+    )
+  rescue
+    _ -> :ok
   end
 
   @spec remove_message_subscriber(map(), reference()) :: map()

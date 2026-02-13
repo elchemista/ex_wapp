@@ -9,11 +9,11 @@ defmodule ExWapp.Noise.ClientPayloadTest do
   alias WAWebProtobufsWa6.ClientPayload.DevicePairingRegistrationData
 
   @version_hash :crypto.hash(:md5, "2.3000.1029948479")
-  # DeviceProps with historySyncConfig matching Go's whatsmeow
+  # DeviceProps with historySyncConfig matching Firefox/Linux identity
   @device_props <<
     0x0A,
-    0x09,
-    "whatsmeow"::binary,
+    0x07,
+    "Firefox"::binary,
     0x12,
     0x06,
     0x08,
@@ -23,7 +23,7 @@ defmodule ExWapp.Noise.ClientPayloadTest do
     0x18,
     0x00,
     0x18,
-    0x00,
+    0x02,
     0x20,
     0x00,
     0x2A,

@@ -105,10 +105,10 @@ defmodule ExWapp.Noise.ClientPayload do
       appVersion: %AppVersion{primary: primary, secondary: secondary, tertiary: tertiary},
       mcc: "000",
       mnc: "000",
-      osVersion: Map.get(info, :os_version, "0.1"),
+      osVersion: Map.get(info, :os_version, "Linux"),
       manufacturer: Map.get(info, :manufacturer, ""),
       device: Map.get(info, :device_name, "Desktop"),
-      osBuildNumber: Map.get(info, :os_build, "0.1"),
+      osBuildNumber: Map.get(info, :os_build, "Linux"),
       releaseChannel: :RELEASE,
       localeLanguageIso6391: Map.get(info, :locale_language, "en"),
       localeCountryIso31661Alpha2: Map.get(info, :locale_country, "US")
@@ -171,7 +171,7 @@ defmodule ExWapp.Noise.ClientPayload do
     #   - primary: uint32 (field 1)
     #   - secondary: uint32 (field 2)
     #   - tertiary: uint32 (field 3)
-    # - platformType: enum (field 3) - UNKNOWN = 0
+    # - platformType: enum (field 3) - FIREFOX = 2
     # - requireFullSync: bool (field 4) - false
     # - historySyncConfig: message (field 5)
     #   - storageQuotaMb: uint32 (field 3) - 10240
@@ -229,13 +229,13 @@ defmodule ExWapp.Noise.ClientPayload do
       >>
 
     # Build DeviceProps message
-    os_name = "whatsmeow"
+    os_name = "Firefox"
     os_len = byte_size(os_name)
     version_len = byte_size(version)
     history_len = byte_size(history_sync_config)
 
     <<
-      # os = "whatsmeow" (field 1, wire type 2)
+      # os = "Firefox" (field 1, wire type 2)
       0x0A,
       os_len::8,
       os_name::binary,
@@ -243,9 +243,9 @@ defmodule ExWapp.Noise.ClientPayload do
       0x12,
       version_len::8,
       version::binary,
-      # platformType = UNKNOWN (0) (field 3, wire type 0)
+      # platformType = FIREFOX (2) (field 3, wire type 0)
       0x18,
-      0x00,
+      0x02,
       # requireFullSync = false (field 4, wire type 0)
       0x20,
       0x00,

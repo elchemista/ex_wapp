@@ -1,8 +1,8 @@
 # WhatsApp Multi-Device Protocol Spec for ExWapp
 
-> Derived from whatsmeow (Go), Baileys (TypeScript), and whatsapp-rust.
-> Every rule below has been verified against at least two reference implementations.
-> Line references are from the `/tmp/` copies of these libraries.
+> Derived from whatsmeow (Go), Baileys (TypeScript), whatsapp-rust, and reconciled
+> with ExWapp implementation/history through Feb 12, 2026.
+> When reference behavior and current ExWapp behavior differ, this document calls it out.
 
 ---
 
@@ -51,10 +51,9 @@ When a LID mapping is discovered for a PN that has an existing Signal session:
 > whatsmeow `message.go:291-296`: `migrateSessionStore` calls `Store.Sessions.MigratePNToLID(pn, lid)`.
 > Called both during send (`send.go:1269`) and receive (`message.go:318`).
 
-**ExWapp Note**: We do NOT currently implement session migration. Instead, we use
-session-aware JID resolution: if a session exists under PN (from prekey fetch), use PN;
-if a session exists under LID (migrated), use LID. This is a workaround — proper migration
-would be more robust.
+**ExWapp Note**: ExWapp now applies deterministic wire/signal session aliasing during
+prekey processing and encrypt path resolution. It still keeps compatibility behavior:
+if state exists only under one keyspace (wire or mapped signal JID), that keyspace is used.
 
 ---
 
@@ -86,9 +85,9 @@ would be more robust.
 
 ### 2.3 Response Processing
 
-The response contains `<device>` nodes for each user. Each device has:
-- `jid`: The device JID (PN with device suffix, e.g., `15550001111:2@s.whatsapp.net`)
-- `key-index`: Device key index
+The response contains `<device>` nodes for each user. Device JIDs are reconstructed from:
+- parent `<user jid="base@server">`
+- `<device id="N">` (`0` => base jid, `N>0` => `base:N@server`)
 
 **ALL returned devices must be targeted** (except current device — see Section 5.3).
 
@@ -118,10 +117,12 @@ USync responses may include LID data. Store these mappings immediately:
 - **Namespace**: `encrypt` (NOT `usync`)
 - **JIDs**: Use **wire JIDs (PN)**, NOT LID-mapped JIDs. The server expects PN JIDs.
 - **Batch**: Multiple `<user>` nodes in a single IQ (efficient)
-- **Only fetch for devices without existing sessions**: Check both PN and LID session stores before fetching
+- **Default fetch policy**: fetch only for devices without existing sessions (check PN + mapped signal JID)
+- **ExWapp exceptions**:
+  - self-chat: clear sessions first so fresh prekeys are fetched
+  - group own-target sync: own targets may be force-refreshed defensively
 
 > whatsmeow `send.go:1279-1290`: Checks `existingSessions` map, only fetches for devices returning `false`.
-> whatsmeow `prekeys.go:125-141`: Request uses `jid` from the encryption identity list.
 
 ### 3.3 Session After Prekey Fetch
 
@@ -144,11 +145,12 @@ padded = plaintext + random_padding
 ```
 
 Padding algorithm (PKCS7-like):
-1. Calculate target length: round up to next multiple of 16 (minimum plaintext + 1)
-2. Pad byte value = number of padding bytes
-3. Append `pad_len` copies of the pad byte
+1. Pick `pad_len` from 1..15 (ExWapp currently uses `random_byte & 0x0F`, with 0 mapped to 15)
+2. Pad byte value = `pad_len`
+3. Append `pad_len` copies of that byte
 
 > whatsmeow `send.go:padMessage()`: Uses random padding with byte value.
+> ExWapp: `ExWapp.Signal.Encryption.pad_message/1`.
 
 ### 4.2 Encryption Types
 
@@ -184,7 +186,9 @@ SignalMessage protobuf contains:
 - `previous_counter`: Counter of previous sending chain
 - `ciphertext`: AES-256-CBC encrypted plaintext
 
-MAC is 8 bytes of HMAC-SHA256 over: `sender_identity || receiver_identity || mac_key || version || protobuf`.
+MAC is first 8 bytes of HMAC-SHA256 with:
+- Key: `mac_key`
+- Data: `serialize(sender_identity) || serialize(receiver_identity) || version || protobuf`
 
 ---
 
@@ -194,20 +198,21 @@ MAC is 8 bytes of HMAC-SHA256 over: `sender_identity || receiver_identity || mac
 
 1. **Build protobuf message**: `Message { conversation: "text" }` → marshal to bytes → `plaintext`
 2. **Build DSM-wrapped message**: `Message { deviceSentMessage: { destinationJid: recipient, message: original } }` → marshal → `dsmPlaintext`
-3. **Discover devices**: USync query with `[recipient, ownJID]` → `allDevices` list
+3. **Discover devices**: USync query with recipient + own sender identity (when different) → `recipient_devices`, `own_devices`, `all_usync_devices`
 4. **Store LID mappings** from USync response
-5. **Compute phash**: `participantListHashV2(allDevices)` — includes ALL devices, including current device
-6. **Determine prekey needs**: For each device in `allDevices`, check if Signal session exists (under both PN and LID)
-7. **Fetch prekeys** for devices without sessions (batch IQ, using PN JIDs)
-8. **Create sessions** from prekey bundles
-9. **Encrypt per device**:
+5. **Exclude current device from encryption targets** (self-chat requires filtering recipient path too)
+6. **Self-chat special case**: compare user parts only; clear existing sessions for targets so first send is fresh `pkmsg`
+7. **Determine prekey needs**: for each target, check session presence under both wire JID and mapped signal JID
+8. **Fetch prekeys** for missing targets (batch first, individual retry for missing bundles), always using wire PN JIDs in IQ
+9. **Create sessions** from bundles with forced rebuild (`force: true`), aliasing wire/signal JID keys
+10. **Encrypt per device**:
    - Skip current device
    - Own devices (matching user part) → encrypt `dsmPlaintext`
    - Recipient devices → encrypt `plaintext`
    - Each encryption → pad → Signal encrypt → get ciphertext + type (pkmsg/msg)
-10. **Build participant nodes**: `<to jid="wireJID"><enc v="2" type="pkmsg|msg">ciphertext</enc></to>`
-11. **Build message node** with phash, participants, device-identity (if any pkmsg)
-12. **Send** via WebSocket
+11. **Build participant nodes**: `<to jid="wireJID"><enc v="2" type="pkmsg|msg">ciphertext</enc></to>`
+12. **Build DM message node**: participants + optional device-identity + optional tctoken (`phash` not emitted in DM attrs)
+13. **Send** over transport (Binary encode → Noise encrypt → WA frame)
 
 ### 5.2 DeviceSentMessage (DSM)
 
@@ -245,6 +250,7 @@ When sender == recipient:
 - ALL devices get DSM-wrapped payload (there are no "recipient" devices, only "own" devices)
 - Current device is still excluded
 - Self-chat detection: compare **user parts only** (not full JID with server), because own JID may appear as both PN and LID
+- ExWapp defensive rule: clear existing sessions for self-chat targets before prekey fetch to avoid stale-ratchet `msg` failures
 
 ---
 
@@ -254,7 +260,9 @@ When sender == recipient:
 
 ```
 1. Collect ALL device JIDs from USync (including current device)
-2. Convert each to string representation (with device suffix)
+2. Convert each JID to ADString format: `user.agent:device@server`
+   - `15550001111@s.whatsapp.net` → `15550001111.0:0@s.whatsapp.net`
+   - `15550001111:37@s.whatsapp.net` → `15550001111.0:37@s.whatsapp.net`
 3. Sort strings lexicographically
 4. Concatenate all strings (no separator)
 5. SHA-256 hash the concatenated string
@@ -270,8 +278,8 @@ When sender == recipient:
 
 ### 6.2 Input JIDs
 
-- **DM**: ALL usync devices (recipient + own, INCLUDING current device)
-- **Group**: ALL group participant devices
+- **DM**: computed for diagnostics/parity only; ExWapp does NOT put `phash` in DM `<message>` attrs
+- **Group**: computed from participant target JIDs used for distribution/topology checks
 
 ### 6.3 Server Validation
 
@@ -289,7 +297,7 @@ The server compares the phash with its own computation. On mismatch:
 ### 7.1 DM Message
 
 ```xml
-<message id="3EB0..." type="text" to="recipient@s.whatsapp.net" phash="2:...">
+<message id="3EB0..." type="text" to="recipient@s.whatsapp.net">
   <participants>
     <to jid="recipient:0@s.whatsapp.net">
       <enc v="2" type="pkmsg">[ciphertext]</enc>
@@ -306,17 +314,28 @@ The server compares the phash with its own computation. On mismatch:
 </message>
 ```
 
-### 7.2 Attributes
+### 7.2 Message ID Format
+
+ExWapp uses the same ID pattern as whatsmeow/Baileys/whatsapp-rust:
+
+```
+"3EB0" + UPPER_HEX( SHA256( timestamp_8bytes || own_user@c.us || random_16bytes )[0..8] )
+```
+
+- Total length: 22 chars
+- Prefix: always `3EB0`
+
+### 7.3 Attributes
 
 | Attribute | Required | Value |
 |-----------|----------|-------|
-| `id` | Yes | Message ID (generated, prefixed `3EB0`) |
+| `id` | Yes | Message ID in `3EB0` SHA256-derived format |
 | `type` | Yes | `"text"`, `"media"`, `"reaction"`, `"poll"` |
 | `to` | Yes | Recipient **base JID** (no device suffix) |
-| `phash` | Yes (if computed) | Participant list hash v2 |
-| `addressing_mode` | Optional | `"LID"` or `"PN"` |
+| `phash` | Group only | Participant list hash v2 |
+| `addressing_mode` | Group only | `"lid"` or `"pn"` |
 
-### 7.3 Children
+### 7.4 Children
 
 | Child | When Included |
 |-------|---------------|
@@ -324,7 +343,7 @@ The server compares the phash with its own computation. On mismatch:
 | `<device-identity>` | When ANY participant gets `pkmsg` (prekey message) |
 | `<tctoken>` | When privacy token available for recipient (DM only) |
 
-### 7.4 Group Message
+### 7.5 Group Message
 
 ```xml
 <message id="..." type="text" to="group@g.us" phash="2:..." addressing_mode="lid">
@@ -338,6 +357,10 @@ The server compares the phash with its own computation. On mismatch:
   <device-identity>[if pkmsg present]</device-identity>
 </message>
 ```
+
+Group addressing invariants:
+- pick one identity family per participant based on `addressing_mode` (no mixed PN+LID duplicates)
+- drop target JIDs that do not match the selected `addressing_mode`
 
 ---
 
@@ -396,11 +419,11 @@ For groups:
 
 ### 9.2 Sender Resolution
 
-1. Extract `from`, `participant` (groups), `sender_lid`/`sender_pn` attributes
-2. For DMs: sender = `from` attribute. Check `sender_lid` for LID mapping.
-3. For groups: sender = `participant` attribute. Check `participant_lid` for LID mapping.
-4. **Resolve encryption JID**: If sender is PN and LID mapping exists → use LID for session lookup
-5. **Migrate session** if needed (PN → LID)
+1. Extract sender candidates from envelope attrs:
+   `participant`, `from`, `sender_lid`, `sender_pn`, `participant_lid`, `participant_pn`
+2. Add both with-device and stripped-device variants
+3. Expand candidates through PN↔LID mapping table
+4. Try decryption against candidates in order until one succeeds
 
 > whatsmeow `message.go:314-328`: Resolves sender to encryption identity, migrates session.
 
@@ -408,23 +431,24 @@ For groups:
 
 | enc type | Handler | Description |
 |----------|---------|-------------|
-| `pkmsg` | PreKey decrypt | New session from prekey bundle → X3DH → ratchet |
+| `pkmsg` | PreKey decrypt | Try existing session ratchet first; fallback to fresh X3DH only if needed |
 | `msg` | Normal decrypt | Existing session → advance ratchet |
 | `skmsg` | SenderKey decrypt | Group message → SenderKey cipher |
 
 ### 9.4 Multiple Encryption Candidates
 
-A message may contain multiple `<enc>` children (different encryption types or targets).
-Try each candidate until one succeeds.
+A message may contain multiple `<enc>` candidates (`<message><enc>...` and/or `<participants><to><enc>...`).
+Try payload candidates in order; for each payload, try sender candidates until one succeeds.
 
 ### 9.5 Post-Decryption
 
-1. Unpad the decrypted plaintext
+1. Unpad the decrypted plaintext (`enc v=3` is treated as unpadded/raw)
 2. Unmarshal protobuf → `Message`
 3. If `Message.senderKeyDistributionMessage` present → process SKDM (store group key)
 4. If `Message.deviceSentMessage` present → unwrap to get inner message
 5. If `Message.protocolMessage` present → handle protocol action (key rotation, etc.)
-6. Otherwise → dispatch as chat message
+6. If payload is protocol/internal (history sync/SKDM-only), do not emit chat text
+7. Otherwise → dispatch as chat message
 
 ---
 
@@ -432,7 +456,7 @@ Try each candidate until one succeeds.
 
 ### 10.1 Message ACK (Outgoing)
 
-After receiving a message, send an ACK:
+For outbound sends, server returns ACK:
 
 ```xml
 <ack class="message" id="MSG_ID" to="sender@s.whatsapp.net"/>
@@ -450,13 +474,14 @@ Missing notification ACKs stall server sync and history delivery.
 
 ### 10.3 Delivery Receipt
 
-After successful decryption, send a delivery receipt:
+After successful decryption of an inbound message, send a receipt:
 
 ```xml
 <receipt id="MSG_ID" to="sender@s.whatsapp.net"/>
 ```
 
-For messages from self (own device): `type="sender"`.
+- `type="delivery"` for regular inbound content
+- `type` omitted for peer/protocol category
 
 ---
 
@@ -468,9 +493,9 @@ If decryption fails, send a retry receipt to ask sender to re-encrypt:
 
 ```xml
 <receipt id="MSG_ID" to="sender@s.whatsapp.net" type="retry">
-  <retry count="1" id="MSG_ID" t="TIMESTAMP" v="1"/>
+  <retry count="1" id="MSG_ID" t="TIMESTAMP" v="1" error="CODE"/>
   <registration>[4-byte big-endian registration ID]</registration>
-  <!-- On retry count > 1: include prekey bundle -->
+  <!-- On retry count >= 2: include prekey bundle -->
   <keys>
     <type>[key type byte]</type>
     <identity>[identity public key]</identity>
@@ -481,16 +506,20 @@ If decryption fails, send a retry receipt to ask sender to re-encrypt:
 </receipt>
 ```
 
+ExWapp retry error codes:
+- `1` no session
+- `3` unknown signed prekey
+- `7` invalid MAC
+- `0` other/unspecified
+
 ### 11.2 When We Handle Retry Receipt
 
 When server forwards a retry receipt for our message:
 
-1. Look up original message from cache
-2. If group: recreate SenderKey distribution message
-3. If own device: wrap in DeviceSentMessage
-4. If retry includes prekey bundle: use it
-5. Else if retry count >= 2 AND >1 hour since last recreation: fetch fresh prekeys
-6. Re-encrypt and send as new message node with retry count attribute
+1. Look up original outbound text from chat store
+2. Spawn retry send worker (bounded attempts)
+3. Re-run normal send pipeline (DM/group/self rules apply)
+4. If needed, refresh sessions/prekeys and re-encrypt
 
 > whatsmeow `retry.go:128-324`: Full retry handling.
 
@@ -513,7 +542,9 @@ Groups use SenderKey encryption (one encrypt, multiple recipients):
 3. **Distribute SenderKey** to new participants via individual Signal encryption:
    - Build `SenderKeyDistributionMessage` protobuf
    - Encrypt per-device using normal Signal session (pkmsg/msg)
-   - Only send to devices that don't have the current SenderKey
+   - Use participant identity matching the group `addressing_mode` (`lid` or `pn`)
+   - Exclude current sender device
+   - ExWapp currently refreshes own-target prekeys defensively for reliable sync
 
 ### 12.2 Group Message Node
 
@@ -534,7 +565,7 @@ Groups use SenderKey encryption (one encrypt, multiple recipients):
 - No DeviceSentMessage wrapping
 - Single `<enc type="skmsg">` for the group payload (outside `<participants>`)
 - `<participants>` only contains SKDM distribution nodes (not all members)
-- `addressing_mode` typically `"lid"` for groups
+- `addressing_mode` must match participant `<to jid>` identity family consistently
 
 ---
 
@@ -583,15 +614,14 @@ These MUST ALL hold for messages to be delivered successfully:
 
 ### Prekey Fetch
 - [ ] Prekey IQ uses `xmlns="encrypt"` (not `usync`)
-- [ ] Prekey IQ identity strategy is explicit and consistent:
-  - PN-first (whatsmeow-style with PN wire devices), OR
-  - LID-preferred when PN→LID mapping exists (Baileys-style assertSessions)
+- [ ] Prekey IQ uses wire PN JIDs (never mapped LID JIDs)
 - [ ] Only fetch for devices without existing sessions (check both PN and LID)
+- [ ] Missing bundles from batch response are retried individually
 
 ### Session Management
-- [ ] Signal session keyed by encryption identity (LID if available, else PN)
-- [ ] No session created under LID if prekey was fetched under PN (unless migrated)
-- [ ] Session preference: use whichever JID the session actually exists under
+- [ ] Session aliasing/migration between wire and signal JIDs is deterministic
+- [ ] Encryption uses whichever JID keyspace actually has session state (no blind remap)
+- [ ] Self-chat clears stale sessions before prekey bootstrap
 
 ### Encryption
 - [ ] Recipient devices get plain message protobuf
@@ -602,11 +632,12 @@ These MUST ALL hold for messages to be delivered successfully:
 
 ### Message Node
 - [ ] `<to jid>` uses wire identity (PN)
-- [ ] `phash` computed from ALL usync devices (INCLUDING current device)
-- [ ] `phash` uses base64 with NO PADDING
+- [ ] DM messages do NOT include `phash` attr
+- [ ] Group `phash` uses ADString input + first 6 hash bytes + base64(no padding)
 - [ ] `<device-identity>` included when ANY target gets pkmsg
 - [ ] Message `to` attribute is base JID (no device suffix)
 - [ ] Message `type` is `"text"` (or media type)
+- [ ] Message ID follows `3EB0` + SHA256-derived 22-char format
 
 ### Receiving
 - [ ] Sender resolved to encryption identity (LID if mapping exists)
@@ -668,111 +699,114 @@ For troubleshooting message delivery, ensure logs show:
 
 ---
 
-## 17. Current Failure Profile (2026-02-12)
+## 17. End-to-End Wire Encode/Decode Pipeline
 
-Observed pattern from latest run:
-- USync succeeds and device list is returned
-- Prekey fetch succeeds
-- Session creation succeeds
-- Message is sent and server returns ACK (`class=message`)
-- Message does **not** render on phone/linked device
+### 17.1 Outbound Encode Path (ExWapp)
 
-### 17.1 Why ACK Is Not Enough
+For a single outbound message, bytes are built in this order:
 
-Server ACK only confirms stanza acceptance, not successful end-device decryption/rendering.
-If the recipient device fails Signal/identity validation or cannot decrypt payload, the message can be silently dropped from UI.
+1. Build WA protobuf payload (`ExWapp.Proto.Message.encode/1`)
+2. Build DSM payload for own-device copies when DM (`deviceSentMessage`, field 31)
+3. Pad payload (`ExWapp.Signal.Encryption.pad_message/1`)
+4. Encrypt with Signal session:
+   - `pkmsg` => `0x33 || PreKeySignalMessage protobuf`
+   - `msg` => `0x33 || SignalMessage protobuf || mac8`
+   - `skmsg` (group top-level) => `0x33 || SenderKeyMessage protobuf || signature64`
+5. Wrap ciphertext into binary node:
+   - DM/group participant: `<to jid="..."><enc v="2" type="...">raw_bytes</enc></to>`
+6. Build `<message>` node with attrs and children (`participants`, optional `device-identity`, optional `tctoken`, optional group `enc skmsg`)
+7. Binary-node encode (`ExWapp.Binary.encode/1`)
+8. Noise transport encrypt (`ExWapp.Noise.encrypt/2`)
+9. WA frame encode (`ExWapp.Transport.Frame.encode/2`):
+   - optional connection header once: `WA 06 03`
+   - 24-bit big-endian payload length
+   - encrypted payload bytes
 
-### 17.2 Most Likely Fault Domains
+### 17.2 Inbound Decode Path (ExWapp)
 
-1. **Signal wire compatibility mismatch**
-   - PreKeySignalMessage or SignalMessage produced by our Elixir implementation may not be byte-compatible with device libsignal expectations.
-2. **Session lifecycle mismatch**
-   - Session recreated too often (or recreated under wrong identity) causing perpetual `pkmsg` and unstable ratchet.
-3. **Identity/address mismatch**
-   - Wire identity and encryption identity diverge without deterministic migration/alias policy.
-4. **Self-chat fanout semantics**
-   - Self-chat must encrypt only for non-sender own devices with DSM payload; any targeting drift breaks sync copy visibility.
+1. Read websocket frame bytes
+2. Consume WA header once if present
+3. Split frames by 24-bit length (`Frame.decode/1`)
+4. Noise decrypt each frame (`Noise.decrypt/2`)
+5. Binary unpack:
+   - first byte is transport flags
+   - if compression bit set (`0x02`), zlib-inflate payload
+6. Binary-node decode (`ExWapp.Binary.decode/1`)
+7. Message handler extraction:
+   - collect `<enc>` payload candidates from root and nested participants
+   - resolve sender candidates from attrs + PN/LID mapping
+   - attempt decrypt over payload × sender candidate matrix
+8. Post-decrypt:
+   - unpad (except `enc v=3`)
+   - classify protocol vs user payload
+   - emit receipt or retry actions
 
----
+### 17.3 WA Binary Node Encoding Essentials
 
-## 18. Implementation Program (Mandatory)
-
-This section is normative for ExWapp until outbound sync is proven stable.
-
-### 18.1 Phase A: Deterministic Session Behavior
-
-Requirements:
-1. Session reuse must be default for all devices (recipient + own devices).
-2. Prekey fetch only when session is absent under both candidate identities.
-3. Session key-space policy must be explicit:
-   - `wire_jid` and `encryption_jid` must be logged per target.
-   - if mapping exists, migration/alias must be deterministic (never random fallback).
-4. `pkmsg` should only occur on true bootstrap/retry paths; steady-state must converge to `msg`.
-
-Acceptance:
-- For two consecutive sends in same DM, second send emits `msg` for already-established device sessions.
-
-### 18.2 Phase B: Signal Wire Conformance Harness
-
-Requirements:
-1. Add golden-vector tests for:
-   - `serialize_prekey_signal_message`
-   - `parse_prekey_signal_message`
-   - `serialize_signal_message`/MAC verification
-2. Add cross-implementation harness:
-   - ExWapp-generated ciphertext must be decryptable by a libsignal-backed reference path.
-   - Reference-generated ciphertext must be decryptable by ExWapp.
-3. Include message kinds:
-   - bootstrap `pkmsg`
-   - follow-up `msg`
-   - self-chat DSM payload
-
-Acceptance:
-- Test suite fails on any byte-level incompatibility in wire format or MAC validation.
-
-### 18.3 Phase C: Self-Chat and Own-Device Sync Contract
-
-Requirements:
-1. Self-chat detection is by own user identity (PN/LID user equivalence).
-2. Exact sender device must be excluded from encryption targets.
-3. All other own devices must receive DSM payload.
-4. `destinationJid` in DSM must match conversation destination JID semantics.
-5. `participants` list and `phash` input must remain coherent (current device included in phash list, excluded from encrypted targets).
-
-Acceptance:
-- Live test: sending to own JID appears on phone within one sync cycle.
-
-### 18.4 Phase D: Delivery Observability
-
-Requirements:
-1. Add explicit outcome logs after send:
-   - transport ACK received
-   - retry receipt received (if any)
-   - downstream decrypt/receipt signals (if observable)
-2. On ACK-without-render pattern, log a structured warning with:
-   - message id
-   - target list
-   - enc types per target
-   - wire/encryption identity map
-
-Acceptance:
-- Every failed user-visible delivery has enough telemetry to classify into one of Section 17.2 domains.
+- Raw ciphertext/keys must be encoded as raw binary (`Binary.raw/1`), not UTF-8 strings.
+- Encoder starts with one leading `0x00` byte (whatsmeow parity).
+- JIDs can be encoded as pair/ad/fb/interop tokenized forms internally.
+- Attributes with `nil` or empty string are omitted.
 
 ---
 
-## 19. Source-Backed Rules To Follow
+## 18. Protobuf Fields Required for Correct Send/Decode
 
-1. **Session reuse before prekey fetch**  
-   - whatsmeow `send.go` (`existingSessions` / `retryDevices`)  
-   - Baileys `messages-send.ts` (`assertSessions`)
-2. **Wire JID vs encryption identity split**  
+### 18.1 `Message` (`ExWapp.Proto.Message`)
+
+- Field `1` => `conversation` (simple text)
+- Field `6` => `extendedTextMessage`
+- Field `12` => `protocolMessage`
+- Field `31` => `deviceSentMessage` (wire tag bytes `0xFA 0x01`)
+
+### 18.2 `DeviceSentMessage`
+
+- Field `1` => `destinationJid` (base JID)
+- Field `2` => nested original `Message`
+- Field `3` => `phash` (optional; generally nil for DM)
+
+### 18.3 `enc` Node Types
+
+- `type="pkmsg"` => PreKeySignalMessage bytes
+- `type="msg"` => SignalMessage bytes
+- `type="skmsg"` => SenderKeyMessage bytes
+- `v="2"` for current message encryption path
+
+---
+
+## 19. Runtime Validation Status (Feb 12, 2026)
+
+- Refactor + protocol fixes from `history.md` are applied in code paths under:
+  - `lib/ex_wapp/session/outbound.ex`
+  - `lib/ex_wapp/session/iq.ex`
+  - `lib/ex_wapp/session/message_node.ex`
+  - `lib/ex_wapp/session/account.ex`
+  - `lib/ex_wapp/message_handler.ex`
+- Automated tests cover core send/decode invariants (message ID, DSM tag/fields, phash format, padding, sender-key paths).
+- Final truth still requires fresh live-device validation after pairing:
+  - DM send to other user
+  - Self-chat send to own number
+  - Group send with sender-key distribution
+
+---
+
+## 20. Source-Backed Rules To Follow
+
+1. **Wire JID vs encryption identity split**
    - whatsmeow `encryptMessageForDeviceAndWrap` (`wireIdentity` + `encryptionIdentity`)
-3. **Self-device DSM behavior**  
-   - Baileys `createParticipantNodes` + `relayMessage` own-recipient branch
-4. **phash v2 algorithm**  
-   - whatsmeow `participantListHashV2` (first 6 hash bytes, RawStd base64, `2:` prefix)
-5. **Device identity inclusion rule**  
-   - include when any target uses `pkmsg`
+   - ExWapp `session/outbound.ex` aliasing + session-aware resolution
+2. **USync first, prekey second**
+   - `usync` for device discovery
+   - `encrypt` prekey IQ only for concrete wire JIDs
+3. **Self-device DSM behavior**
+   - own non-current targets receive DSM payload, current device excluded
+4. **Message ID format**
+   - `3EB0` + SHA256-derived uppercase hex (22 chars total)
+5. **phash v2 algorithm**
+   - ADString inputs, first 6 SHA256 bytes, base64 no padding, `"2:"` prefix
+6. **device-identity inclusion**
+   - include for outgoing messages when any target uses `pkmsg`
+   - include `accountSignatureKey` for message sends
 
 Web references:
 - https://github.com/tulir/whatsmeow/blob/main/send.go

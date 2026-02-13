@@ -86,10 +86,21 @@ defmodule ExWappTest do
     end
   end
 
-  describe "Live helpers" do
-    test "wait_new_messages returns timeout when no messages arrive" do
-      {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
-      assert {:error, :timeout} = ExWapp.Live.wait_new_messages(session, timeout_ms: 10)
+  describe "PubSub subscription" do
+    test "subscribe/1 receives broadcasted messages" do
+      session_id = "pubsub_test_#{System.unique_integer([:positive])}"
+
+      {:ok, session} =
+        ExWapp.start_link(store: ExWapp.Store.Memory, session_id: session_id)
+
+      :ok = ExWapp.subscribe(session_id)
+
+      # Simulate an incoming message arriving at the session
+      send(session, {:new_message, "1234@s.whatsapp.net", %{text: "hello", id: "test1"}})
+
+      assert_receive {:ex_wapp_message, "1234@s.whatsapp.net", %{text: "hello"}}, 1_000
+
+      ExWapp.unsubscribe(session_id)
       GenServer.stop(session)
     end
   end

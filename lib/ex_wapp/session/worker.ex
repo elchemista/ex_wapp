@@ -178,6 +178,14 @@ defmodule ExWapp.Session.Worker do
   def stats(server), do: GenServer.call(server, :get_stats)
 
   @doc """
+  Returns the session_id for this worker (set at start_link via `:session_id` option).
+
+  Returns `nil` when no explicit session_id was provided.
+  """
+  @spec get_session_id(GenServer.server()) :: term() | nil
+  def get_session_id(server), do: GenServer.call(server, :get_session_id)
+
+  @doc """
   Subscribes to QR code events.
   """
   @spec subscribe_qr(GenServer.server()) :: {:ok, reference()}
@@ -271,9 +279,15 @@ defmodule ExWapp.Session.Worker do
     session_id = Keyword.get(opts, :session_id)
     transport_mod = Keyword.get(opts, :transport, ExWapp.Conn)
 
-    # Register with Registry if session_id provided
+    # Register with Registry and subscribe to PubSub commands if session_id provided
     if session_id do
       Registry.register(ExWapp.Session.Registry, session_id, self())
+
+      try do
+        Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:commands:#{session_id}")
+      rescue
+        _ -> :ok
+      end
     end
 
     {:ok, outbound_queue} =
@@ -359,6 +373,10 @@ defmodule ExWapp.Session.Worker do
 
   def handle_call(:get_store, _from, state) do
     {:reply, state.store, state}
+  end
+
+  def handle_call(:get_session_id, _from, state) do
+    {:reply, state.session_id, state}
   end
 
   def handle_call(:get_conn, _from, state) do
@@ -509,6 +527,28 @@ defmodule ExWapp.Session.Worker do
     {:noreply, new_state}
   end
 
+  # PubSub send command - dispatched via ExWapp.send_message("session_id", jid, text)
+  def handle_info({:ex_wapp_send, jid, text}, state) do
+    session_pid = self()
+
+    case start_send_worker(
+           state,
+           jid,
+           fn ->
+             result = do_send_text_worker(session_pid, state, jid, text)
+             send(session_pid, {:send_result, jid, text, result, :primary, 0})
+             result
+           end
+         ) do
+      {:ok, worker, mon} ->
+        {:noreply, state |> register_send_worker(worker, mon, jid) |> update_stats(:messages_sent)}
+
+      {:error, reason} ->
+        Logger.warning("[SESSION] PubSub send failed for #{jid}: #{inspect(reason)}")
+        {:noreply, state}
+    end
+  end
+
   # New message received - notify subscribers
   def handle_info({:new_message, jid, message}, state) do
     emit_telemetry(
@@ -589,6 +629,16 @@ defmodule ExWapp.Session.Worker do
   def terminate(reason, state) do
     Logger.info("Session terminating: #{inspect(reason)}")
     emit_telemetry(:terminate, %{reason: reason}, state)
+    Subscribers.broadcast_lifecycle(state.session_id, {:ex_wapp_session, :terminated, reason})
+
+    if state.session_id do
+      try do
+        Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:commands:#{state.session_id}")
+      rescue
+        _ -> :ok
+      end
+    end
+
     do_disconnect(state, reason)
     :ok
   end
@@ -663,6 +713,7 @@ defmodule ExWapp.Session.Worker do
     end
 
     emit_telemetry(:disconnected, %{reason: reason}, state)
+    Subscribers.broadcast_lifecycle(state.session_id, {:ex_wapp_session, :disconnected, reason})
 
     %{
       state
@@ -782,6 +833,7 @@ defmodule ExWapp.Session.Worker do
 
   defp handle_connection_event({:noise, :handshake_completed}, state) do
     emit_telemetry(:connected, %{}, state)
+    Subscribers.broadcast_lifecycle(state.session_id, {:ex_wapp_session, :connected})
 
     %{state | status: :connected, reconnect_attempts: 0, connected_at: DateTime.utc_now()}
   end

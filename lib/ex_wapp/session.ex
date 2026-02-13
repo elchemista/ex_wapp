@@ -33,6 +33,9 @@ defmodule ExWapp.Session do
   @spec stats(GenServer.server()) :: map()
   defdelegate stats(server), to: Worker
 
+  @spec get_session_id(GenServer.server()) :: term() | nil
+  defdelegate get_session_id(server), to: Worker
+
   @spec subscribe_qr(GenServer.server()) :: {:ok, reference()}
   defdelegate subscribe_qr(server), to: Worker
 
@@ -44,12 +47,6 @@ defmodule ExWapp.Session do
 
   @spec qr_stream(GenServer.server()) :: Enumerable.t()
   defdelegate qr_stream(server), to: Worker
-
-  @spec subscribe_messages(GenServer.server()) :: {:ok, reference()}
-  defdelegate subscribe_messages(server), to: Worker
-
-  @spec unsubscribe_messages(GenServer.server(), reference()) :: :ok
-  defdelegate unsubscribe_messages(server, ref), to: Worker
 
   @spec message_stream(GenServer.server()) :: Enumerable.t()
   defdelegate message_stream(server), to: Worker

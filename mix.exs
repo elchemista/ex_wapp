@@ -20,6 +20,7 @@ defmodule ExWapp.MixProject do
 
   defp deps do
     [
+      {:phoenix_pubsub, "~> 2.1"},
       {:websockex, "~> 0.4"},
       {:ed25519, "~> 1.4"},
       {:protox, "~> 1.7"},

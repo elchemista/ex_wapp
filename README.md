@@ -60,8 +60,8 @@ result.groups
 ```
 
 `result.chats` and `result.groups` are a snapshot taken when `run/1` returns.
-For live updates, call `ExWapp.Live.list_chats(result.session)` again after
-`ExWapp.Live.wait_new_messages/2` receives events.
+For live updates, subscribe via `ExWapp.subscribe(session)` and call
+`ExWapp.Live.list_chats(session)` again when messages arrive.
 
 If a stored session was invalidated server-side, `run/1` now returns:
 
@@ -88,8 +88,18 @@ ExWapp.Live.send_message(session, "1234567890-123456789@g.us", "hello group")
 # Read stored chat messages
 ExWapp.Live.get_messages(session, "393XXXXXXXXX@s.whatsapp.net", limit: 20)
 
-# Wait for new incoming messages (real-time)
-ExWapp.Live.wait_new_messages(session, timeout_ms: 120_000, limit: 5)
+# Subscribe to messages + lifecycle events via PubSub
+ExWapp.subscribe(session)
+# Messages: {:ex_wapp_message, jid, message}
+# Lifecycle: {:ex_wapp_session, :connected}, {:ex_wapp_session, :disconnected, reason}, etc.
+
+# Send via session_id string (fire-and-forget, no pid needed)
+ExWapp.send_message("my_session", "393XXXXXXXXX@s.whatsapp.net", "hello via pubsub")
+
+# Or use the lazy stream API
+ExWapp.message_stream(session)
+|> Stream.each(fn {jid, msg} -> IO.puts("[#{jid}] #{msg.text}") end)
+|> Stream.run()
 
 # Refresh chat projection after new events
 ExWapp.Live.list_chats(session)
@@ -254,7 +264,95 @@ Incoming nodes:
 1. transport receives encrypted frame
 2. session gets decoded node via inbound router
 3. message handler processes decrypt/receipt/notification logic
-4. subscribers receive `{:ex_wapp_message, ref, jid, message}`
+4. PubSub broadcasts `{:ex_wapp_message, jid, message}` to subscribed processes
+
+## PubSub Topics & Messages
+
+ExWapp uses Phoenix PubSub for all event broadcasting. A single `subscribe/1`
+call gives you both incoming messages and session lifecycle events. No need to
+hold onto the session pid — use the session_id string anywhere.
+
+### Getting the Session ID
+
+```elixir
+session_id = ExWapp.get_session_id(session)
+```
+
+### Subscribe / Unsubscribe
+
+```elixir
+# Per-session (accepts pid or session_id string)
+ExWapp.subscribe(session)
+ExWapp.subscribe("my_session")
+ExWapp.unsubscribe(session)
+
+# All sessions (global)
+ExWapp.subscribe_all()
+ExWapp.unsubscribe_all()
+```
+
+One `subscribe/1` call subscribes to **both** topics below:
+
+### Per-Session Topics
+
+| Topic | Message format |
+|---|---|
+| `"ex_wapp:messages:<id>"` | `{:ex_wapp_message, jid, message}` |
+| `"ex_wapp:session:<id>"` | `{:ex_wapp_session, :connected}` |
+| | `{:ex_wapp_session, :disconnected, reason}` |
+| | `{:ex_wapp_session, :terminated, reason}` |
+
+### Global Topics (via `subscribe_all/0`)
+
+| Topic | Message format |
+|---|---|
+| `"ex_wapp:messages"` | `{:ex_wapp_message, session_id, jid, message}` |
+| `"ex_wapp:session"` | `{session_id, {:ex_wapp_session, event, ...}}` |
+
+### Sending via PubSub (no pid needed)
+
+```elixir
+# Fire-and-forget send using session_id string
+ExWapp.send_message("my_session", "393XXXXXXXXX@s.whatsapp.net", "hello!")
+
+# Synchronous send using session pid (returns {:ok, message_id})
+{:ok, id} = ExWapp.send_message(session, "393XXXXXXXXX@s.whatsapp.net", "hello!")
+```
+
+The worker subscribes to `"ex_wapp:commands:<session_id>"` and picks up
+`{:ex_wapp_send, jid, text}` messages automatically.
+
+### Example: LiveView subscriber
+
+```elixir
+defmodule MyAppWeb.ChatLive do
+  use MyAppWeb, :live_view
+
+  def mount(_params, _session, socket) do
+    if connected?(socket) do
+      ExWapp.subscribe("my_session")
+    end
+
+    {:ok, assign(socket, messages: [], status: :unknown)}
+  end
+
+  def handle_info({:ex_wapp_message, jid, message}, socket) do
+    {:noreply, update(socket, :messages, &[{jid, message} | &1])}
+  end
+
+  def handle_info({:ex_wapp_session, :connected}, socket) do
+    {:noreply, assign(socket, :status, :connected)}
+  end
+
+  def handle_info({:ex_wapp_session, :disconnected, _reason}, socket) do
+    {:noreply, assign(socket, :status, :disconnected)}
+  end
+
+  def handle_info({:ex_wapp_session, :terminated, _reason}, socket) do
+    {:noreply, assign(socket, :status, :terminated)}
+  end
+end
+```
 
 ## Multi-Session Safety
 

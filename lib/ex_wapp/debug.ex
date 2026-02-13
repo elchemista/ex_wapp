@@ -266,11 +266,11 @@ defmodule ExWapp.Debug do
       signed_prekey = ExWapp.Signal.Keys.generate_signed_prekey(identity, 1)
       reg_id = :rand.uniform(65535)
 
-      # Build device props (matching Go exactly)
+      # Build device props (Firefox/Linux identity)
       device_props = <<
         0x0A,
-        0x09,
-        "whatsmeow"::binary,
+        0x07,
+        "Firefox"::binary,
         0x12,
         0x06,
         0x08,
@@ -280,7 +280,7 @@ defmodule ExWapp.Debug do
         0x18,
         0x00,
         0x18,
-        0x00,
+        0x02,
         0x20,
         0x00,
         0x2A,

@@ -233,6 +233,18 @@ defmodule ExWapp do
   defdelegate stats(server), to: Session
 
   @doc """
+  Returns the session_id for a session process.
+
+  Returns `nil` when no explicit `:session_id` option was provided at start.
+
+  ## Example
+
+      session_id = ExWapp.get_session_id(session)
+  """
+  @spec get_session_id(GenServer.server()) :: term() | nil
+  defdelegate get_session_id(server), to: Session
+
+  @doc """
   Gracefully disconnects from WhatsApp servers.
 
   Stops automatic reconnection and closes the connection cleanly.
@@ -310,37 +322,40 @@ defmodule ExWapp do
   @doc """
   Sends a text message to a contact or group.
 
-  ## Options
+  Accepts either a session pid or a session_id string.
 
-    * `:quoted_id` - Message ID to reply to
-    * `:quoted_participant` - Sender JID of quoted message (for groups)
-    * `:mentions` - List of JIDs to mention
+  When called with a **pid**, the call is synchronous and returns the message ID.
+  When called with a **session_id string**, the send command is dispatched via
+  PubSub (fire-and-forget) and returns `:ok` immediately.
 
   ## Returns
 
-    * `{:ok, message_id}` - Message was queued for sending
+    * `{:ok, message_id}` - Message was queued for sending (pid path)
+    * `:ok` - Send command dispatched via PubSub (session_id path)
     * `{:error, reason}` - Failed to send
 
   ## Examples
 
-      # Simple message
+      # With session pid (synchronous, returns message_id)
       {:ok, id} = ExWapp.send_message(session, "1234567890@s.whatsapp.net", "Hello!")
 
-      # Reply to a message
-      {:ok, id} = ExWapp.send_message(session, jid, "This is a reply",
-        quoted_id: "ABCD1234"
-      )
-
-      # Mention someone in a group
-      {:ok, id} = ExWapp.send_message(session, group_jid, "Hey @user!",
-        mentions: ["1234567890@s.whatsapp.net"]
-      )
+      # With session_id string (fire-and-forget via PubSub)
+      :ok = ExWapp.send_message("my_session", "1234567890@s.whatsapp.net", "Hello!")
   """
-  @spec send_message(GenServer.server(), String.t(), String.t(), keyword()) ::
-          {:ok, String.t()} | {:error, term()}
-  def send_message(session, jid, text, _opts \\ []) do
-    # Use Session.send_text which handles encryption
+  @spec send_message(pid() | binary(), String.t(), String.t()) ::
+          {:ok, String.t()} | :ok | {:error, term()}
+  def send_message(session, jid, text)
+
+  def send_message(session, jid, text) when is_pid(session) do
     Session.send_text(session, jid, text)
+  end
+
+  def send_message(session_id, jid, text) when is_binary(session_id) do
+    Phoenix.PubSub.broadcast(
+      ExWapp.PubSub,
+      "ex_wapp:commands:#{session_id}",
+      {:ex_wapp_send, jid, text}
+    )
   end
 
   @doc """
@@ -379,29 +394,6 @@ defmodule ExWapp do
   end
 
   @doc """
-  Subscribe to incoming messages.
-
-  Returns a reference. Messages arrive as `{:ex_wapp_message, ref, jid, message}`.
-
-  ## Example
-
-      {:ok, ref} = ExWapp.subscribe_messages(session)
-
-      receive do
-        {:ex_wapp_message, ^ref, jid, message} ->
-          IO.puts("New message from \#{jid}: \#{message.text}")
-      end
-  """
-  @spec subscribe_messages(GenServer.server()) :: {:ok, reference()}
-  defdelegate subscribe_messages(session), to: Session
-
-  @doc """
-  Unsubscribe from messages.
-  """
-  @spec unsubscribe_messages(GenServer.server(), reference()) :: :ok
-  defdelegate unsubscribe_messages(session, ref), to: Session
-
-  @doc """
   Builds a lazy stream of incoming messages.
 
   Each element is a tuple of `{jid, message}`.
@@ -416,6 +408,97 @@ defmodule ExWapp do
   """
   @spec message_stream(GenServer.server()) :: Enumerable.t()
   defdelegate message_stream(session), to: Session
+
+  # ============================================================================
+  # PubSub Subscription API
+  # ============================================================================
+
+  @doc """
+  Subscribe the calling process to a session's events via PubSub.
+
+  Subscribes to **both** incoming messages and session lifecycle events
+  in a single call. Accepts either a session pid or a session_id string.
+
+  ## Messages received
+
+  - `{:ex_wapp_message, jid, message}` - incoming WhatsApp message
+  - `{:ex_wapp_session, :connected}` - session connected
+  - `{:ex_wapp_session, :disconnected, reason}` - session disconnected
+  - `{:ex_wapp_session, :terminated, reason}` - session process stopped
+
+  ## Example
+
+      ExWapp.subscribe(session)
+      # or
+      ExWapp.subscribe("my_session")
+
+      def handle_info({:ex_wapp_message, jid, message}, state) do
+        IO.puts("Message from \#{jid}")
+        {:noreply, state}
+      end
+
+      def handle_info({:ex_wapp_session, :connected}, state) do
+        {:noreply, assign(state, :status, :connected)}
+      end
+
+      def handle_info({:ex_wapp_session, :disconnected, _reason}, state) do
+        {:noreply, assign(state, :status, :disconnected)}
+      end
+  """
+  @spec subscribe(pid() | term()) :: :ok | {:error, term()}
+  def subscribe(session) when is_pid(session) do
+    session_id = Session.get_session_id(session) || session
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:messages:#{session_id}")
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
+  end
+
+  def subscribe(session_id) do
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:messages:#{session_id}")
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
+  end
+
+  @doc """
+  Unsubscribe the calling process from a session's events.
+
+  Unsubscribes from both messages and lifecycle topics.
+  Accepts either a session pid or a session_id string.
+  """
+  @spec unsubscribe(pid() | term()) :: :ok
+  def unsubscribe(session) when is_pid(session) do
+    session_id = Session.get_session_id(session) || session
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:messages:#{session_id}")
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
+  end
+
+  def unsubscribe(session_id) do
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:messages:#{session_id}")
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
+  end
+
+  @doc """
+  Subscribe to events from ALL sessions via PubSub.
+
+  Subscribes to both global messages and global lifecycle topics.
+
+  ## Messages received
+
+  - `{:ex_wapp_message, session_id, jid, message}` - message from any session
+  - `{session_id, {:ex_wapp_session, event, ...}}` - lifecycle from any session
+  """
+  @spec subscribe_all() :: :ok | {:error, term()}
+  def subscribe_all do
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:messages")
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:session")
+  end
+
+  @doc """
+  Unsubscribe from all global topics (messages + lifecycle).
+  """
+  @spec unsubscribe_all() :: :ok
+  def unsubscribe_all do
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:messages")
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:session")
+  end
 
   @doc """
   Archives a chat.

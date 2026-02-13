@@ -42,6 +42,8 @@ defmodule ExWapp.Application do
   @impl true
   def start(_type, _args) do
     children = [
+      # PubSub for message broadcasting
+      {Phoenix.PubSub, name: ExWapp.PubSub},
       # Registry for session lookup by ID
       {Registry, keys: :unique, name: ExWapp.Session.Registry},
       # DynamicSupervisor for managing session processes
