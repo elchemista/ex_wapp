@@ -1,4 +1,4 @@
-defmodule ExWapp.Session.Subscribers do
+defmodule ExWapp.Session.Worker.Subscribers do
   @moduledoc """
   Subscriber bookkeeping for QR and message streams.
   """

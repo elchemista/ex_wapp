@@ -1,4 +1,4 @@
-defmodule ExWapp.Session.Inbound do
+defmodule ExWapp.Session.Worker.Inbound do
   @moduledoc """
   Converts inbound message handler outputs into sendable action nodes.
   """

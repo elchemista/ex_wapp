@@ -1,4 +1,4 @@
-defmodule ExWapp.Session.Resilience do
+defmodule ExWapp.Session.Worker.Resilience do
   @moduledoc """
   Reconnect/backoff policy for session workers.
   """

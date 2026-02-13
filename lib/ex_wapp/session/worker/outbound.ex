@@ -1,4 +1,4 @@
-defmodule ExWapp.Session.Outbound do
+defmodule ExWapp.Session.Worker.Outbound do
   @moduledoc false
 
   require Logger

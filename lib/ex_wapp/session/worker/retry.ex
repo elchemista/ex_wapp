@@ -1,4 +1,4 @@
-defmodule ExWapp.Session.Retry do
+defmodule ExWapp.Session.Worker.Retry do
   @moduledoc """
   Outbound retry and message lookup helpers for Session.
   """
