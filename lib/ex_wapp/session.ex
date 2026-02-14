@@ -50,4 +50,34 @@ defmodule ExWapp.Session do
 
   @spec message_stream(GenServer.server()) :: Enumerable.t()
   defdelegate message_stream(server), to: Worker
+
+  # ── App State Sync (server-synced operations) ──
+
+  @spec send_app_state(GenServer.server(), map()) :: {:ok, map(), map()} | {:error, term()}
+  defdelegate send_app_state(server, patch_info), to: Worker
+
+  @spec archive_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  defdelegate archive_chat(server, jid), to: Worker
+
+  @spec unarchive_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  defdelegate unarchive_chat(server, jid), to: Worker
+
+  @spec delete_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  defdelegate delete_chat(server, jid), to: Worker
+
+  @spec create_contact(GenServer.server(), String.t(), String.t()) :: :ok | {:error, term()}
+  defdelegate create_contact(server, jid, name), to: Worker
+
+  @spec delete_contact(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  defdelegate delete_contact(server, jid), to: Worker
+
+  @spec list_contacts(GenServer.server()) :: [ExWapp.Contact.t()]
+  defdelegate list_contacts(server), to: Worker
+
+  @spec get_contact(GenServer.server(), String.t()) :: ExWapp.Contact.t() | nil
+  defdelegate get_contact(server, jid), to: Worker
+
+  @spec get_chat_info(GenServer.server(), String.t()) ::
+          {:ok, ExWapp.Chat.chat()} | {:error, :not_found}
+  defdelegate get_chat_info(server, jid), to: Worker
 end

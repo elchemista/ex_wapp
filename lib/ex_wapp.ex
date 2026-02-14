@@ -500,33 +500,139 @@ defmodule ExWapp do
     Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:session")
   end
 
-  @doc """
-  Archives a chat.
-  """
-  @spec archive_chat(GenServer.server(), String.t()) :: :ok
-  def archive_chat(session, jid), do: Chat.archive(session, jid)
+  # ============================================================================
+  # Server-Synced Chat & Contact Operations
+  # ============================================================================
 
   @doc """
-  Unarchives a chat.
+  Archives a chat (server-synced via app state).
+
+  Falls back to local-only archive if not connected.
   """
-  @spec unarchive_chat(GenServer.server(), String.t()) :: :ok
-  def unarchive_chat(session, jid), do: Chat.unarchive(session, jid)
+  @spec archive_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def archive_chat(session, jid) do
+    case Session.archive_chat(session, jid) do
+      :ok -> :ok
+      {:error, {:not_connected, _}} -> Chat.archive(session, jid)
+      error -> error
+    end
+  end
 
   @doc """
-  Pins a chat to the top.
+  Unarchives a chat (server-synced via app state).
   """
-  @spec pin_chat(GenServer.server(), String.t()) :: :ok
-  def pin_chat(session, jid), do: Chat.pin(session, jid)
+  @spec unarchive_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def unarchive_chat(session, jid) do
+    case Session.unarchive_chat(session, jid) do
+      :ok -> :ok
+      {:error, {:not_connected, _}} -> Chat.unarchive(session, jid)
+      error -> error
+    end
+  end
 
   @doc """
-  Unpins a chat.
+  Pins a chat to the top (server-synced via app state).
   """
-  @spec unpin_chat(GenServer.server(), String.t()) :: :ok
-  def unpin_chat(session, jid), do: Chat.unpin(session, jid)
+  @spec pin_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def pin_chat(session, jid) do
+    patch = ExWapp.AppState.Engine.build_pin(jid, true)
+
+    case Session.send_app_state(session, patch) do
+      {:ok, _, _} -> :ok
+      {:error, {:not_connected, _}} -> Chat.pin(session, jid)
+      error -> error
+    end
+  end
 
   @doc """
-  Deletes a chat from local storage.
+  Unpins a chat (server-synced via app state).
   """
-  @spec delete_chat(GenServer.server(), String.t()) :: :ok
-  def delete_chat(session, jid), do: Chat.delete(session, jid)
+  @spec unpin_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def unpin_chat(session, jid) do
+    patch = ExWapp.AppState.Engine.build_pin(jid, false)
+
+    case Session.send_app_state(session, patch) do
+      {:ok, _, _} -> :ok
+      {:error, {:not_connected, _}} -> Chat.unpin(session, jid)
+      error -> error
+    end
+  end
+
+  @doc """
+  Deletes a chat (server-synced via app state).
+  """
+  @spec delete_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def delete_chat(session, jid) do
+    case Session.delete_chat(session, jid) do
+      :ok -> :ok
+      {:error, {:not_connected, _}} -> Chat.delete(session, jid)
+      error -> error
+    end
+  end
+
+  @doc """
+  Mutes a chat (server-synced via app state).
+
+  `mute_end_timestamp` is milliseconds epoch, or -1 for forever, or 0/nil to unmute.
+  """
+  @spec mute_chat(GenServer.server(), String.t(), integer()) :: :ok | {:error, term()}
+  def mute_chat(session, jid, mute_end_timestamp \\ -1) do
+    patch = ExWapp.AppState.Engine.build_mute(jid, true, mute_end_timestamp)
+
+    case Session.send_app_state(session, patch) do
+      {:ok, _, _} -> :ok
+      error -> error
+    end
+  end
+
+  @doc """
+  Unmutes a chat (server-synced via app state).
+  """
+  @spec unmute_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def unmute_chat(session, jid) do
+    patch = ExWapp.AppState.Engine.build_mute(jid, false)
+
+    case Session.send_app_state(session, patch) do
+      {:ok, _, _} -> :ok
+      error -> error
+    end
+  end
+
+  @doc """
+  Marks a chat as read (server-synced via app state).
+  """
+  @spec mark_chat_as_read(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def mark_chat_as_read(session, jid) do
+    patch = ExWapp.AppState.Engine.build_mark_read(jid, true)
+
+    case Session.send_app_state(session, patch) do
+      {:ok, _, _} -> :ok
+      {:error, {:not_connected, _}} -> Chat.mark_read(session, jid)
+      error -> error
+    end
+  end
+
+  @doc """
+  Creates or updates a contact (server-synced via app state).
+  """
+  @spec create_contact(GenServer.server(), String.t(), String.t()) :: :ok | {:error, term()}
+  defdelegate create_contact(session, jid, name), to: Session
+
+  @doc """
+  Deletes a contact (server-synced via app state).
+  """
+  @spec delete_contact(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  defdelegate delete_contact(session, jid), to: Session
+
+  @doc """
+  Lists all contacts.
+  """
+  @spec list_contacts(GenServer.server()) :: [ExWapp.Contact.t()]
+  defdelegate list_contacts(session), to: Session
+
+  @doc """
+  Gets a specific contact by JID.
+  """
+  @spec get_contact(GenServer.server(), String.t()) :: ExWapp.Contact.t() | nil
+  defdelegate get_contact(session, jid), to: Session
 end

@@ -22,7 +22,7 @@ defmodule ExWapp.MessageHandler do
   require Logger
 
   alias ExWapp.{Binary, Chat, JID, MapPath, Store}
-  alias ExWapp.Proto.HistorySync
+  alias ExWapp.Proto.{HistorySync, SyncAction}
   alias ExWapp.Signal.{Encryption, SenderKey}
   alias ExWapp.Binary.Node
 
@@ -92,6 +92,7 @@ defmodule ExWapp.MessageHandler do
     message_data = extract_message_content(content, type)
     {message_data, state} = maybe_decrypt_message(message_data, state, from, participant, attrs)
     state = maybe_ingest_history_sync(message_data, session, state, from, id)
+    state = maybe_ingest_app_state_keys(message_data, state)
 
     # Build message struct
     message = %{
@@ -208,6 +209,9 @@ defmodule ExWapp.MessageHandler do
 
       "server_sync" ->
         handle_server_sync(content, session, state)
+
+      "w:sync:app:state" ->
+        handle_app_state_sync_notification(content, session, state)
 
       "devices" ->
         handle_devices_notification(content, session, state)
@@ -335,6 +339,53 @@ defmodule ExWapp.MessageHandler do
 
     {:ok, state}
   end
+
+  # Handle w:sync:app:state notification — server pushes when another device
+  # modifies app state (contacts, chat settings, etc.)
+  # Reference: whatsmeow appstate.go FetchAppState / handleAppStateSyncNotification
+  defp handle_app_state_sync_notification(content, _session, state) do
+    collection_names = extract_app_state_collection_names(content)
+
+    if collection_names != [] do
+      Logger.info(
+        "[APP_STATE] Received sync notification for collections: #{inspect(collection_names)}"
+      )
+
+      # Notify the session worker to trigger a re-fetch of the changed collections
+      # The worker will call FetchAppState for each collection
+      session_pid = Map.get(state, :session_pid)
+
+      if is_pid(session_pid) and Process.alive?(session_pid) do
+        send(session_pid, {:app_state_sync_collections, collection_names})
+      end
+    end
+
+    {:ok, state}
+  end
+
+  defp extract_app_state_collection_names(content) when is_list(content) do
+    Enum.flat_map(content, fn
+      %Node{tag: "sync", content: children} when is_list(children) ->
+        Enum.flat_map(children, fn
+          %Node{tag: "collection", attrs: attrs} ->
+            name = Map.get(attrs, "name")
+            if is_binary(name) and name != "", do: [name], else: []
+
+          _ ->
+            []
+        end)
+
+      %Node{tag: "collection", attrs: attrs} ->
+        name = Map.get(attrs, "name")
+        if is_binary(name) and name != "", do: [name], else: []
+
+      _ ->
+        []
+    end)
+    |> Enum.uniq()
+  end
+
+  defp extract_app_state_collection_names(_), do: []
 
   defp handle_server_sync(content, session, state) do
     process_sync_collections(content, chat_target(session, state))
@@ -947,6 +998,156 @@ defmodule ExWapp.MessageHandler do
   end
 
   defp maybe_ingest_history_sync(_message_data, _session, state, _from, _id), do: state
+
+  # ============================================================================
+  # App State Key Ingestion
+  # ============================================================================
+
+  # Detect AppStateSyncKeyShare in protocol messages (ProtocolMessage field 7)
+  # Reference: whatsmeow message.go:812 handleAppStateSyncKeyShare
+  defp maybe_ingest_app_state_keys(
+         %{message_content_type: :protocol, protocol_payload: payload},
+         state
+       )
+       when is_binary(payload) do
+    with {:ok, message_fields} <- decode_wire_fields_safe(payload),
+         protocol_message when is_binary(protocol_message) <-
+           find_first_ld_field(message_fields, 12),
+         {:ok, protocol_fields} <- decode_wire_fields_safe(protocol_message),
+         key_share_bytes when is_binary(key_share_bytes) <-
+           find_first_ld_field(protocol_fields, 7),
+         {:ok, key_share} <- SyncAction.decode_app_state_sync_key_share(key_share_bytes),
+         true <- length(key_share.keys) > 0 do
+      Logger.info("[APP_STATE] Received AppStateSyncKeyShare with #{length(key_share.keys)} keys")
+
+      store_app_state_keys(state, key_share.keys)
+    else
+      _ -> state
+    end
+  rescue
+    error ->
+      Logger.warning("[APP_STATE] Failed to ingest app state keys: #{inspect(error)}")
+      state
+  end
+
+  defp maybe_ingest_app_state_keys(_message_data, state), do: state
+
+  defp store_app_state_keys(state, keys) when is_list(keys) do
+    store = Map.get(state, :store)
+
+    if is_nil(store) do
+      Logger.warning("[APP_STATE] No store available, cannot persist app state keys")
+      state
+    else
+      data = Store.load!(store)
+      existing_keys = Map.get(data, :app_state_keys, %{})
+
+      updated_keys =
+        Enum.reduce(keys, existing_keys, fn key, acc ->
+          key_id = Map.get(key, :key_id)
+          key_data = Map.get(key, :key_data)
+
+          if is_binary(key_id) and is_map(key_data) and is_binary(Map.get(key_data, :key_data)) do
+            key_id_hex = Base.encode16(key_id, case: :lower)
+
+            Logger.info(
+              "[APP_STATE] Storing app state key #{key_id_hex} (ts: #{Map.get(key_data, :timestamp)})"
+            )
+
+            Map.put(acc, key_id_hex, %{
+              data: Map.get(key_data, :key_data),
+              timestamp: Map.get(key_data, :timestamp),
+              fingerprint: Map.get(key_data, :fingerprint)
+            })
+          else
+            Logger.warning("[APP_STATE] Skipping malformed key: #{inspect(key)}")
+            acc
+          end
+        end)
+
+      if updated_keys != existing_keys do
+        Store.persist(store, Map.put(data, :app_state_keys, updated_keys))
+        Logger.info("[APP_STATE] Persisted #{map_size(updated_keys)} total app state keys")
+      end
+
+      state
+    end
+  rescue
+    error ->
+      Logger.warning("[APP_STATE] Failed to store app state keys: #{inspect(error)}")
+      state
+  end
+
+  # Lightweight protobuf helpers for key extraction (reuse decode_wire_fields pattern from HistorySync)
+  defp decode_wire_fields_safe(binary) when is_binary(binary) do
+    decode_wire_fields_acc(binary, [])
+  end
+
+  defp decode_wire_fields_safe(_), do: {:error, :not_binary}
+
+  defp decode_wire_fields_acc(<<>>, acc), do: {:ok, Enum.reverse(acc)}
+
+  defp decode_wire_fields_acc(binary, acc) when is_binary(binary) do
+    with {:ok, tag, rest} <- decode_varint_safe(binary),
+         wire_type <- Bitwise.band(tag, 0x07),
+         field_num <- Bitwise.bsr(tag, 3) do
+      case wire_type do
+        0 ->
+          with {:ok, value, tail} <- decode_varint_safe(rest) do
+            decode_wire_fields_acc(tail, [{field_num, 0, value} | acc])
+          end
+
+        1 ->
+          if byte_size(rest) >= 8 do
+            <<_skip::binary-size(8), tail::binary>> = rest
+            decode_wire_fields_acc(tail, [{field_num, 1, :fixed64} | acc])
+          else
+            {:error, :invalid_fixed64}
+          end
+
+        2 ->
+          with {:ok, len, tail} <- decode_varint_safe(rest),
+               true <- byte_size(tail) >= len do
+            <<value::binary-size(len), next::binary>> = tail
+            decode_wire_fields_acc(next, [{field_num, 2, value} | acc])
+          else
+            false -> {:error, :invalid_length}
+          end
+
+        5 ->
+          if byte_size(rest) >= 4 do
+            <<_skip::binary-size(4), tail::binary>> = rest
+            decode_wire_fields_acc(tail, [{field_num, 5, :fixed32} | acc])
+          else
+            {:error, :invalid_fixed32}
+          end
+
+        _ ->
+          {:error, {:unsupported_wire_type, wire_type}}
+      end
+    end
+  end
+
+  defp decode_varint_safe(binary), do: decode_varint_safe(binary, 0, 0)
+  defp decode_varint_safe(_, _, shift) when shift > 63, do: {:error, :invalid_varint}
+  defp decode_varint_safe(<<>>, _, _), do: {:error, :invalid_varint}
+
+  defp decode_varint_safe(<<byte, rest::binary>>, acc, shift) do
+    value = Bitwise.bor(acc, Bitwise.bsl(Bitwise.band(byte, 0x7F), shift))
+
+    if Bitwise.band(byte, 0x80) == 0 do
+      {:ok, value, rest}
+    else
+      decode_varint_safe(rest, value, shift + 7)
+    end
+  end
+
+  defp find_first_ld_field(fields, field_num) when is_list(fields) do
+    Enum.find_value(fields, fn
+      {^field_num, 2, value} when is_binary(value) -> value
+      _ -> nil
+    end)
+  end
 
   defp upsert_chat_from_history_sync(target, %{jid: jid} = conversation)
        when not is_nil(target) do

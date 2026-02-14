@@ -202,6 +202,80 @@ defmodule ExWapp.Session.Worker do
     GenServer.call(server, {:send_text, jid, IO.iodata_to_binary(text)})
   end
 
+  @doc "Send an app state mutation (server-synced)."
+  @spec send_app_state(GenServer.server(), map()) :: {:ok, map(), map()} | {:error, term()}
+  def send_app_state(server, patch_info) do
+    GenServer.call(server, {:app_state_mutation, patch_info}, 30_000)
+  end
+
+  @doc "Archive a chat (server-synced)."
+  @spec archive_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def archive_chat(server, jid) do
+    patch = ExWapp.AppState.Engine.build_archive(jid, true)
+
+    case send_app_state(server, patch) do
+      {:ok, _, _} -> :ok
+      error -> error
+    end
+  end
+
+  @doc "Unarchive a chat (server-synced)."
+  @spec unarchive_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def unarchive_chat(server, jid) do
+    patch = ExWapp.AppState.Engine.build_archive(jid, false)
+
+    case send_app_state(server, patch) do
+      {:ok, _, _} -> :ok
+      error -> error
+    end
+  end
+
+  @doc "Delete a chat (server-synced)."
+  @spec delete_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def delete_chat(server, jid) do
+    patch = ExWapp.AppState.Engine.build_delete_chat(jid)
+
+    case send_app_state(server, patch) do
+      {:ok, _, _} -> :ok
+      error -> error
+    end
+  end
+
+  @doc "Create or update a contact (server-synced)."
+  @spec create_contact(GenServer.server(), String.t(), String.t()) :: :ok | {:error, term()}
+  def create_contact(server, jid, name) do
+    patch = ExWapp.AppState.Engine.build_contact(jid, name)
+
+    case send_app_state(server, patch) do
+      {:ok, _, _} -> :ok
+      error -> error
+    end
+  end
+
+  @doc "Delete a contact (server-synced)."
+  @spec delete_contact(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def delete_contact(server, jid) do
+    patch = ExWapp.AppState.Engine.build_delete_contact(jid)
+
+    case send_app_state(server, patch) do
+      {:ok, _, _} -> :ok
+      error -> error
+    end
+  end
+
+  @doc "List all contacts."
+  @spec list_contacts(GenServer.server()) :: [ExWapp.Contact.t()]
+  def list_contacts(server), do: GenServer.call(server, :list_contacts)
+
+  @doc "Get a specific contact by JID."
+  @spec get_contact(GenServer.server(), String.t()) :: ExWapp.Contact.t() | nil
+  def get_contact(server, jid), do: GenServer.call(server, {:get_contact, jid})
+
+  @doc "Get chat info (metadata) for a JID."
+  @spec get_chat_info(GenServer.server(), String.t()) ::
+          {:ok, ExWapp.Chat.chat()} | {:error, :not_found}
+  def get_chat_info(server, jid), do: GenServer.call(server, {:get_chat_info, jid})
+
   @doc """
   Builds a lazy stream of QR pairing events.
 
@@ -400,6 +474,37 @@ defmodule ExWapp.Session.Worker do
     {:reply, {:error, {:not_connected, state.status}}, state}
   end
 
+  # ── App State Sync Operations ──
+
+  def handle_call({:app_state_mutation, patch_info}, _from, %{status: :connected} = state) do
+    session_pid = self()
+
+    result =
+      try do
+        ExWapp.AppState.Engine.send_mutation(session_pid, patch_info, state.store)
+      rescue
+        e -> {:error, {:exception, e}}
+      end
+
+    {:reply, result, state}
+  end
+
+  def handle_call({:app_state_mutation, _patch_info}, _from, state) do
+    {:reply, {:error, {:not_connected, state.status}}, state}
+  end
+
+  def handle_call(:list_contacts, _from, state) do
+    {:reply, ExWapp.Contact.list(state.store), state}
+  end
+
+  def handle_call({:get_contact, jid}, _from, state) do
+    {:reply, ExWapp.Contact.get(state.store, jid), state}
+  end
+
+  def handle_call({:get_chat_info, jid}, _from, state) do
+    {:reply, ExWapp.Chat.get(state.store, jid), state}
+  end
+
   def handle_call(:get_signal_sessions, _from, state) do
     {:reply, state.signal_sessions, state}
   end
@@ -569,6 +674,36 @@ defmodule ExWapp.Session.Worker do
     {new_state, actions} = NodeHandler.safe_handle_node(node, state)
     Enum.each(actions, &NodeHandler.safe_handle_action(&1, new_state))
     {:noreply, new_state}
+  end
+
+  # App state sync notification — triggered by MessageHandler when server pushes
+  # collection changes from another device
+  def handle_info({:app_state_sync_collections, collection_names}, %{status: :connected} = state)
+      when is_list(collection_names) do
+    Logger.info(
+      "[APP_STATE] Re-fetching #{length(collection_names)} collections: #{inspect(collection_names)}"
+    )
+
+    # Run async to avoid blocking the worker
+    store = state.store
+    session_pid = self()
+
+    spawn(fn ->
+      Enum.each(collection_names, fn name ->
+        try do
+          fetch_app_state_collection(session_pid, store, name)
+        rescue
+          e -> Logger.warning("[APP_STATE] Failed to fetch collection #{name}: #{inspect(e)}")
+        end
+      end)
+    end)
+
+    {:noreply, state}
+  end
+
+  def handle_info({:app_state_sync_collections, _}, state) do
+    Logger.debug("[APP_STATE] Ignoring sync notification — not connected")
+    {:noreply, state}
   end
 
   def handle_info({:outbound_error, _item, reason}, state) do
@@ -1061,4 +1196,147 @@ defmodule ExWapp.Session.Worker do
   defp qr_event_kind({:code, _}), do: :code
   defp qr_event_kind(:success), do: :success
   defp qr_event_kind({:error, _}), do: :error
+
+  # ============================================================================
+  # App State Sync — fetch collection from server
+  # ============================================================================
+
+  defp fetch_app_state_collection(session_pid, store, collection_name) do
+    alias ExWapp.AppState.Engine
+
+    with {:ok, hash_state, _mutation_macs} <-
+           Engine.get_collection_state(store, collection_name) do
+      # Build the fetch IQ
+      message_id = :crypto.strong_rand_bytes(16) |> Base.encode64() |> String.slice(0, 16)
+
+      want_snapshot = hash_state.version == 0
+
+      collection_attrs = %{"name" => collection_name}
+
+      collection_attrs =
+        if want_snapshot do
+          Map.put(collection_attrs, "return_snapshot", "true")
+        else
+          collection_attrs
+          |> Map.put("version", to_string(hash_state.version))
+          |> Map.put("return_snapshot", "false")
+        end
+
+      iq_node = %Binary.Node{
+        tag: "iq",
+        attrs: %{
+          "id" => message_id,
+          "xmlns" => "w:sync:app:state",
+          "type" => "set",
+          "to" => "s.whatsapp.net"
+        },
+        content: [
+          %Binary.Node{
+            tag: "sync",
+            attrs: %{},
+            content: [
+              %Binary.Node{
+                tag: "collection",
+                attrs: collection_attrs,
+                content: nil
+              }
+            ]
+          }
+        ]
+      }
+
+      case GenServer.call(session_pid, {:send_iq, iq_node, message_id}, 30_000) do
+        {:ok, response} ->
+          process_app_state_response(store, collection_name, response, hash_state)
+
+        {:error, reason} ->
+          Logger.warning("[APP_STATE] Fetch IQ failed for #{collection_name}: #{inspect(reason)}")
+      end
+    end
+  rescue
+    e ->
+      Logger.warning("[APP_STATE] fetch_app_state_collection error: #{inspect(e)}")
+  end
+
+  defp process_app_state_response(store, collection_name, response, _hash_state) do
+    alias ExWapp.AppState.Engine
+
+    # Extract patches from response node
+    patches = extract_patches_from_response(response)
+
+    if patches == [] do
+      Logger.debug("[APP_STATE] No patches returned for #{collection_name}")
+      :ok
+    else
+      data = Store.load!(store)
+      key_store = Map.get(data, :app_state_keys, %{})
+
+      decoded_count =
+        Enum.reduce(patches, 0, fn patch_binary, count ->
+          case ExWapp.Proto.SyncAction.decode_syncd_patch(patch_binary) do
+            {:ok, patch} ->
+              case Engine.decode_mutations(patch.mutations, key_store, false) do
+                {:ok, decoded_mutations} ->
+                  Enum.each(decoded_mutations, fn mutation ->
+                    if mutation.operation == 0 do
+                      Engine.dispatch_mutation(store, mutation.index, mutation.action)
+                    end
+                  end)
+
+                  count + length(decoded_mutations)
+
+                {:error, reason} ->
+                  Logger.warning(
+                    "[APP_STATE] Failed to decode mutations for #{collection_name}: #{inspect(reason)}"
+                  )
+
+                  count
+              end
+
+            {:error, reason} ->
+              Logger.warning(
+                "[APP_STATE] Failed to decode patch for #{collection_name}: #{inspect(reason)}"
+              )
+
+              count
+          end
+        end)
+
+      Logger.info("[APP_STATE] Processed #{decoded_count} mutations for #{collection_name}")
+    end
+  rescue
+    e ->
+      Logger.warning("[APP_STATE] process_app_state_response error: #{inspect(e)}")
+  end
+
+  defp extract_patches_from_response(%Binary.Node{content: content}) when is_list(content) do
+    Enum.flat_map(content, fn
+      %Binary.Node{tag: "sync", content: sync_children} when is_list(sync_children) ->
+        Enum.flat_map(sync_children, fn
+          %Binary.Node{tag: "collection", content: coll_children} when is_list(coll_children) ->
+            Enum.flat_map(coll_children, fn
+              %Binary.Node{tag: "patches", content: patch_children}
+              when is_list(patch_children) ->
+                Enum.flat_map(patch_children, fn
+                  %Binary.Node{tag: "patch", content: patch_data} when is_binary(patch_data) ->
+                    [patch_data]
+
+                  _ ->
+                    []
+                end)
+
+              _ ->
+                []
+            end)
+
+          _ ->
+            []
+        end)
+
+      _ ->
+        []
+    end)
+  end
+
+  defp extract_patches_from_response(_), do: []
 end

@@ -301,6 +301,50 @@ defmodule ExWapp.Chat do
     update_chat(target, jid, fn chat -> %{chat | pinned: false} end)
   end
 
+  @doc "Update archived state from app state sync dispatch."
+  @spec update_archived(target(), String.t(), boolean()) :: :ok
+  def update_archived(target, jid, archived) when is_boolean(archived) do
+    chat = get_or_create(target, jid)
+    save_chat(target, %{chat | archived: archived})
+  end
+
+  @doc "Update pinned state from app state sync dispatch."
+  @spec update_pinned(target(), String.t(), boolean()) :: :ok
+  def update_pinned(target, jid, pinned) when is_boolean(pinned) do
+    chat = get_or_create(target, jid)
+    save_chat(target, %{chat | pinned: pinned})
+  end
+
+  @doc "Update muted state from app state sync dispatch."
+  @spec update_muted(target(), String.t(), map()) :: :ok
+  def update_muted(target, jid, mute_action) when is_map(mute_action) do
+    chat = get_or_create(target, jid)
+    muted = Map.get(mute_action, :muted, false)
+    mute_end = Map.get(mute_action, :mute_end_timestamp)
+
+    muted_until =
+      cond do
+        not muted -> nil
+        is_integer(mute_end) and mute_end > 0 -> mute_end
+        true -> -1
+      end
+
+    save_chat(target, %{chat | muted_until: muted_until})
+  end
+
+  @doc "Mark chat as read/unread from app state sync dispatch."
+  @spec mark_read_from_sync(target(), String.t(), map()) :: :ok
+  def mark_read_from_sync(target, jid, action_value) when is_map(action_value) do
+    mark_read_action = Map.get(action_value, :mark_chat_as_read_action)
+    read = is_map(mark_read_action) and Map.get(mark_read_action, :read, false)
+
+    if read do
+      mark_read(target, jid)
+    else
+      :ok
+    end
+  end
+
   @doc """
   Updates the chat name (for contacts that send push names).
   """
