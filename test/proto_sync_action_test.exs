@@ -2,6 +2,7 @@ defmodule ExWapp.Proto.SyncActionTest do
   use ExUnit.Case, async: true
 
   alias ExWapp.Proto.SyncAction
+
   alias ExWapp.Proto.SyncAction.{
     SyncdPatch,
     SyncdMutation,
@@ -228,7 +229,9 @@ defmodule ExWapp.Proto.SyncActionTest do
       {:ok, decoded} = SyncAction.decode_sync_action_data(encoded)
 
       assert decoded.value.archive_chat_action.archived == true
-      assert decoded.value.archive_chat_action.message_range.last_message_timestamp == 1_699_999_999
+
+      assert decoded.value.archive_chat_action.message_range.last_message_timestamp ==
+               1_699_999_999
     end
 
     test "delete chat action" do
@@ -248,7 +251,8 @@ defmodule ExWapp.Proto.SyncActionTest do
       encoded = SyncAction.encode_sync_action_data(data)
       {:ok, decoded} = SyncAction.decode_sync_action_data(encoded)
 
-      assert decoded.value.delete_chat_action.message_range.last_message_timestamp == 1_699_999_999
+      assert decoded.value.delete_chat_action.message_range.last_message_timestamp ==
+               1_699_999_999
     end
 
     test "mark chat as read action" do
@@ -303,6 +307,9 @@ defmodule ExWapp.Proto.SyncActionTest do
       }
 
       encoded = SyncAction.encode_sync_action_data(data)
+      # Field 7 (pushNameSetting) wire tag = 58 (0x3A)
+      assert :binary.matches(encoded, [<<0x3A>>]) != []
+
       {:ok, decoded} = SyncAction.decode_sync_action_data(encoded)
 
       assert decoded.value.push_name_setting.name == "My Name"

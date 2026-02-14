@@ -135,6 +135,16 @@ defmodule ExWapp.Proto.SyncAction do
     defstruct key_data: nil, fingerprint: nil, timestamp: nil
   end
 
+  defmodule AppStateSyncKeyId do
+    @moduledoc false
+    defstruct key_id: nil
+  end
+
+  defmodule ExternalBlobReference do
+    @moduledoc false
+    defstruct media_key: nil, direct_path: nil, handle: nil, file_size_bytes: nil
+  end
+
   # ══════════════════════════════════════════════════════════════
   # ENCODING
   # ══════════════════════════════════════════════════════════════
@@ -206,11 +216,11 @@ defmodule ExWapp.Proto.SyncAction do
     |> encode_submessage(3, encode_contact_action(v.contact_action))
     |> encode_submessage(4, encode_mute_action(v.mute_action))
     |> encode_submessage(5, encode_pin_action(v.pin_action))
+    |> encode_submessage(7, encode_push_name_setting(v.push_name_setting))
     |> encode_submessage(17, encode_archive_chat_action(v.archive_chat_action))
     |> encode_submessage(20, encode_mark_chat_as_read_action(v.mark_chat_as_read_action))
     |> encode_submessage(21, encode_clear_chat_action(v.clear_chat_action))
     |> encode_submessage(22, encode_delete_chat_action(v.delete_chat_action))
-    |> encode_submessage(25, encode_push_name_setting(v.push_name_setting))
     |> IO.iodata_to_binary()
   end
 
@@ -383,11 +393,11 @@ defmodule ExWapp.Proto.SyncAction do
          contact_action: decode_sub(fields, 3, &decode_contact_action/1),
          mute_action: decode_sub(fields, 4, &decode_mute_action/1),
          pin_action: decode_sub(fields, 5, &decode_pin_action/1),
+         push_name_setting: decode_sub(fields, 7, &decode_push_name_setting/1),
          archive_chat_action: decode_sub(fields, 17, &decode_archive_chat_action/1),
          mark_chat_as_read_action: decode_sub(fields, 20, &decode_mark_chat_as_read_action/1),
          clear_chat_action: decode_sub(fields, 21, &decode_clear_chat_action/1),
-         delete_chat_action: decode_sub(fields, 22, &decode_delete_chat_action/1),
-         push_name_setting: decode_sub(fields, 25, &decode_push_name_setting/1)
+         delete_chat_action: decode_sub(fields, 22, &decode_delete_chat_action/1)
        }}
     end
   end
@@ -642,15 +652,11 @@ defmodule ExWapp.Proto.SyncAction do
   # ══════════════════════════════════════════════════════════════
 
   defp decode_sub(fields, field_num, decoder) do
-    case first_field(fields, field_num, 2) do
-      nil ->
-        nil
-
-      data ->
-        case decoder.(data) do
-          {:ok, result} -> result
-          _ -> nil
-        end
+    with data when is_binary(data) <- first_field(fields, field_num, 2),
+         {:ok, result} <- decoder.(data) do
+      result
+    else
+      _ -> nil
     end
   end
 
@@ -679,44 +685,43 @@ defmodule ExWapp.Proto.SyncAction do
   defp decode_wire_fields(<<>>, acc), do: {:ok, Enum.reverse(acc)}
 
   defp decode_wire_fields(binary, acc) when is_binary(binary) do
-    with {:ok, tag, rest} <- decode_varint_bin(binary),
-         wire_type <- band(tag, 0x07),
-         field_num <- bsr(tag, 3) do
-      case wire_type do
-        0 ->
-          with {:ok, value, tail} <- decode_varint_bin(rest) do
-            decode_wire_fields(tail, [{field_num, 0, value} | acc])
-          end
-
-        1 ->
-          if byte_size(rest) >= 8 do
-            <<_skip::binary-size(8), tail::binary>> = rest
-            decode_wire_fields(tail, [{field_num, 1, :fixed64} | acc])
-          else
-            {:error, :invalid_fixed64}
-          end
-
-        2 ->
-          with {:ok, len, tail} <- decode_varint_bin(rest),
-               true <- byte_size(tail) >= len do
-            <<value::binary-size(len), next::binary>> = tail
-            decode_wire_fields(next, [{field_num, 2, value} | acc])
-          else
-            false -> {:error, :invalid_length_delimited_field}
-          end
-
-        5 ->
-          if byte_size(rest) >= 4 do
-            <<_skip::binary-size(4), tail::binary>> = rest
-            decode_wire_fields(tail, [{field_num, 5, :fixed32} | acc])
-          else
-            {:error, :invalid_fixed32}
-          end
-
-        _ ->
-          {:error, {:unsupported_wire_type, wire_type}}
-      end
+    with {:ok, tag, rest} <- decode_varint_bin(binary) do
+      wire_type = band(tag, 0x07)
+      field_num = bsr(tag, 3)
+      decode_wire_field(wire_type, field_num, rest, acc)
     end
+  end
+
+  defp decode_wire_field(0, field_num, rest, acc) do
+    with {:ok, value, tail} <- decode_varint_bin(rest) do
+      decode_wire_fields(tail, [{field_num, 0, value} | acc])
+    end
+  end
+
+  defp decode_wire_field(1, field_num, <<_skip::binary-size(8), tail::binary>>, acc) do
+    decode_wire_fields(tail, [{field_num, 1, :fixed64} | acc])
+  end
+
+  defp decode_wire_field(1, _field_num, _rest, _acc), do: {:error, :invalid_fixed64}
+
+  defp decode_wire_field(2, field_num, rest, acc) do
+    with {:ok, len, tail} <- decode_varint_bin(rest),
+         true <- byte_size(tail) >= len do
+      <<value::binary-size(len), next::binary>> = tail
+      decode_wire_fields(next, [{field_num, 2, value} | acc])
+    else
+      false -> {:error, :invalid_length_delimited_field}
+    end
+  end
+
+  defp decode_wire_field(5, field_num, <<_skip::binary-size(4), tail::binary>>, acc) do
+    decode_wire_fields(tail, [{field_num, 5, :fixed32} | acc])
+  end
+
+  defp decode_wire_field(5, _field_num, _rest, _acc), do: {:error, :invalid_fixed32}
+
+  defp decode_wire_field(wire_type, _field_num, _rest, _acc) do
+    {:error, {:unsupported_wire_type, wire_type}}
   end
 
   defp decode_varint_bin(binary), do: decode_varint_bin(binary, 0, 0)

@@ -635,4 +635,11 @@ defmodule ExWapp do
   """
   @spec get_contact(GenServer.server(), String.t()) :: ExWapp.Contact.t() | nil
   defdelegate get_contact(session, jid), to: Session
+
+  @doc """
+  Returns local metadata for a specific chat.
+  """
+  @spec get_chat_info(GenServer.server(), String.t()) ::
+          {:ok, ExWapp.Chat.chat()} | {:error, :not_found}
+  defdelegate get_chat_info(session, jid), to: Session
 end

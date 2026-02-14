@@ -68,7 +68,8 @@ defmodule ExWapp.AppState.Crypto do
   Matches whatsmeow `concatAndHMAC(sha256.New, keys.Index, indexBytes)` in `encode.go:300`.
   """
   @spec compute_index_mac(binary(), binary()) :: binary()
-  def compute_index_mac(index_json, index_key) when is_binary(index_json) and byte_size(index_key) == 32 do
+  def compute_index_mac(index_json, index_key)
+      when is_binary(index_json) and byte_size(index_key) == 32 do
     :crypto.mac(:hmac, :sha256, index_key, index_json)
   end
 
@@ -83,7 +84,8 @@ defmodule ExWapp.AppState.Crypto do
   """
   @spec compute_content_mac(non_neg_integer(), binary(), binary(), binary()) :: binary()
   def compute_content_mac(operation, encrypted_content, key_id, mac_key)
-      when is_integer(operation) and is_binary(encrypted_content) and is_binary(key_id) and byte_size(mac_key) == 32 do
+      when is_integer(operation) and is_binary(encrypted_content) and is_binary(key_id) and
+             byte_size(mac_key) == 32 do
     operation_byte = <<operation + 1>>
     key_data_length = <<byte_size(key_id) + 1::big-unsigned-64>>
 
@@ -105,7 +107,8 @@ defmodule ExWapp.AppState.Crypto do
   """
   @spec compute_snapshot_mac(binary(), non_neg_integer(), binary(), binary()) :: binary()
   def compute_snapshot_mac(hash_state, version, collection_name, snapshot_mac_key)
-      when byte_size(hash_state) == 128 and is_integer(version) and is_binary(collection_name) and byte_size(snapshot_mac_key) == 32 do
+      when byte_size(hash_state) == 128 and is_integer(version) and is_binary(collection_name) and
+             byte_size(snapshot_mac_key) == 32 do
     :crypto.mac(:hmac, :sha256, snapshot_mac_key, [
       hash_state,
       <<version::big-unsigned-64>>,
@@ -120,15 +123,18 @@ defmodule ExWapp.AppState.Crypto do
   """
   @spec compute_patch_mac(binary(), [binary()], non_neg_integer(), binary(), binary()) :: binary()
   def compute_patch_mac(snapshot_mac, value_macs, version, collection_name, patch_mac_key)
-      when is_binary(snapshot_mac) and is_list(value_macs) and is_integer(version) and is_binary(collection_name) and
+      when is_binary(snapshot_mac) and is_list(value_macs) and is_integer(version) and
+             is_binary(collection_name) and
              byte_size(patch_mac_key) == 32 do
     data = [snapshot_mac | value_macs] ++ [<<version::big-unsigned-64>>, collection_name]
     :crypto.mac(:hmac, :sha256, patch_mac_key, data)
   end
 
   # HKDF-SHA256 extract-then-expand
+  defp hkdf_sha256(ikm, <<>>, info, length),
+    do: hkdf_sha256(ikm, :binary.copy(<<0>>, 32), info, length)
+
   defp hkdf_sha256(ikm, salt, info, length) do
-    salt = if salt == <<>> or salt == nil, do: :binary.copy(<<0>>, 32), else: salt
     prk = :crypto.mac(:hmac, :sha256, salt, ikm)
     hkdf_expand(prk, info, length)
   end

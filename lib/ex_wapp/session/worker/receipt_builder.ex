@@ -167,7 +167,6 @@ defmodule ExWapp.Session.Worker.ReceiptBuilder do
       {:ok, %Binary.Node{tag: "keys", attrs: %{}, content: keys_content}}
     else
       {:error, reason} -> {:error, reason}
-      _ -> {:error, :invalid_device_identity}
     end
   rescue
     error -> {:error, {:retry_keys_build_failed, error}}

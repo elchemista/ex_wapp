@@ -137,8 +137,20 @@ defmodule ExWapp.Session.Worker.Outbound do
     padded_group_payload = Encryption.pad_message(message_payload)
     sender_identity = Account.local_account_sender_key_jid(store)
 
-    with true <- sender_identity != "" or {:error, :missing_sender_identity},
-         {:ok, distribution_payload} <-
+    if sender_identity == "" do
+      {:error, :missing_sender_identity}
+    else
+      do_build_group_sender_key_payloads(
+        store,
+        group_jid,
+        sender_identity,
+        padded_group_payload
+      )
+    end
+  end
+
+  defp do_build_group_sender_key_payloads(store, group_jid, sender_identity, padded_payload) do
+    with {:ok, distribution_payload} <-
            SenderKey.create_outbound_distribution_message(
              store,
              group_jid,
@@ -149,12 +161,9 @@ defmodule ExWapp.Session.Worker.Outbound do
              store,
              group_jid,
              sender_identity,
-             padded_group_payload
+             padded_payload
            ) do
       {:ok, Encryption.pad_message(distribution_payload), skmsg_payload}
-    else
-      false -> {:error, :missing_sender_identity}
-      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -490,22 +499,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
     signal_sessions =
       if self_chat? do
-        lid_mapping = Account.load_lid_mapping(state.store)
-
-        Logger.info(
-          "[SEND] Self-chat: clearing #{length(all_device_jids)} existing sessions to force fresh pkmsg"
-        )
-
-        Enum.reduce(all_device_jids, signal_sessions, fn device_jid, sessions ->
-          signal_jid = JIDUtils.resolve_signal_encryption_jid(device_jid, lid_mapping)
-          sessions = SessionStore.delete_session(sessions, device_jid)
-
-          if signal_jid != "" and signal_jid != device_jid do
-            SessionStore.delete_session(sessions, signal_jid)
-          else
-            sessions
-          end
-        end)
+        clear_self_chat_sessions(state.store, signal_sessions, all_device_jids)
       else
         signal_sessions
       end
@@ -538,6 +532,25 @@ defmodule ExWapp.Session.Worker.Outbound do
            all_usync_devices: all_usync_devices
          }}
     end
+  end
+
+  defp clear_self_chat_sessions(store, signal_sessions, all_device_jids) do
+    lid_mapping = Account.load_lid_mapping(store)
+
+    Logger.info(
+      "[SEND] Self-chat: clearing #{length(all_device_jids)} existing sessions to force fresh pkmsg"
+    )
+
+    Enum.reduce(all_device_jids, signal_sessions, fn device_jid, sessions ->
+      signal_jid = JIDUtils.resolve_signal_encryption_jid(device_jid, lid_mapping)
+      sessions = SessionStore.delete_session(sessions, device_jid)
+
+      if signal_jid != "" and signal_jid != device_jid do
+        SessionStore.delete_session(sessions, signal_jid)
+      else
+        sessions
+      end
+    end)
   end
 
   defp discover_devices(state, recipient_base_jid, own_sender_jid, own_device_id) do
@@ -689,7 +702,7 @@ defmodule ExWapp.Session.Worker.Outbound do
                                                                    {:ok, sessions, bundles} ->
       case fetch_prekeys_worker(state, device_jid, sessions) do
         {:ok, updated_sessions, fetched_bundles} ->
-          {:cont, {:ok, updated_sessions, Map.merge(bundles, fetched_bundles || %{})}}
+          {:cont, {:ok, updated_sessions, Map.merge(bundles, fetched_bundles)}}
 
         {:error, reason} ->
           {:halt, {:error, {:prekey_fetch_failed, device_jid, reason}}}
@@ -742,7 +755,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
       case fetch_prekeys_individually_worker(state, missing, sessions) do
         {:ok, retried_sessions, retried_bundles} ->
-          {retried_sessions, Map.merge(prekey_bundles, retried_bundles || %{})}
+          {retried_sessions, Map.merge(prekey_bundles, retried_bundles)}
 
         {:error, reason} ->
           Logger.warning("[SEND] Individual #{context} prekey retry failed: #{inspect(reason)}")
@@ -886,8 +899,8 @@ defmodule ExWapp.Session.Worker.Outbound do
   end
 
   defp resolve_send_targets(store, signal_sessions, jid, prekey_bundles, target_hints, opts) do
-    all_prekey_bundles = prekey_bundles || %{}
-    hints = target_hints || %{}
+    all_prekey_bundles = prekey_bundles
+    hints = target_hints
     self_chat_mode = Keyword.get(opts, :self_chat_mode, :dsm_all_non_current)
 
     recipient_prekey_bundles = filter_prekey_bundles_for_identity(all_prekey_bundles, jid)
@@ -1163,7 +1176,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
     result =
       case result do
-        {:error, :no_session} when signal_jid != target_jid ->
+        {:error, :missing_bundle} when signal_jid != target_jid ->
           Logger.debug("[SEND] No session for signal_jid=#{signal_jid}, retrying with wire jid")
           Encryption.encrypt_for_recipient_sync(store, sessions, target_jid, payload, bundle)
 

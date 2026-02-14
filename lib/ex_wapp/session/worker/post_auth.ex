@@ -124,8 +124,6 @@ defmodule ExWapp.Session.Worker.PostAuth do
     |> String.replace("@whatsapp.net", "@s.whatsapp.net")
   end
 
-  defp normalize_jid_string(_), do: ""
-
   defp persist_uploaded_prekeys(store, prekeys) when is_list(prekeys) do
     data = Store.load!(store)
     signal = Map.get(data, :signal, %{})

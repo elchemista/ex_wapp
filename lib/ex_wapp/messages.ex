@@ -127,7 +127,7 @@ defmodule ExWapp.Messages do
     mentions = Keyword.get(opts, :mentions, [])
     quoted_id = Keyword.get(opts, :quoted_id)
 
-    if quoted_id || length(mentions) > 0 do
+    if quoted_id || mentions != [] do
       # Use ExtendedTextMessage for quotes/mentions
       context_info = build_context_info(opts)
 
@@ -152,7 +152,7 @@ defmodule ExWapp.Messages do
     quoted_participant = Keyword.get(opts, :quoted_participant)
     mentions = Keyword.get(opts, :mentions, [])
 
-    if quoted_id || length(mentions) > 0 do
+    if quoted_id || mentions != [] do
       %ContextInfo{
         stanzaID: quoted_id,
         participant: quoted_participant,

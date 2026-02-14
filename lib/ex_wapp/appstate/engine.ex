@@ -56,9 +56,10 @@ defmodule ExWapp.AppState.Engine do
   # ============================================================================
 
   @type mutation_info :: %{
-          index: [String.t()],
-          version: integer(),
-          value: %SyncActionValue{}
+          required(:index) => [String.t()],
+          required(:version) => integer(),
+          required(:value) => %SyncActionValue{},
+          optional(:operation) => :remove
         }
 
   @type patch_info :: %{
@@ -72,9 +73,11 @@ defmodule ExWapp.AppState.Engine do
           hash: binary()
         }
 
+  @type action_value :: %SyncActionValue{} | nil
+
   @type decoded_mutation :: %{
           operation: non_neg_integer(),
-          action: %SyncActionValue{},
+          action: action_value(),
           version: integer() | nil,
           index: [String.t()],
           index_mac: binary(),
@@ -288,104 +291,109 @@ defmodule ExWapp.AppState.Engine do
     timestamp = patch_info[:timestamp] || System.system_time(:millisecond)
     collection_name = patch_info.type
 
-    # Build encrypted mutations
-    {mutations, value_macs, updated_mutation_macs} =
-      Enum.reduce(patch_info.mutations, {[], [], mutation_macs}, fn mut, {muts, vmacs, mmacs} ->
-        operation = if Map.get(mut, :operation) == :remove, do: 1, else: 0
+    {mutations, value_macs, updated_macs} =
+      encode_all_mutations(patch_info.mutations, keys, key_id, timestamp, mutation_macs)
 
-        # Set timestamp on the value
-        value = %{mut.value | timestamp: timestamp}
+    new_hash = compute_lthash_update(hash_state.hash, value_macs)
+    new_version = hash_state.version + 1
 
-        # Encode SyncActionData
-        index_json = Jason.encode!(mut.index)
+    encoded =
+      finalize_patch(mutations, value_macs, new_hash, new_version, collection_name, keys, key_id)
 
-        action_data = %SyncActionData{
-          index: index_json,
-          value: value,
-          padding: <<>>,
-          version: mut.version
-        }
+    new_hash_state = %{version: new_version, hash: new_hash}
+    {:ok, encoded, new_hash_state, updated_macs}
+  rescue
+    error ->
+      {:error, {:encode_patch_failed, error}}
+  end
 
-        content = SyncAction.encode_sync_action_data(action_data)
+  defp encode_all_mutations(raw_mutations, keys, key_id, timestamp, mutation_macs) do
+    Enum.reduce(raw_mutations, {[], [], mutation_macs}, fn mut, {muts, vmacs, mmacs} ->
+      {mutation, value_mac, old_mac, operation, mmacs} =
+        encode_single_mutation(mut, keys, key_id, timestamp, mmacs)
 
-        # Encrypt content with AES-256-CBC
-        {iv, ciphertext} = Crypto.encrypt_cbc(content, keys.value_encryption)
-        encrypted_content = iv <> ciphertext
+      {muts ++ [mutation], vmacs ++ [{value_mac, old_mac, operation}], mmacs}
+    end)
+  end
 
-        # Compute MACs
-        value_mac =
-          Crypto.compute_content_mac(operation, encrypted_content, key_id, keys.value_mac)
+  defp encode_single_mutation(mut, keys, key_id, timestamp, mmacs) do
+    operation = if Map.get(mut, :operation) == :remove, do: 1, else: 0
+    value = %{mut.value | timestamp: timestamp}
+    index_json = Jason.encode!(mut.index)
 
-        index_mac = Crypto.compute_index_mac(index_json, keys.index)
+    content =
+      SyncAction.encode_sync_action_data(%SyncActionData{
+        index: index_json,
+        value: value,
+        padding: <<>>,
+        version: mut.version
+      })
 
-        # Update mutation MACs map: remove old MAC for this index, add new
-        index_mac_hex = Base.encode16(index_mac, case: :lower)
+    {iv, ciphertext} = Crypto.encrypt_cbc(content, keys.value_encryption)
+    encrypted = iv <> ciphertext
 
-        old_value_mac = Map.get(mmacs, index_mac_hex)
+    value_mac =
+      Crypto.compute_content_mac(operation, encrypted, key_id, keys.value_mac)
 
-        mmacs =
-          if operation == 0 do
-            Map.put(mmacs, index_mac_hex, value_mac)
-          else
-            Map.delete(mmacs, index_mac_hex)
-          end
+    index_mac = Crypto.compute_index_mac(index_json, keys.index)
+    index_hex = Base.encode16(index_mac, case: :lower)
+    old_mac = Map.get(mmacs, index_hex)
 
-        mutation = %SyncdMutation{
-          operation: operation,
-          record: %SyncdRecord{
-            index: index_mac,
-            value: encrypted_content <> value_mac,
-            key_id: key_id
-          }
-        }
+    updated_mmacs =
+      if operation == 0,
+        do: Map.put(mmacs, index_hex, value_mac),
+        else: Map.delete(mmacs, index_hex)
 
-        {muts ++ [mutation], vmacs ++ [{value_mac, old_value_mac, operation}], mmacs}
-      end)
+    mutation = %SyncdMutation{
+      operation: operation,
+      record: %SyncdRecord{
+        index: index_mac,
+        value: encrypted <> value_mac,
+        key_id: key_id
+      }
+    }
 
-    # Update LTHash
-    subtract_macs =
+    {mutation, value_mac, old_mac, operation, updated_mmacs}
+  end
+
+  defp compute_lthash_update(hash, value_macs) do
+    subtract =
       value_macs
       |> Enum.map(fn {_new, old, _op} -> old end)
       |> Enum.reject(&is_nil/1)
 
-    add_macs = Enum.map(value_macs, fn {new_mac, _old, _op} -> new_mac end)
+    add =
+      value_macs
+      |> Enum.filter(fn {_new, _old, op} -> op == 0 end)
+      |> Enum.map(fn {new_mac, _old, _op} -> new_mac end)
 
-    new_hash = LTHash.subtract_then_add(hash_state.hash, subtract_macs, add_macs)
-    new_version = hash_state.version + 1
+    LTHash.subtract_then_add(hash, subtract, add)
+  end
 
-    # Compute snapshot MAC
+  defp finalize_patch(mutations, value_macs, hash, version, collection, keys, key_id) do
     snapshot_mac =
-      Crypto.compute_snapshot_mac(new_hash, new_version, collection_name, keys.snapshot_mac)
+      Crypto.compute_snapshot_mac(hash, version, collection, keys.snapshot_mac)
 
-    # Build the patch
-    patch = %SyncdPatch{
-      version: new_version,
-      mutations: mutations,
-      snapshot_mac: snapshot_mac,
-      key_id: key_id
-    }
-
-    # Compute patch MAC
-    mutation_value_macs = Enum.map(value_macs, fn {new_mac, _old, _op} -> new_mac end)
+    all_value_macs =
+      Enum.map(value_macs, fn {new_mac, _old, _op} -> new_mac end)
 
     patch_mac =
       Crypto.compute_patch_mac(
         snapshot_mac,
-        mutation_value_macs,
-        new_version,
-        collection_name,
+        all_value_macs,
+        version,
+        collection,
         keys.patch_mac
       )
 
-    patch = %{patch | patch_mac: patch_mac}
-    encoded = SyncAction.encode_syncd_patch(patch)
-
-    new_hash_state = %{version: new_version, hash: new_hash}
-
-    {:ok, encoded, new_hash_state, updated_mutation_macs}
-  rescue
-    error ->
-      {:error, {:encode_patch_failed, error}}
+    %SyncdPatch{
+      version: version,
+      mutations: mutations,
+      snapshot_mac: snapshot_mac,
+      patch_mac: patch_mac,
+      key_id: key_id
+    }
+    |> SyncAction.encode_syncd_patch()
   end
 
   # ============================================================================
@@ -412,101 +420,149 @@ defmodule ExWapp.AppState.Engine do
   end
 
   defp decode_single_mutation(%SyncdMutation{} = mutation, key_store, validate_macs) do
-    key_id = mutation.record.key_id
-    key_id_hex = if is_binary(key_id), do: Base.encode16(key_id, case: :lower), else: nil
+    record = mutation.record
 
-    with {:ok, key_data} <- get_key_data(key_store, key_id_hex),
+    with {:ok, keys, key_id} <- resolve_mutation_keys(record, key_store),
+         {:ok, encrypted_content, value_mac} <- split_record_value(record.value),
+         :ok <-
+           verify_content_mac(
+             mutation.operation,
+             encrypted_content,
+             key_id,
+             keys,
+             validate_macs,
+             value_mac
+           ),
+         {:ok, plaintext} <- decrypt_content(encrypted_content, keys),
+         {:ok, sync_data} <- decode_action_data(plaintext),
+         :ok <- verify_index_mac(sync_data.index, record.index, keys, validate_macs) do
+      {:ok, build_decoded_mutation(mutation, sync_data, record.index, value_mac)}
+    end
+  end
+
+  defp resolve_mutation_keys(record, key_store) do
+    key_id = record.key_id
+
+    key_id_hex =
+      if is_binary(key_id),
+        do: Base.encode16(key_id, case: :lower),
+        else: nil
+
+    with {:ok, key_data} <- get_key_data(key_store, key_id_hex) do
+      {:ok, Crypto.expand_keys(key_data), key_id}
+    end
+  end
+
+  defp split_record_value(content)
+       when is_binary(content) and byte_size(content) > 32 do
+    content_len = byte_size(content) - 32
+
+    {:ok, binary_part(content, 0, content_len), binary_part(content, content_len, 32)}
+  end
+
+  defp split_record_value(_content), do: {:error, :invalid_record_value}
+
+  defp verify_content_mac(_op, _enc, _key_id, _keys, false, _mac), do: :ok
+
+  defp verify_content_mac(op, encrypted, key_id, keys, true, value_mac) do
+    expected =
+      Crypto.compute_content_mac(op, encrypted, key_id, keys.value_mac)
+
+    if expected == value_mac, do: :ok, else: {:error, :mismatching_content_mac}
+  end
+
+  defp decrypt_content(encrypted, _keys) when byte_size(encrypted) < 16 do
+    {:error, :encrypted_content_too_short}
+  end
+
+  defp decrypt_content(encrypted, keys) do
+    iv = binary_part(encrypted, 0, 16)
+    ct = binary_part(encrypted, 16, byte_size(encrypted) - 16)
+
+    case Crypto.decrypt_cbc(ct, keys.value_encryption, iv) do
+      {:ok, _plaintext} = ok -> ok
+      {:error, reason} -> {:error, {:decrypt_failed, reason}}
+    end
+  end
+
+  defp decode_action_data(plaintext) do
+    case SyncAction.decode_sync_action_data(plaintext) do
+      {:ok, _data} = ok -> ok
+      {:error, reason} -> {:error, {:decode_sync_action_data_failed, reason}}
+    end
+  end
+
+  defp verify_index_mac(_index_blob, _index_mac, _keys, false), do: :ok
+
+  defp verify_index_mac(index_blob, index_mac, keys, true) when is_binary(index_blob) do
+    expected = Crypto.compute_index_mac(index_blob, keys.index)
+    if expected == index_mac, do: :ok, else: {:error, :mismatching_index_mac}
+  end
+
+  defp verify_index_mac(_index_blob, _index_mac, _keys, _validate), do: :ok
+
+  defp build_decoded_mutation(mutation, sync_data, index_mac, value_mac) do
+    index =
+      case Jason.decode(sync_data.index || "[]") do
+        {:ok, parsed} when is_list(parsed) -> parsed
+        _ -> []
+      end
+
+    %{
+      operation: mutation.operation,
+      action: sync_data.value,
+      version: sync_data.version,
+      index: index,
+      index_mac: index_mac,
+      value_mac: value_mac
+    }
+  end
+
+  @doc """
+  Decode and validate a single SyncdPatch.
+
+  This verifies:
+  - content/index MACs per mutation,
+  - snapshot MAC,
+  - patch MAC,
+  - LTHash state transition.
+  """
+  @spec decode_patch(%SyncdPatch{}, String.t(), hash_state(), map(), map(), boolean()) ::
+          {:ok, [decoded_mutation()], hash_state(), map()} | {:error, term()}
+  def decode_patch(
+        %SyncdPatch{} = patch,
+        collection_name,
+        hash_state,
+        mutation_macs,
+        key_store,
+        validate_macs \\ true
+      ) do
+    with {:ok, patch_version} <- normalize_patch_version(patch.version),
+         {:ok, key_data} <- get_patch_key_data(patch, key_store),
          keys <- Crypto.expand_keys(key_data),
-         content <- mutation.record.value,
-         true <- is_binary(content) and byte_size(content) > 32 do
-      # Split value into encrypted content + value MAC (last 32 bytes)
-      content_len = byte_size(content) - 32
-      encrypted_content = binary_part(content, 0, content_len)
-      value_mac = binary_part(content, content_len, 32)
-
-      # Validate content MAC
-      if validate_macs do
-        expected =
-          Crypto.compute_content_mac(
-            mutation.operation,
-            encrypted_content,
-            key_id,
-            keys.value_mac
-          )
-
-        if expected != value_mac do
-          {:error, :mismatching_content_mac}
-        else
-          :ok
-        end
-      else
-        :ok
-      end
-      |> case do
-        :ok ->
-          # Decrypt: first 16 bytes = IV, rest = ciphertext
-          if byte_size(encrypted_content) < 16 do
-            {:error, :encrypted_content_too_short}
-          else
-            iv = binary_part(encrypted_content, 0, 16)
-            ciphertext = binary_part(encrypted_content, 16, byte_size(encrypted_content) - 16)
-
-            case Crypto.decrypt_cbc(ciphertext, keys.value_encryption, iv) do
-              {:ok, plaintext} ->
-                case SyncAction.decode_sync_action_data(plaintext) do
-                  {:ok, sync_action_data} ->
-                    index_mac = mutation.record.index
-
-                    # Validate index MAC
-                    if validate_macs and is_binary(sync_action_data.index) do
-                      expected_index_mac =
-                        Crypto.compute_index_mac(sync_action_data.index, keys.index)
-
-                      if expected_index_mac != index_mac do
-                        {:error, :mismatching_index_mac}
-                      else
-                        :ok
-                      end
-                    else
-                      :ok
-                    end
-                    |> case do
-                      :ok ->
-                        index =
-                          case Jason.decode(sync_action_data.index || "[]") do
-                            {:ok, parsed} when is_list(parsed) -> parsed
-                            _ -> []
-                          end
-
-                        {:ok,
-                         %{
-                           operation: mutation.operation,
-                           action: sync_action_data.value,
-                           version: sync_action_data.version,
-                           index: index,
-                           index_mac: index_mac,
-                           value_mac: value_mac
-                         }}
-
-                      error ->
-                        error
-                    end
-
-                  {:error, reason} ->
-                    {:error, {:decode_sync_action_data_failed, reason}}
-                end
-
-              {:error, reason} ->
-                {:error, {:decrypt_failed, reason}}
-            end
-          end
-
-        error ->
-          error
-      end
-    else
-      false -> {:error, :invalid_record_value}
-      {:error, reason} -> {:error, reason}
+         {:ok, decoded_mutations} <- decode_mutations(patch.mutations, key_store, validate_macs),
+         {:ok, new_hash} <-
+           update_hash_for_patch(decoded_mutations, hash_state.hash, mutation_macs),
+         :ok <-
+           validate_snapshot_mac(
+             patch,
+             validate_macs,
+             new_hash,
+             patch_version,
+             collection_name,
+             keys
+           ),
+         :ok <-
+           validate_patch_mac(
+             patch,
+             validate_macs,
+             patch_version,
+             collection_name,
+             decoded_mutations,
+             keys
+           ),
+         {:ok, updated_mutation_macs} <- update_mutation_macs(decoded_mutations, mutation_macs) do
+      {:ok, decoded_mutations, %{version: patch_version, hash: new_hash}, updated_mutation_macs}
     end
   end
 
@@ -569,13 +625,77 @@ defmodule ExWapp.AppState.Engine do
       # Send via session GenServer
       case GenServer.call(session, {:send_iq, iq_node, message_id}, 30_000) do
         {:ok, _response} ->
-          # Persist new state
           persist_collection_state(store, collection_name, new_hash_state, new_mutation_macs)
+          apply_outgoing_patch(store, patch_info)
           {:ok, new_hash_state, new_mutation_macs}
 
         {:error, reason} ->
           {:error, {:iq_failed, reason}}
       end
+    end
+  end
+
+  @doc """
+  Fetch and apply a single app state collection from the server.
+  """
+  @spec fetch_collection(GenServer.server(), struct(), String.t()) :: :ok | {:error, term()}
+  def fetch_collection(session, store, collection_name) do
+    case do_fetch_collection(session, store, collection_name, _want_snapshot = true) do
+      :ok ->
+        :ok
+
+      {:error, :snapshot_not_supported} ->
+        do_fetch_collection(session, store, collection_name, false)
+
+      {:error, {:apply_snapshot_failed, _reason}} ->
+        do_fetch_collection(session, store, collection_name, false)
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp do_fetch_collection(session, store, collection_name, want_snapshot) do
+    with {:ok, hash_state, _macs} <- get_collection_state(store, collection_name),
+         snapshot? <- want_snapshot and hash_state.version == 0,
+         {:ok, response} <-
+           send_collection_fetch_iq(session, collection_name, hash_state.version, snapshot?),
+         {:ok, count} <- apply_collection_response(store, collection_name, response) do
+      Logger.info("[APP_STATE] Applied #{count} mutations for #{collection_name}")
+
+      :ok
+    end
+  end
+
+  @doc """
+  Apply collection response content (`snapshot` + `patches`) to local store.
+  """
+  @spec apply_collection_response(struct(), String.t(), Binary.Node.t()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def apply_collection_response(store, collection_name, response) do
+    with {:ok, collection_data} <- extract_collection_data(response, collection_name),
+         {:ok, hash_state, mutation_macs} <- get_collection_state(store, collection_name),
+         key_store <- store_key_data(store),
+         {:ok, hash_state, mutation_macs, snapshot_count} <-
+           maybe_apply_snapshot(
+             store,
+             collection_name,
+             collection_data.snapshot,
+             key_store,
+             hash_state,
+             mutation_macs
+           ),
+         {:ok, hash_state, mutation_macs, patch_count} <-
+           apply_patches(
+             store,
+             collection_name,
+             collection_data.patches,
+             key_store,
+             hash_state,
+             mutation_macs
+           ) do
+      persist_collection_state(store, collection_name, hash_state, mutation_macs)
+      {:ok, snapshot_count + patch_count}
     end
   end
 
@@ -628,54 +748,28 @@ defmodule ExWapp.AppState.Engine do
   Called after decoding incoming patches from the server.
   Reference: whatsmeow `appstate.go:114-278` dispatchAppState
   """
-  @spec dispatch_mutation(struct(), [String.t()], map()) :: :ok | :ignored
-  def dispatch_mutation(store, index, action_value) when is_list(index) do
+  @spec dispatch_mutation(struct(), non_neg_integer(), [String.t()], action_value()) ::
+          :ok | :ignored
+  def dispatch_mutation(store, operation, index, action_value)
+      when is_integer(operation) and is_list(index) do
     case index do
       ["contact", jid] ->
-        contact_action = get_action_field(action_value, :contact_action)
-
-        if contact_action do
-          ExWapp.Contact.merge_from_sync(store, jid, contact_action)
-        else
-          :ignored
-        end
+        dispatch_contact_mutation(store, operation, jid, action_value)
 
       ["archive", jid] ->
-        archive_action = get_action_field(action_value, :archive_chat_action)
-
-        if archive_action do
-          ExWapp.Chat.update_archived(store, jid, Map.get(archive_action, :archived, false))
-        else
-          :ignored
-        end
+        dispatch_archive_mutation(store, operation, jid, action_value)
 
       ["pin_v1", jid] ->
-        pin_action = get_action_field(action_value, :pin_action)
-
-        if pin_action do
-          ExWapp.Chat.update_pinned(store, jid, Map.get(pin_action, :pinned, false))
-        else
-          :ignored
-        end
+        dispatch_pin_mutation(store, operation, jid, action_value)
 
       ["mute", jid] ->
-        mute_action = get_action_field(action_value, :mute_action)
-
-        if mute_action do
-          ExWapp.Chat.update_muted(store, jid, mute_action)
-        else
-          :ignored
-        end
+        dispatch_mute_mutation(store, operation, jid, action_value)
 
       ["deleteChat", jid] ->
-        ExWapp.Chat.delete(store, jid)
+        dispatch_delete_chat_mutation(store, operation, jid)
 
       ["markChatAsRead", jid] ->
-        if action_value do
-          ExWapp.Chat.mark_read_from_sync(store, jid, action_value)
-        else
-          :ignored
-        end
+        dispatch_mark_read_mutation(store, operation, jid, action_value)
 
       _ ->
         :ignored
@@ -689,7 +783,67 @@ defmodule ExWapp.AppState.Engine do
       :ignored
   end
 
-  def dispatch_mutation(_store, _index, _action_value), do: :ignored
+  @doc """
+  Backwards-compatible dispatch entrypoint for SET operations.
+  """
+  @spec dispatch_mutation(struct(), [String.t()], action_value()) :: :ok | :ignored
+  def dispatch_mutation(store, index, action_value) do
+    dispatch_mutation(store, 0, index, action_value)
+  end
+
+  defp dispatch_contact_mutation(store, 1, jid, _action_value),
+    do: ExWapp.Contact.delete(store, jid)
+
+  defp dispatch_contact_mutation(store, _operation, jid, action_value) do
+    case get_action_field(action_value, :contact_action) do
+      nil -> :ignored
+      contact_action -> ExWapp.Contact.merge_from_sync(store, jid, contact_action)
+    end
+  end
+
+  defp dispatch_archive_mutation(_store, 1, _jid, _action_value), do: :ignored
+
+  defp dispatch_archive_mutation(store, _operation, jid, action_value) do
+    case get_action_field(action_value, :archive_chat_action) do
+      nil ->
+        :ignored
+
+      archive_action ->
+        ExWapp.Chat.update_archived(store, jid, Map.get(archive_action, :archived, false))
+    end
+  end
+
+  defp dispatch_pin_mutation(_store, 1, _jid, _action_value), do: :ignored
+
+  defp dispatch_pin_mutation(store, _operation, jid, action_value) do
+    case get_action_field(action_value, :pin_action) do
+      nil -> :ignored
+      pin_action -> ExWapp.Chat.update_pinned(store, jid, Map.get(pin_action, :pinned, false))
+    end
+  end
+
+  defp dispatch_mute_mutation(_store, 1, _jid, _action_value), do: :ignored
+
+  defp dispatch_mute_mutation(store, _operation, jid, action_value) do
+    case get_action_field(action_value, :mute_action) do
+      nil -> :ignored
+      mute_action -> ExWapp.Chat.update_muted(store, jid, mute_action)
+    end
+  end
+
+  defp dispatch_delete_chat_mutation(store, _operation, jid) do
+    ExWapp.Chat.delete(store, jid)
+  end
+
+  defp dispatch_mark_read_mutation(_store, 1, _jid, _action_value), do: :ignored
+
+  defp dispatch_mark_read_mutation(store, _operation, jid, action_value) do
+    if action_value do
+      ExWapp.Chat.mark_read_from_sync(store, jid, action_value)
+    else
+      :ignored
+    end
+  end
 
   defp get_action_field(nil, _field), do: nil
 
@@ -699,9 +853,344 @@ defmodule ExWapp.AppState.Engine do
 
   defp get_action_field(_, _), do: nil
 
+  @doc """
+  Apply outgoing mutation effects locally after a successful server ack.
+  """
+  @spec apply_outgoing_patch(struct(), patch_info()) :: :ok
+  def apply_outgoing_patch(store, patch_info) when is_map(patch_info) do
+    patch_info
+    |> Map.get(:mutations, [])
+    |> Enum.each(fn mutation ->
+      operation = if Map.get(mutation, :operation) == :remove, do: 1, else: 0
+      dispatch_mutation(store, operation, mutation.index, mutation.value)
+    end)
+
+    :ok
+  end
+
   # ============================================================================
   # Helpers
   # ============================================================================
+
+  defp send_collection_fetch_iq(session, collection_name, version, return_snapshot?) do
+    message_id = generate_request_id()
+
+    collection_attrs =
+      if return_snapshot? do
+        %{"name" => collection_name, "return_snapshot" => "true"}
+      else
+        %{
+          "name" => collection_name,
+          "version" => to_string(version),
+          "return_snapshot" => "false"
+        }
+      end
+
+    iq_node = %Binary.Node{
+      tag: "iq",
+      attrs: %{
+        "id" => message_id,
+        "xmlns" => "w:sync:app:state",
+        "type" => "set",
+        "to" => "s.whatsapp.net"
+      },
+      content: [
+        %Binary.Node{
+          tag: "sync",
+          attrs: %{},
+          content: [
+            %Binary.Node{
+              tag: "collection",
+              attrs: collection_attrs,
+              content: nil
+            }
+          ]
+        }
+      ]
+    }
+
+    case GenServer.call(session, {:send_iq, iq_node, message_id}, 30_000) do
+      {:ok, response} -> {:ok, response}
+      {:error, reason} -> {:error, {:iq_failed, reason}}
+    end
+  end
+
+  defp extract_collection_data(%Binary.Node{} = response, collection_name) do
+    case find_collection_node(response, collection_name) do
+      nil ->
+        {:error, :collection_not_found}
+
+      %Binary.Node{content: children} ->
+        snapshot = find_child_binary(children, "snapshot")
+        patches = extract_patch_binaries(children)
+        {:ok, %{snapshot: snapshot, patches: patches}}
+    end
+  end
+
+  defp extract_collection_data(_response, _collection_name) do
+    {:error, :invalid_collection_response}
+  end
+
+  defp find_collection_node(%Binary.Node{tag: "collection", attrs: attrs} = node, collection_name) do
+    if Map.get(attrs, "name") == collection_name do
+      node
+    end
+  end
+
+  defp find_collection_node(%Binary.Node{content: children}, collection_name)
+       when is_list(children) do
+    Enum.find_value(children, &find_collection_node(&1, collection_name))
+  end
+
+  defp find_collection_node(_node, _collection_name), do: nil
+
+  defp find_child_binary(children, tag) when is_list(children) do
+    Enum.find_value(children, fn
+      %Binary.Node{tag: ^tag, content: value} when is_binary(value) -> value
+      _ -> nil
+    end)
+  end
+
+  defp find_child_binary(_children, _tag), do: nil
+
+  defp extract_patch_binaries(children) when is_list(children) do
+    Enum.flat_map(children, fn
+      %Binary.Node{tag: "patches", content: patch_nodes} when is_list(patch_nodes) ->
+        Enum.flat_map(patch_nodes, fn
+          %Binary.Node{tag: "patch", content: value} when is_binary(value) -> [value]
+          _ -> []
+        end)
+
+      %Binary.Node{tag: "patch", content: value} when is_binary(value) ->
+        [value]
+
+      _ ->
+        []
+    end)
+  end
+
+  defp extract_patch_binaries(_children), do: []
+
+  defp store_key_data(store) do
+    store
+    |> Store.load!()
+    |> Map.get(:app_state_keys, %{})
+  end
+
+  defp maybe_apply_snapshot(
+         _store,
+         _collection_name,
+         nil,
+         _key_store,
+         hash_state,
+         mutation_macs
+       ) do
+    {:ok, hash_state, mutation_macs, 0}
+  end
+
+  defp maybe_apply_snapshot(store, collection_name, snapshot_binary, key_store, _hs, _mm) do
+    with {:ok, snapshot} <- SyncAction.decode_syncd_snapshot(snapshot_binary),
+         {:ok, version} <- normalize_patch_version(snapshot.version),
+         {:ok, decoded} <- decode_snapshot_mutations(snapshot, key_store),
+         {:ok, hash, macs} <-
+           verify_snapshot(snapshot, decoded, version, collection_name, key_store) do
+      dispatch_decoded_mutations(store, decoded)
+      {:ok, %{version: version, hash: hash}, macs, length(decoded)}
+    else
+      {:error, reason}
+      when reason in [:invalid_length_delimited_field, :missing_snapshot_key_id] ->
+        {:error, :snapshot_not_supported}
+
+      {:error, reason} ->
+        {:error, {:apply_snapshot_failed, reason}}
+    end
+  end
+
+  defp decode_snapshot_mutations(snapshot, key_store) do
+    with {:ok, mutations} <- build_snapshot_mutations(snapshot) do
+      decode_mutations(mutations, key_store, true)
+    end
+  end
+
+  defp verify_snapshot(snapshot, decoded_mutations, version, collection_name, key_store) do
+    with {:ok, key_data} <- get_snapshot_key_data(snapshot, key_store),
+         keys <- Crypto.expand_keys(key_data),
+         new_hash <- LTHash.add(LTHash.new(), Enum.map(decoded_mutations, & &1.value_mac)),
+         :ok <-
+           validate_snapshot_hash(
+             snapshot.mac,
+             keys.snapshot_mac,
+             new_hash,
+             version,
+             collection_name
+           ),
+         {:ok, macs} <- update_mutation_macs(decoded_mutations, %{}) do
+      {:ok, new_hash, macs}
+    end
+  end
+
+  defp dispatch_decoded_mutations(store, decoded_mutations) do
+    Enum.each(decoded_mutations, fn m ->
+      dispatch_mutation(store, m.operation, m.index, m.action)
+    end)
+  end
+
+  defp apply_patches(store, collection_name, patches, key_store, hash_state, mutation_macs)
+       when is_list(patches) do
+    Enum.reduce_while(patches, {:ok, hash_state, mutation_macs, 0}, fn patch_binary,
+                                                                       {:ok, state, macs, count} ->
+      case apply_single_patch(store, collection_name, patch_binary, key_store, state, macs) do
+        {:ok, decoded, new_state, new_macs} ->
+          {:cont, {:ok, new_state, new_macs, count + length(decoded)}}
+
+        {:error, reason} ->
+          {:halt, {:error, {:apply_patch_failed, reason}}}
+      end
+    end)
+  end
+
+  defp apply_single_patch(store, collection_name, patch_binary, key_store, state, macs) do
+    with {:ok, patch} <- SyncAction.decode_syncd_patch(patch_binary),
+         {:ok, decoded, new_state, new_macs} <-
+           decode_patch(patch, collection_name, state, macs, key_store, true) do
+      dispatch_decoded_mutations(store, decoded)
+      {:ok, decoded, new_state, new_macs}
+    end
+  end
+
+  defp build_snapshot_mutations(snapshot) do
+    snapshot_key_id = snapshot.key_id
+
+    mutations =
+      Enum.map(snapshot.records, fn record ->
+        record =
+          if is_binary(record.key_id), do: record, else: %{record | key_id: snapshot_key_id}
+
+        %SyncdMutation{operation: 0, record: record}
+      end)
+
+    {:ok, mutations}
+  end
+
+  defp get_snapshot_key_data(snapshot, key_store) do
+    key_id = snapshot.key_id || snapshot_key_id_from_records(snapshot.records)
+
+    if is_binary(key_id) do
+      key_id_hex = Base.encode16(key_id, case: :lower)
+      get_key_data(key_store, key_id_hex)
+    else
+      {:error, :missing_snapshot_key_id}
+    end
+  end
+
+  defp snapshot_key_id_from_records(records) do
+    Enum.find_value(records, fn
+      %{key_id: key_id} when is_binary(key_id) -> key_id
+      _ -> nil
+    end)
+  end
+
+  defp normalize_patch_version(version) when is_integer(version) and version >= 0 do
+    {:ok, version}
+  end
+
+  defp normalize_patch_version(_version), do: {:error, :invalid_patch_version}
+
+  defp get_patch_key_data(%SyncdPatch{key_id: key_id}, key_store) when is_binary(key_id) do
+    key_id_hex = Base.encode16(key_id, case: :lower)
+    get_key_data(key_store, key_id_hex)
+  end
+
+  defp get_patch_key_data(_patch, _key_store), do: {:error, :missing_patch_key_id}
+
+  defp update_hash_for_patch(decoded_mutations, hash, mutation_macs) do
+    {new_hash, _} =
+      Enum.reduce(decoded_mutations, {hash, mutation_macs}, fn mutation, {acc_hash, acc_macs} ->
+        index_hex = index_mac_hex(mutation.index_mac)
+        old_mac = Map.get(acc_macs, index_hex)
+        subtract_macs = if is_binary(old_mac), do: [old_mac], else: []
+        add_macs = if mutation.operation == 0, do: [mutation.value_mac], else: []
+
+        next_hash = LTHash.subtract_then_add(acc_hash, subtract_macs, add_macs)
+        next_macs = put_mutation_mac(acc_macs, mutation)
+        {next_hash, next_macs}
+      end)
+
+    {:ok, new_hash}
+  rescue
+    error ->
+      {:error, {:hash_update_failed, error}}
+  end
+
+  defp validate_snapshot_mac(_patch, false, _h, _v, _c, _k), do: :ok
+
+  defp validate_snapshot_mac(%{snapshot_mac: nil}, true, _h, _v, _c, _k),
+    do: {:error, :invalid_snapshot_mac}
+
+  defp validate_snapshot_mac(patch, true, hash, version, collection, keys) do
+    expected =
+      Crypto.compute_snapshot_mac(hash, version, collection, keys.snapshot_mac)
+
+    compare_mac(expected, patch.snapshot_mac, :mismatching_snapshot_mac)
+  end
+
+  defp validate_patch_mac(_p, false, _v, _c, _m, _k), do: :ok
+
+  defp validate_patch_mac(%{snapshot_mac: s, patch_mac: p}, true, _v, _c, _m, _k)
+       when not is_binary(s) or not is_binary(p),
+       do: {:error, :invalid_patch_mac}
+
+  defp validate_patch_mac(patch, true, version, collection, decoded_mutations, keys) do
+    value_macs = Enum.map(decoded_mutations, & &1.value_mac)
+
+    expected =
+      Crypto.compute_patch_mac(
+        patch.snapshot_mac,
+        value_macs,
+        version,
+        collection,
+        keys.patch_mac
+      )
+
+    compare_mac(expected, patch.patch_mac, :mismatching_patch_mac)
+  end
+
+  defp validate_snapshot_hash(mac, mac_key, hash, version, collection) do
+    expected =
+      Crypto.compute_snapshot_mac(hash, version, collection, mac_key)
+
+    compare_mac(expected, mac, :mismatching_snapshot_mac)
+  end
+
+  defp compare_mac(expected, actual, _error) when expected == actual, do: :ok
+  defp compare_mac(_expected, _actual, error), do: {:error, error}
+
+  defp update_mutation_macs(decoded_mutations, mutation_macs) when is_map(mutation_macs) do
+    updated =
+      Enum.reduce(decoded_mutations, mutation_macs, fn mutation, acc ->
+        put_mutation_mac(acc, mutation)
+      end)
+
+    {:ok, updated}
+  end
+
+  defp update_mutation_macs(_decoded_mutations, _mutation_macs) do
+    {:error, :invalid_mutation_macs}
+  end
+
+  defp put_mutation_mac(macs, mutation) do
+    index_hex = index_mac_hex(mutation.index_mac)
+
+    case mutation.operation do
+      0 -> Map.put(macs, index_hex, mutation.value_mac)
+      1 -> Map.delete(macs, index_hex)
+      _ -> macs
+    end
+  end
+
+  defp index_mac_hex(index_mac) when is_binary(index_mac) do
+    Base.encode16(index_mac, case: :lower)
+  end
 
   defp get_latest_app_state_key(store) do
     data = Store.load!(store)

@@ -141,6 +141,47 @@ ExWapp.list_groups(session)
 :ok = ExWapp.disconnect(session)
 ```
 
+## Chat & Contacts API (App State Sync)
+
+ExWapp exposes server-synced chat/contact operations through App State patches.
+When connected, changes propagate to linked devices.
+
+```elixir
+# Chat actions
+:ok = ExWapp.archive_chat(session, "393XXXXXXXXX@s.whatsapp.net")
+:ok = ExWapp.unarchive_chat(session, "393XXXXXXXXX@s.whatsapp.net")
+:ok = ExWapp.delete_chat(session, "393XXXXXXXXX@s.whatsapp.net")
+
+:ok = ExWapp.pin_chat(session, "393XXXXXXXXX@s.whatsapp.net")
+:ok = ExWapp.unpin_chat(session, "393XXXXXXXXX@s.whatsapp.net")
+
+# mute forever (-1), or pass an absolute unix ms timestamp
+:ok = ExWapp.mute_chat(session, "393XXXXXXXXX@s.whatsapp.net", -1)
+:ok = ExWapp.unmute_chat(session, "393XXXXXXXXX@s.whatsapp.net")
+
+:ok = ExWapp.mark_chat_as_read(session, "393XXXXXXXXX@s.whatsapp.net")
+
+# Get local metadata projection for a chat
+{:ok, chat} = ExWapp.get_chat_info(session, "393XXXXXXXXX@s.whatsapp.net")
+```
+
+```elixir
+# Contact actions
+:ok = ExWapp.create_contact(session, "393XXXXXXXXX@s.whatsapp.net", "Alice Example")
+:ok = ExWapp.delete_contact(session, "393XXXXXXXXX@s.whatsapp.net")
+
+contacts = ExWapp.list_contacts(session)
+contact = ExWapp.get_contact(session, "393XXXXXXXXX@s.whatsapp.net")
+```
+
+Notes:
+
+- `archive_chat/2`, `unarchive_chat/2`, `delete_chat/2`, `pin_chat/2`,
+  `unpin_chat/2`, and `mark_chat_as_read/2` use local fallback behavior when
+  the session is not connected.
+- contact APIs (`create_contact/3`, `delete_contact/2`, `list_contacts/1`,
+  `get_contact/2`) are available directly from `ExWapp`.
+
 ## Signal Implementation
 
 Only the pure Elixir Signal path is active.

@@ -680,29 +680,25 @@ defmodule ExWapp.Session.Worker do
   # collection changes from another device
   def handle_info({:app_state_sync_collections, collection_names}, %{status: :connected} = state)
       when is_list(collection_names) do
-    Logger.info(
-      "[APP_STATE] Re-fetching #{length(collection_names)} collections: #{inspect(collection_names)}"
-    )
+    refresh_app_state_collections(self(), state.store, collection_names, :notification)
 
-    # Run async to avoid blocking the worker
-    store = state.store
-    session_pid = self()
+    {:noreply, state}
+  end
 
-    spawn(fn ->
-      Enum.each(collection_names, fn name ->
-        try do
-          fetch_app_state_collection(session_pid, store, name)
-        rescue
-          e -> Logger.warning("[APP_STATE] Failed to fetch collection #{name}: #{inspect(e)}")
-        end
-      end)
-    end)
+  def handle_info({:app_state_initial_sync, collection_names}, %{status: :connected} = state)
+      when is_list(collection_names) do
+    refresh_app_state_collections(self(), state.store, collection_names, :initial)
 
     {:noreply, state}
   end
 
   def handle_info({:app_state_sync_collections, _}, state) do
     Logger.debug("[APP_STATE] Ignoring sync notification — not connected")
+    {:noreply, state}
+  end
+
+  def handle_info({:app_state_initial_sync, _}, state) do
+    Logger.debug("[APP_STATE] Ignoring initial sync request — not connected")
     {:noreply, state}
   end
 
@@ -1048,13 +1044,13 @@ defmodule ExWapp.Session.Worker do
   # QR Subscriber Management
   # ============================================================================
 
-  defp notify_qr(state, event) do
+  defp notify_qr(state, {:error, _} = event) do
     Subscribers.notify_qr(state, event, fn ->
       emit_telemetry(
         :qr,
         %{subscriber_count: map_size(state.qr_subscribers)},
         state,
-        %{event: qr_event_kind(event)}
+        %{event: :error}
       )
     end)
   end
@@ -1193,150 +1189,30 @@ defmodule ExWapp.Session.Worker do
     _ -> :ok
   end
 
-  defp qr_event_kind({:code, _}), do: :code
-  defp qr_event_kind(:success), do: :success
-  defp qr_event_kind({:error, _}), do: :error
-
   # ============================================================================
-  # App State Sync — fetch collection from server
+  # App State Sync
   # ============================================================================
 
-  defp fetch_app_state_collection(session_pid, store, collection_name) do
-    alias ExWapp.AppState.Engine
+  defp refresh_app_state_collections(session_pid, store, collection_names, source) do
+    names =
+      collection_names
+      |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
 
-    with {:ok, hash_state, _mutation_macs} <-
-           Engine.get_collection_state(store, collection_name) do
-      # Build the fetch IQ
-      message_id = :crypto.strong_rand_bytes(16) |> Base.encode64() |> String.slice(0, 16)
+    Logger.info(
+      "[APP_STATE] Fetching #{length(names)} collections from #{source}: #{inspect(names)}"
+    )
 
-      want_snapshot = hash_state.version == 0
+    spawn(fn ->
+      Enum.each(names, fn collection_name ->
+        case ExWapp.AppState.Engine.fetch_collection(session_pid, store, collection_name) do
+          :ok ->
+            :ok
 
-      collection_attrs = %{"name" => collection_name}
-
-      collection_attrs =
-        if want_snapshot do
-          Map.put(collection_attrs, "return_snapshot", "true")
-        else
-          collection_attrs
-          |> Map.put("version", to_string(hash_state.version))
-          |> Map.put("return_snapshot", "false")
+          {:error, reason} ->
+            Logger.warning("[APP_STATE] Failed to fetch #{collection_name}: #{inspect(reason)}")
         end
-
-      iq_node = %Binary.Node{
-        tag: "iq",
-        attrs: %{
-          "id" => message_id,
-          "xmlns" => "w:sync:app:state",
-          "type" => "set",
-          "to" => "s.whatsapp.net"
-        },
-        content: [
-          %Binary.Node{
-            tag: "sync",
-            attrs: %{},
-            content: [
-              %Binary.Node{
-                tag: "collection",
-                attrs: collection_attrs,
-                content: nil
-              }
-            ]
-          }
-        ]
-      }
-
-      case GenServer.call(session_pid, {:send_iq, iq_node, message_id}, 30_000) do
-        {:ok, response} ->
-          process_app_state_response(store, collection_name, response, hash_state)
-
-        {:error, reason} ->
-          Logger.warning("[APP_STATE] Fetch IQ failed for #{collection_name}: #{inspect(reason)}")
-      end
-    end
-  rescue
-    e ->
-      Logger.warning("[APP_STATE] fetch_app_state_collection error: #{inspect(e)}")
-  end
-
-  defp process_app_state_response(store, collection_name, response, _hash_state) do
-    alias ExWapp.AppState.Engine
-
-    # Extract patches from response node
-    patches = extract_patches_from_response(response)
-
-    if patches == [] do
-      Logger.debug("[APP_STATE] No patches returned for #{collection_name}")
-      :ok
-    else
-      data = Store.load!(store)
-      key_store = Map.get(data, :app_state_keys, %{})
-
-      decoded_count =
-        Enum.reduce(patches, 0, fn patch_binary, count ->
-          case ExWapp.Proto.SyncAction.decode_syncd_patch(patch_binary) do
-            {:ok, patch} ->
-              case Engine.decode_mutations(patch.mutations, key_store, false) do
-                {:ok, decoded_mutations} ->
-                  Enum.each(decoded_mutations, fn mutation ->
-                    if mutation.operation == 0 do
-                      Engine.dispatch_mutation(store, mutation.index, mutation.action)
-                    end
-                  end)
-
-                  count + length(decoded_mutations)
-
-                {:error, reason} ->
-                  Logger.warning(
-                    "[APP_STATE] Failed to decode mutations for #{collection_name}: #{inspect(reason)}"
-                  )
-
-                  count
-              end
-
-            {:error, reason} ->
-              Logger.warning(
-                "[APP_STATE] Failed to decode patch for #{collection_name}: #{inspect(reason)}"
-              )
-
-              count
-          end
-        end)
-
-      Logger.info("[APP_STATE] Processed #{decoded_count} mutations for #{collection_name}")
-    end
-  rescue
-    e ->
-      Logger.warning("[APP_STATE] process_app_state_response error: #{inspect(e)}")
-  end
-
-  defp extract_patches_from_response(%Binary.Node{content: content}) when is_list(content) do
-    Enum.flat_map(content, fn
-      %Binary.Node{tag: "sync", content: sync_children} when is_list(sync_children) ->
-        Enum.flat_map(sync_children, fn
-          %Binary.Node{tag: "collection", content: coll_children} when is_list(coll_children) ->
-            Enum.flat_map(coll_children, fn
-              %Binary.Node{tag: "patches", content: patch_children}
-              when is_list(patch_children) ->
-                Enum.flat_map(patch_children, fn
-                  %Binary.Node{tag: "patch", content: patch_data} when is_binary(patch_data) ->
-                    [patch_data]
-
-                  _ ->
-                    []
-                end)
-
-              _ ->
-                []
-            end)
-
-          _ ->
-            []
-        end)
-
-      _ ->
-        []
+      end)
     end)
   end
-
-  defp extract_patches_from_response(_), do: []
 end

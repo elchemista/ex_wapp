@@ -6,6 +6,11 @@ defmodule ExWapp.Store do
   - Noise protocol keys (static keypair, handshake hash/salt)
   - Signal protocol state (identity, signed prekeys, sessions)
   - Client configuration and pairing data
+  - App state sync data:
+    - `:app_state_keys`
+    - `:app_state_versions`
+    - `:app_state_mutation_macs`
+    - `:contacts`
 
   ## Built-in Adapters
 

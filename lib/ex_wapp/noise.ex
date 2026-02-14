@@ -88,7 +88,7 @@ defmodule ExWapp.Noise do
       with {:ok, client_payload, pending_data} <- build_client_payload(base_state),
            {:ok, handshake_ref, client_hello, static_map} <-
              start_handshake(base_state, client_payload, static_key),
-           _ = Logger.debug("[NOISE] static_map from handshake: #{inspect(static_map != nil)}"),
+           _ = Logger.debug("[NOISE] static_map from handshake: #{inspect(static_map)}"),
            :ok <- persist_static_key(store, static_map) do
         state =
           base_state
@@ -212,8 +212,7 @@ defmodule ExWapp.Noise do
        when not is_nil(handshake_ref) do
     case NoiseEngine.write_client_finish(handshake_ref, payload) do
       {:error, reason} -> {:error, {:handshake_client_finish, reason}}
-      {:ok, new_handshake, bin} when is_binary(bin) -> {:ok, new_handshake, bin}
-      {:ok, new_handshake, list} when is_list(list) -> {:ok, new_handshake, ensure_binary(list)}
+      {:ok, new_handshake, bin} -> {:ok, new_handshake, ensure_binary(bin)}
     end
   end
 
@@ -222,7 +221,6 @@ defmodule ExWapp.Noise do
   defp complete_handshake(%__MODULE__{}, handshake_ref) do
     case NoiseEngine.complete_handshake(handshake_ref) do
       {:ok, %Secrets{} = secrets} -> {:ok, secrets}
-      other -> {:error, {:handshake_finish, other}}
     end
   end
 
@@ -277,7 +275,6 @@ defmodule ExWapp.Noise do
   defp build_transport_cipher(%__MODULE__{}, %Secrets{} = secrets) do
     case NoiseEngine.setup_transport(secrets) do
       {:ok, cipher_ref} -> {:ok, cipher_ref}
-      other -> {:error, {:noise_cipher_new, other}}
     end
   end
 
@@ -321,17 +318,12 @@ defmodule ExWapp.Noise do
     case NoiseEngine.init_handshake(payload, static_key, handshake_header: handshake_header) do
       {:ok, handshake_ref, client_hello, static_map} ->
         {:ok, handshake_ref, ensure_binary(client_hello), normalize_static_key(static_map)}
-
-      other ->
-        {:error, {:handshake_new, other}}
     end
   end
 
   defp normalize_static_key(%{priv: priv, pub: pub}) do
     %{priv: ensure_binary(priv), pub: ensure_binary(pub)}
   end
-
-  defp normalize_static_key(other), do: other
 
   defp load_static_key(store) do
     data = Store.load!(store)
@@ -344,8 +336,6 @@ defmodule ExWapp.Noise do
         nil
     end
   end
-
-  defp persist_static_key(_store, nil), do: :ok
 
   defp persist_static_key(store, %{priv: priv, pub: pub}) do
     Logger.debug("[NOISE] persist_static_key called with store=#{inspect(store)}")

@@ -69,14 +69,11 @@ defmodule ExWapp.Signal.Session do
     remote_one_time_prekey = get_in(remote_bundle, [:prekey, :public])
 
     # Verify signed prekey signature
-    unless Keys.verify(
-             remote_identity,
-             remote_signed_prekey,
-             remote_bundle.signed_prekey.signature
-           ) do
-      Logger.error("[SIGNAL] Invalid signed prekey signature")
-      {:error, :invalid_signature}
-    else
+    if Keys.verify(
+         remote_identity,
+         remote_signed_prekey,
+         remote_bundle.signed_prekey.signature
+       ) do
       # X3DH: Calculate shared secrets
       # DH1 = DH(IKa, SPKb) - our identity with their signed prekey
       dh1 = x25519_shared_secret(local_identity.private, remote_signed_prekey)
@@ -141,6 +138,9 @@ defmodule ExWapp.Signal.Session do
 
       # Return ephemeral.public as base_key for PreKeySignalMessage
       {:ok, session, ephemeral.public}
+    else
+      Logger.error("[SIGNAL] Invalid signed prekey signature")
+      {:error, :invalid_signature}
     end
   end
 
@@ -219,49 +219,11 @@ defmodule ExWapp.Signal.Session do
   """
   @spec decrypt(session_state(), binary()) :: {:ok, binary(), session_state()} | {:error, term()}
   def decrypt(session, ciphertext) do
-    with {:ok, parsed} <- parse_signal_message(ciphertext) do
-      needs_ratchet = parsed.ratchet_key != session.remote_ratchet_key
+    case parse_signal_message(ciphertext) do
+      {:ok, parsed} ->
+        session = maybe_ratchet(session, parsed.ratchet_key)
+        decrypt_inner_message(session, parsed)
 
-      Logger.info(
-        "[SIGNAL] decrypt: counter=#{parsed.counter} prev_counter=#{parsed.previous_counter} " <>
-          "needs_ratchet=#{needs_ratchet} ct_size=#{byte_size(parsed.ciphertext)}"
-      )
-
-      session =
-        if needs_ratchet do
-          Logger.info("[SIGNAL] Performing DH ratchet step")
-          perform_dh_ratchet(session, parsed.ratchet_key)
-        else
-          session
-        end
-
-      with {:ok, message_keys, updated_chain} <-
-             get_or_derive_message_key(session.receiving_chain, parsed.counter) do
-        mac_valid =
-          WireFormat.valid_signal_mac?(
-            parsed.mac,
-            message_keys.mac_key,
-            session.remote_identity_key,
-            session.local_identity_key.public,
-            parsed.version_and_proto
-          )
-
-        Logger.info("[SIGNAL] MAC verification: #{mac_valid}")
-
-        if mac_valid do
-          plaintext =
-            WireFormat.decrypt_aes_cbc(
-              parsed.ciphertext,
-              message_keys.cipher_key,
-              message_keys.iv
-            )
-
-          {:ok, plaintext, %{session | receiving_chain: updated_chain}}
-        else
-          {:error, :invalid_mac}
-        end
-      end
-    else
       {:error, reason} ->
         Logger.warning("[SIGNAL] Failed to parse SignalMessage: #{inspect(reason)}")
         {:error, reason}
@@ -286,79 +248,15 @@ defmodule ExWapp.Signal.Session do
             "inner_size=#{byte_size(inner_ciphertext)}"
         )
 
-        # Look up our prekeys
-        available_signed_ids = Map.keys(local_prekeys.signed_prekeys)
-        available_prekey_ids = Map.keys(local_prekeys.prekeys)
-
-        Logger.info(
-          "[SIGNAL] Available signed_prekey_ids=#{inspect(available_signed_ids)} " <>
-            "prekey_ids_count=#{length(available_prekey_ids)} " <>
-            "looking_for signed=#{signed_prekey_id} prekey=#{inspect(prekey_id)}"
+        resolve_prekeys_and_decrypt(
+          local_identity,
+          local_prekeys,
+          prekey_id,
+          signed_prekey_id,
+          remote_identity,
+          base_key,
+          inner_ciphertext
         )
-
-        signed_prekey = Map.get(local_prekeys.signed_prekeys, signed_prekey_id)
-        one_time_prekey = if prekey_id, do: Map.get(local_prekeys.prekeys, prekey_id), else: nil
-
-        Logger.info(
-          "[SIGNAL] Lookup result: signed_prekey=#{if signed_prekey, do: "found", else: "MISSING"} " <>
-            "one_time_prekey=#{if one_time_prekey, do: "found", else: if(prekey_id, do: "MISSING", else: "not_needed")}"
-        )
-
-        unless signed_prekey do
-          Logger.warning(
-            "[SIGNAL] Unknown signed prekey #{signed_prekey_id}, available: #{inspect(available_signed_ids)}"
-          )
-
-          {:error, :unknown_signed_prekey}
-        else
-          # X3DH from recipient side
-          # DH1 = DH(SPKb, IKa)
-          dh1 = x25519_shared_secret(signed_prekey.private, remote_identity)
-
-          # DH2 = DH(IKb, EKa)
-          dh2 = x25519_shared_secret(local_identity.private, base_key)
-
-          # DH3 = DH(SPKb, EKa)
-          dh3 = x25519_shared_secret(signed_prekey.private, base_key)
-
-          # DH4 = DH(OPKb, EKa) if one-time prekey was used
-          dh4 =
-            if one_time_prekey do
-              x25519_shared_secret(one_time_prekey.private, base_key)
-            else
-              <<>>
-            end
-
-          Logger.info(
-            "[SIGNAL] X3DH DH outputs: dh1=#{Base.encode16(binary_part(dh1, 0, 4))}... " <>
-              "dh2=#{Base.encode16(binary_part(dh2, 0, 4))}... " <>
-              "dh3=#{Base.encode16(binary_part(dh3, 0, 4))}... " <>
-              "dh4=#{if dh4 == <<>>, do: "empty", else: Base.encode16(binary_part(dh4, 0, 4)) <> "..."}"
-          )
-
-          case decrypt_prekey_inner_with_compat(
-                 local_identity,
-                 signed_prekey,
-                 remote_identity,
-                 base_key,
-                 inner_ciphertext,
-                 dh1,
-                 dh2,
-                 dh3,
-                 dh4
-               ) do
-            {:ok, plaintext, updated_session, variant} ->
-              Logger.info(
-                "[SIGNAL] Inner decrypt succeeded with #{variant}, plaintext_size=#{byte_size(plaintext)}"
-              )
-
-              {:ok, plaintext, updated_session}
-
-            {:error, reason} ->
-              Logger.warning("[SIGNAL] Inner decrypt failed: #{inspect(reason)}")
-              {:error, reason}
-          end
-        end
 
       {:error, reason} ->
         Logger.warning("[SIGNAL] Failed to parse PreKeySignalMessage: #{inspect(reason)}")
@@ -384,6 +282,111 @@ defmodule ExWapp.Signal.Session do
     end
   end
 
+  defp resolve_prekeys_and_decrypt(
+         local_identity,
+         local_prekeys,
+         prekey_id,
+         signed_prekey_id,
+         remote_identity,
+         base_key,
+         inner_ciphertext
+       ) do
+    signed_prekey = Map.get(local_prekeys.signed_prekeys, signed_prekey_id)
+    one_time_prekey = if prekey_id, do: Map.get(local_prekeys.prekeys, prekey_id), else: nil
+
+    if signed_prekey do
+      x3dh_and_decrypt(
+        local_identity,
+        signed_prekey,
+        one_time_prekey,
+        remote_identity,
+        base_key,
+        inner_ciphertext
+      )
+    else
+      Logger.warning(
+        "[SIGNAL] Unknown signed prekey #{signed_prekey_id}, available: #{inspect(Map.keys(local_prekeys.signed_prekeys))}"
+      )
+
+      {:error, :unknown_signed_prekey}
+    end
+  end
+
+  defp maybe_ratchet(session, ratchet_key) do
+    if ratchet_key != session.remote_ratchet_key do
+      Logger.info("[SIGNAL] Performing DH ratchet step")
+      perform_dh_ratchet(session, ratchet_key)
+    else
+      session
+    end
+  end
+
+  defp decrypt_inner_message(session, parsed) do
+    with {:ok, message_keys, updated_chain} <-
+           get_or_derive_message_key(session.receiving_chain, parsed.counter) do
+      mac_valid =
+        WireFormat.valid_signal_mac?(
+          parsed.mac,
+          message_keys.mac_key,
+          session.remote_identity_key,
+          session.local_identity_key.public,
+          parsed.version_and_proto
+        )
+
+      Logger.info("[SIGNAL] MAC verification: #{mac_valid}")
+
+      if mac_valid do
+        plaintext =
+          WireFormat.decrypt_aes_cbc(
+            parsed.ciphertext,
+            message_keys.cipher_key,
+            message_keys.iv
+          )
+
+        {:ok, plaintext, %{session | receiving_chain: updated_chain}}
+      else
+        {:error, :invalid_mac}
+      end
+    end
+  end
+
+  defp x3dh_and_decrypt(
+         local_identity,
+         signed_prekey,
+         one_time_prekey,
+         remote_identity,
+         base_key,
+         inner_ciphertext
+       ) do
+    # X3DH from recipient side
+    dh1 = x25519_shared_secret(signed_prekey.private, remote_identity)
+    dh2 = x25519_shared_secret(local_identity.private, base_key)
+    dh3 = x25519_shared_secret(signed_prekey.private, base_key)
+
+    dh4 =
+      if one_time_prekey, do: x25519_shared_secret(one_time_prekey.private, base_key), else: <<>>
+
+    case decrypt_prekey_inner_with_compat(
+           local_identity,
+           signed_prekey,
+           remote_identity,
+           base_key,
+           inner_ciphertext,
+           {dh1, dh2, dh3, dh4}
+         ) do
+      {:ok, plaintext, updated_session, variant} ->
+        Logger.info(
+          "[SIGNAL] Inner decrypt succeeded with #{variant}, plaintext_size=#{byte_size(plaintext)}"
+        )
+
+        {:ok, plaintext, updated_session}
+
+      {:error, reason} ->
+        Logger.warning("[SIGNAL] Inner decrypt failed: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
   # ============================================================================
   # Double Ratchet
   # ============================================================================
@@ -394,11 +397,9 @@ defmodule ExWapp.Signal.Session do
          remote_identity,
          base_key,
          inner_ciphertext,
-         dh1,
-         dh2,
-         dh3,
-         dh4
+         dh_outputs
        ) do
+    {dh1, dh2, dh3, dh4} = dh_outputs
     variants = x3dh_secret_variants(dh1, dh2, dh3, dh4)
 
     Enum.reduce_while(variants, {:error, :invalid_mac}, fn {variant, shared_secret}, _acc ->

@@ -21,6 +21,7 @@ defmodule ExWapp.MessageHandler do
 
   require Logger
 
+  alias ExWapp.AppState.Engine
   alias ExWapp.{Binary, Chat, JID, MapPath, Store}
   alias ExWapp.Proto.{HistorySync, SyncAction}
   alias ExWapp.Signal.{Encryption, SenderKey}
@@ -92,7 +93,7 @@ defmodule ExWapp.MessageHandler do
     message_data = extract_message_content(content, type)
     {message_data, state} = maybe_decrypt_message(message_data, state, from, participant, attrs)
     state = maybe_ingest_history_sync(message_data, session, state, from, id)
-    state = maybe_ingest_app_state_keys(message_data, state)
+    state = maybe_ingest_app_state_keys(message_data, session, state)
 
     # Build message struct
     message = %{
@@ -232,11 +233,8 @@ defmodule ExWapp.MessageHandler do
     |> append_actions(ack_actions)
   end
 
-  defp append_actions(result, extra_actions) do
-    case result do
-      {:ok, state} -> {:ok, state, extra_actions}
-      {:ok, state, actions} -> {:ok, state, actions ++ extra_actions}
-    end
+  defp append_actions({:ok, state}, extra_actions) do
+    {:ok, state, extra_actions}
   end
 
   defp handle_encrypt_notification(_content, _session, state) do
@@ -343,7 +341,7 @@ defmodule ExWapp.MessageHandler do
   # Handle w:sync:app:state notification — server pushes when another device
   # modifies app state (contacts, chat settings, etc.)
   # Reference: whatsmeow appstate.go FetchAppState / handleAppStateSyncNotification
-  defp handle_app_state_sync_notification(content, _session, state) do
+  defp handle_app_state_sync_notification(content, session, state) do
     collection_names = extract_app_state_collection_names(content)
 
     if collection_names != [] do
@@ -351,9 +349,7 @@ defmodule ExWapp.MessageHandler do
         "[APP_STATE] Received sync notification for collections: #{inspect(collection_names)}"
       )
 
-      # Notify the session worker to trigger a re-fetch of the changed collections
-      # The worker will call FetchAppState for each collection
-      session_pid = Map.get(state, :session_pid)
+      session_pid = resolve_session_pid(session, state)
 
       if is_pid(session_pid) and Process.alive?(session_pid) do
         send(session_pid, {:app_state_sync_collections, collection_names})
@@ -722,8 +718,6 @@ defmodule ExWapp.MessageHandler do
     |> normalize_optional_text()
   end
 
-  defp extract_sync_name(_), do: nil
-
   defp find_first_attr(attrs, keys) when is_map(attrs) and is_list(keys) do
     Enum.find_value(keys, fn key ->
       case Map.get(attrs, key) do
@@ -1007,6 +1001,7 @@ defmodule ExWapp.MessageHandler do
   # Reference: whatsmeow message.go:812 handleAppStateSyncKeyShare
   defp maybe_ingest_app_state_keys(
          %{message_content_type: :protocol, protocol_payload: payload},
+         session,
          state
        )
        when is_binary(payload) do
@@ -1017,10 +1012,14 @@ defmodule ExWapp.MessageHandler do
          key_share_bytes when is_binary(key_share_bytes) <-
            find_first_ld_field(protocol_fields, 7),
          {:ok, key_share} <- SyncAction.decode_app_state_sync_key_share(key_share_bytes),
-         true <- length(key_share.keys) > 0 do
+         true <- key_share.keys != [] do
       Logger.info("[APP_STATE] Received AppStateSyncKeyShare with #{length(key_share.keys)} keys")
 
-      store_app_state_keys(state, key_share.keys)
+      with {:ok, :updated} <- store_app_state_keys(state, key_share.keys) do
+        maybe_trigger_initial_app_state_sync(session)
+      end
+
+      state
     else
       _ -> state
     end
@@ -1030,14 +1029,14 @@ defmodule ExWapp.MessageHandler do
       state
   end
 
-  defp maybe_ingest_app_state_keys(_message_data, state), do: state
+  defp maybe_ingest_app_state_keys(_message_data, _session, state), do: state
 
   defp store_app_state_keys(state, keys) when is_list(keys) do
     store = Map.get(state, :store)
 
     if is_nil(store) do
       Logger.warning("[APP_STATE] No store available, cannot persist app state keys")
-      state
+      {:error, :missing_store}
     else
       data = Store.load!(store)
       existing_keys = Map.get(data, :app_state_keys, %{})
@@ -1068,22 +1067,35 @@ defmodule ExWapp.MessageHandler do
       if updated_keys != existing_keys do
         Store.persist(store, Map.put(data, :app_state_keys, updated_keys))
         Logger.info("[APP_STATE] Persisted #{map_size(updated_keys)} total app state keys")
+        {:ok, :updated}
+      else
+        {:ok, :unchanged}
       end
-
-      state
     end
   rescue
     error ->
       Logger.warning("[APP_STATE] Failed to store app state keys: #{inspect(error)}")
-      state
+      {:error, {:store_failed, error}}
   end
+
+  defp maybe_trigger_initial_app_state_sync(session) do
+    if is_pid(session) and Process.alive?(session) do
+      send(session, {:app_state_initial_sync, Engine.all_collections()})
+    end
+  end
+
+  defp resolve_session_pid(session, _state) when is_pid(session), do: session
+
+  defp resolve_session_pid(_session, state) when is_map(state) do
+    Map.get(state, :session_pid)
+  end
+
+  defp resolve_session_pid(_session, _state), do: nil
 
   # Lightweight protobuf helpers for key extraction (reuse decode_wire_fields pattern from HistorySync)
   defp decode_wire_fields_safe(binary) when is_binary(binary) do
     decode_wire_fields_acc(binary, [])
   end
-
-  defp decode_wire_fields_safe(_), do: {:error, :not_binary}
 
   defp decode_wire_fields_acc(<<>>, acc), do: {:ok, Enum.reverse(acc)}
 
@@ -1219,8 +1231,6 @@ defmodule ExWapp.MessageHandler do
     end)
     |> Enum.uniq()
   end
-
-  defp normalize_lid_mappings(_), do: []
 
   defp encrypted_payload_candidates(message_data) when is_map(message_data) do
     candidates = Map.get(message_data, :enc_candidates, [])
@@ -1490,15 +1500,12 @@ defmodule ExWapp.MessageHandler do
     end
   end
 
-  defp maybe_process_sender_key_distributions(state, _from, _sender_jid, _plaintext),
-    do: {0, state}
-
   defp build_receipt_actions(from, id, participant, attrs, message_data, state) do
     cond do
       id in [nil, ""] ->
         {[], state}
 
-      from in [nil, ""] ->
+      from == "" ->
         {[], state}
 
       needs_retry_receipt?(message_data) ->
@@ -1683,8 +1690,6 @@ defmodule ExWapp.MessageHandler do
     end
   end
 
-  defp classify_decrypted_content(_, _), do: {:user_message, nil}
-
   defp decode_message_text_recursive(_payload, depth) when depth > @max_message_decode_depth,
     do: :error
 
@@ -1729,8 +1734,6 @@ defmodule ExWapp.MessageHandler do
   defp valid_text_payload?(value) when is_binary(value) do
     value != "" and String.valid?(value)
   end
-
-  defp valid_text_payload?(_), do: false
 
   defp first_non_empty(values) when is_list(values) do
     Enum.find(values, fn

@@ -9,7 +9,7 @@ defmodule ExWapp.Signal.Encryption do
   4. Decrypting incoming messages
   """
 
-  alias ExWapp.Signal.{SessionStore, PrekeyFetcher}
+  alias ExWapp.Signal.{PrekeyFetcher, SessionStore}
 
   require Logger
 
@@ -80,35 +80,14 @@ defmodule ExWapp.Signal.Encryption do
              {:ok, remote_bundle} <- ensure_remote_bundle(session, signal_store, jid) do
           Logger.info("[ENCRYPTION] Got remote bundle, encrypting...")
 
-          local_reg_id =
-            session
-            |> GenServer.call(:get_store)
-            |> ExWapp.Store.load!()
-            |> then(fn data -> get_in(data, [:signal, :registration_id]) || 0 end)
-
-          case SessionStore.encrypt_message(
-                 signal_store,
-                 jid,
-                 plaintext,
-                 local_identity,
-                 local_reg_id,
-                 remote_bundle
-               ) do
-            {:ok, ciphertext, type, updated_store} ->
-              # Save updated session store
-              GenServer.call(session, {:update_signal_sessions, updated_store})
-
-              Logger.info(
-                "[ENCRYPTION] Encrypted message for #{jid}, type=#{type}, size=#{byte_size(ciphertext)}"
-              )
-
-              {:ok, ciphertext, type}
-
-            {:error, reason} ->
-              Logger.error("[ENCRYPTION] SessionStore.encrypt_message failed: #{inspect(reason)}")
-
-              {:error, reason}
-          end
+          do_encrypt_for_recipient(
+            session,
+            jid,
+            plaintext,
+            local_identity,
+            signal_store,
+            remote_bundle
+          )
         else
           {:error, reason} ->
             Logger.error("[ENCRYPTION] Failed to get remote bundle: #{inspect(reason)}")
@@ -154,30 +133,31 @@ defmodule ExWapp.Signal.Encryption do
       "[ENCRYPTION] decrypt_from_sender_sync: jid=#{jid} enc_type=#{inspect(enc_type)} is_prekey=#{is_prekey} ct_size=#{byte_size(ciphertext)}"
     )
 
-    with {:ok, local_identity, local_prekeys} <- get_local_keys_from_store(store) do
-      signal_store = signal_sessions || SessionStore.new()
+    case get_local_keys_from_store(store) do
+      {:ok, local_identity, local_prekeys} ->
+        signal_store = signal_sessions || SessionStore.new()
 
-      Logger.info(
-        "[ENCRYPTION] Have identity, signed_prekeys=#{map_size(local_prekeys.signed_prekeys)} prekeys=#{map_size(local_prekeys.prekeys)}"
-      )
+        Logger.info(
+          "[ENCRYPTION] Have identity, signed_prekeys=#{map_size(local_prekeys.signed_prekeys)} prekeys=#{map_size(local_prekeys.prekeys)}"
+        )
 
-      case SessionStore.decrypt_message(
-             signal_store,
-             jid,
-             ciphertext,
-             is_prekey,
-             local_identity,
-             local_prekeys
-           ) do
-        {:ok, plaintext, updated_store} ->
-          Logger.info("[ENCRYPTION] Decrypt succeeded, plaintext_size=#{byte_size(plaintext)}")
-          {:ok, plaintext, updated_store}
+        case SessionStore.decrypt_message(
+               signal_store,
+               jid,
+               ciphertext,
+               is_prekey,
+               local_identity,
+               local_prekeys
+             ) do
+          {:ok, plaintext, updated_store} ->
+            Logger.info("[ENCRYPTION] Decrypt succeeded, plaintext_size=#{byte_size(plaintext)}")
+            {:ok, plaintext, updated_store}
 
-        {:error, reason} ->
-          Logger.warning("[ENCRYPTION] Decrypt failed: #{inspect(reason)}")
-          {:error, reason}
-      end
-    else
+          {:error, reason} ->
+            Logger.warning("[ENCRYPTION] Decrypt failed: #{inspect(reason)}")
+            {:error, reason}
+        end
+
       {:error, reason} ->
         Logger.warning("[ENCRYPTION] get_local_keys failed: #{inspect(reason)}")
         {:error, reason}
@@ -216,20 +196,7 @@ defmodule ExWapp.Signal.Encryption do
       padded
     else
       # WhatsApp padding: last byte indicates padding length
-      pad_len = :binary.last(padded)
-
-      if pad_len > 0 and pad_len <= 16 and pad_len <= byte_size(padded) do
-        payload_len = byte_size(padded) - pad_len
-        <<payload::binary-size(payload_len), padding::binary-size(pad_len)>> = padded
-
-        if valid_padding?(padding, pad_len) do
-          payload
-        else
-          padded
-        end
-      else
-        padded
-      end
+      strip_wa_padding(padded)
     end
   end
 
@@ -254,6 +221,55 @@ defmodule ExWapp.Signal.Encryption do
   # ============================================================================
   # Private Helpers
   # ============================================================================
+
+  defp do_encrypt_for_recipient(
+         session,
+         jid,
+         plaintext,
+         local_identity,
+         signal_store,
+         remote_bundle
+       ) do
+    local_reg_id =
+      session
+      |> GenServer.call(:get_store)
+      |> ExWapp.Store.load!()
+      |> then(fn data -> get_in(data, [:signal, :registration_id]) || 0 end)
+
+    case SessionStore.encrypt_message(
+           signal_store,
+           jid,
+           plaintext,
+           local_identity,
+           local_reg_id,
+           remote_bundle
+         ) do
+      {:ok, ciphertext, type, updated_store} ->
+        GenServer.call(session, {:update_signal_sessions, updated_store})
+
+        Logger.info(
+          "[ENCRYPTION] Encrypted message for #{jid}, type=#{type}, size=#{byte_size(ciphertext)}"
+        )
+
+        {:ok, ciphertext, type}
+
+      {:error, reason} ->
+        Logger.error("[ENCRYPTION] SessionStore.encrypt_message failed: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  defp strip_wa_padding(padded) do
+    pad_len = :binary.last(padded)
+
+    if pad_len > 0 and pad_len <= 16 and pad_len <= byte_size(padded) do
+      payload_len = byte_size(padded) - pad_len
+      <<payload::binary-size(payload_len), padding::binary-size(pad_len)>> = padded
+      if valid_padding?(padding, pad_len), do: payload, else: padded
+    else
+      padded
+    end
+  end
 
   defp get_local_keys(session) do
     store = GenServer.call(session, :get_store)

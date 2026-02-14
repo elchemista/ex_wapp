@@ -119,6 +119,4 @@ defmodule ExWapp.Contact do
       _ -> nil
     end
   end
-
-  defp extract_phone(_), do: nil
 end

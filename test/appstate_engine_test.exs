@@ -398,6 +398,25 @@ defmodule ExWapp.AppState.EngineTest do
       assert contact.full_name == "Bob Smith"
     end
 
+    test "dispatches contact remove operation", %{store: store} do
+      ExWapp.Contact.put(store, "1234@s.whatsapp.net", %ExWapp.Contact{
+        jid: "1234@s.whatsapp.net",
+        full_name: "To Delete"
+      })
+
+      assert ExWapp.Contact.get(store, "1234@s.whatsapp.net") != nil
+
+      assert :ok =
+               Engine.dispatch_mutation(
+                 store,
+                 1,
+                 ["contact", "1234@s.whatsapp.net"],
+                 %SyncActionValue{}
+               )
+
+      assert ExWapp.Contact.get(store, "1234@s.whatsapp.net") == nil
+    end
+
     test "dispatches archive action", %{store: store} do
       action = %SyncActionValue{
         archive_chat_action: %ArchiveChatAction{archived: true}

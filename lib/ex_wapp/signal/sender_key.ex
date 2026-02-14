@@ -57,56 +57,8 @@ defmodule ExWapp.Signal.SenderKey do
 
       processed_count =
         Enum.reduce(distributions, 0, fn distribution, acc ->
-          group_jid =
-            normalize_group_jid(distribution.group_jid, normalized_group_hint)
-
-          case parse_axolotl_distribution_message(distribution.axolotl_distribution) do
-            {:ok, parsed} when group_jid != "" ->
-              case WireFormat.deserialize_public_key(parsed.signing_key) do
-                {:ok, signing_key} ->
-                  :ok =
-                    put_sender_key_state(
-                      store,
-                      group_jid,
-                      normalized_sender,
-                      parsed.id,
-                      %{
-                        id: parsed.id,
-                        iteration: parsed.iteration,
-                        chain_key: parsed.chain_key,
-                        signing_key: signing_key,
-                        message_keys: %{}
-                      }
-                    )
-
-                  Logger.info(
-                    "[SENDER_KEY] Stored distribution: group=#{group_jid} sender=#{normalized_sender} id=#{parsed.id} iteration=#{parsed.iteration} source_field=#{distribution.source_field}"
-                  )
-
-                  acc + 1
-
-                {:error, reason} ->
-                  Logger.warning(
-                    "[SENDER_KEY] Invalid signing key in distribution (group=#{group_jid} sender=#{normalized_sender}): #{inspect(reason)}"
-                  )
-
-                  acc
-              end
-
-            {:ok, _parsed} ->
-              Logger.warning(
-                "[SENDER_KEY] Skipping distribution with empty group JID (sender=#{normalized_sender})"
-              )
-
-              acc
-
-            {:error, reason} ->
-              Logger.warning(
-                "[SENDER_KEY] Failed to parse axolotl sender key distribution for sender=#{normalized_sender}: #{inspect(reason)}"
-              )
-
-              acc
-          end
+          group_jid = normalize_group_jid(distribution.group_jid, normalized_group_hint)
+          acc + process_single_distribution(store, distribution, group_jid, normalized_sender)
         end)
 
       {:ok, processed_count}
@@ -115,6 +67,49 @@ defmodule ExWapp.Signal.SenderKey do
 
   def process_distributions_from_plaintext(_store, _group_jid_hint, _sender_jid, _plaintext),
     do: {:error, :invalid_plaintext}
+
+  defp process_single_distribution(_store, _distribution, "", _sender), do: 0
+
+  defp process_single_distribution(store, distribution, group_jid, sender) do
+    case parse_axolotl_distribution_message(distribution.axolotl_distribution) do
+      {:ok, parsed} ->
+        store_parsed_distribution(store, parsed, group_jid, sender, distribution.source_field)
+
+      {:error, reason} ->
+        Logger.warning(
+          "[SENDER_KEY] Failed to parse axolotl sender key distribution for sender=#{sender}: #{inspect(reason)}"
+        )
+
+        0
+    end
+  end
+
+  defp store_parsed_distribution(store, parsed, group_jid, sender, source_field) do
+    case WireFormat.deserialize_public_key(parsed.signing_key) do
+      {:ok, signing_key} ->
+        :ok =
+          put_sender_key_state(store, group_jid, sender, parsed.id, %{
+            id: parsed.id,
+            iteration: parsed.iteration,
+            chain_key: parsed.chain_key,
+            signing_key: signing_key,
+            message_keys: %{}
+          })
+
+        Logger.info(
+          "[SENDER_KEY] Stored distribution: group=#{group_jid} sender=#{sender} id=#{parsed.id} iteration=#{parsed.iteration} source_field=#{source_field}"
+        )
+
+        1
+
+      {:error, reason} ->
+        Logger.warning(
+          "[SENDER_KEY] Invalid signing key in distribution (group=#{group_jid} sender=#{sender}): #{inspect(reason)}"
+        )
+
+        0
+    end
+  end
 
   @doc """
   Decrypts a group sender-key message (`skmsg`) for a specific group and sender.
@@ -151,9 +146,6 @@ defmodule ExWapp.Signal.SenderKey do
            ) do
       {:ok, plaintext}
     else
-      false ->
-        {:error, :invalid_sender_key_jid}
-
       {:error, reason} ->
         {:error, reason}
     end
@@ -210,9 +202,6 @@ defmodule ExWapp.Signal.SenderKey do
 
       {:ok, version_and_proto <> signature}
     else
-      false ->
-        {:error, :invalid_sender_key_jid}
-
       {:error, reason} ->
         {:error, reason}
     end
@@ -236,10 +225,7 @@ defmodule ExWapp.Signal.SenderKey do
     if sender_state do
       {:ok, record, normalize_sender_state(sender_state, key_id)}
     else
-      case key_id do
-        nil -> {:error, :invalid_sender_key_id}
-        _ -> {:error, {:unknown_sender_key_id, key_id}}
-      end
+      {:error, {:unknown_sender_key_id, key_id}}
     end
   end
 
@@ -415,13 +401,21 @@ defmodule ExWapp.Signal.SenderKey do
   end
 
   defp valid_outbound_sender_state?(state, current_id) do
-    is_integer(current_id) and current_id >= 0 and
-      is_integer(state.id) and state.id == current_id and
-      is_integer(state.iteration) and state.iteration >= 0 and
-      is_binary(state.chain_key) and byte_size(state.chain_key) == 32 and
-      is_binary(state.signing_key) and byte_size(state.signing_key) == 32 and
-      is_binary(state.signing_private) and byte_size(state.signing_private) == 32
+    valid_sender_key_id?(current_id, state.id) and
+      valid_sender_key_iteration?(state.iteration) and
+      binary_of_size?(state.chain_key, 32) and
+      binary_of_size?(state.signing_key, 32) and
+      binary_of_size?(state.signing_private, 32)
   end
+
+  defp valid_sender_key_id?(current_id, state_id),
+    do: is_integer(current_id) and current_id >= 0 and state_id == current_id
+
+  defp valid_sender_key_iteration?(iteration),
+    do: is_integer(iteration) and iteration >= 0
+
+  defp binary_of_size?(value, size),
+    do: is_binary(value) and byte_size(value) == size
 
   defp generate_sender_key_id do
     <<value::32>> = :crypto.strong_rand_bytes(4)
@@ -549,26 +543,22 @@ defmodule ExWapp.Signal.SenderKey do
   # ============================================================================
 
   defp parse_sender_key_distributions(payload) do
-    case collect_length_delimited_fields(payload, MapSet.new([2, 15])) do
-      {:ok, fields} ->
-        fields
-        |> Enum.reduce([], fn {field_num, raw_distribution}, acc ->
-          case parse_wa_sender_key_distribution(raw_distribution) do
-            {:ok, parsed} ->
-              [
-                %{
-                  source_field: field_num,
-                  group_jid: parsed.group_jid,
-                  axolotl_distribution: parsed.axolotl_distribution
-                }
-                | acc
-              ]
+    case collect_length_delimited_fields(payload, [2, 15]) do
+      {:ok, fields} -> Enum.flat_map(fields, &parse_distribution_field/1)
+      {:error, _reason} -> []
+    end
+  end
 
-            {:error, _reason} ->
-              acc
-          end
-        end)
-        |> Enum.reverse()
+  defp parse_distribution_field({field_num, raw_distribution}) do
+    case parse_wa_sender_key_distribution(raw_distribution) do
+      {:ok, parsed} ->
+        [
+          %{
+            source_field: field_num,
+            group_jid: parsed.group_jid,
+            axolotl_distribution: parsed.axolotl_distribution
+          }
+        ]
 
       {:error, _reason} ->
         []
@@ -643,87 +633,93 @@ defmodule ExWapp.Signal.SenderKey do
 
   defp collect_length_delimited_fields(<<>>, _field_nums), do: {:ok, []}
 
-  defp collect_length_delimited_fields(binary, field_nums) when is_binary(binary) do
+  defp collect_length_delimited_fields(binary, field_nums)
+       when is_binary(binary) and is_list(field_nums) do
     do_collect_length_delimited_fields(binary, field_nums, [])
   end
 
   defp do_collect_length_delimited_fields(<<>>, _field_nums, acc), do: {:ok, Enum.reverse(acc)}
 
   defp do_collect_length_delimited_fields(binary, field_nums, acc) do
-    with {:ok, tag, rest} <- decode_varint(binary),
-         field_num <- tag >>> 3,
-         wire_type <- tag &&& 0x07 do
-      case wire_type do
-        0 ->
-          with {:ok, _value, tail} <- decode_varint(rest) do
-            do_collect_length_delimited_fields(tail, field_nums, acc)
-          end
-
-        1 when byte_size(rest) >= 8 ->
-          <<_skip::binary-size(8), tail::binary>> = rest
-          do_collect_length_delimited_fields(tail, field_nums, acc)
-
-        2 ->
-          with {:ok, len, tail} <- decode_varint(rest),
-               true <- byte_size(tail) >= len do
-            <<value::binary-size(len), next::binary>> = tail
-
-            next_acc =
-              if MapSet.member?(field_nums, field_num) do
-                [{field_num, value} | acc]
-              else
-                acc
-              end
-
-            do_collect_length_delimited_fields(next, field_nums, next_acc)
-          else
-            false -> {:error, :invalid_length_delimited_field}
-          end
-
-        5 when byte_size(rest) >= 4 ->
-          <<_skip::binary-size(4), tail::binary>> = rest
-          do_collect_length_delimited_fields(tail, field_nums, acc)
-
-        _ ->
-          {:error, {:unsupported_wire_type, wire_type}}
-      end
+    with {:ok, tag, rest} <- decode_varint(binary) do
+      field_num = tag >>> 3
+      wire_type = tag &&& 0x07
+      collect_wire_field(wire_type, field_num, rest, field_nums, acc)
     end
   end
+
+  defp collect_wire_field(0, _field_num, rest, field_nums, acc) do
+    with {:ok, _value, tail} <- decode_varint(rest) do
+      do_collect_length_delimited_fields(tail, field_nums, acc)
+    end
+  end
+
+  defp collect_wire_field(
+         1,
+         _field_num,
+         <<_skip::binary-size(8), tail::binary>>,
+         field_nums,
+         acc
+       ),
+       do: do_collect_length_delimited_fields(tail, field_nums, acc)
+
+  defp collect_wire_field(2, field_num, rest, field_nums, acc) do
+    with {:ok, len, tail} <- decode_varint(rest),
+         true <- byte_size(tail) >= len do
+      <<value::binary-size(len), next::binary>> = tail
+      next_acc = if field_num in field_nums, do: [{field_num, value} | acc], else: acc
+      do_collect_length_delimited_fields(next, field_nums, next_acc)
+    else
+      false -> {:error, :invalid_length_delimited_field}
+    end
+  end
+
+  defp collect_wire_field(
+         5,
+         _field_num,
+         <<_skip::binary-size(4), tail::binary>>,
+         field_nums,
+         acc
+       ),
+       do: do_collect_length_delimited_fields(tail, field_nums, acc)
+
+  defp collect_wire_field(wire_type, _field_num, _rest, _field_nums, _acc),
+    do: {:error, {:unsupported_wire_type, wire_type}}
 
   defp decode_fields(<<>>, acc), do: {:ok, acc, <<>>}
 
   defp decode_fields(binary, acc) when is_binary(binary) do
-    with {:ok, tag, rest} <- decode_varint(binary),
-         field_num <- tag >>> 3,
-         wire_type <- tag &&& 0x07 do
-      case wire_type do
-        0 ->
-          with {:ok, value, tail} <- decode_varint(rest) do
-            decode_fields(tail, Map.put(acc, field_num, value))
-          end
-
-        1 when byte_size(rest) >= 8 ->
-          <<_skip::binary-size(8), tail::binary>> = rest
-          decode_fields(tail, acc)
-
-        2 ->
-          with {:ok, len, tail} <- decode_varint(rest),
-               true <- byte_size(tail) >= len do
-            <<value::binary-size(len), next::binary>> = tail
-            decode_fields(next, Map.put(acc, field_num, value))
-          else
-            false -> {:error, :invalid_length_delimited_field}
-          end
-
-        5 when byte_size(rest) >= 4 ->
-          <<_skip::binary-size(4), tail::binary>> = rest
-          decode_fields(tail, acc)
-
-        _ ->
-          {:error, {:unsupported_wire_type, wire_type}}
-      end
+    with {:ok, tag, rest} <- decode_varint(binary) do
+      field_num = tag >>> 3
+      wire_type = tag &&& 0x07
+      decode_wire_field(wire_type, field_num, rest, acc)
     end
   end
+
+  defp decode_wire_field(0, field_num, rest, acc) do
+    with {:ok, value, tail} <- decode_varint(rest) do
+      decode_fields(tail, Map.put(acc, field_num, value))
+    end
+  end
+
+  defp decode_wire_field(1, _field_num, <<_skip::binary-size(8), tail::binary>>, acc),
+    do: decode_fields(tail, acc)
+
+  defp decode_wire_field(2, field_num, rest, acc) do
+    with {:ok, len, tail} <- decode_varint(rest),
+         true <- byte_size(tail) >= len do
+      <<value::binary-size(len), next::binary>> = tail
+      decode_fields(next, Map.put(acc, field_num, value))
+    else
+      false -> {:error, :invalid_length_delimited_field}
+    end
+  end
+
+  defp decode_wire_field(5, _field_num, <<_skip::binary-size(4), tail::binary>>, acc),
+    do: decode_fields(tail, acc)
+
+  defp decode_wire_field(wire_type, _field_num, _rest, _acc),
+    do: {:error, {:unsupported_wire_type, wire_type}}
 
   defp decode_varint(binary), do: decode_varint(binary, 0, 0)
   defp decode_varint(_, _, shift) when shift > 63, do: {:error, :invalid_varint}

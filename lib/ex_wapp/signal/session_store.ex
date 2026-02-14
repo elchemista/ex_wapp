@@ -8,6 +8,7 @@ defmodule ExWapp.Signal.SessionStore do
   """
 
   alias ExWapp.Signal.Adapter, as: Signal
+  alias ExWapp.Signal.WireFormat
 
   require Logger
 
@@ -119,17 +120,10 @@ defmodule ExWapp.Signal.SessionStore do
       true ->
         case get_session(store, jid) do
           {:ok, session} ->
-            # Existing session - return it with nil base_key (not a prekey message)
             {:ok, session, nil, store}
 
           :not_found ->
-            cond do
-              remote_bundle in [nil, %{}] ->
-                {:error, :missing_bundle}
-
-              true ->
-                create_session_from_bundle(store, jid, local_identity, remote_bundle)
-            end
+            create_or_reject(store, jid, local_identity, remote_bundle)
         end
     end
   end
@@ -164,31 +158,16 @@ defmodule ExWapp.Signal.SessionStore do
       case Signal.encrypt(session, plaintext) do
         {:ok, ciphertext, updated_session} ->
           updated_store = update_session(store, jid, updated_session)
+          prekey_base_key = base_key || Map.get(remote_bundle, :base_key)
 
-          # If caller already created the session in a previous step (e.g. prekey fetch
-          # worker), base_key will be nil here. Preserve first-message wrapping by honoring
-          # the provided remote_bundle base_key.
-          prekey_base_key = base_key || Map.get(remote_bundle || %{}, :base_key)
-
-          if prekey_base_key do
-            prekey_id = get_in(remote_bundle, [:prekey, :id]) || 0
-            signed_prekey_id = get_in(remote_bundle, [:signed_prekey, :id]) || 0
-            identity_pub = local_identity.public
-
-            wrapped =
-              ExWapp.Signal.WireFormat.serialize_prekey_signal_message(
-                local_registration_id,
-                prekey_id,
-                signed_prekey_id,
-                prekey_base_key,
-                identity_pub,
-                ciphertext
-              )
-
-            {:ok, wrapped, :prekey, updated_store}
-          else
-            {:ok, ciphertext, :whisper, updated_store}
-          end
+          wrap_encrypted(
+            ciphertext,
+            prekey_base_key,
+            remote_bundle,
+            local_identity,
+            local_registration_id,
+            updated_store
+          )
       end
     end
   end
@@ -206,77 +185,100 @@ defmodule ExWapp.Signal.SessionStore do
     )
 
     if is_prekey_message do
-      # PreKeySignalMessage - if a session exists, decrypt inner SignalMessage with it first.
-      # This matches libsignal/whatsmeow behavior where pkmsg can wrap traffic even after
-      # session establishment, and avoids resetting ratchet state on every incoming pkmsg.
-      existing_result =
-        case get_session(store, jid) do
-          {:ok, session} ->
+      decrypt_prekey(store, jid, ciphertext, local_identity, local_prekeys)
+    else
+      decrypt_whisper(store, jid, ciphertext)
+    end
+  end
+
+  defp create_or_reject(store, jid, local_identity, remote_bundle) do
+    if remote_bundle in [nil, %{}] do
+      {:error, :missing_bundle}
+    else
+      create_session_from_bundle(store, jid, local_identity, remote_bundle)
+    end
+  end
+
+  # If we have a prekey base_key, wrap as PreKeySignalMessage; otherwise return whisper.
+  defp wrap_encrypted(ciphertext, nil, _remote_bundle, _local_identity, _reg_id, store),
+    do: {:ok, ciphertext, :whisper, store}
+
+  defp wrap_encrypted(ciphertext, prekey_base_key, remote_bundle, local_identity, reg_id, store) do
+    prekey_id = get_in(remote_bundle, [:prekey, :id]) || 0
+    signed_prekey_id = get_in(remote_bundle, [:signed_prekey, :id]) || 0
+
+    wrapped =
+      WireFormat.serialize_prekey_signal_message(
+        reg_id,
+        prekey_id,
+        signed_prekey_id,
+        prekey_base_key,
+        local_identity.public,
+        ciphertext
+      )
+
+    {:ok, wrapped, :prekey, store}
+  end
+
+  defp decrypt_prekey(store, jid, ciphertext, local_identity, local_prekeys) do
+    case try_existing_session_for_prekey(store, jid, ciphertext) do
+      {:ok, plaintext, session} ->
+        {:ok, plaintext, put_session(store, jid, session)}
+
+      :try_fresh ->
+        case Signal.decrypt_prekey_message(ciphertext, local_identity, local_prekeys) do
+          {:ok, plaintext, session} ->
+            Logger.info("[SESSION_STORE] PreKey decrypt succeeded (fresh) for #{jid}")
+            {:ok, plaintext, put_session(store, jid, session)}
+
+          {:error, reason} ->
+            Logger.warning("[SESSION_STORE] PreKey decrypt failed for #{jid}: #{inspect(reason)}")
+            {:error, reason}
+        end
+    end
+  end
+
+  defp try_existing_session_for_prekey(store, jid, ciphertext) do
+    case get_session(store, jid) do
+      {:ok, session} ->
+        Logger.info("[SESSION_STORE] Trying existing session ratchet for prekey msg from #{jid}")
+
+        case Signal.decrypt_prekey_message_with_session(session, ciphertext) do
+          {:ok, plaintext, updated_session} ->
+            Logger.info("[SESSION_STORE] PreKey decrypt succeeded on existing session for #{jid}")
+            {:ok, plaintext, updated_session}
+
+          {:error, reason} ->
             Logger.info(
-              "[SESSION_STORE] Trying existing session ratchet for prekey msg from #{jid}"
+              "[SESSION_STORE] Existing session prekey decrypt failed for #{jid}, trying fresh X3DH: #{inspect(reason)}"
             )
 
-            case Signal.decrypt_prekey_message_with_session(session, ciphertext) do
-              {:ok, plaintext, updated_session} ->
-                Logger.info(
-                  "[SESSION_STORE] PreKey decrypt succeeded on existing session for #{jid}"
-                )
-
-                {:ok, plaintext, updated_session}
-
-              {:error, reason} ->
-                Logger.info(
-                  "[SESSION_STORE] Existing session prekey decrypt failed for #{jid}, trying fresh X3DH: #{inspect(reason)}"
-                )
-
-                :try_fresh
-            end
-
-          :not_found ->
             :try_fresh
         end
 
-      case existing_result do
-        {:ok, plaintext, session} ->
-          updated_store = put_session(store, jid, session)
-          {:ok, plaintext, updated_store}
+      :not_found ->
+        :try_fresh
+    end
+  end
 
-        :try_fresh ->
-          case Signal.decrypt_prekey_message(ciphertext, local_identity, local_prekeys) do
-            {:ok, plaintext, session} ->
-              Logger.info("[SESSION_STORE] PreKey decrypt succeeded (fresh) for #{jid}")
-              updated_store = put_session(store, jid, session)
-              {:ok, plaintext, updated_store}
+  defp decrypt_whisper(store, jid, ciphertext) do
+    case get_session(store, jid) do
+      {:ok, session} ->
+        case Signal.decrypt(session, ciphertext) do
+          {:ok, plaintext, updated_session} ->
+            {:ok, plaintext, update_session(store, jid, updated_session)}
 
-            {:error, reason} ->
-              Logger.warning(
-                "[SESSION_STORE] PreKey decrypt failed for #{jid}: #{inspect(reason)}"
-              )
+          {:error, reason} ->
+            Logger.warning(
+              "[SESSION_STORE] Whisper decrypt failed for #{jid}: #{inspect(reason)}"
+            )
 
-              {:error, reason}
-          end
-      end
-    else
-      # Regular SignalMessage - use existing session
-      case get_session(store, jid) do
-        {:ok, session} ->
-          case Signal.decrypt(session, ciphertext) do
-            {:ok, plaintext, updated_session} ->
-              updated_store = update_session(store, jid, updated_session)
-              {:ok, plaintext, updated_store}
+            {:error, reason}
+        end
 
-            {:error, reason} ->
-              Logger.warning(
-                "[SESSION_STORE] Whisper decrypt failed for #{jid}: #{inspect(reason)}"
-              )
-
-              {:error, reason}
-          end
-
-        :not_found ->
-          Logger.warning("[SESSION_STORE] No session found for #{jid} (whisper message)")
-          {:error, :no_session}
-      end
+      :not_found ->
+        Logger.warning("[SESSION_STORE] No session found for #{jid} (whisper message)")
+        {:error, :no_session}
     end
   end
 

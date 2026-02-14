@@ -8,6 +8,7 @@ defmodule ExWapp.Pairing.ADV do
   """
 
   alias Ed25519
+  alias ExWapp.Signal.Keys, as: SignalKeys
   alias WAAdv.{ADVDeviceIdentity, ADVSignedDeviceIdentity, ADVSignedDeviceIdentityHMAC}
 
   @adv_prefix_device_signature_generate <<6, 1>>
@@ -47,56 +48,68 @@ defmodule ExWapp.Pairing.ADV do
 
     with :ok <- ensure_binary_length(adv_secret, 32, :adv_secret),
          {:ok, {identity_pub, identity_priv}} <- extract_identity(identity) do
-      # Try direct ADVSignedDeviceIdentity first (used in pair-success device-identity)
-      # This is the most common case for QR pairing
+      # Try direct ADVSignedDeviceIdentity first (most common for QR pairing)
       case parse_direct_signed_identity(adv_bytes, identity_pub, identity_priv) do
         {:ok, result} ->
-          if should_try_hmac_after_direct?(result) do
-            Logger.warning(
-              "[ADV] Direct parse looks wrapped/incomplete, retrying as HMAC container"
-            )
-
-            case decode_container(adv_bytes) do
-              {:ok, container}
-              when is_binary(container.details) and byte_size(container.details) > 0 ->
-                case parse_hmac_wrapped(container, adv_secret, identity_pub, identity_priv) do
-                  {:ok, wrapped} ->
-                    {:ok, wrapped}
-
-                  {:error, _reason} ->
-                    Logger.info("[ADV] Falling back to direct parse result")
-                    {:ok, result}
-                end
-
-              _ ->
-                Logger.info("[ADV] Falling back to direct parse result")
-                {:ok, result}
-            end
-          else
-            Logger.info("[ADV] ✓ Direct parsing succeeded")
-            {:ok, result}
-          end
+          maybe_retry_as_hmac(result, adv_bytes, adv_secret, identity_pub, identity_priv)
 
         {:error, direct_error} ->
-          Logger.warning(
-            "[ADV] Direct parsing failed: #{inspect(direct_error)}, trying HMAC wrapper"
-          )
-
-          # Fallback: Try HMAC-wrapped format
-          case decode_container(adv_bytes) do
-            {:ok, container}
-            when is_binary(container.details) and byte_size(container.details) > 0 ->
-              parse_hmac_wrapped(container, adv_secret, identity_pub, identity_priv)
-
-            _ ->
-              {:error, direct_error}
-          end
+          fallback_to_hmac(direct_error, adv_bytes, adv_secret, identity_pub, identity_priv)
       end
     end
   end
 
   def parse_signed_device_identity(_adv_bytes, _adv_secret, _identity),
     do: {:error, :invalid_adv_payload}
+
+  defp maybe_retry_as_hmac(result, adv_bytes, adv_secret, identity_pub, identity_priv) do
+    require Logger
+
+    case should_try_hmac_after_direct(result) do
+      :try_hmac ->
+        Logger.warning("[ADV] Direct parse looks wrapped/incomplete, retrying as HMAC container")
+        try_hmac_or_fallback(result, adv_bytes, adv_secret, identity_pub, identity_priv)
+
+      :skip ->
+        Logger.info("[ADV] ✓ Direct parsing succeeded")
+        {:ok, result}
+    end
+  end
+
+  defp try_hmac_or_fallback(direct_result, adv_bytes, adv_secret, identity_pub, identity_priv) do
+    require Logger
+
+    case decode_container(adv_bytes) do
+      {:ok, container}
+      when is_binary(container.details) and byte_size(container.details) > 0 ->
+        case parse_hmac_wrapped(container, adv_secret, identity_pub, identity_priv) do
+          {:ok, wrapped} ->
+            {:ok, wrapped}
+
+          {:error, _reason} ->
+            Logger.info("[ADV] Falling back to direct parse result")
+            {:ok, direct_result}
+        end
+
+      _ ->
+        Logger.info("[ADV] Falling back to direct parse result")
+        {:ok, direct_result}
+    end
+  end
+
+  defp fallback_to_hmac(direct_error, adv_bytes, adv_secret, identity_pub, identity_priv) do
+    require Logger
+    Logger.warning("[ADV] Direct parsing failed: #{inspect(direct_error)}, trying HMAC wrapper")
+
+    case decode_container(adv_bytes) do
+      {:ok, container}
+      when is_binary(container.details) and byte_size(container.details) > 0 ->
+        parse_hmac_wrapped(container, adv_secret, identity_pub, identity_priv)
+
+      _ ->
+        {:error, direct_error}
+    end
+  end
 
   @doc """
   Encodes an `ADVSignedDeviceIdentity` payload.
@@ -132,26 +145,13 @@ defmodule ExWapp.Pairing.ADV do
     Logger.info("[ADV-HMAC] container.details size: #{byte_size(container.details || <<>>)}")
     Logger.info("[ADV-HMAC] container.HMAC size: #{byte_size(container."HMAC" || <<>>)}")
 
+    hosted? = hosted_account?(container.accountType)
+
     with {:ok, details_bin} <- ensure_details(container.details),
-         hosted? <- hosted_account?(container.accountType),
          :ok <- verify_hmac(details_bin, container."HMAC", adv_secret, hosted?),
-         _ = Logger.info("[ADV-HMAC] HMAC verified OK"),
          {:ok, signed_identity} <- decode_signed_identity(details_bin),
-         _ =
-           Logger.info(
-             "[ADV-HMAC] signed_identity.details size: #{byte_size(signed_identity.details || <<>>)}"
-           ),
-         _ =
-           Logger.info(
-             "[ADV-HMAC] signed_identity.accountSignatureKey size: #{byte_size(signed_identity.accountSignatureKey || <<>>)}"
-           ),
-         _ =
-           Logger.info(
-             "[ADV-HMAC] signed_identity.accountSignature size: #{byte_size(signed_identity.accountSignature || <<>>)}"
-           ),
          {:ok, %ADVSignedDeviceIdentity{} = signed_identity} <-
            ensure_signature_fields(signed_identity),
-         # Skip account signature verification - whatsmeow doesn't verify it
          {:ok, device_signature} <-
            generate_device_signature(
              signed_identity,
@@ -159,12 +159,53 @@ defmodule ExWapp.Pairing.ADV do
              identity_pub,
              identity_priv,
              hosted?
-           ),
-         _ = Logger.info("[ADV-HMAC] device_signature size: #{byte_size(device_signature)}"),
-         signed_with_device <- %{signed_identity | deviceSignature: device_signature},
-         {:ok, details} <- decode_details_relaxed(signed_with_device.details),
-         {:ok, self_signed} <- encode_self_signed(signed_with_device),
-         _ = Logger.info("[ADV-HMAC] self_signed size: #{byte_size(self_signed)}") do
+           ) do
+      signed_with_device = %{signed_identity | deviceSignature: device_signature}
+      build_parsed_identity(signed_with_device, container, details_bin, hosted?, device_signature)
+    end
+  end
+
+  # Parse direct ADVSignedDeviceIdentity (from device-identity in pair-success)
+  defp parse_direct_signed_identity(adv_bytes, identity_pub, identity_priv) do
+    require Logger
+    Logger.info("[ADV] Parsing direct ADVSignedDeviceIdentity (#{byte_size(adv_bytes)} bytes)")
+
+    with {:ok, signed_identity} <- decode_signed_identity(adv_bytes),
+         {:ok, %ADVSignedDeviceIdentity{} = signed_identity} <-
+           ensure_signature_fields(signed_identity),
+         {:ok, device_signature} <-
+           generate_device_signature(
+             signed_identity,
+             signed_identity.details,
+             identity_pub,
+             identity_priv,
+             false
+           ) do
+      signed_with_device = %{signed_identity | deviceSignature: device_signature}
+
+      build_parsed_identity(
+        signed_with_device,
+        nil,
+        signed_identity.details,
+        false,
+        device_signature
+      )
+    else
+      {:error, reason} = err ->
+        Logger.error("[ADV] parse_direct_signed_identity failed: #{inspect(reason)}")
+        err
+    end
+  end
+
+  defp build_parsed_identity(
+         signed_with_device,
+         container,
+         details_bin,
+         hosted?,
+         device_signature
+       ) do
+    with {:ok, details} <- decode_details_relaxed(signed_with_device.details),
+         {:ok, self_signed} <- encode_self_signed(signed_with_device) do
       {:ok,
        %{
          container: container,
@@ -175,56 +216,6 @@ defmodule ExWapp.Pairing.ADV do
          self_signed: self_signed,
          details_binary: details_bin
        }}
-    end
-  end
-
-  # Parse direct ADVSignedDeviceIdentity (from device-identity in pair-success)
-  defp parse_direct_signed_identity(adv_bytes, identity_pub, identity_priv) do
-    require Logger
-    Logger.info("[ADV] Parsing direct ADVSignedDeviceIdentity (#{byte_size(adv_bytes)} bytes)")
-
-    with {:ok, signed_identity} <- decode_signed_identity(adv_bytes),
-         _ =
-           Logger.info(
-             "[ADV] Decoded signed_identity, details=#{byte_size(signed_identity.details || <<>>)} bytes"
-           ),
-         {:ok, %ADVSignedDeviceIdentity{} = signed_identity} <-
-           ensure_signature_fields(signed_identity),
-         _ = Logger.info("[ADV] Signature fields OK"),
-         details_bin <- signed_identity.details,
-         # Skip account signature verification - whatsmeow doesn't verify it during pairing
-         {:ok, device_signature} <-
-           generate_device_signature(
-             signed_identity,
-             details_bin,
-             identity_pub,
-             identity_priv,
-             false
-           ),
-         _ =
-           Logger.info("[ADV] Generated device signature (#{byte_size(device_signature)} bytes)"),
-         signed_with_device <- %{signed_identity | deviceSignature: device_signature},
-         {:ok, details} <- decode_details_relaxed(signed_with_device.details),
-         _ =
-           Logger.info(
-             "[ADV] Decoded details (relaxed): keyIndex=#{inspect(extract_key_index(details))}"
-           ),
-         {:ok, self_signed} <- encode_self_signed(signed_with_device),
-         _ = Logger.info("[ADV] Encoded self_signed (#{byte_size(self_signed)} bytes)") do
-      {:ok,
-       %{
-         container: nil,
-         signed: signed_with_device,
-         details: details,
-         hosted?: false,
-         device_signature: device_signature,
-         self_signed: self_signed,
-         details_binary: details_bin
-       }}
-    else
-      {:error, reason} = err ->
-        Logger.error("[ADV] parse_direct_signed_identity failed: #{inspect(reason)}")
-        err
     end
   end
 
@@ -306,7 +297,7 @@ defmodule ExWapp.Pairing.ADV do
     # Use XEdDSA (Signal's curve25519 signature scheme) - NOT plain Ed25519!
     # This matches whatsmeow's ecc.CalculateSignature(ecc.NewDjbECPrivateKey...)
     try do
-      signature = ExWapp.Signal.Keys.sign_message(identity_priv, message)
+      signature = SignalKeys.sign_message(identity_priv, message)
       {:ok, signature}
     rescue
       e ->
@@ -343,7 +334,7 @@ defmodule ExWapp.Pairing.ADV do
     end
   end
 
-  defp should_try_hmac_after_direct?(%{
+  defp should_try_hmac_after_direct(%{
          signed: %ADVSignedDeviceIdentity{} = signed,
          details: details
        }) do
@@ -352,17 +343,12 @@ defmodule ExWapp.Pairing.ADV do
     account_signature_valid? =
       is_binary(signed.accountSignature) and byte_size(signed.accountSignature) == 64
 
-    details_decode_failed? and not account_signature_valid?
+    if details_decode_failed? and not account_signature_valid?,
+      do: :try_hmac,
+      else: :skip
   end
 
-  defp should_try_hmac_after_direct?(_), do: false
-
-  defp extract_key_index(%ADVDeviceIdentity{keyIndex: value}), do: value
-
-  defp extract_key_index(%{} = details),
-    do: Map.get(details, :keyIndex) || Map.get(details, "keyIndex")
-
-  defp extract_key_index(_), do: nil
+  defp should_try_hmac_after_direct(_), do: :skip
 
   # Minimal protobuf parser for ADVDeviceIdentity keyIndex (field 3, varint).
   # This keeps pairing resilient when the generated proto cannot parse new fields.
@@ -370,55 +356,52 @@ defmodule ExWapp.Pairing.ADV do
     do_extract_key_index(blob)
   end
 
-  defp extract_key_index_from_details_blob(_), do: nil
-
   defp do_extract_key_index(<<>>), do: nil
 
   defp do_extract_key_index(binary) do
-    with {:ok, tag, rest} <- decode_varint(binary) do
-      field_num = Bitwise.bsr(tag, 3)
-      wire_type = Bitwise.band(tag, 0x07)
+    case decode_varint(binary) do
+      {:ok, tag, rest} ->
+        extract_key_index_field(Bitwise.band(tag, 0x07), Bitwise.bsr(tag, 3), rest)
 
-      case wire_type do
-        0 ->
-          with {:ok, value, tail} <- decode_varint(rest) do
-            if field_num == 3, do: value, else: do_extract_key_index(tail)
-          else
-            _ -> nil
-          end
+      _ ->
+        nil
+    end
+  end
 
-        1 ->
-          if byte_size(rest) >= 8 do
-            <<_skip::binary-size(8), tail::binary>> = rest
-            do_extract_key_index(tail)
-          else
-            nil
-          end
+  defp extract_key_index_field(0, 3, rest) do
+    case decode_varint(rest) do
+      {:ok, value, _tail} -> value
+      _ -> nil
+    end
+  end
 
-        2 ->
-          with {:ok, len, tail} <- decode_varint(rest),
-               true <- byte_size(tail) >= len do
-            <<_value::binary-size(len), next::binary>> = tail
-            do_extract_key_index(next)
-          else
-            _ -> nil
-          end
+  defp extract_key_index_field(0, _field_num, rest) do
+    case decode_varint(rest) do
+      {:ok, _value, tail} -> do_extract_key_index(tail)
+      _ -> nil
+    end
+  end
 
-        5 ->
-          if byte_size(rest) >= 4 do
-            <<_skip::binary-size(4), tail::binary>> = rest
-            do_extract_key_index(tail)
-          else
-            nil
-          end
+  defp extract_key_index_field(1, _field_num, <<_skip::binary-size(8), tail::binary>>),
+    do: do_extract_key_index(tail)
 
-        _ ->
-          nil
-      end
+  defp extract_key_index_field(1, _field_num, _rest), do: nil
+
+  defp extract_key_index_field(2, _field_num, rest) do
+    with {:ok, len, tail} <- decode_varint(rest),
+         true <- byte_size(tail) >= len do
+      <<_value::binary-size(len), next::binary>> = tail
+      do_extract_key_index(next)
     else
       _ -> nil
     end
   end
+
+  defp extract_key_index_field(5, _field_num, <<_skip::binary-size(4), tail::binary>>),
+    do: do_extract_key_index(tail)
+
+  defp extract_key_index_field(5, _field_num, _rest), do: nil
+  defp extract_key_index_field(_wire_type, _field_num, _rest), do: nil
 
   defp decode_varint(binary), do: decode_varint(binary, 0, 0)
 
@@ -436,22 +419,11 @@ defmodule ExWapp.Pairing.ADV do
   end
 
   defp encode_self_signed(%ADVSignedDeviceIdentity{} = signed) do
-    require Logger
-
-    Logger.info(
-      "[ADV] encode_self_signed: details=#{byte_size(signed.details)}, acctSigKey=#{maybe_size(signed.accountSignatureKey)}, acctSig=#{maybe_size(signed.accountSignature)}, devSig=#{maybe_size(signed.deviceSignature)}"
-    )
-
-    with {:ok, result} <- encode_signed_device_identity(signed, include_signature_key: false) do
-      Logger.info("[ADV] encode_self_signed result: #{byte_size(result)} bytes")
-      {:ok, result}
-    else
+    case encode_signed_device_identity(signed, include_signature_key: false) do
+      {:ok, result} -> {:ok, result}
       {:error, reason} -> {:error, {:adv_self_signed_encode, reason}}
     end
   end
-
-  defp maybe_size(nil), do: 0
-  defp maybe_size(value) when is_binary(value), do: byte_size(value)
 
   defp ensure_binary_length(value, expected, _field)
        when is_binary(value) and byte_size(value) == expected,
