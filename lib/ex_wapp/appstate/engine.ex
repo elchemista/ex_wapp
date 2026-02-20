@@ -17,6 +17,7 @@ defmodule ExWapp.AppState.Engine do
   alias ExWapp.Proto.SyncAction.{
     SyncdPatch,
     SyncdMutation,
+    SyncdMutations,
     SyncdRecord,
     SyncActionData,
     SyncActionValue,
@@ -27,11 +28,17 @@ defmodule ExWapp.AppState.Engine do
     DeleteChatAction,
     MarkChatAsReadAction,
     ClearChatAction,
-    SyncActionMessageRange
+    SyncActionMessageRange,
+    ExternalBlobReference
   }
 
   alias ExWapp.Binary
   alias ExWapp.Store
+
+  @media_key_hkdf_info "WhatsApp App State Keys"
+  @appstate_media_mms_type "md-app-state"
+  @default_media_hosts ["mmg.whatsapp.net", "mmg-fallback.whatsapp.net"]
+  @media_hmac_length 10
 
   # ============================================================================
   # Collection names (matching whatsmeow appstate/keys.go)
@@ -91,11 +98,13 @@ defmodule ExWapp.AppState.Engine do
   @doc "Build a contact creation/update patch."
   @spec build_contact(String.t(), String.t(), String.t() | nil) :: patch_info()
   def build_contact(jid, full_name, first_name \\ nil) do
+    normalized_jid = normalize_contact_jid(jid)
+
     %{
       type: @collection_critical_unblock_low,
       mutations: [
         %{
-          index: ["contact", jid],
+          index: ["contact", normalized_jid],
           version: 2,
           value: %SyncActionValue{
             contact_action: %ContactAction{
@@ -112,11 +121,13 @@ defmodule ExWapp.AppState.Engine do
   @doc "Build a contact deletion patch (REMOVE operation)."
   @spec build_delete_contact(String.t()) :: patch_info()
   def build_delete_contact(jid) do
+    normalized_jid = normalize_contact_jid(jid)
+
     %{
       type: @collection_critical_unblock_low,
       mutations: [
         %{
-          index: ["contact", jid],
+          index: ["contact", normalized_jid],
           version: 2,
           value: %SyncActionValue{},
           operation: :remove
@@ -209,10 +220,11 @@ defmodule ExWapp.AppState.Engine do
   @spec build_delete_chat(String.t(), integer() | nil) :: patch_info()
   def build_delete_chat(jid, last_msg_ts \\ nil) do
     %{
-      type: @collection_regular,
+      type: @collection_regular_high,
       mutations: [
         %{
-          index: ["deleteChat", jid],
+          # Third index component is delete-media flag ("0" = keep media).
+          index: ["deleteChat", jid, "0"],
           version: 6,
           value: %SyncActionValue{
             delete_chat_action: %DeleteChatAction{
@@ -250,11 +262,12 @@ defmodule ExWapp.AppState.Engine do
   @spec build_clear_chat(String.t(), integer() | nil) :: patch_info()
   def build_clear_chat(jid, last_msg_ts \\ nil) do
     %{
-      type: @collection_regular,
+      type: @collection_regular_high,
       mutations: [
         %{
-          index: ["clearChat", jid],
-          version: 7,
+          # ["1","0"] matches web client shape (keep-starred disabled, keep-media disabled).
+          index: ["clearChat", jid, "1", "0"],
+          version: 6,
           value: %SyncActionValue{
             clear_chat_action: %ClearChatAction{
               message_range: build_message_range(last_msg_ts)
@@ -387,7 +400,7 @@ defmodule ExWapp.AppState.Engine do
       )
 
     %SyncdPatch{
-      version: version,
+      # WhatsApp web clients omit patch.version on outgoing mutations.
       mutations: mutations,
       snapshot_mac: snapshot_mac,
       patch_mac: patch_mac,
@@ -537,7 +550,7 @@ defmodule ExWapp.AppState.Engine do
         key_store,
         validate_macs \\ true
       ) do
-    with {:ok, patch_version} <- normalize_patch_version(patch.version),
+    with {:ok, patch_version} <- normalize_patch_version(patch.version, hash_state.version),
          {:ok, key_data} <- get_patch_key_data(patch, key_store),
          keys <- Crypto.expand_keys(key_data),
          {:ok, decoded_mutations} <- decode_mutations(patch.mutations, key_store, validate_macs),
@@ -580,6 +593,10 @@ defmodule ExWapp.AppState.Engine do
   @spec send_mutation(GenServer.server(), patch_info(), struct()) ::
           {:ok, hash_state(), map()} | {:error, term()}
   def send_mutation(session, patch_info, store) do
+    do_send_mutation(session, patch_info, store, true)
+  end
+
+  defp do_send_mutation(session, patch_info, store, allow_retry) do
     with {:ok, key_id, key_data} <- get_latest_app_state_key(store),
          {:ok, hash_state, mutation_macs} <-
            get_collection_state(store, patch_info.type),
@@ -613,7 +630,7 @@ defmodule ExWapp.AppState.Engine do
                   %Binary.Node{
                     tag: "patch",
                     attrs: %{},
-                    content: encoded_patch
+                    content: Binary.raw(encoded_patch)
                   }
                 ]
               }
@@ -624,16 +641,82 @@ defmodule ExWapp.AppState.Engine do
 
       # Send via session GenServer
       case GenServer.call(session, {:send_iq, iq_node, message_id}, 30_000) do
-        {:ok, _response} ->
-          persist_collection_state(store, collection_name, new_hash_state, new_mutation_macs)
-          apply_outgoing_patch(store, patch_info)
-          {:ok, new_hash_state, new_mutation_macs}
+        {:ok, response} ->
+          case validate_mutation_response(response, collection_name) do
+            :ok ->
+              persist_collection_state(store, collection_name, new_hash_state, new_mutation_macs)
+              apply_outgoing_patch(store, patch_info)
+              refresh_collection_after_mutation(session, store, collection_name)
+              {:ok, new_hash_state, new_mutation_macs}
+
+            {:error, {:conflict, _code}} when allow_retry ->
+              Logger.warning(
+                "[APP_STATE] Conflict while sending patch for #{collection_name}, applying conflict response and retrying once"
+              )
+
+              _ = apply_collection_response(store, collection_name, response, session)
+              do_send_mutation(session, patch_info, store, false)
+
+            {:error, reason} ->
+              {:error, {:app_state_update_failed, reason}}
+          end
 
         {:error, reason} ->
           {:error, {:iq_failed, reason}}
       end
     end
   end
+
+  defp refresh_collection_after_mutation(session, store, collection_name) do
+    spawn(fn ->
+      case fetch_collection(session, store, collection_name) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.debug(
+            "[APP_STATE] Post-mutation refresh failed for #{collection_name}: #{inspect(reason)}"
+          )
+      end
+    end)
+  end
+
+  defp validate_mutation_response(%Binary.Node{} = response, collection_name) do
+    case find_collection_node(response, collection_name) || find_first_collection_node(response) do
+      nil ->
+        {:error, :collection_not_found}
+
+      %Binary.Node{attrs: attrs} = collection_node ->
+        case Map.get(attrs, "type") do
+          "error" -> {:error, classify_collection_error(collection_node)}
+          _ -> :ok
+        end
+    end
+  end
+
+  defp validate_mutation_response(_response, _collection_name) do
+    {:error, :invalid_collection_response}
+  end
+
+  defp classify_collection_error(%Binary.Node{} = collection_node) do
+    case collection_error_code(collection_node) do
+      409 -> {:conflict, 409}
+      nil -> {:server_error, :unknown}
+      code -> {:server_error, code}
+    end
+  end
+
+  defp collection_error_code(%Binary.Node{content: children}) when is_list(children) do
+    Enum.find_value(children, fn
+      %Binary.Node{tag: "error", attrs: attrs} ->
+        parse_integer_attr(Map.get(attrs, "code"))
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp collection_error_code(_), do: nil
 
   @doc """
   Fetch and apply a single app state collection from the server.
@@ -660,7 +743,7 @@ defmodule ExWapp.AppState.Engine do
          snapshot? <- want_snapshot and hash_state.version == 0,
          {:ok, response} <-
            send_collection_fetch_iq(session, collection_name, hash_state.version, snapshot?),
-         {:ok, count} <- apply_collection_response(store, collection_name, response) do
+         {:ok, count} <- apply_collection_response(store, collection_name, response, session) do
       Logger.info("[APP_STATE] Applied #{count} mutations for #{collection_name}")
 
       :ok
@@ -673,12 +756,19 @@ defmodule ExWapp.AppState.Engine do
   @spec apply_collection_response(struct(), String.t(), Binary.Node.t()) ::
           {:ok, non_neg_integer()} | {:error, term()}
   def apply_collection_response(store, collection_name, response) do
+    apply_collection_response(store, collection_name, response, nil)
+  end
+
+  @spec apply_collection_response(struct(), String.t(), Binary.Node.t(), pid() | nil) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def apply_collection_response(store, collection_name, response, session) do
     with {:ok, collection_data} <- extract_collection_data(response, collection_name),
          {:ok, hash_state, mutation_macs} <- get_collection_state(store, collection_name),
          key_store <- store_key_data(store),
          {:ok, hash_state, mutation_macs, snapshot_count} <-
            maybe_apply_snapshot(
              store,
+             session,
              collection_name,
              collection_data.snapshot,
              key_store,
@@ -688,6 +778,7 @@ defmodule ExWapp.AppState.Engine do
          {:ok, hash_state, mutation_macs, patch_count} <-
            apply_patches(
              store,
+             session,
              collection_name,
              collection_data.patches,
              key_store,
@@ -766,6 +857,9 @@ defmodule ExWapp.AppState.Engine do
         dispatch_mute_mutation(store, operation, jid, action_value)
 
       ["deleteChat", jid] ->
+        dispatch_delete_chat_mutation(store, operation, jid)
+
+      ["deleteChat", jid, _delete_media] ->
         dispatch_delete_chat_mutation(store, operation, jid)
 
       ["markChatAsRead", jid] ->
@@ -920,10 +1014,16 @@ defmodule ExWapp.AppState.Engine do
       nil ->
         {:error, :collection_not_found}
 
-      %Binary.Node{content: children} ->
+      %Binary.Node{attrs: attrs, content: children} ->
         snapshot = find_child_binary(children, "snapshot")
         patches = extract_patch_binaries(children)
-        {:ok, %{snapshot: snapshot, patches: patches}}
+
+        {:ok,
+         %{
+           snapshot: snapshot,
+           patches: patches,
+           has_more_patches: parse_bool_attr(Map.get(attrs, "has_more_patches"))
+         }}
     end
   end
 
@@ -944,9 +1044,17 @@ defmodule ExWapp.AppState.Engine do
 
   defp find_collection_node(_node, _collection_name), do: nil
 
+  defp find_first_collection_node(%Binary.Node{tag: "collection"} = node), do: node
+
+  defp find_first_collection_node(%Binary.Node{content: children}) when is_list(children) do
+    Enum.find_value(children, &find_first_collection_node/1)
+  end
+
+  defp find_first_collection_node(_node), do: nil
+
   defp find_child_binary(children, tag) when is_list(children) do
     Enum.find_value(children, fn
-      %Binary.Node{tag: ^tag, content: value} when is_binary(value) -> value
+      %Binary.Node{tag: ^tag, content: value} -> binary_content(value)
       _ -> nil
     end)
   end
@@ -957,12 +1065,21 @@ defmodule ExWapp.AppState.Engine do
     Enum.flat_map(children, fn
       %Binary.Node{tag: "patches", content: patch_nodes} when is_list(patch_nodes) ->
         Enum.flat_map(patch_nodes, fn
-          %Binary.Node{tag: "patch", content: value} when is_binary(value) -> [value]
-          _ -> []
+          %Binary.Node{tag: "patch", content: value} ->
+            case binary_content(value) do
+              nil -> []
+              binary -> [binary]
+            end
+
+          _ ->
+            []
         end)
 
-      %Binary.Node{tag: "patch", content: value} when is_binary(value) ->
-        [value]
+      %Binary.Node{tag: "patch", content: value} ->
+        case binary_content(value) do
+          nil -> []
+          binary -> [binary]
+        end
 
       _ ->
         []
@@ -970,6 +1087,39 @@ defmodule ExWapp.AppState.Engine do
   end
 
   defp extract_patch_binaries(_children), do: []
+
+  defp binary_content(%Binary.Raw{data: data}) when is_binary(data), do: data
+  defp binary_content(data) when is_binary(data), do: data
+  defp binary_content(_), do: nil
+
+  defp parse_bool_attr(value) when is_boolean(value), do: value
+  defp parse_bool_attr(1), do: true
+  defp parse_bool_attr(0), do: false
+
+  defp parse_bool_attr(value) when is_binary(value) do
+    case String.downcase(String.trim(value)) do
+      "1" -> true
+      "true" -> true
+      "yes" -> true
+      "0" -> false
+      "false" -> false
+      "no" -> false
+      _ -> false
+    end
+  end
+
+  defp parse_bool_attr(_), do: false
+
+  defp parse_integer_attr(value) when is_integer(value), do: value
+
+  defp parse_integer_attr(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, _} -> parsed
+      :error -> nil
+    end
+  end
+
+  defp parse_integer_attr(_), do: nil
 
   defp store_key_data(store) do
     store
@@ -979,6 +1129,7 @@ defmodule ExWapp.AppState.Engine do
 
   defp maybe_apply_snapshot(
          _store,
+         _session,
          _collection_name,
          nil,
          _key_store,
@@ -988,8 +1139,8 @@ defmodule ExWapp.AppState.Engine do
     {:ok, hash_state, mutation_macs, 0}
   end
 
-  defp maybe_apply_snapshot(store, collection_name, snapshot_binary, key_store, _hs, _mm) do
-    with {:ok, snapshot} <- SyncAction.decode_syncd_snapshot(snapshot_binary),
+  defp maybe_apply_snapshot(store, session, collection_name, snapshot_binary, key_store, _hs, _mm) do
+    with {:ok, snapshot} <- decode_snapshot_payload(session, snapshot_binary),
          {:ok, version} <- normalize_patch_version(snapshot.version),
          {:ok, decoded} <- decode_snapshot_mutations(snapshot, key_store),
          {:ok, hash, macs} <-
@@ -998,7 +1149,12 @@ defmodule ExWapp.AppState.Engine do
       {:ok, %{version: version, hash: hash}, macs, length(decoded)}
     else
       {:error, reason}
-      when reason in [:invalid_length_delimited_field, :missing_snapshot_key_id] ->
+      when reason in [
+             :invalid_length_delimited_field,
+             :missing_snapshot_key_id,
+             :invalid_snapshot_payload,
+             :invalid_external_blob_reference
+           ] ->
         {:error, :snapshot_not_supported}
 
       {:error, reason} ->
@@ -1035,11 +1191,27 @@ defmodule ExWapp.AppState.Engine do
     end)
   end
 
-  defp apply_patches(store, collection_name, patches, key_store, hash_state, mutation_macs)
+  defp apply_patches(
+         store,
+         session,
+         collection_name,
+         patches,
+         key_store,
+         hash_state,
+         mutation_macs
+       )
        when is_list(patches) do
     Enum.reduce_while(patches, {:ok, hash_state, mutation_macs, 0}, fn patch_binary,
                                                                        {:ok, state, macs, count} ->
-      case apply_single_patch(store, collection_name, patch_binary, key_store, state, macs) do
+      case apply_single_patch(
+             store,
+             session,
+             collection_name,
+             patch_binary,
+             key_store,
+             state,
+             macs
+           ) do
         {:ok, decoded, new_state, new_macs} ->
           {:cont, {:ok, new_state, new_macs, count + length(decoded)}}
 
@@ -1049,13 +1221,285 @@ defmodule ExWapp.AppState.Engine do
     end)
   end
 
-  defp apply_single_patch(store, collection_name, patch_binary, key_store, state, macs) do
+  defp apply_single_patch(store, session, collection_name, patch_binary, key_store, state, macs) do
     with {:ok, patch} <- SyncAction.decode_syncd_patch(patch_binary),
+         {:ok, patch} <- maybe_resolve_external_patch_mutations(session, patch),
          {:ok, decoded, new_state, new_macs} <-
            decode_patch(patch, collection_name, state, macs, key_store, true) do
       dispatch_decoded_mutations(store, decoded)
       {:ok, decoded, new_state, new_macs}
     end
+  end
+
+  defp decode_snapshot_payload(_session, snapshot_binary) when not is_binary(snapshot_binary) do
+    {:error, :invalid_snapshot_payload}
+  end
+
+  defp decode_snapshot_payload(session, snapshot_binary) do
+    case SyncAction.decode_syncd_snapshot(snapshot_binary) do
+      {:ok, snapshot} ->
+        {:ok, snapshot}
+
+      {:error, _reason} ->
+        with {:ok, ref} <- SyncAction.decode_external_blob_reference(snapshot_binary),
+             {:ok, raw_snapshot} <- download_external_blob(session, ref),
+             {:ok, snapshot} <- SyncAction.decode_syncd_snapshot(raw_snapshot) do
+          {:ok, snapshot}
+        end
+    end
+  end
+
+  defp maybe_resolve_external_patch_mutations(
+         _session,
+         %SyncdPatch{external_mutations: nil} = patch
+       ) do
+    {:ok, patch}
+  end
+
+  defp maybe_resolve_external_patch_mutations(
+         session,
+         %SyncdPatch{external_mutations: %ExternalBlobReference{} = ref} = patch
+       ) do
+    with {:ok, raw_mutations} <- download_external_blob(session, ref),
+         {:ok, %SyncdMutations{mutations: mutations}} <-
+           SyncAction.decode_syncd_mutations(raw_mutations) do
+      {:ok, %{patch | mutations: mutations}}
+    end
+  end
+
+  defp maybe_resolve_external_patch_mutations(_session, %SyncdPatch{} = patch) do
+    {:ok, patch}
+  end
+
+  defp download_external_blob(session, %ExternalBlobReference{} = ref) do
+    with {:ok, direct_path} <- validate_external_direct_path(ref.direct_path),
+         {:ok, encrypted_payload} <-
+           download_external_blob_payload(session, direct_path, ref.file_enc_sha256) do
+      decrypt_external_blob_payload(ref.media_key, encrypted_payload)
+    end
+  end
+
+  defp download_external_blob(_session, _), do: {:error, :invalid_external_blob_reference}
+
+  defp validate_external_direct_path(path) when is_binary(path) do
+    trimmed = String.trim(path)
+    if trimmed == "", do: {:error, :missing_external_blob_path}, else: {:ok, trimmed}
+  end
+
+  defp validate_external_direct_path(_), do: {:error, :missing_external_blob_path}
+
+  defp download_external_blob_payload(session, direct_path, file_enc_sha256) do
+    hosts = media_download_hosts(session)
+
+    Enum.reduce_while(hosts, {:error, :external_blob_download_failed}, fn host, _acc ->
+      case http_get_binary(build_external_blob_url(host, direct_path, file_enc_sha256)) do
+        {:ok, body} ->
+          {:halt, {:ok, body}}
+
+        {:error, reason} ->
+          Logger.debug(
+            "[APP_STATE] External blob download failed from #{host}: #{inspect(reason)}"
+          )
+
+          {:cont, {:error, reason}}
+      end
+    end)
+  end
+
+  defp media_download_hosts(session) do
+    queried_hosts =
+      case query_media_conn_hosts(session) do
+        {:ok, hosts} when is_list(hosts) -> hosts
+        _ -> []
+      end
+
+    (queried_hosts ++ @default_media_hosts)
+    |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+    |> Enum.uniq()
+  end
+
+  defp query_media_conn_hosts(session) when is_pid(session) do
+    if Process.alive?(session) do
+      message_id = generate_request_id()
+
+      iq_node = %Binary.Node{
+        tag: "iq",
+        attrs: %{
+          "id" => message_id,
+          "xmlns" => "w:m",
+          "type" => "set",
+          "to" => "s.whatsapp.net"
+        },
+        content: [
+          %Binary.Node{
+            tag: "media_conn",
+            attrs: %{},
+            content: nil
+          }
+        ]
+      }
+
+      case GenServer.call(session, {:send_iq, iq_node, message_id}, 30_000) do
+        {:ok, response} -> parse_media_conn_hosts(response)
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:error, :invalid_session}
+    end
+  end
+
+  defp query_media_conn_hosts(_), do: {:error, :invalid_session}
+
+  defp parse_media_conn_hosts(%Binary.Node{} = response) do
+    case find_media_conn_node(response) do
+      %Binary.Node{content: children} when is_list(children) ->
+        hosts =
+          children
+          |> Enum.flat_map(fn
+            %Binary.Node{tag: "host", attrs: attrs} ->
+              case Map.get(attrs, "hostname") do
+                host when is_binary(host) and host != "" -> [host]
+                _ -> []
+              end
+
+            _ ->
+              []
+          end)
+          |> Enum.uniq()
+
+        if hosts == [], do: {:error, :no_media_hosts}, else: {:ok, hosts}
+
+      _ ->
+        {:error, :media_conn_not_found}
+    end
+  end
+
+  defp parse_media_conn_hosts(_), do: {:error, :invalid_media_conn_response}
+
+  defp find_media_conn_node(%Binary.Node{tag: "media_conn"} = node), do: node
+
+  defp find_media_conn_node(%Binary.Node{content: children}) when is_list(children) do
+    Enum.find_value(children, &find_media_conn_node/1)
+  end
+
+  defp find_media_conn_node(_), do: nil
+
+  defp build_external_blob_url(_host, direct_path, _file_enc_sha256)
+       when direct_path in [nil, ""] do
+    direct_path
+  end
+
+  defp build_external_blob_url(_host, <<"https://", _::binary>> = direct_path, _file_enc_sha256) do
+    direct_path
+  end
+
+  defp build_external_blob_url(_host, <<"http://", _::binary>> = direct_path, _file_enc_sha256) do
+    direct_path
+  end
+
+  defp build_external_blob_url(host, direct_path, file_enc_sha256) do
+    direct_path =
+      if String.starts_with?(direct_path, "/"), do: direct_path, else: "/" <> direct_path
+
+    separator = if String.contains?(direct_path, "?"), do: "&", else: "?"
+
+    hash_param =
+      case file_enc_sha256 do
+        bin when is_binary(bin) and byte_size(bin) > 0 -> Base.url_encode64(bin, padding: false)
+        _ -> ""
+      end
+
+    "https://#{host}#{direct_path}#{separator}hash=#{hash_param}&mms-type=#{@appstate_media_mms_type}&__wa-mms="
+  end
+
+  defp http_get_binary(url) when is_binary(url) and url != "" do
+    _ = Application.ensure_all_started(:inets)
+    _ = Application.ensure_all_started(:ssl)
+
+    headers = [
+      {~c"Origin", ~c"https://web.whatsapp.com"},
+      {~c"Referer", ~c"https://web.whatsapp.com/"},
+      {~c"User-Agent", ~c"Mozilla/5.0"}
+    ]
+
+    request = {String.to_charlist(url), headers}
+    http_opts = [timeout: 15_000, connect_timeout: 10_000]
+
+    case :httpc.request(:get, request, http_opts, body_format: :binary) do
+      {:ok, {{_http_version, 200, _reason}, _resp_headers, body}} when is_binary(body) ->
+        {:ok, body}
+
+      {:ok, {{_http_version, status, _reason}, _resp_headers, body}} ->
+        {:error, {:http_status, status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp http_get_binary(_), do: {:error, :invalid_external_blob_url}
+
+  defp decrypt_external_blob_payload(nil, payload) when is_binary(payload), do: {:ok, payload}
+
+  defp decrypt_external_blob_payload(media_key, payload)
+       when is_binary(media_key) and is_binary(payload) do
+    if byte_size(payload) <= @media_hmac_length do
+      {:error, :external_blob_payload_too_short}
+    else
+      ciphertext_len = byte_size(payload) - @media_hmac_length
+      <<ciphertext::binary-size(ciphertext_len), mac::binary-size(@media_hmac_length)>> = payload
+
+      with {:ok, iv, cipher_key, mac_key} <- derive_external_blob_keys(media_key),
+           :ok <- verify_external_blob_mac(iv, ciphertext, mac_key, mac),
+           {:ok, plaintext} <- Crypto.decrypt_cbc(ciphertext, cipher_key, iv) do
+        {:ok, plaintext}
+      end
+    end
+  end
+
+  defp decrypt_external_blob_payload(_media_key, _payload),
+    do: {:error, :invalid_external_blob_key}
+
+  defp derive_external_blob_keys(media_key)
+       when is_binary(media_key) and byte_size(media_key) > 0 do
+    expanded = hkdf_sha256(media_key, <<>>, @media_key_hkdf_info, 112)
+    iv = binary_part(expanded, 0, 16)
+    cipher_key = binary_part(expanded, 16, 32)
+    mac_key = binary_part(expanded, 48, 32)
+    {:ok, iv, cipher_key, mac_key}
+  end
+
+  defp derive_external_blob_keys(_), do: {:error, :invalid_external_blob_key}
+
+  defp verify_external_blob_mac(iv, ciphertext, mac_key, mac)
+       when is_binary(iv) and is_binary(ciphertext) and is_binary(mac_key) and is_binary(mac) do
+    expected =
+      :crypto.mac(:hmac, :sha256, mac_key, [iv, ciphertext])
+      |> binary_part(0, @media_hmac_length)
+
+    if expected == mac, do: :ok, else: {:error, :invalid_external_blob_mac}
+  end
+
+  defp verify_external_blob_mac(_, _, _, _), do: {:error, :invalid_external_blob_mac}
+
+  defp hkdf_sha256(ikm, <<>>, info, length),
+    do: hkdf_sha256(ikm, :binary.copy(<<0>>, 32), info, length)
+
+  defp hkdf_sha256(ikm, salt, info, length) do
+    prk = :crypto.mac(:hmac, :sha256, salt, ikm)
+    hkdf_expand(prk, info, length)
+  end
+
+  defp hkdf_expand(prk, info, length) do
+    n = ceil(length / 32)
+
+    {output, _} =
+      Enum.reduce(1..n, {<<>>, <<>>}, fn i, {acc, prev} ->
+        t = :crypto.mac(:hmac, :sha256, prk, prev <> info <> <<i::8>>)
+        {acc <> t, t}
+      end)
+
+    binary_part(output, 0, length)
   end
 
   defp build_snapshot_mutations(snapshot) do
@@ -1095,6 +1539,18 @@ defmodule ExWapp.AppState.Engine do
   end
 
   defp normalize_patch_version(_version), do: {:error, :invalid_patch_version}
+
+  defp normalize_patch_version(version, _current_version)
+       when is_integer(version) and version >= 0 do
+    {:ok, version}
+  end
+
+  defp normalize_patch_version(nil, current_version)
+       when is_integer(current_version) and current_version >= 0 do
+    {:ok, current_version + 1}
+  end
+
+  defp normalize_patch_version(_version, _current_version), do: {:error, :invalid_patch_version}
 
   defp get_patch_key_data(%SyncdPatch{key_id: key_id}, key_store) when is_binary(key_id) do
     key_id_hex = Base.encode16(key_id, case: :lower)
@@ -1234,6 +1690,27 @@ defmodule ExWapp.AppState.Engine do
       last_message_timestamp: timestamp
     }
   end
+
+  defp normalize_contact_jid(jid) when is_binary(jid) do
+    jid = String.trim(jid)
+
+    case String.split(jid, "@", parts: 2) do
+      [user, domain] ->
+        normalized_domain =
+          case String.downcase(domain) do
+            "whatsapp.net" -> "s.whatsapp.net"
+            "s.whatsapp.net" -> "s.whatsapp.net"
+            other -> other
+          end
+
+        "#{String.trim_leading(user, "+")}@#{normalized_domain}"
+
+      [user] ->
+        "#{String.trim_leading(user, "+")}@s.whatsapp.net"
+    end
+  end
+
+  defp normalize_contact_jid(jid), do: jid |> to_string() |> normalize_contact_jid()
 
   defp generate_request_id do
     :crypto.strong_rand_bytes(16) |> Base.encode64() |> String.slice(0, 16)

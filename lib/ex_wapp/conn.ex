@@ -200,14 +200,14 @@ defmodule ExWapp.Conn do
       {:error, reason} ->
         Logger.error("cannot send node: #{inspect(reason)}")
         notify_session(state.session, {:error, reason})
-        {:noreply, state}
+        {:ok, state}
     end
   end
 
   @doc false
   def handle_cast({:send_node, _node}, state) do
     Logger.warning("dropping outbound node before Noise handshake completes")
-    {:noreply, state}
+    {:ok, state}
   end
 
   @doc false

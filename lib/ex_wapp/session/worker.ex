@@ -44,6 +44,7 @@ defmodule ExWapp.Session.Worker do
   use GenServer
   require Logger
 
+  alias ExWapp.AppState.Engine
   alias ExWapp.{Binary, Pairing, Store, Telemetry}
 
   alias ExWapp.Session.{InboundRouter, JIDUtils, OutboundQueue}
@@ -92,6 +93,7 @@ defmodule ExWapp.Session.Worker do
     signal_sessions: nil,
     retry_counters: %{},
     outbound_confirmations: %{},
+    app_state_initial_sync_requested: false,
     prekey_count_query_id: nil,
     stats: %{
       messages_sent: 0,
@@ -121,6 +123,7 @@ defmodule ExWapp.Session.Worker do
           reconnect_attempts: non_neg_integer(),
           last_disconnect_reason: term() | nil,
           connected_at: DateTime.t() | nil,
+          app_state_initial_sync_requested: boolean(),
           retry_counters: map(),
           outbound_confirmations: map(),
           stats: map()
@@ -262,6 +265,10 @@ defmodule ExWapp.Session.Worker do
       error -> error
     end
   end
+
+  @doc "Fetch and apply the contact app-state collection (`critical_unblock_low`)."
+  @spec sync_contacts(GenServer.server()) :: :ok | {:error, term()}
+  def sync_contacts(server), do: GenServer.call(server, :sync_contacts, 30_000)
 
   @doc "List all contacts."
   @spec list_contacts(GenServer.server()) :: [ExWapp.Contact.t()]
@@ -476,20 +483,68 @@ defmodule ExWapp.Session.Worker do
 
   # ── App State Sync Operations ──
 
-  def handle_call({:app_state_mutation, patch_info}, _from, %{status: :connected} = state) do
+  def handle_call({:app_state_mutation, patch_info}, from, %{status: :connected} = state) do
     session_pid = self()
 
-    result =
-      try do
-        ExWapp.AppState.Engine.send_mutation(session_pid, patch_info, state.store)
-      rescue
-        e -> {:error, {:exception, e}}
-      end
+    # Spawn a worker to avoid deadlock: send_mutation calls GenServer.call(session, {:send_iq, ...})
+    # which would deadlock if run inside handle_call of the same GenServer.
+    case start_send_worker(
+           state,
+           "app_state_mutation",
+           fn ->
+             try do
+               ExWapp.AppState.Engine.send_mutation(session_pid, patch_info, state.store)
+             rescue
+               e -> {:error, {:exception, e}}
+             end
+           end,
+           from
+         ) do
+      {:ok, worker, mon} ->
+        new_state =
+          state
+          |> Map.update(:send_workers, %{worker => "app_state"}, fn workers ->
+            Map.put(workers, worker, "app_state")
+          end)
+          |> Map.update(:send_worker_mons, %{mon => worker}, fn mons ->
+            Map.put(mons, mon, worker)
+          end)
 
-    {:reply, result, state}
+        {:noreply, new_state}
+
+      {:error, reason} ->
+        {:reply, {:error, {:send_worker_start_failed, reason}}, state}
+    end
   end
 
   def handle_call({:app_state_mutation, _patch_info}, _from, state) do
+    {:reply, {:error, {:not_connected, state.status}}, state}
+  end
+
+  def handle_call(:sync_contacts, from, %{status: :connected} = state) do
+    session_pid = self()
+
+    case start_send_worker(
+           state,
+           "app_state_sync_contacts",
+           fn ->
+             try do
+               Engine.fetch_collection(session_pid, state.store, "critical_unblock_low")
+             rescue
+               e -> {:error, {:exception, e}}
+             end
+           end,
+           from
+         ) do
+      {:ok, worker, mon} ->
+        {:noreply, register_send_worker(state, worker, mon, "app_state_sync_contacts")}
+
+      {:error, reason} ->
+        {:reply, {:error, {:send_worker_start_failed, reason}}, state}
+    end
+  end
+
+  def handle_call(:sync_contacts, _from, state) do
     {:reply, {:error, {:not_connected, state.status}}, state}
   end
 
@@ -685,11 +740,19 @@ defmodule ExWapp.Session.Worker do
     {:noreply, state}
   end
 
+  def handle_info(
+        {:app_state_initial_sync, _collection_names},
+        %{status: :connected, app_state_initial_sync_requested: true} = state
+      ) do
+    Logger.debug("[APP_STATE] Initial sync already requested for this connection, skipping")
+    {:noreply, state}
+  end
+
   def handle_info({:app_state_initial_sync, collection_names}, %{status: :connected} = state)
       when is_list(collection_names) do
     refresh_app_state_collections(self(), state.store, collection_names, :initial)
 
-    {:noreply, state}
+    {:noreply, %{state | app_state_initial_sync_requested: true}}
   end
 
   def handle_info({:app_state_sync_collections, _}, state) do
@@ -842,7 +905,7 @@ defmodule ExWapp.Session.Worker do
 
   defp do_disconnect(%__MODULE__{conn: nil} = state, _reason) do
     OutboundQueue.clear_conn(state.outbound_queue)
-    state
+    %{state | app_state_initial_sync_requested: false}
   end
 
   defp do_disconnect(%__MODULE__{conn: conn, conn_ref: ref} = state, reason) do
@@ -866,7 +929,8 @@ defmodule ExWapp.Session.Worker do
         conn_ref: nil,
         status: :disconnected,
         last_disconnect_reason: reason,
-        connected_at: nil
+        connected_at: nil,
+        app_state_initial_sync_requested: false
     }
   end
 
@@ -881,7 +945,8 @@ defmodule ExWapp.Session.Worker do
       conn_ref: nil,
       status: :disconnected,
       last_disconnect_reason: reason,
-      connected_at: nil
+      connected_at: nil,
+      app_state_initial_sync_requested: false
     })
     |> update_stats(:reconnects)
     |> then(fn s ->
@@ -964,7 +1029,7 @@ defmodule ExWapp.Session.Worker do
   # ============================================================================
 
   defp handle_connection_event({:noise, :handshake_started}, state) do
-    %{state | status: :handshaking}
+    %{state | status: :handshaking, app_state_initial_sync_requested: false}
   end
 
   defp handle_connection_event({:transport, :connected}, state) do
@@ -980,7 +1045,15 @@ defmodule ExWapp.Session.Worker do
     emit_telemetry(:connected, %{}, state)
     Subscribers.broadcast_lifecycle(state.session_id, {:ex_wapp_session, :connected})
 
-    %{state | status: :connected, reconnect_attempts: 0, connected_at: DateTime.utc_now()}
+    state =
+      %{
+        state
+        | status: :connected,
+          reconnect_attempts: 0,
+          connected_at: DateTime.utc_now()
+      }
+
+    maybe_schedule_initial_app_state_sync(state)
   end
 
   defp handle_connection_event({:connection_message, %Binary.Node{} = node}, state) do
@@ -1192,6 +1265,28 @@ defmodule ExWapp.Session.Worker do
   # ============================================================================
   # App State Sync
   # ============================================================================
+
+  defp maybe_schedule_initial_app_state_sync(state) do
+    if has_app_state_keys?(state.store) do
+      Logger.info(
+        "[APP_STATE] Existing keys found on connect, scheduling initial collection fetch"
+      )
+
+      send(self(), {:app_state_initial_sync, Engine.all_collections()})
+    end
+
+    state
+  end
+
+  defp has_app_state_keys?(store) do
+    store
+    |> Store.load!()
+    |> Map.get(:app_state_keys, %{})
+    |> map_size()
+    |> Kernel.>(0)
+  rescue
+    _ -> false
+  end
 
   defp refresh_app_state_collections(session_pid, store, collection_names, source) do
     names =

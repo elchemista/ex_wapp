@@ -40,6 +40,12 @@ defmodule ExWapp.AppState.EngineTest do
       [mutation] = patch.mutations
       assert mutation.value.contact_action.first_name == "John Doe"
     end
+
+    test "normalizes contact jid by stripping + and normalizing domain" do
+      patch = Engine.build_contact("+1234@whatsapp.net", "John Doe")
+      [mutation] = patch.mutations
+      assert mutation.index == ["contact", "1234@s.whatsapp.net"]
+    end
   end
 
   describe "build_delete_contact/1" do
@@ -50,6 +56,12 @@ defmodule ExWapp.AppState.EngineTest do
       [mutation] = patch.mutations
       assert mutation.index == ["contact", "1234@s.whatsapp.net"]
       assert mutation.operation == :remove
+    end
+
+    test "normalizes contact jid before delete mutation" do
+      patch = Engine.build_delete_contact("+1234@whatsapp.net")
+      [mutation] = patch.mutations
+      assert mutation.index == ["contact", "1234@s.whatsapp.net"]
     end
   end
 
@@ -122,9 +134,9 @@ defmodule ExWapp.AppState.EngineTest do
     test "builds delete chat patch" do
       patch = Engine.build_delete_chat("1234@s.whatsapp.net")
 
-      assert patch.type == "regular"
+      assert patch.type == "regular_high"
       [mutation] = patch.mutations
-      assert mutation.index == ["deleteChat", "1234@s.whatsapp.net"]
+      assert mutation.index == ["deleteChat", "1234@s.whatsapp.net", "0"]
       assert mutation.version == 6
     end
   end
@@ -144,10 +156,10 @@ defmodule ExWapp.AppState.EngineTest do
     test "builds clear chat patch" do
       patch = Engine.build_clear_chat("1234@s.whatsapp.net")
 
-      assert patch.type == "regular"
+      assert patch.type == "regular_high"
       [mutation] = patch.mutations
-      assert mutation.index == ["clearChat", "1234@s.whatsapp.net"]
-      assert mutation.version == 7
+      assert mutation.index == ["clearChat", "1234@s.whatsapp.net", "1", "0"]
+      assert mutation.version == 6
     end
   end
 
@@ -186,7 +198,7 @@ defmodule ExWapp.AppState.EngineTest do
       # Decode the protobuf back
       {:ok, decoded_patch} = SyncAction.decode_syncd_patch(encoded)
 
-      assert decoded_patch.version == 6
+      assert decoded_patch.version == nil
       assert length(decoded_patch.mutations) == 1
       assert is_binary(decoded_patch.snapshot_mac)
       assert is_binary(decoded_patch.patch_mac)
@@ -463,11 +475,86 @@ defmodule ExWapp.AppState.EngineTest do
       assert {:error, :not_found} = ExWapp.Chat.get(store, "1234@s.whatsapp.net")
     end
 
+    test "dispatches delete chat action with delete-media index", %{store: store} do
+      ExWapp.Chat.get_or_create(store, "1234@s.whatsapp.net")
+
+      action = %SyncActionValue{
+        delete_chat_action: %DeleteChatAction{}
+      }
+
+      Engine.dispatch_mutation(store, ["deleteChat", "1234@s.whatsapp.net", "1"], action)
+
+      assert {:error, :not_found} = ExWapp.Chat.get(store, "1234@s.whatsapp.net")
+    end
+
     test "returns :ignored for unknown index" do
       store = ExWapp.Store.new(ExWapp.Store.Memory)
 
       assert :ignored =
                Engine.dispatch_mutation(store, ["unknown_action", "jid"], %SyncActionValue{})
+    end
+  end
+
+  describe "apply_collection_response/3" do
+    test "applies patch payloads wrapped in Binary.Raw" do
+      store = ExWapp.Store.new(ExWapp.Store.Memory)
+      key_id = :crypto.strong_rand_bytes(16)
+      key_data = :crypto.strong_rand_bytes(32)
+      key_hex = Base.encode16(key_id, case: :lower)
+
+      data = ExWapp.Store.load!(store)
+
+      ExWapp.Store.persist(
+        store,
+        Map.put(data, :app_state_keys, %{key_hex => %{data: key_data, timestamp: 1}})
+      )
+
+      patch_info = Engine.build_contact("1234@s.whatsapp.net", "Alice Example")
+
+      {:ok, encoded_patch, _new_hash_state, _new_mutation_macs} =
+        Engine.encode_patch(
+          patch_info,
+          key_id,
+          key_data,
+          %{version: 0, hash: LTHash.new()},
+          %{}
+        )
+
+      response = %ExWapp.Binary.Node{
+        tag: "iq",
+        attrs: %{"type" => "result"},
+        content: [
+          %ExWapp.Binary.Node{
+            tag: "sync",
+            attrs: %{},
+            content: [
+              %ExWapp.Binary.Node{
+                tag: "collection",
+                attrs: %{"name" => "critical_unblock_low", "version" => "0"},
+                content: [
+                  %ExWapp.Binary.Node{
+                    tag: "patches",
+                    attrs: %{},
+                    content: [
+                      %ExWapp.Binary.Node{
+                        tag: "patch",
+                        attrs: %{},
+                        content: ExWapp.Binary.raw(encoded_patch)
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+
+      assert {:ok, 1} = Engine.apply_collection_response(store, "critical_unblock_low", response)
+
+      contact = ExWapp.Contact.get(store, "1234@s.whatsapp.net")
+      assert contact != nil
+      assert contact.full_name == "Alice Example"
     end
   end
 end

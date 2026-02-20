@@ -18,14 +18,19 @@ defmodule ExWapp.Proto.SyncAction do
   # waServerSync.SyncdPatch
   # Field 1: version (SyncdVersion, submessage)
   # Field 2: mutations (repeated SyncdMutation)
-  # Field 3: externalMutations (ExternalBlobReference) — skipped for now
+  # Field 3: externalMutations (ExternalBlobReference)
   # Field 4: snapshotMAC (bytes)
   # Field 5: patchMAC (bytes)
   # Field 6: keyID (KeyId, submessage)
 
   defmodule SyncdPatch do
     @moduledoc false
-    defstruct version: nil, mutations: [], snapshot_mac: nil, patch_mac: nil, key_id: nil
+    defstruct version: nil,
+              mutations: [],
+              external_mutations: nil,
+              snapshot_mac: nil,
+              patch_mac: nil,
+              key_id: nil
   end
 
   defmodule SyncdMutation do
@@ -42,6 +47,11 @@ defmodule ExWapp.Proto.SyncAction do
   defmodule SyncdSnapshot do
     @moduledoc false
     defstruct version: nil, records: [], mac: nil, key_id: nil
+  end
+
+  defmodule SyncdMutations do
+    @moduledoc false
+    defstruct mutations: []
   end
 
   defmodule SyncActionData do
@@ -142,7 +152,12 @@ defmodule ExWapp.Proto.SyncAction do
 
   defmodule ExternalBlobReference do
     @moduledoc false
-    defstruct media_key: nil, direct_path: nil, handle: nil, file_size_bytes: nil
+    defstruct media_key: nil,
+              direct_path: nil,
+              handle: nil,
+              file_size_bytes: nil,
+              file_sha256: nil,
+              file_enc_sha256: nil
   end
 
   # ══════════════════════════════════════════════════════════════
@@ -154,6 +169,7 @@ defmodule ExWapp.Proto.SyncAction do
     []
     |> encode_submessage(1, encode_syncd_version(patch.version))
     |> encode_repeated_submessage(2, patch.mutations, &encode_syncd_mutation/1)
+    |> encode_submessage(3, encode_external_blob_reference(patch.external_mutations))
     |> encode_bytes(4, patch.snapshot_mac)
     |> encode_bytes(5, patch.patch_mac)
     |> encode_submessage(6, encode_key_id(patch.key_id))
@@ -207,6 +223,19 @@ defmodule ExWapp.Proto.SyncAction do
 
   defp encode_key_id(nil), do: nil
   defp encode_key_id(id) when is_binary(id), do: encode_bytes([], 1, id) |> IO.iodata_to_binary()
+
+  defp encode_external_blob_reference(nil), do: nil
+
+  defp encode_external_blob_reference(%ExternalBlobReference{} = ref) do
+    []
+    |> encode_bytes(1, ref.media_key)
+    |> encode_string(2, ref.direct_path)
+    |> encode_string(3, ref.handle)
+    |> encode_varint_field(4, ref.file_size_bytes)
+    |> encode_bytes(5, ref.file_sha256)
+    |> encode_bytes(6, ref.file_enc_sha256)
+    |> IO.iodata_to_binary()
+  end
 
   defp encode_sync_action_value(nil), do: nil
 
@@ -333,6 +362,7 @@ defmodule ExWapp.Proto.SyncAction do
        %SyncdPatch{
          version: decode_version_field(first_field(fields, 1, 2)),
          mutations: mutations,
+         external_mutations: decode_sub(fields, 3, &decode_external_blob_reference/1),
          snapshot_mac: first_field(fields, 4, 2),
          patch_mac: first_field(fields, 5, 2),
          key_id: decode_key_id_field(first_field(fields, 6, 2))
@@ -356,6 +386,19 @@ defmodule ExWapp.Proto.SyncAction do
          mac: first_field(fields, 3, 2),
          key_id: decode_key_id_field(first_field(fields, 4, 2))
        }}
+    end
+  end
+
+  @doc "Decode SyncdMutations from binary protobuf."
+  @spec decode_syncd_mutations(binary()) :: {:ok, %SyncdMutations{}} | {:error, term()}
+  def decode_syncd_mutations(data) when is_binary(data) do
+    with {:ok, fields} <- decode_wire_fields(data) do
+      mutations =
+        fields
+        |> all_fields(1, 2)
+        |> Enum.map(&decode_syncd_mutation_fields/1)
+
+      {:ok, %SyncdMutations{mutations: mutations}}
     end
   end
 
@@ -414,6 +457,23 @@ defmodule ExWapp.Proto.SyncAction do
         |> Enum.reject(&is_nil/1)
 
       {:ok, %AppStateSyncKeyShare{keys: keys}}
+    end
+  end
+
+  @doc "Decode ExternalBlobReference from binary protobuf."
+  @spec decode_external_blob_reference(binary()) ::
+          {:ok, %ExternalBlobReference{}} | {:error, term()}
+  def decode_external_blob_reference(data) when is_binary(data) do
+    with {:ok, fields} <- decode_wire_fields(data) do
+      {:ok,
+       %ExternalBlobReference{
+         media_key: first_field(fields, 1, 2),
+         direct_path: first_field(fields, 2, 2),
+         handle: first_field(fields, 3, 2),
+         file_size_bytes: first_field(fields, 4, 0),
+         file_sha256: first_field(fields, 5, 2),
+         file_enc_sha256: first_field(fields, 6, 2)
+       }}
     end
   end
 

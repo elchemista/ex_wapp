@@ -4,6 +4,14 @@ defmodule ExWappTest do
   alias ExWapp.Session
   alias ExWapp.Session.Supervisor, as: SessionSupervisor
 
+  defmodule FakeTransport do
+    def start_link(_opts) do
+      {:ok, spawn_link(fn -> Process.sleep(:infinity) end)}
+    end
+
+    def send_node(_conn, _node), do: :ok
+  end
+
   describe "Session lifecycle" do
     test "starts in idle state" do
       {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
@@ -27,6 +35,107 @@ defmodule ExWappTest do
       Process.sleep(10)
       assert ExWapp.state(session) == :idle
       GenServer.stop(session)
+    end
+  end
+
+  describe "App state sync stability" do
+    test "app-state mutation request on connected session does not crash" do
+      key_id_hex = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+      key_data = :crypto.strong_rand_bytes(32)
+
+      {:ok, session} =
+        ExWapp.start_link(
+          reconnect: false,
+          store:
+            {ExWapp.Store.Memory,
+             initial_data: %{
+               app_state_keys: %{
+                 key_id_hex => %{data: key_data, timestamp: 1}
+               }
+             }}
+        )
+
+      send(session, {:connection_event, {:noise, :handshake_completed}})
+      assert eventually(fn -> ExWapp.state(session) == :connected end)
+
+      assert {:error, _reason} = ExWapp.unarchive_chat(session, "120363424063038804@g.us")
+      assert Process.alive?(session)
+
+      GenServer.stop(session)
+    end
+
+    test "sync_contacts returns not_connected when session is idle" do
+      {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
+
+      assert {:error, {:not_connected, :idle}} = ExWapp.sync_contacts(session)
+
+      GenServer.stop(session)
+    end
+
+    test "initial app-state sync from persisted keys is requested once per connection cycle" do
+      key_id_hex = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+      key_data = :crypto.strong_rand_bytes(32)
+
+      {:ok, session} =
+        ExWapp.start_link(
+          reconnect: false,
+          transport: FakeTransport,
+          store:
+            {ExWapp.Store.Memory,
+             initial_data: %{
+               app_state_keys: %{
+                 key_id_hex => %{data: key_data, timestamp: 1}
+               }
+             }}
+        )
+
+      conn = spawn_link(fn -> Process.sleep(:infinity) end)
+
+      :sys.replace_state(session, fn state ->
+        %{state | conn: conn, status: :handshaking, app_state_initial_sync_requested: false}
+      end)
+
+      send(session, {:connection_event, {:noise, :handshake_completed}})
+
+      assert eventually(fn ->
+               state = :sys.get_state(session)
+
+               state.app_state_initial_sync_requested and map_size(state.pending_iqs) > 0
+             end)
+
+      first_pending_count = map_size(:sys.get_state(session).pending_iqs)
+
+      send(session, {:connection_event, {:noise, :handshake_completed}})
+      Process.sleep(50)
+
+      state_after_duplicate = :sys.get_state(session)
+      assert state_after_duplicate.app_state_initial_sync_requested
+      assert map_size(state_after_duplicate.pending_iqs) == first_pending_count
+
+      send(session, {:connection_event, {:transport, {:closed, :test}}})
+
+      assert eventually(fn ->
+               state = :sys.get_state(session)
+
+               state.app_state_initial_sync_requested == false and
+                 map_size(state.pending_iqs) == 0
+             end)
+
+      :sys.replace_state(session, fn state ->
+        %{state | conn: conn, status: :handshaking}
+      end)
+
+      send(session, {:connection_event, {:noise, :handshake_completed}})
+
+      assert eventually(fn ->
+               state = :sys.get_state(session)
+
+               state.app_state_initial_sync_requested and
+                 map_size(state.pending_iqs) > 0
+             end)
+
+      GenServer.stop(session)
+      Process.exit(conn, :kill)
     end
   end
 
@@ -252,6 +361,27 @@ defmodule ExWappTest do
       :ok = SessionSupervisor.stop_session(session_id)
       Process.sleep(10)
       refute SessionSupervisor.session_exists?(session_id)
+    end
+  end
+
+  defp eventually(fun, attempts \\ 80)
+  defp eventually(_fun, 0), do: false
+
+  defp eventually(fun, attempts) when is_function(fun, 0) and attempts > 0 do
+    result =
+      try do
+        fun.()
+      rescue
+        _ -> false
+      catch
+        :exit, _ -> false
+      end
+
+    if result do
+      true
+    else
+      Process.sleep(10)
+      eventually(fun, attempts - 1)
     end
   end
 end
