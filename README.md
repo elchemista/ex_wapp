@@ -86,6 +86,7 @@ ExWapp.Live.send_message(session, "393XXXXXXXXX@s.whatsapp.net", "hello from ex_
 ExWapp.Live.send_message(session, "1234567890-123456789@g.us", "hello group")
 
 # Read stored chat messages
+# (local projection only; full historical blob backfill is not implemented yet)
 ExWapp.Live.get_messages(session, "393XXXXXXXXX@s.whatsapp.net", limit: 20)
 
 # Subscribe to messages + lifecycle events via PubSub
@@ -167,9 +168,11 @@ When connected, changes propagate to linked devices.
 
 ```elixir
 # Contact actions
+# server-synced contact upsert (there is no sync_contact/* API)
 :ok = ExWapp.create_contact(session, "393XXXXXXXXX@s.whatsapp.net", "Alice Example")
 :ok = ExWapp.delete_contact(session, "393XXXXXXXXX@s.whatsapp.net")
 
+:ok = ExWapp.sync_contacts(session)
 contacts = ExWapp.list_contacts(session)
 contact = ExWapp.get_contact(session, "393XXXXXXXXX@s.whatsapp.net")
 ```
@@ -181,6 +184,17 @@ Notes:
   the session is not connected.
 - contact APIs (`create_contact/3`, `delete_contact/2`, `list_contacts/1`,
   `get_contact/2`) are available directly from `ExWapp`.
+- `sync_contacts/1` explicitly fetches and applies contact app-state collection
+  (`critical_unblock_low`) when connected.
+- `list_contacts/1` is a local projection: entries are populated by app-state
+  contact sync and can be augmented by history-sync DM names, so it may be
+  temporarily empty just after connect.
+- `list_contacts/1` may include WhatsApp system/service contacts (for example
+  `0@s.whatsapp.net` with push name `WhatsApp`, or `13135550002@s.whatsapp.net`
+  with push name `Meta AI`) depending on account/region and synced state.
+- `get_messages/3` returns only locally ingested/stored messages (live traffic
+  plus any inline history-sync conversation messages that were parsed) and does
+  not fetch missing history blobs on demand.
 
 ## Signal Implementation
 

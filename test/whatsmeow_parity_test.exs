@@ -478,6 +478,219 @@ defmodule ExWapp.WhatsmeowParityTest do
 
     groups = ExWapp.Chat.list_groups(bob_store)
     assert Enum.map(groups, & &1.jid) == ["123456789@g.us"]
+
+    contact = ExWapp.Contact.get(bob_store, "111111111@s.whatsapp.net")
+    assert contact
+    assert contact.push_name == "Alice"
+    assert ExWapp.Contact.get(bob_store, "123456789@g.us") == nil
+  end
+
+  test "protocol history sync inline payload ingests conversation messages" do
+    alice_identity = Keys.generate_key_pair()
+    bob_identity = Keys.generate_key_pair()
+
+    signed_id = 705
+    prekey_id = 706
+
+    bob_signed_prekey = Keys.generate_signed_prekey(bob_identity, signed_id)
+    bob_one_time_prekey = Keys.generate_prekey(prekey_id)
+
+    bob_store =
+      ExWapp.Store.Memory.new(
+        initial_data: %{
+          signal: %{
+            identity_key: bob_identity,
+            registration_id: 11_951,
+            signed_prekeys: %{signed_id => bob_signed_prekey},
+            prekeys: %{prekey_id => bob_one_time_prekey}
+          },
+          chats: %{}
+        }
+      )
+
+    bob_bundle = %{
+      registration_id: 11_951,
+      identity_key: bob_identity.public,
+      signed_prekey: %{
+        id: signed_id,
+        public: bob_signed_prekey.public,
+        signature: bob_signed_prekey.signature
+      },
+      prekey: %{id: prekey_id, public: bob_one_time_prekey.public}
+    }
+
+    sender_jid = "15550001111@s.whatsapp.net"
+    chat_jid = "111111111@s.whatsapp.net"
+
+    history_sync_payload =
+      build_history_sync_protocol_message([
+        %{
+          jid: chat_jid,
+          name: "Alice",
+          unread_count: 0,
+          last_message_timestamp: 1_730_010_003,
+          pinned: false,
+          archived: false,
+          muted_until: 0,
+          messages: [
+            %{
+              id: "HS_MSG_1",
+              text: "first from history",
+              timestamp: 1_730_010_001,
+              order_id: 1
+            },
+            %{
+              id: "HS_MSG_2",
+              extended_text: "latest from history",
+              timestamp: 1_730_010_003,
+              order_id: 2
+            },
+            %{
+              id: "HS_MSG_3",
+              text: "from me history",
+              from_me: true,
+              timestamp: 1_730_010_002,
+              order_id: 3
+            }
+          ]
+        }
+      ])
+
+    {:ok, ciphertext, :prekey, _alice_sessions} =
+      SessionStore.encrypt_message(
+        SessionStore.new(),
+        sender_jid,
+        ExWapp.Signal.Encryption.pad_message(history_sync_payload),
+        alice_identity,
+        890,
+        bob_bundle
+      )
+
+    node = %Node{
+      tag: "message",
+      attrs: %{
+        "from" => sender_jid,
+        "id" => "HISTORY_SYNC_MESSAGES_1",
+        "type" => "text",
+        "t" => "1730010200"
+      },
+      content: [
+        %Node{
+          tag: "enc",
+          attrs: %{"type" => "pkmsg", "v" => "2"},
+          content: Binary.raw(ciphertext)
+        }
+      ]
+    }
+
+    initial_state = %{
+      store: bob_store,
+      signal_sessions: SessionStore.new(),
+      stats: %{messages_received: 0}
+    }
+
+    assert {:ok, _state_after, _actions} = MessageHandler.handle_node(node, self(), initial_state)
+
+    messages = ExWapp.Chat.messages(bob_store, chat_jid, limit: 10)
+    assert Enum.map(messages, & &1.id) == ["HS_MSG_2", "HS_MSG_3", "HS_MSG_1"]
+
+    assert Enum.find(messages, &(&1.id == "HS_MSG_1")).text == "first from history"
+    assert Enum.find(messages, &(&1.id == "HS_MSG_2")).text == "latest from history"
+    assert Enum.find(messages, &(&1.id == "HS_MSG_3")).from_me
+
+    {:ok, chat} = ExWapp.Chat.get(bob_store, chat_jid)
+    assert chat.unread_count == 0
+  end
+
+  test "protocol history sync with only group conversations does not create contacts" do
+    alice_identity = Keys.generate_key_pair()
+    bob_identity = Keys.generate_key_pair()
+
+    signed_id = 710
+    prekey_id = 711
+
+    bob_signed_prekey = Keys.generate_signed_prekey(bob_identity, signed_id)
+    bob_one_time_prekey = Keys.generate_prekey(prekey_id)
+
+    bob_store =
+      ExWapp.Store.Memory.new(
+        initial_data: %{
+          signal: %{
+            identity_key: bob_identity,
+            registration_id: 12_001,
+            signed_prekeys: %{signed_id => bob_signed_prekey},
+            prekeys: %{prekey_id => bob_one_time_prekey}
+          },
+          chats: %{}
+        }
+      )
+
+    bob_bundle = %{
+      registration_id: 12_001,
+      identity_key: bob_identity.public,
+      signed_prekey: %{
+        id: signed_id,
+        public: bob_signed_prekey.public,
+        signature: bob_signed_prekey.signature
+      },
+      prekey: %{id: prekey_id, public: bob_one_time_prekey.public}
+    }
+
+    sender_jid = "15550001111@s.whatsapp.net"
+    group_jid = "333333333@g.us"
+
+    history_sync_payload =
+      build_history_sync_protocol_message([
+        %{
+          jid: group_jid,
+          name: "Infra Team",
+          unread_count: 2,
+          last_message_timestamp: 1_730_004_444,
+          pinned: false,
+          archived: false,
+          muted_until: 0
+        }
+      ])
+
+    {:ok, ciphertext, :prekey, _alice_sessions} =
+      SessionStore.encrypt_message(
+        SessionStore.new(),
+        sender_jid,
+        ExWapp.Signal.Encryption.pad_message(history_sync_payload),
+        alice_identity,
+        889,
+        bob_bundle
+      )
+
+    node = %Node{
+      tag: "message",
+      attrs: %{
+        "from" => sender_jid,
+        "id" => "HISTORY_SYNC_GROUP_ONLY_1",
+        "type" => "text",
+        "t" => "1730000400"
+      },
+      content: [
+        %Node{
+          tag: "enc",
+          attrs: %{"type" => "pkmsg", "v" => "2"},
+          content: Binary.raw(ciphertext)
+        }
+      ]
+    }
+
+    initial_state = %{
+      store: bob_store,
+      signal_sessions: SessionStore.new(),
+      stats: %{messages_received: 0}
+    }
+
+    assert {:ok, _state_after, _actions} = MessageHandler.handle_node(node, self(), initial_state)
+
+    assert {:ok, group_chat} = ExWapp.Chat.get(bob_store, group_jid)
+    assert group_chat.name == "Infra Team"
+    assert group_chat.is_group
+    assert ExWapp.Contact.get(bob_store, group_jid) == nil
   end
 
   defp build_history_sync_protocol_message(conversations) do
@@ -508,6 +721,10 @@ defmodule ExWapp.WhatsmeowParityTest do
   defp encode_history_sync_conversation(conversation) do
     []
     |> maybe_append_length_delimited_field(1, Map.get(conversation, :jid))
+    |> maybe_append_history_sync_messages(
+      Map.get(conversation, :messages, []),
+      Map.get(conversation, :jid)
+    )
     |> maybe_append_length_delimited_field(13, Map.get(conversation, :name))
     |> maybe_append_varint_field(6, Map.get(conversation, :unread_count))
     |> maybe_append_varint_field(5, Map.get(conversation, :last_message_timestamp))
@@ -531,6 +748,88 @@ defmodule ExWapp.WhatsmeowParityTest do
   defp maybe_append_varint_field(acc, field_num, value)
        when is_integer(value) and value >= 0 do
     [acc, encode_varint_field(field_num, value)]
+  end
+
+  defp maybe_append_history_sync_messages(acc, messages, conversation_jid)
+       when is_list(messages) do
+    encoded_messages =
+      Enum.map(messages, fn message ->
+        encode_length_delimited_field(2, encode_history_sync_message(message, conversation_jid))
+      end)
+
+    [acc, encoded_messages]
+  end
+
+  defp maybe_append_history_sync_messages(acc, _messages, _conversation_jid), do: acc
+
+  defp encode_history_sync_message(message, conversation_jid)
+       when is_map(message) and is_binary(conversation_jid) do
+    web_message_info = encode_web_message_info(message, conversation_jid)
+
+    []
+    |> maybe_append_length_delimited_field(1, web_message_info)
+    |> maybe_append_varint_field(2, Map.get(message, :order_id))
+    |> IO.iodata_to_binary()
+  end
+
+  defp encode_history_sync_message(_message, _conversation_jid), do: <<>>
+
+  defp encode_web_message_info(message, conversation_jid) when is_map(message) do
+    message_payload = encode_history_sync_message_payload(message)
+
+    []
+    |> maybe_append_length_delimited_field(
+      1,
+      encode_history_sync_message_key(message, conversation_jid)
+    )
+    |> maybe_append_length_delimited_field(2, message_payload)
+    |> maybe_append_varint_field(3, Map.get(message, :timestamp))
+    |> maybe_append_length_delimited_field(9, Map.get(message, :participant))
+    |> IO.iodata_to_binary()
+  end
+
+  defp encode_history_sync_message_payload(message) when is_map(message) do
+    cond do
+      is_binary(Map.get(message, :extended_text)) and Map.get(message, :extended_text) != "" ->
+        encode_length_delimited_field(
+          6,
+          encode_length_delimited_field(1, Map.get(message, :extended_text))
+          |> IO.iodata_to_binary()
+        )
+        |> IO.iodata_to_binary()
+
+      is_binary(Map.get(message, :text)) and Map.get(message, :text) != "" ->
+        encode_length_delimited_field(1, Map.get(message, :text))
+        |> IO.iodata_to_binary()
+
+      true ->
+        <<>>
+    end
+  end
+
+  defp encode_history_sync_message_payload(_), do: <<>>
+
+  defp encode_history_sync_message_key(message, conversation_jid) when is_map(message) do
+    remote_jid =
+      first_binary([
+        Map.get(message, :remote_jid),
+        Map.get(message, :jid),
+        conversation_jid
+      ])
+
+    []
+    |> maybe_append_length_delimited_field(1, remote_jid)
+    |> maybe_append_varint_field(2, boolean_to_int(Map.get(message, :from_me, false)))
+    |> maybe_append_length_delimited_field(3, Map.get(message, :id))
+    |> maybe_append_length_delimited_field(4, Map.get(message, :participant))
+    |> IO.iodata_to_binary()
+  end
+
+  defp first_binary(values) when is_list(values) do
+    Enum.find(values, fn
+      value when is_binary(value) and value != "" -> true
+      _ -> false
+    end)
   end
 
   defp encode_length_delimited_field(field_num, value) when is_binary(value) do

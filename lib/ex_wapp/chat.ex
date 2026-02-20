@@ -167,6 +167,41 @@ defmodule ExWapp.Chat do
   end
 
   @doc """
+  Merges a batch of messages into a chat, deduplicating by message ID.
+  """
+  @spec merge_messages(target(), String.t() | JID.t(), [message()]) :: :ok
+  def merge_messages(target, jid, messages) when is_list(messages) do
+    chat = get_or_create(target, jid)
+
+    normalized_new_messages =
+      messages
+      |> Enum.map(&normalize_merged_message/1)
+      |> Enum.reject(&is_nil/1)
+
+    merged_messages =
+      (chat.messages ++ normalized_new_messages)
+      |> Enum.uniq_by(&message_identity/1)
+      |> Enum.sort_by(&message_sort_key/1, :desc)
+      |> Enum.take(1000)
+
+    updated_chat =
+      case latest_message_timestamp(merged_messages) do
+        nil ->
+          %{chat | messages: merged_messages}
+
+        latest when is_integer(latest) ->
+          current =
+            if(is_integer(chat.last_message_timestamp), do: chat.last_message_timestamp, else: 0)
+
+          %{chat | messages: merged_messages, last_message_timestamp: max(current, latest)}
+      end
+
+    save_chat(target, updated_chat)
+  end
+
+  def merge_messages(_target, _jid, _messages), do: :ok
+
+  @doc """
   Adds a message to a chat.
   """
   @spec add_message(target(), String.t() | JID.t(), message()) :: :ok
@@ -543,6 +578,78 @@ defmodule ExWapp.Chat do
       Map.has_key?(metadata, key_str) -> {:ok, Map.get(metadata, key_str)}
       true -> :error
     end
+  end
+
+  defp normalize_merged_message(message) when is_map(message) do
+    id =
+      case Map.get(message, :id) do
+        value when is_binary(value) ->
+          value = String.trim(value)
+          if value == "", do: nil, else: value
+
+        _ ->
+          nil
+      end
+
+    if is_binary(id) do
+      %{
+        id: id,
+        from_me: Map.get(message, :from_me, false) == true,
+        timestamp: normalized_timestamp(Map.get(message, :timestamp)),
+        text: normalize_optional_text(Map.get(message, :text)),
+        status:
+          normalize_message_status(Map.get(message, :status), Map.get(message, :from_me, false)),
+        participant: Map.get(message, :participant),
+        raw: normalize_raw_payload(Map.get(message, :raw))
+      }
+    else
+      nil
+    end
+  end
+
+  defp normalize_merged_message(_), do: nil
+
+  defp normalize_optional_text(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: value
+  end
+
+  defp normalize_optional_text(_), do: nil
+
+  defp normalized_timestamp(value) when is_integer(value) and value >= 0, do: value
+  defp normalized_timestamp(_), do: 0
+
+  defp normalize_message_status(status, _from_me)
+       when status in [:pending, :sent, :received, :delivered, :read, :failed] do
+    status
+  end
+
+  defp normalize_message_status(_status, from_me) do
+    if from_me == true, do: :sent, else: :received
+  end
+
+  defp normalize_raw_payload(value) when is_map(value), do: value
+  defp normalize_raw_payload(_), do: nil
+
+  defp message_identity(%{id: id}) when is_binary(id), do: {:id, id}
+
+  defp message_identity(message),
+    do: {:fallback, message_sort_key(message), Map.get(message, :text)}
+
+  defp message_sort_key(%{timestamp: timestamp, id: id}) do
+    {normalized_timestamp(timestamp), normalize_sort_id(id)}
+  end
+
+  defp message_sort_key(_), do: {0, ""}
+
+  defp normalize_sort_id(value) when is_binary(value), do: value
+  defp normalize_sort_id(_), do: ""
+
+  defp latest_message_timestamp(messages) when is_list(messages) do
+    Enum.find_value(messages, fn
+      %{timestamp: timestamp} when is_integer(timestamp) and timestamp >= 0 -> timestamp
+      _ -> nil
+    end)
   end
 
   defp save_chat(target, chat) do

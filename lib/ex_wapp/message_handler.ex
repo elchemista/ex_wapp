@@ -960,6 +960,11 @@ defmodule ExWapp.MessageHandler do
       {:ok, %{sync_type: sync_type, conversations: conversations, lid_mappings: lid_mappings}} ->
         target = chat_target(session, state)
 
+        history_message_count =
+          Enum.reduce(conversations, 0, fn conversation, count ->
+            count + length(Map.get(conversation, :messages, []))
+          end)
+
         if target do
           Enum.each(conversations, &upsert_chat_from_history_sync(target, &1))
         end
@@ -967,7 +972,7 @@ defmodule ExWapp.MessageHandler do
         persist_history_sync_lid_mappings(state, lid_mappings)
 
         Logger.info(
-          "[HISTORY_SYNC] Applied protocol history sync from=#{normalize_jid(from)} id=#{id} sync_type=#{inspect(sync_type)} conversations=#{length(conversations)} lid_mappings=#{length(lid_mappings)}"
+          "[HISTORY_SYNC] Applied protocol history sync from=#{normalize_jid(from)} id=#{id} sync_type=#{inspect(sync_type)} conversations=#{length(conversations)} messages=#{history_message_count} lid_mappings=#{length(lid_mappings)}"
         )
 
         state
@@ -1015,8 +1020,12 @@ defmodule ExWapp.MessageHandler do
          true <- key_share.keys != [] do
       Logger.info("[APP_STATE] Received AppStateSyncKeyShare with #{length(key_share.keys)} keys")
 
-      with {:ok, :updated} <- store_app_state_keys(state, key_share.keys) do
-        maybe_trigger_initial_app_state_sync(session)
+      case store_app_state_keys(state, key_share.keys) do
+        {:ok, action} when action in [:updated, :unchanged] ->
+          maybe_trigger_initial_app_state_sync(session)
+
+        _ ->
+          :ok
       end
 
       state
@@ -1177,9 +1186,106 @@ defmodule ExWapp.MessageHandler do
       |> maybe_put_sync_metadata(:is_group, Map.get(conversation, :is_group))
 
     Chat.merge_metadata(target, jid, metadata)
+
+    history_messages = Map.get(conversation, :messages, [])
+
+    if is_list(history_messages) and history_messages != [] do
+      chat_messages =
+        history_messages
+        |> Enum.with_index()
+        |> Enum.map(fn {history_message, index} ->
+          history_sync_message_to_chat_message(history_message, jid, index)
+        end)
+        |> Enum.reject(&is_nil/1)
+
+      if chat_messages != [] do
+        Chat.merge_messages(target, jid, chat_messages)
+      end
+    end
+
+    # For DM conversations, also create/update a contact from the chat name
+    if not Map.get(conversation, :is_group, false) do
+      name = Map.get(conversation, :name)
+
+      if is_binary(name) and name != "" do
+        store = resolve_store_from_target(target)
+
+        if store do
+          ExWapp.Contact.update_push_name(store, jid, name)
+        end
+      end
+    end
   end
 
   defp upsert_chat_from_history_sync(_target, _conversation), do: :ok
+
+  defp history_sync_message_to_chat_message(message, conversation_jid, index)
+       when is_map(message) and is_binary(conversation_jid) and is_integer(index) do
+    from_me = Map.get(message, :from_me, false) == true
+    timestamp = normalize_history_sync_timestamp(Map.get(message, :timestamp))
+    participant = normalize_optional_history_jid(Map.get(message, :participant))
+    remote_jid = normalize_optional_history_jid(Map.get(message, :remote_jid))
+
+    message_id =
+      first_non_empty([
+        normalize_optional_text(Map.get(message, :id)),
+        history_sync_message_fallback_id(message, conversation_jid, index)
+      ])
+
+    if is_binary(message_id) and message_id != "" do
+      %{
+        id: message_id,
+        from_me: from_me,
+        timestamp: timestamp,
+        text: normalize_optional_text(Map.get(message, :text)),
+        status: if(from_me, do: :sent, else: :received),
+        participant: participant,
+        raw: %{
+          type: "history_sync",
+          source: :history_sync,
+          remote_jid: remote_jid,
+          order_id: Map.get(message, :order_id)
+        }
+      }
+    else
+      nil
+    end
+  end
+
+  defp history_sync_message_to_chat_message(_message, _conversation_jid, _index), do: nil
+
+  defp normalize_history_sync_timestamp(value) when is_integer(value) and value >= 0, do: value
+  defp normalize_history_sync_timestamp(_), do: 0
+
+  defp normalize_optional_history_jid(value) do
+    case normalize_jid(value) do
+      "" -> nil
+      jid -> jid
+    end
+  end
+
+  defp history_sync_message_fallback_id(message, conversation_jid, index)
+       when is_map(message) and is_binary(conversation_jid) and is_integer(index) do
+    seed = %{
+      conversation_jid: conversation_jid,
+      order_id: Map.get(message, :order_id),
+      timestamp: Map.get(message, :timestamp),
+      text: Map.get(message, :text),
+      participant: Map.get(message, :participant),
+      remote_jid: Map.get(message, :remote_jid),
+      from_me: Map.get(message, :from_me, false),
+      index: index
+    }
+
+    "history-sync-" <>
+      (:erlang.term_to_binary(seed)
+       |> :crypto.hash(:sha256)
+       |> Base.encode16(case: :lower)
+       |> binary_part(0, 20))
+  rescue
+    _ ->
+      "history-sync-#{index}"
+  end
 
   defp persist_history_sync_lid_mappings(state, lid_mappings)
        when is_map(state) and is_list(lid_mappings) do
@@ -1860,4 +1966,15 @@ defmodule ExWapp.MessageHandler do
       _ -> if(is_pid(session), do: session, else: nil)
     end
   end
+
+  # Resolve a store struct from a chat target (pid or store struct).
+  defp resolve_store_from_target(%{__struct__: _} = store), do: store
+
+  defp resolve_store_from_target(pid) when is_pid(pid) do
+    GenServer.call(pid, :get_store)
+  catch
+    :exit, _ -> nil
+  end
+
+  defp resolve_store_from_target(_), do: nil
 end
