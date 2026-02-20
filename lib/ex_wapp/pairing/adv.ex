@@ -7,7 +7,6 @@ defmodule ExWapp.Pairing.ADV do
   WhatsApp once the pairing flow completes.
   """
 
-  alias Ed25519
   alias ExWapp.Signal.Keys, as: SignalKeys
   alias WAAdv.{ADVDeviceIdentity, ADVSignedDeviceIdentity, ADVSignedDeviceIdentityHMAC}
 
