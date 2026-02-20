@@ -36,6 +36,38 @@ defmodule ExWapp.ContactTest do
       assert result.full_name == "Bob"
     end
 
+    test "strips leading + from phone JID", %{store: store} do
+      contact = %Contact{jid: "+5555@s.whatsapp.net", full_name: "Bob"}
+
+      Contact.put(store, "+5555@s.whatsapp.net", contact)
+
+      result = Contact.get(store, "5555@s.whatsapp.net")
+      assert result != nil
+      assert result.jid == "5555@s.whatsapp.net"
+      assert result.phone_number == "5555"
+    end
+
+    test "collapses legacy + JID aliases on update", %{store: store} do
+      Contact.put(store, "+5555@s.whatsapp.net", %Contact{
+        jid: "+5555@s.whatsapp.net",
+        full_name: "Bob"
+      })
+
+      Contact.update_push_name(store, "5555@s.whatsapp.net", "Bob Push")
+
+      keys =
+        store
+        |> Store.load!()
+        |> Map.get(:contacts, %{})
+        |> Map.keys()
+        |> Enum.filter(&String.contains?(&1, "5555"))
+
+      assert keys == ["5555@s.whatsapp.net"]
+
+      result = Contact.get(store, "5555@s.whatsapp.net")
+      assert result.push_name == "Bob Push"
+    end
+
     test "returns nil for unknown JID", %{store: store} do
       assert nil == Contact.get(store, "unknown@s.whatsapp.net")
     end

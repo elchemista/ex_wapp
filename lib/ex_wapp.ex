@@ -625,6 +625,12 @@ defmodule ExWapp do
   defdelegate delete_contact(session, jid), to: Session
 
   @doc """
+  Fetches and applies the contacts collection from app state (`critical_unblock_low`).
+  """
+  @spec sync_contacts(GenServer.server()) :: :ok | {:error, term()}
+  defdelegate sync_contacts(session), to: Session
+
+  @doc """
   Lists all contacts.
   """
   @spec list_contacts(GenServer.server()) :: [ExWapp.Contact.t()]

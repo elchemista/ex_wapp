@@ -44,15 +44,16 @@ defmodule ExWapp.Contact do
   def get(store, jid) do
     data = Store.load!(store)
     contacts = Map.get(data, :contacts, %{})
-    Map.get(contacts, normalize_jid(jid))
+    normalized = normalize_jid(jid)
+    Map.get(contacts, normalized) || find_legacy_contact(contacts, normalized)
   end
 
   @doc "Put (create or update) a contact."
   @spec put(struct(), String.t(), t()) :: :ok
   def put(store, jid, %__MODULE__{} = contact) do
     data = Store.load!(store)
-    contacts = Map.get(data, :contacts, %{})
     normalized = normalize_jid(jid)
+    contacts = data |> Map.get(:contacts, %{}) |> remove_contact_aliases(normalized)
     contact = %{contact | jid: normalized, phone_number: extract_phone(normalized)}
     Store.persist(store, Map.put(data, :contacts, Map.put(contacts, normalized, contact)))
   end
@@ -61,8 +62,9 @@ defmodule ExWapp.Contact do
   @spec delete(struct(), String.t()) :: :ok
   def delete(store, jid) do
     data = Store.load!(store)
-    contacts = Map.get(data, :contacts, %{})
-    Store.persist(store, Map.put(data, :contacts, Map.delete(contacts, normalize_jid(jid))))
+    normalized = normalize_jid(jid)
+    contacts = data |> Map.get(:contacts, %{}) |> remove_contact_aliases(normalized)
+    Store.persist(store, Map.put(data, :contacts, contacts))
   end
 
   @doc "Update push name for a contact (from incoming message notify attr)."
@@ -72,7 +74,11 @@ defmodule ExWapp.Contact do
     data = Store.load!(store)
     contacts = Map.get(data, :contacts, %{})
 
-    existing = Map.get(contacts, normalized, %__MODULE__{jid: normalized})
+    existing =
+      Map.get(contacts, normalized) || find_legacy_contact(contacts, normalized) ||
+        %__MODULE__{jid: normalized}
+
+    contacts = remove_contact_aliases(contacts, normalized)
     updated = %{existing | push_name: name, phone_number: extract_phone(normalized)}
 
     Store.persist(store, Map.put(data, :contacts, Map.put(contacts, normalized, updated)))
@@ -87,7 +93,11 @@ defmodule ExWapp.Contact do
     data = Store.load!(store)
     contacts = Map.get(data, :contacts, %{})
 
-    existing = Map.get(contacts, normalized, %__MODULE__{jid: normalized})
+    existing =
+      Map.get(contacts, normalized) || find_legacy_contact(contacts, normalized) ||
+        %__MODULE__{jid: normalized}
+
+    contacts = remove_contact_aliases(contacts, normalized)
 
     updated =
       existing
@@ -106,12 +116,37 @@ defmodule ExWapp.Contact do
   defp maybe_set(contact, key, value), do: Map.put(contact, key, value)
 
   defp normalize_jid(jid) when is_binary(jid) do
-    jid
-    |> String.trim()
-    |> String.replace("@whatsapp.net", "@s.whatsapp.net")
+    jid = String.trim(jid)
+
+    case String.split(jid, "@", parts: 2) do
+      [user, domain] ->
+        normalized_domain =
+          case String.downcase(domain) do
+            "whatsapp.net" -> "s.whatsapp.net"
+            "s.whatsapp.net" -> "s.whatsapp.net"
+            other -> other
+          end
+
+        "#{String.trim_leading(user, "+")}@#{normalized_domain}"
+
+      [user] ->
+        "#{String.trim_leading(user, "+")}@s.whatsapp.net"
+    end
   end
 
-  defp normalize_jid(jid), do: to_string(jid)
+  defp normalize_jid(jid), do: jid |> to_string() |> normalize_jid()
+
+  defp find_legacy_contact(contacts, normalized) when is_map(contacts) do
+    Enum.find_value(contacts, fn {jid, contact} ->
+      if normalize_jid(jid) == normalized, do: contact
+    end)
+  end
+
+  defp remove_contact_aliases(contacts, normalized) when is_map(contacts) do
+    contacts
+    |> Enum.reject(fn {jid, _contact} -> normalize_jid(jid) == normalized end)
+    |> Map.new()
+  end
 
   defp extract_phone(jid) when is_binary(jid) do
     case String.split(jid, "@", parts: 2) do

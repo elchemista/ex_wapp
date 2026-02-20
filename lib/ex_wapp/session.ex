@@ -71,6 +71,9 @@ defmodule ExWapp.Session do
   @spec delete_contact(GenServer.server(), String.t()) :: :ok | {:error, term()}
   defdelegate delete_contact(server, jid), to: Worker
 
+  @spec sync_contacts(GenServer.server()) :: :ok | {:error, term()}
+  defdelegate sync_contacts(server), to: Worker
+
   @spec list_contacts(GenServer.server()) :: [ExWapp.Contact.t()]
   defdelegate list_contacts(server), to: Worker
 
