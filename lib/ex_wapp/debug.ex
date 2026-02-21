@@ -269,8 +269,8 @@ defmodule ExWapp.Debug do
       # Build device props (Firefox/Linux identity)
       device_props = <<
         0x0A,
-        0x07,
-        "Firefox"::binary,
+        0x05,
+        "Linux"::binary,
         0x12,
         0x06,
         0x08,

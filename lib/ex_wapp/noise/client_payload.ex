@@ -38,7 +38,7 @@ defmodule ExWapp.Noise.ClientPayload do
     require Logger
     Logger.info("[ClientPayload] Building LOGIN payload for #{inspect(jid)}")
 
-    info = Map.get(data, :client_info, %{})
+    info = resolve_client_info(data, runtime_cfg)
 
     # Match Go's getLoginPayload() - must include lidDbMigrated!
     payload = %ClientPayload{
@@ -55,7 +55,8 @@ defmodule ExWapp.Noise.ClientPayload do
 
     with {:ok, iodata} <- ClientPayload.encode(payload) do
       binary = IO.iodata_to_binary(iodata)
-      {:ok, binary}
+      updated_data = Map.put(data, :client_info, info)
+      {:ok, binary, updated_data}
     end
   end
 
@@ -64,7 +65,7 @@ defmodule ExWapp.Noise.ClientPayload do
     Logger.info("[ClientPayload] Building REGISTRATION payload")
 
     with {:ok, signal_info, signal_state} <- ensure_signal_bundle(data) do
-      info = Map.get(data, :client_info, %{})
+      info = resolve_client_info(data, runtime_cfg)
 
       # Match Go's getRegistrationPayload() exactly
       payload = %ClientPayload{
@@ -120,6 +121,29 @@ defmodule ExWapp.Noise.ClientPayload do
         Map.get(info, :locale_country, Map.get(ua_defaults, :locale_country, "US"))
       # Note: Go doesn't set phoneID, deviceType, or deviceModelType
     }
+  end
+
+  defp resolve_client_info(data, runtime_cfg) do
+    ua_defaults = Config.get(runtime_cfg, [:protocol, :user_agent], %{})
+
+    data
+    |> Map.get(:client_info, %{})
+    |> put_default(:os_version, Map.get(ua_defaults, :os_version, "Linux"))
+    |> put_default(:manufacturer, Map.get(ua_defaults, :manufacturer, ""))
+    |> put_default(:device_name, Map.get(ua_defaults, :device_name, "Desktop"))
+    |> put_default(:os_build, Map.get(ua_defaults, :os_build, "Linux"))
+    |> put_default(:locale_language, Map.get(ua_defaults, :locale_language, "en"))
+    |> put_default(:locale_country, Map.get(ua_defaults, :locale_country, "US"))
+  end
+
+  defp put_default(info, _key, nil), do: info
+
+  defp put_default(info, key, default) do
+    case Map.get(info, key) do
+      nil -> Map.put(info, key, default)
+      "" -> Map.put(info, key, default)
+      _ -> info
+    end
   end
 
   defp build_web_info(_info) do
@@ -263,13 +287,13 @@ defmodule ExWapp.Noise.ClientPayload do
       >>
 
     # Build DeviceProps message
-    os_name = "Firefox"
+    os_name = "Linux"
     os_len = byte_size(os_name)
     version_len = byte_size(version)
     history_len = byte_size(history_sync_config)
 
     <<
-      # os = "Firefox" (field 1, wire type 2)
+      # os = "Linux" (field 1, wire type 2)
       0x0A,
       os_len::8,
       os_name::binary,

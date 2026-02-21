@@ -13,8 +13,8 @@ defmodule ExWapp.Noise.ClientPayloadTest do
   # DeviceProps with historySyncConfig matching Firefox/Linux identity
   @device_props <<
     0x0A,
-    0x07,
-    "Firefox"::binary,
+    0x05,
+    "Linux"::binary,
     0x12,
     0x06,
     0x08,
@@ -107,13 +107,49 @@ defmodule ExWapp.Noise.ClientPayloadTest do
         |> put_in([:protocol, :user_agent, :device_name], "Firefox")
         |> put_in([:protocol, :user_agent, :os_build], "x86_64")
 
-      assert {:ok, payload, _data} = NoiseClientPayload.build(noise, runtime_cfg)
+      assert {:ok, payload, data} = NoiseClientPayload.build(noise, runtime_cfg)
       assert {:ok, decoded} = ClientPayloadProto.decode(payload)
 
       assert decoded.userAgent.osVersion == "Linux 6.8"
       assert decoded.userAgent.manufacturer == "Mozilla"
       assert decoded.userAgent.device == "Firefox"
       assert decoded.userAgent.osBuildNumber == "x86_64"
+
+      assert get_in(data, [:client_info, :os_version]) == "Linux 6.8"
+      assert get_in(data, [:client_info, :manufacturer]) == "Mozilla"
+      assert get_in(data, [:client_info, :device_name]) == "Firefox"
+      assert get_in(data, [:client_info, :os_build]) == "x86_64"
+    end
+
+    test "normalizes client_info for login payloads" do
+      store = store_fixture()
+      noise = %Noise{store: store}
+
+      :ok =
+        Store.persist(store, %{
+          pairing: %{device: %{jid: %ExWapp.JID{user: "15550001111", device: 40}}},
+          client_info: %{}
+        })
+
+      runtime_cfg =
+        Config.defaults()
+        |> put_in([:protocol, :user_agent, :os_version], "Linux")
+        |> put_in([:protocol, :user_agent, :manufacturer], "Mozilla")
+        |> put_in([:protocol, :user_agent, :device_name], "Firefox")
+        |> put_in([:protocol, :user_agent, :os_build], "Linux")
+
+      assert {:ok, payload, data} = NoiseClientPayload.build(noise, runtime_cfg)
+      assert {:ok, decoded} = ClientPayloadProto.decode(payload)
+
+      assert decoded.userAgent.osVersion == "Linux"
+      assert decoded.userAgent.manufacturer == "Mozilla"
+      assert decoded.userAgent.device == "Firefox"
+      assert decoded.userAgent.osBuildNumber == "Linux"
+
+      assert get_in(data, [:client_info, :os_version]) == "Linux"
+      assert get_in(data, [:client_info, :manufacturer]) == "Mozilla"
+      assert get_in(data, [:client_info, :device_name]) == "Firefox"
+      assert get_in(data, [:client_info, :os_build]) == "Linux"
     end
   end
 
