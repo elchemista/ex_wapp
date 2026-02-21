@@ -33,6 +33,7 @@ Implemented configurable areas include:
 - IQ timeout + max pending IQ requests
 - outbound queue size/drop policy
 - send retry/confirmation limits
+- send error guard (pause/disconnect/stop session)
 - throttle and daily quota guards
 - safety breaker for repeated `401` / `403` / `stream_replaced`
 - trust/parity control surface per session:
@@ -50,6 +51,7 @@ Inspect active policy/config from a running session:
 ```elixir
 cfg = ExWapp.runtime_config(session)
 status = ExWapp.policy_status(session)
+health = ExWapp.health_status(session)
 ```
 
 Example:
@@ -60,6 +62,11 @@ config :ex_wapp, :runtime,
   iq: [default_timeout_ms: 20_000, max_pending_requests: 500],
   queue: [max_size: 5_000, drop_policy: :reject_new],
   throttle: [enabled: true, global: [messages_per_second: 5, burst: 10]],
+  send_error_guard: [
+    enabled: true,
+    max_consecutive_errors: 3,
+    action: :stop_session
+  ],
   quota: [enabled: true, per_session: [daily_messages: 2_000]],
   compliance: [strict_mode: true, require_explicit_opt_in: true],
   risk: [enabled: true, block_threshold: 75],
@@ -73,6 +80,20 @@ config :ex_wapp, :runtime,
 ```
 
 Detailed implementation checklist: `SESSION_TRUST_PARITY_CHECKLIST.md`.
+
+Health monitoring/control via PubSub:
+
+- per-session topic: `ex_wapp:health:<session_id>`
+- global topic: `ex_wapp:health`
+- commands topic supports `{:ex_wapp_control, :pause_sends | :resume_sends | :disconnect | :stop_session}`
+
+Programmatic control:
+
+```elixir
+ExWapp.control_session("acc_1", :pause_sends)
+ExWapp.control_session("acc_1", :resume_sends)
+ExWapp.control_session("acc_1", :stop_session)
+```
 
 ## Quickstart
 

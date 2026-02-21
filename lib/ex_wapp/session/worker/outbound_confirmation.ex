@@ -95,6 +95,8 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
         @default_max_silent_drop_fallback_attempts
       )
 
+    on_drop = Keyword.get(opts, :on_drop, fn _jid, _message_id, _attempt -> :ok end)
+
     case outbound_message_status(state.store, jid, message_id) do
       status when status in [:delivered, :read, :received] ->
         Logger.info("[SEND] Outbound confirmed id=#{message_id} status=#{status}")
@@ -127,6 +129,7 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
           )
 
           mark_message_failed(state.store, message_id)
+          on_drop.(jid, message_id, attempt)
           state
         end
     end

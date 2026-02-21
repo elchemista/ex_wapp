@@ -257,6 +257,12 @@ defmodule ExWapp do
   defdelegate policy_status(server), to: Session
 
   @doc """
+  Returns send health counters and guard state for a running session.
+  """
+  @spec health_status(GenServer.server()) :: map()
+  defdelegate health_status(server), to: Session
+
+  @doc """
   Gracefully disconnects from WhatsApp servers.
 
   Stops automatic reconnection and closes the connection cleanly.
@@ -371,6 +377,39 @@ defmodule ExWapp do
   end
 
   @doc """
+  Controls a session worker using either pid (direct cast) or session_id (PubSub command).
+
+  Supported actions:
+  - `:pause_sends`
+  - `:resume_sends`
+  - `:disconnect`
+  - `:stop_session`
+  """
+  @spec control_session(
+          pid() | binary(),
+          :pause_sends | :resume_sends | :disconnect | :stop_session
+        ) ::
+          :ok
+  def control_session(session, action)
+
+  def control_session(session, action) when is_pid(session) do
+    case action do
+      :pause_sends -> Session.pause_sends(session)
+      :resume_sends -> Session.resume_sends(session)
+      :disconnect -> Session.disconnect(session)
+      :stop_session -> Session.stop_worker(session)
+    end
+  end
+
+  def control_session(session_id, action) when is_binary(session_id) do
+    Phoenix.PubSub.broadcast(
+      ExWapp.PubSub,
+      "ex_wapp:commands:#{session_id}",
+      {:ex_wapp_control, action}
+    )
+  end
+
+  @doc """
   Sends a read receipt to mark messages as read.
 
   ## Example
@@ -437,6 +476,7 @@ defmodule ExWapp do
   - `{:ex_wapp_session, :connected}` - session connected
   - `{:ex_wapp_session, :disconnected, reason}` - session disconnected
   - `{:ex_wapp_session, :terminated, reason}` - session process stopped
+  - `{:ex_wapp_health, type, metadata}` - send health/error/guard events
 
   ## Example
 
@@ -462,11 +502,13 @@ defmodule ExWapp do
     session_id = Session.get_session_id(session) || session
     Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:messages:#{session_id}")
     Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:health:#{session_id}")
   end
 
   def subscribe(session_id) do
     Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:messages:#{session_id}")
     Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:health:#{session_id}")
   end
 
   @doc """
@@ -480,11 +522,13 @@ defmodule ExWapp do
     session_id = Session.get_session_id(session) || session
     Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:messages:#{session_id}")
     Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:health:#{session_id}")
   end
 
   def unsubscribe(session_id) do
     Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:messages:#{session_id}")
     Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:health:#{session_id}")
   end
 
   @doc """
@@ -496,11 +540,13 @@ defmodule ExWapp do
 
   - `{:ex_wapp_message, session_id, jid, message}` - message from any session
   - `{session_id, {:ex_wapp_session, event, ...}}` - lifecycle from any session
+  - `{session_id, {:ex_wapp_health, type, metadata}}` - health events from any session
   """
   @spec subscribe_all() :: :ok | {:error, term()}
   def subscribe_all do
     Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:messages")
     Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:session")
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:health")
   end
 
   @doc """
@@ -510,6 +556,7 @@ defmodule ExWapp do
   def unsubscribe_all do
     Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:messages")
     Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:session")
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:health")
   end
 
   # ============================================================================

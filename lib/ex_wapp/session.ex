@@ -42,6 +42,9 @@ defmodule ExWapp.Session do
   @spec policy_status(GenServer.server()) :: map()
   defdelegate policy_status(server), to: Worker, as: :get_policy_status
 
+  @spec health_status(GenServer.server()) :: map()
+  defdelegate health_status(server), to: Worker, as: :get_health_status
+
   @spec subscribe_qr(GenServer.server()) :: {:ok, reference()}
   defdelegate subscribe_qr(server), to: Worker
 
@@ -50,6 +53,15 @@ defmodule ExWapp.Session do
 
   @spec send_text(GenServer.server(), binary(), iodata()) :: :ok | {:error, term()}
   defdelegate send_text(server, jid, text), to: Worker
+
+  @spec pause_sends(GenServer.server()) :: :ok
+  defdelegate pause_sends(server), to: Worker
+
+  @spec resume_sends(GenServer.server()) :: :ok
+  defdelegate resume_sends(server), to: Worker
+
+  @spec stop_worker(GenServer.server()) :: :ok
+  defdelegate stop_worker(server), to: Worker
 
   @spec qr_stream(GenServer.server()) :: Enumerable.t()
   defdelegate qr_stream(server), to: Worker

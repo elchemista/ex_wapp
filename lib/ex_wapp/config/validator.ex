@@ -7,6 +7,7 @@ defmodule ExWapp.Config.Validator do
          :ok <- validate_health(cfg),
          :ok <- validate_iq(cfg),
          :ok <- validate_send(cfg),
+         :ok <- validate_send_error_guard(cfg),
          :ok <- validate_queue(cfg),
          :ok <- validate_throttle(cfg),
          :ok <- validate_quota(cfg),
@@ -57,6 +58,23 @@ defmodule ExWapp.Config.Validator do
          :ok <- ensure_positive_integer(cfg, [:send, :confirm_timeout_ms]),
          :ok <- ensure_non_neg_integer(cfg, [:send, :max_silent_drop_fallback_attempts]),
          :ok <- ensure_list_of_positive_integers(cfg, [:send, :retry_backoff_ms]) do
+      :ok
+    end
+  end
+
+  defp validate_send_error_guard(cfg) do
+    with :ok <- ensure_boolean(cfg, [:send_error_guard, :enabled]),
+         :ok <- ensure_positive_integer(cfg, [:send_error_guard, :max_consecutive_errors]),
+         :ok <- ensure_positive_integer(cfg, [:send_error_guard, :max_errors_per_minute]),
+         :ok <- ensure_positive_integer(cfg, [:send_error_guard, :max_drops_per_minute]),
+         :ok <-
+           ensure_one_of(cfg, [:send_error_guard, :action], [
+             :none,
+             :pause,
+             :disconnect,
+             :stop_session
+           ]),
+         :ok <- ensure_boolean(cfg, [:send_error_guard, :notify_only]) do
       :ok
     end
   end

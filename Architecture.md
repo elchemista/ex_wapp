@@ -916,9 +916,17 @@ Configured controls include reconnect caps, IQ/pending limits, outbound queue
 limits, send retry windows, throttling, daily quotas, and a safety breaker for
 repeated `401`/`403`/`stream_replaced` signals.
 
+The runtime config also exposes `send_error_guard` for per-session thresholds
+and actions (`:pause`, `:disconnect`, `:stop_session`) based on send errors and
+drop timeouts.
+
 Additional trust/parity control namespaces are available at session level:
 `compliance`, `adaptive_governor`, `risk`, `canary`, `release_gates`,
 `auth_guard`, `protocol_health`, `hygiene`, and `enforcement`.
+
+Operational health events are broadcast on PubSub topics:
+- `ex_wapp:health:<session_id>`
+- `ex_wapp:health`
 
 See `SESSION_TRUST_PARITY_CHECKLIST.md` for phased implementation tasks.
 

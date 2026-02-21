@@ -98,6 +98,32 @@ defmodule ExWapp.Session.Worker.Subscribers do
     _ -> :ok
   end
 
+  @doc """
+  Broadcasts session health events (errors, drops, retries, guard trips).
+
+  Events are sent on:
+  - per-session: `"ex_wapp:health:<session_id>"`
+  - global: `"ex_wapp:health"` with `{session_id, payload}`
+  """
+  @spec broadcast_health(term(), term()) :: :ok
+  def broadcast_health(session_id, event) do
+    topic_key = session_id || self()
+
+    Phoenix.PubSub.broadcast(
+      ExWapp.PubSub,
+      "ex_wapp:health:#{topic_key}",
+      event
+    )
+
+    Phoenix.PubSub.broadcast(
+      ExWapp.PubSub,
+      "ex_wapp:health",
+      {topic_key, event}
+    )
+  rescue
+    _ -> :ok
+  end
+
   @spec remove_message_subscriber(map(), reference()) :: map()
   def remove_message_subscriber(state, ref) do
     case Map.pop(state.message_subscribers, ref) do

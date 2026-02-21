@@ -33,6 +33,14 @@ defmodule ExWapp.Config do
         max_silent_drop_fallback_attempts: 1,
         retry_backoff_ms: [1_000, 3_000, 7_000]
       },
+      send_error_guard: %{
+        enabled: false,
+        max_consecutive_errors: 3,
+        max_errors_per_minute: 20,
+        max_drops_per_minute: 10,
+        action: :stop_session,
+        notify_only: false
+      },
       queue: %{
         max_size: 10_000,
         drop_policy: :reject_new,
