@@ -36,6 +36,12 @@ defmodule ExWapp.Session do
   @spec get_session_id(GenServer.server()) :: term() | nil
   defdelegate get_session_id(server), to: Worker
 
+  @spec runtime_config(GenServer.server()) :: map()
+  defdelegate runtime_config(server), to: Worker, as: :get_runtime_config
+
+  @spec policy_status(GenServer.server()) :: map()
+  defdelegate policy_status(server), to: Worker, as: :get_policy_status
+
   @spec subscribe_qr(GenServer.server()) :: {:ok, reference()}
   defdelegate subscribe_qr(server), to: Worker
 

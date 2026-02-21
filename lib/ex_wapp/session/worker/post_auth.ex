@@ -8,7 +8,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
 
   require Logger
 
-  alias ExWapp.{Binary, MapPath, Store}
+  alias ExWapp.{Binary, Config, MapPath, Store}
 
   @min_prekey_threshold 5
 
@@ -89,7 +89,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
 
         do_prekey_upload(state, initial: true)
 
-      server_count <= @min_prekey_threshold ->
+      server_count <= min_prekey_threshold(state) ->
         Logger.info("[SESSION] Server prekeys low (#{server_count}), uploading refill batch")
         do_prekey_upload(state, initial: false)
 
@@ -105,7 +105,10 @@ defmodule ExWapp.Session.Worker.PostAuth do
   # -- Internal helpers -------------------------------------------------------
 
   defp do_prekey_upload(state, opts) do
-    case ExWapp.Prekeys.build_prekey_upload(state.store, opts) do
+    case ExWapp.Prekeys.build_prekey_upload(
+           state.store,
+           Keyword.put(opts, :runtime_cfg, state.runtime_cfg || %{})
+         ) do
       {:ok, prekey_node, prekeys} ->
         persist_uploaded_prekeys(state.store, prekeys)
         initial = Keyword.get(opts, :initial, false)
@@ -158,5 +161,9 @@ defmodule ExWapp.Session.Worker.PostAuth do
     error ->
       Logger.warning("[SESSION] Failed to persist uploaded prekeys: #{inspect(error)}")
       :ok
+  end
+
+  defp min_prekey_threshold(state) do
+    Config.get(state.runtime_cfg || %{}, [:prekeys, :min_threshold], @min_prekey_threshold)
   end
 end

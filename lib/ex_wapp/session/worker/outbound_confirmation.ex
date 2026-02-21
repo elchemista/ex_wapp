@@ -9,7 +9,7 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
   alias ExWapp.Chat
   alias ExWapp.Session.{Account, JIDUtils}
 
-  @max_silent_drop_fallback_attempts 1
+  @default_max_silent_drop_fallback_attempts 1
 
   @doc """
   Schedules a confirmation timer for an outbound message when the
@@ -23,7 +23,14 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
   def schedule(state, jid, text, message_id, _strategy, attempt, opts \\ []) do
     timeout_ms = Keyword.get(opts, :timeout_ms, 6_000)
 
-    if watch_self_chat?(state.store, jid, attempt) do
+    max_fallback_attempts =
+      Keyword.get(
+        opts,
+        :max_silent_drop_fallback_attempts,
+        @default_max_silent_drop_fallback_attempts
+      )
+
+    if watch_self_chat?(state.store, jid, attempt, max_fallback_attempts) do
       timer =
         Process.send_after(
           self(),
@@ -63,10 +70,30 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
           map(),
           (map(), String.t(), (-> term()) -> {:ok, pid(), reference()} | {:error, term()}),
           (pid(), map(), String.t(), String.t(), keyword() -> term()),
-          (map(), pid(), reference(), String.t() -> map())
+          (map(), pid(), reference(), String.t() -> map()),
+          keyword()
         ) :: map()
   def handle_timeout(state, message_id, confirmation, start_worker_fn, send_fn, register_fn) do
+    handle_timeout(state, message_id, confirmation, start_worker_fn, send_fn, register_fn, [])
+  end
+
+  def handle_timeout(
+        state,
+        message_id,
+        confirmation,
+        start_worker_fn,
+        send_fn,
+        register_fn,
+        opts
+      ) do
     %{jid: jid, text: text, attempt: attempt} = confirmation
+
+    max_fallback_attempts =
+      Keyword.get(
+        opts,
+        :max_silent_drop_fallback_attempts,
+        @default_max_silent_drop_fallback_attempts
+      )
 
     case outbound_message_status(state.store, jid, message_id) do
       status when status in [:delivered, :read, :received] ->
@@ -77,7 +104,7 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
         state
 
       _other ->
-        if attempt < @max_silent_drop_fallback_attempts do
+        if attempt < max_fallback_attempts do
           Logger.warning(
             "[SEND] Message id=#{message_id} to=#{jid} remained unconfirmed; retrying with fallback self-chat strategy"
           )
@@ -149,10 +176,9 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
     end
   end
 
-  defp watch_self_chat?(nil, _jid, _attempt), do: false
-
-  defp watch_self_chat?(store, jid, attempt)
-       when is_integer(attempt) and attempt <= @max_silent_drop_fallback_attempts do
+  defp watch_self_chat?(store, jid, attempt, max_fallback_attempts)
+       when is_integer(attempt) and is_integer(max_fallback_attempts) and
+              attempt <= max_fallback_attempts do
     own_base_jid = Account.local_account_base_jid(store)
     own_lid_jid = Account.local_account_lid_jid(store)
 
@@ -166,7 +192,7 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
     dest_user != "" and MapSet.member?(own_user_parts, dest_user)
   end
 
-  defp watch_self_chat?(_store, _jid, _attempt), do: false
+  defp watch_self_chat?(_store, _jid, _attempt, _max_fallback_attempts), do: false
 
   defp outbound_message_status(nil, _jid, _message_id), do: :unknown
 

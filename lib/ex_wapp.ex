@@ -245,6 +245,18 @@ defmodule ExWapp do
   defdelegate get_session_id(server), to: Session
 
   @doc """
+  Returns the effective runtime configuration for a running session.
+  """
+  @spec runtime_config(GenServer.server()) :: map()
+  defdelegate runtime_config(server), to: Session
+
+  @doc """
+  Returns current policy status (safety breaker, quota, rate limiter snapshot).
+  """
+  @spec policy_status(GenServer.server()) :: map()
+  defdelegate policy_status(server), to: Session
+
+  @doc """
   Gracefully disconnects from WhatsApp servers.
 
   Stops automatic reconnection and closes the connection cleanly.

@@ -14,13 +14,23 @@ defmodule ExWapp.Session.OutboundQueue do
   defstruct session: nil,
             transport: ExWapp.Conn,
             conn: nil,
-            queue: :queue.new()
+            queue: :queue.new(),
+            max_size: 10_000,
+            drop_policy: :reject_new,
+            flush_batch_size: 100,
+            flush_tick_ms: 10,
+            flush_timer: nil
 
   @type t :: %__MODULE__{
           session: pid(),
           transport: module(),
           conn: pid() | nil,
-          queue: :queue.queue(item())
+          queue: :queue.queue(item()),
+          max_size: pos_integer(),
+          drop_policy: :reject_new | :drop_oldest,
+          flush_batch_size: pos_integer(),
+          flush_tick_ms: pos_integer(),
+          flush_timer: reference() | nil
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -44,7 +54,11 @@ defmodule ExWapp.Session.OutboundQueue do
   def init(opts) do
     state = %__MODULE__{
       session: Keyword.fetch!(opts, :session),
-      transport: Keyword.get(opts, :transport, ExWapp.Conn)
+      transport: Keyword.get(opts, :transport, ExWapp.Conn),
+      max_size: Keyword.get(opts, :max_size, 10_000),
+      drop_policy: Keyword.get(opts, :drop_policy, :reject_new),
+      flush_batch_size: Keyword.get(opts, :flush_batch_size, 100),
+      flush_tick_ms: Keyword.get(opts, :flush_tick_ms, 10)
     }
 
     {:ok, state}
@@ -60,27 +74,76 @@ defmodule ExWapp.Session.OutboundQueue do
   end
 
   def handle_cast({:enqueue, item}, state) do
-    state = %{state | queue: :queue.in(item, state.queue)}
+    state = enqueue_item(state, item)
+    {:noreply, flush(state)}
+  end
+
+  @impl true
+  def handle_info(:flush_queue, state) do
+    state = %{state | flush_timer: nil}
     {:noreply, flush(state)}
   end
 
   defp flush(%{conn: nil} = state), do: state
 
-  defp flush(%{queue: queue} = state) do
+  defp flush(state) do
+    {state, sent_count} = flush_batch(state, state.flush_batch_size)
+
+    if sent_count >= state.flush_batch_size and :queue.len(state.queue) > 0 do
+      schedule_flush(state)
+    else
+      state
+    end
+  end
+
+  defp flush_batch(state, remaining) when remaining <= 0, do: {state, 0}
+
+  defp flush_batch(%{queue: queue} = state, remaining) do
     case :queue.out(queue) do
       {:empty, _queue} ->
-        state
+        {state, 0}
 
       {{:value, item}, rest} ->
         case dispatch(item, state) do
           :ok ->
-            flush(%{state | queue: rest})
+            next_state = %{state | queue: rest}
+            {final_state, sent_rest} = flush_batch(next_state, remaining - 1)
+            {final_state, sent_rest + 1}
 
           {:error, reason} ->
             Logger.warning("[OUTBOUND] dispatch failed: #{inspect(reason)}")
             send(state.session, {:outbound_error, item, reason})
-            %{state | queue: :queue.in_r(item, rest)}
+            {%{state | queue: :queue.in_r(item, rest)}, 0}
         end
+    end
+  end
+
+  defp schedule_flush(%{flush_timer: nil} = state) do
+    timer = Process.send_after(self(), :flush_queue, state.flush_tick_ms)
+    %{state | flush_timer: timer}
+  end
+
+  defp schedule_flush(state), do: state
+
+  defp enqueue_item(state, item) do
+    queue_len = :queue.len(state.queue)
+
+    cond do
+      queue_len < state.max_size ->
+        %{state | queue: :queue.in(item, state.queue)}
+
+      state.drop_policy == :drop_oldest ->
+        trimmed =
+          case :queue.out(state.queue) do
+            {:empty, q} -> q
+            {{:value, _oldest}, rest} -> rest
+          end
+
+        %{state | queue: :queue.in(item, trimmed)}
+
+      true ->
+        send(state.session, {:outbound_error, item, :queue_full})
+        state
     end
   end
 

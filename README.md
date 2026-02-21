@@ -20,6 +20,40 @@ Still unstable and protocol-sensitive:
 - full message delivery reliability across protocol changes
 - complete parity for all retry and cache-invalidation edge cases
 
+## Runtime Hardening Config
+
+ExWapp now supports runtime hardening controls (with safe defaults) through:
+
+- `config :ex_wapp, :runtime, ...` (application-wide)
+- per-session override via `start_link(runtime: [...])` / `start_session(..., runtime: [...])`
+
+Implemented configurable areas include:
+
+- reconnect/backoff + max attempts
+- IQ timeout + max pending IQ requests
+- outbound queue size/drop policy
+- send retry/confirmation limits
+- throttle and daily quota guards
+- safety breaker for repeated `401` / `403` / `stream_replaced`
+
+Inspect active policy/config from a running session:
+
+```elixir
+cfg = ExWapp.runtime_config(session)
+status = ExWapp.policy_status(session)
+```
+
+Example:
+
+```elixir
+config :ex_wapp, :runtime,
+  reconnect: [enabled: true, max_attempts: 10, max_backoff_ms: 120_000],
+  iq: [default_timeout_ms: 20_000, max_pending_requests: 500],
+  queue: [max_size: 5_000, drop_policy: :reject_new],
+  throttle: [enabled: true, global: [messages_per_second: 5, burst: 10]],
+  quota: [enabled: true, per_session: [daily_messages: 2_000]]
+```
+
 ## Quickstart
 
 ```bash

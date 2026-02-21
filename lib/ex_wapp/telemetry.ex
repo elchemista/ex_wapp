@@ -17,7 +17,11 @@ defmodule ExWapp.Telemetry do
     @prefix ++ [:terminate],
     @prefix ++ [:qr],
     @prefix ++ [:message_received],
-    @prefix ++ [:message_sent]
+    @prefix ++ [:message_sent],
+    [:ex_wapp, :rate, :limited],
+    [:ex_wapp, :quota, :exceeded],
+    [:ex_wapp, :safety, :trip],
+    [:ex_wapp, :policy, :blocked_send]
   ]
 
   @type event_name :: [atom()]

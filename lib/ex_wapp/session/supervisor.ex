@@ -96,6 +96,7 @@ defmodule ExWapp.Session.Supervisor do
     * `:store` - Storage adapter (see `ExWapp.Store`)
     * `:auto_connect` - Connect automatically on start (default: false)
     * `:reconnect` - Enable automatic reconnection (default: true)
+    * `:runtime` - Runtime hardening config override for this session
 
   ## Examples
 

@@ -45,7 +45,7 @@ defmodule ExWapp.Session.Worker do
   require Logger
 
   alias ExWapp.AppState.Engine
-  alias ExWapp.{Binary, Pairing, Store, Telemetry}
+  alias ExWapp.{Binary, Config, Pairing, Quota, RateLimiter, Store, Telemetry}
 
   alias ExWapp.Session.{InboundRouter, JIDUtils, OutboundQueue}
 
@@ -55,12 +55,9 @@ defmodule ExWapp.Session.Worker do
     OutboundConfirmation,
     Resilience,
     Retry,
+    Safety,
     Subscribers
   }
-
-  @health_check_interval_ms 30_000
-  @max_outgoing_retry_attempts 2
-  @silent_drop_confirm_timeout_ms 6_000
 
   @typedoc "Human readable events emitted during the pairing flow."
   @type qr_event :: {:code, String.t()} | :success | {:error, term()}
@@ -85,6 +82,10 @@ defmodule ExWapp.Session.Worker do
     send_workers: %{},
     send_worker_mons: %{},
     opts: [],
+    runtime_cfg: %{},
+    rate_limiter: %{},
+    quota: %{},
+    safety: %{},
     reconnect_attempts: 0,
     last_disconnect_reason: nil,
     connected_at: nil,
@@ -119,6 +120,10 @@ defmodule ExWapp.Session.Worker do
           send_workers: %{pid() => binary()},
           send_worker_mons: %{reference() => pid()},
           opts: keyword(),
+          runtime_cfg: map(),
+          rate_limiter: map(),
+          quota: map(),
+          safety: map(),
           pairing: Pairing.state(),
           reconnect_attempts: non_neg_integer(),
           last_disconnect_reason: term() | nil,
@@ -143,6 +148,7 @@ defmodule ExWapp.Session.Worker do
     * `:supervisor` - Parent supervisor PID (set automatically by Supervisor)
     * `:auto_connect` - Connect automatically on start (default: false)
     * `:reconnect` - Enable automatic reconnection (default: true)
+    * `:runtime` - Runtime hardening settings override (deep-merged)
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -184,6 +190,14 @@ defmodule ExWapp.Session.Worker do
   """
   @spec get_session_id(GenServer.server()) :: term() | nil
   def get_session_id(server), do: GenServer.call(server, :get_session_id)
+
+  @doc "Returns the resolved runtime configuration for this session."
+  @spec get_runtime_config(GenServer.server()) :: map()
+  def get_runtime_config(server), do: GenServer.call(server, :get_runtime_config)
+
+  @doc "Returns current policy status (safety, quota, rate limiter snapshots)."
+  @spec get_policy_status(GenServer.server()) :: map()
+  def get_policy_status(server), do: GenServer.call(server, :get_policy_status)
 
   @doc """
   Subscribes to QR code events.
@@ -353,6 +367,15 @@ defmodule ExWapp.Session.Worker do
   def init(opts) do
     Process.flag(:trap_exit, true)
 
+    runtime_cfg =
+      case Config.resolve(opts) do
+        {:ok, cfg} ->
+          cfg
+
+        {:error, reason} ->
+          raise ArgumentError, "invalid runtime config: #{inspect(reason)}"
+      end
+
     store = Store.new(Keyword.get(opts, :store))
     session_id = Keyword.get(opts, :session_id)
     transport_mod = Keyword.get(opts, :transport, ExWapp.Conn)
@@ -369,20 +392,31 @@ defmodule ExWapp.Session.Worker do
     end
 
     {:ok, outbound_queue} =
-      OutboundQueue.start_link(session: self(), transport: transport_mod)
+      OutboundQueue.start_link(
+        session: self(),
+        transport: transport_mod,
+        max_size: Config.get(runtime_cfg, [:queue, :max_size], 10_000),
+        drop_policy: Config.get(runtime_cfg, [:queue, :drop_policy], :reject_new),
+        flush_batch_size: Config.get(runtime_cfg, [:queue, :flush_batch_size], 100),
+        flush_tick_ms: Config.get(runtime_cfg, [:queue, :flush_tick_ms], 10)
+      )
 
     {:ok, inbound_router} = InboundRouter.start_link(session: self())
     {:ok, send_worker_sup} = Task.Supervisor.start_link()
 
     state = %__MODULE__{
       opts: opts,
+      runtime_cfg: runtime_cfg,
       store: store,
       transport_mod: transport_mod,
       outbound_queue: outbound_queue,
       inbound_router: inbound_router,
       send_worker_sup: send_worker_sup,
       session_id: session_id,
-      pairing: Pairing.new(store)
+      pairing: Pairing.new(store),
+      rate_limiter: RateLimiter.new(),
+      quota: Quota.new(runtime_cfg),
+      safety: Safety.new()
     }
 
     emit_telemetry(:init, %{session_id: session_id}, state)
@@ -418,39 +452,53 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_call({:send_text, jid, text}, from, state) do
-    # Spawn a worker to handle the full send flow (including prekey fetch if needed)
-    # This allows us to wait for IQ responses without blocking the GenServer
-    session_pid = self()
+    case enforce_send_policies(state, jid) do
+      {:error, reason, blocked_state} ->
+        {:reply, {:error, reason}, blocked_state}
 
-    case start_send_worker(
-           state,
-           jid,
-           fn ->
-             result = do_send_text_worker(session_pid, state, jid, text)
-             send(session_pid, {:send_result, jid, text, result, :primary, 0})
-             result
-           end,
-           from
-         ) do
-      {:ok, worker, mon} ->
-        new_state =
-          state
-          |> Map.update(:send_workers, %{worker => jid}, fn workers ->
-            Map.put(workers, worker, jid)
-          end)
-          |> Map.update(:send_worker_mons, %{mon => worker}, fn mons ->
-            Map.put(mons, mon, worker)
-          end)
+      {:ok, policy_state} ->
+        # Spawn a worker to handle the full send flow (including prekey fetch if needed)
+        # This allows us to wait for IQ responses without blocking the GenServer
+        session_pid = self()
 
-        {:noreply, update_stats(new_state, :messages_sent)}
+        case start_send_worker(
+               policy_state,
+               jid,
+               fn ->
+                 result = do_send_text_worker(session_pid, policy_state, jid, text)
+                 send(session_pid, {:send_result, jid, text, result, :primary, 0})
+                 result
+               end,
+               from
+             ) do
+          {:ok, worker, mon} ->
+            new_state =
+              policy_state
+              |> Map.update(:send_workers, %{worker => jid}, fn workers ->
+                Map.put(workers, worker, jid)
+              end)
+              |> Map.update(:send_worker_mons, %{mon => worker}, fn mons ->
+                Map.put(mons, mon, worker)
+              end)
 
-      {:error, reason} ->
-        {:reply, {:error, {:send_worker_start_failed, reason}}, state}
+            {:noreply, update_stats(new_state, :messages_sent)}
+
+          {:error, reason} ->
+            {:reply, {:error, {:send_worker_start_failed, reason}}, policy_state}
+        end
     end
   end
 
   def handle_call(:get_store, _from, state) do
     {:reply, state.store, state}
+  end
+
+  def handle_call(:get_runtime_config, _from, state) do
+    {:reply, state.runtime_cfg, state}
+  end
+
+  def handle_call(:get_policy_status, _from, state) do
+    {:reply, policy_status(state), state}
   end
 
   def handle_call(:get_session_id, _from, state) do
@@ -463,17 +511,24 @@ defmodule ExWapp.Session.Worker do
 
   def handle_call({:send_iq, node, message_id}, from, %{status: :connected, conn: conn} = state)
       when is_pid(conn) do
-    # Send the IQ node
-    case state.transport_mod.send_node(conn, node) do
-      :ok ->
-        # Register pending IQ with timeout
-        timer = Process.send_after(self(), {:iq_timeout, message_id}, 30_000)
-        pending = %{from: from, timer: timer}
-        new_state = %{state | pending_iqs: Map.put(state.pending_iqs, message_id, pending)}
-        {:noreply, new_state}
+    max_pending = Config.get(state.runtime_cfg, [:iq, :max_pending_requests], 1_000)
 
-      error ->
-        {:reply, error, state}
+    if map_size(state.pending_iqs) >= max_pending do
+      {:reply, {:error, :too_many_pending_iq_requests}, state}
+    else
+      # Send the IQ node
+      case state.transport_mod.send_node(conn, node) do
+        :ok ->
+          # Register pending IQ with timeout
+          timeout_ms = Config.get(state.runtime_cfg, [:iq, :default_timeout_ms], 30_000)
+          timer = Process.send_after(self(), {:iq_timeout, message_id}, timeout_ms)
+          pending = %{from: from, timer: timer}
+          new_state = %{state | pending_iqs: Map.put(state.pending_iqs, message_id, pending)}
+          {:noreply, new_state}
+
+        error ->
+          {:reply, error, state}
+      end
     end
   end
 
@@ -686,24 +741,33 @@ defmodule ExWapp.Session.Worker do
 
   # PubSub send command - dispatched via ExWapp.send_message("session_id", jid, text)
   def handle_info({:ex_wapp_send, jid, text}, state) do
-    session_pid = self()
+    case enforce_send_policies(state, jid) do
+      {:error, reason, blocked_state} ->
+        Logger.warning("[SESSION] PubSub send blocked for #{jid}: #{inspect(reason)}")
+        {:noreply, blocked_state}
 
-    case start_send_worker(
-           state,
-           jid,
-           fn ->
-             result = do_send_text_worker(session_pid, state, jid, text)
-             send(session_pid, {:send_result, jid, text, result, :primary, 0})
-             result
-           end
-         ) do
-      {:ok, worker, mon} ->
-        {:noreply,
-         state |> register_send_worker(worker, mon, jid) |> update_stats(:messages_sent)}
+      {:ok, policy_state} ->
+        session_pid = self()
 
-      {:error, reason} ->
-        Logger.warning("[SESSION] PubSub send failed for #{jid}: #{inspect(reason)}")
-        {:noreply, state}
+        case start_send_worker(
+               policy_state,
+               jid,
+               fn ->
+                 result = do_send_text_worker(session_pid, policy_state, jid, text)
+                 send(session_pid, {:send_result, jid, text, result, :primary, 0})
+                 result
+               end
+             ) do
+          {:ok, worker, mon} ->
+            {:noreply,
+             policy_state
+             |> register_send_worker(worker, mon, jid)
+             |> update_stats(:messages_sent)}
+
+          {:error, reason} ->
+            Logger.warning("[SESSION] PubSub send failed for #{jid}: #{inspect(reason)}")
+            {:noreply, policy_state}
+        end
     end
   end
 
@@ -816,7 +880,9 @@ defmodule ExWapp.Session.Worker do
             confirmation,
             &start_send_worker/3,
             &do_send_text_worker/5,
-            &register_send_worker/4
+            &register_send_worker/4,
+            max_silent_drop_fallback_attempts:
+              Config.get(state.runtime_cfg, [:send, :max_silent_drop_fallback_attempts], 1)
           )
 
         {:noreply, new_state}
@@ -1002,7 +1068,8 @@ defmodule ExWapp.Session.Worker do
   # ============================================================================
 
   defp schedule_health_check(state) do
-    timer = Process.send_after(self(), :health_check, @health_check_interval_ms)
+    interval_ms = Config.get(state.runtime_cfg, [:health, :check_interval_ms], 30_000)
+    timer = Process.send_after(self(), :health_check, interval_ms)
     %{state | health_timer: timer}
   end
 
@@ -1077,9 +1144,10 @@ defmodule ExWapp.Session.Worker do
 
   defp maybe_retry_outgoing_message(state, jid, message_id) do
     session_pid = self()
+    max_attempts = Config.get(state.runtime_cfg, [:send, :max_outgoing_retry_attempts], 2)
 
     Retry.maybe_retry_outgoing_message(state, jid, message_id,
-      max_attempts: @max_outgoing_retry_attempts,
+      max_attempts: max_attempts,
       normalize_jid: &JIDUtils.normalize_for_signal/1,
       start_worker: &start_send_worker/3,
       send_fun: fn normalized_jid, text ->
@@ -1098,8 +1166,14 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp schedule_outbound_confirmation(state, jid, text, message_id, strategy, attempt) do
+    confirm_timeout_ms = Config.get(state.runtime_cfg, [:send, :confirm_timeout_ms], 6_000)
+
+    max_fallback_attempts =
+      Config.get(state.runtime_cfg, [:send, :max_silent_drop_fallback_attempts], 1)
+
     OutboundConfirmation.schedule(state, jid, text, message_id, strategy, attempt,
-      timeout_ms: @silent_drop_confirm_timeout_ms
+      timeout_ms: confirm_timeout_ms,
+      max_silent_drop_fallback_attempts: max_fallback_attempts
     )
   end
 
@@ -1149,7 +1223,14 @@ defmodule ExWapp.Session.Worker do
 
   defp restart_outbound_queue(state) do
     {:ok, outbound_queue} =
-      OutboundQueue.start_link(session: self(), transport: state.transport_mod)
+      OutboundQueue.start_link(
+        session: self(),
+        transport: state.transport_mod,
+        max_size: Config.get(state.runtime_cfg, [:queue, :max_size], 10_000),
+        drop_policy: Config.get(state.runtime_cfg, [:queue, :drop_policy], :reject_new),
+        flush_batch_size: Config.get(state.runtime_cfg, [:queue, :flush_batch_size], 100),
+        flush_tick_ms: Config.get(state.runtime_cfg, [:queue, :flush_tick_ms], 10)
+      )
 
     maybe_set_conn(outbound_queue, state.conn)
     %{state | outbound_queue: outbound_queue}
@@ -1233,6 +1314,68 @@ defmodule ExWapp.Session.Worker do
         send_worker_mons: %{},
         outbound_confirmations: %{}
     }
+  end
+
+  defp enforce_send_policies(state, jid) do
+    with {:ok, state} <- Safety.check_send_allowed(state),
+         {:ok, state} <- Quota.check_and_increment(state, jid),
+         {:ok, state} <- RateLimiter.check_and_update(state, jid) do
+      {:ok, state}
+    else
+      {:error, reason, policy_state} ->
+        emit_telemetry(:error, %{reason: reason, phase: :send_policy}, policy_state, %{jid: jid})
+        emit_policy_telemetry(reason, jid, policy_state)
+        {:error, reason, policy_state}
+    end
+  end
+
+  defp policy_status(state) do
+    rate_limiter = state.rate_limiter || %{}
+
+    %{
+      safety: Safety.status(state),
+      quota: state.quota,
+      rate_limiter: %{
+        global: rate_limiter[:global],
+        per_jid_keys: map_size(rate_limiter[:per_jid] || %{}),
+        per_group_keys: map_size(rate_limiter[:per_group] || %{})
+      }
+    }
+  end
+
+  defp emit_policy_telemetry(reason, jid, state) do
+    metadata = %{jid: jid, session_id: state.session_id, reason: reason}
+
+    case reason do
+      {:rate_limited, scope, retry_after_ms} ->
+        :telemetry.execute(
+          [:ex_wapp, :rate, :limited],
+          %{count: 1, retry_after_ms: retry_after_ms},
+          Map.put(metadata, :scope, scope)
+        )
+
+      {:quota_exceeded, scope} ->
+        :telemetry.execute(
+          [:ex_wapp, :quota, :exceeded],
+          %{count: 1},
+          Map.put(metadata, :scope, scope)
+        )
+
+      {:safety_cooloff, retry_after_ms} ->
+        :telemetry.execute(
+          [:ex_wapp, :safety, :trip],
+          %{count: 1, retry_after_ms: retry_after_ms},
+          metadata
+        )
+
+      :forbidden_locked ->
+        :telemetry.execute([:ex_wapp, :safety, :trip], %{count: 1}, metadata)
+
+      _ ->
+        :telemetry.execute([:ex_wapp, :policy, :blocked_send], %{count: 1}, metadata)
+    end
+  rescue
+    _ -> :ok
   end
 
   defp update_stats(state, key) do

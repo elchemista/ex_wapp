@@ -16,6 +16,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     Inbound,
     PostAuth,
     ReceiptBuilder,
+    Safety,
     Subscribers
   }
 
@@ -151,12 +152,14 @@ defmodule ExWapp.Session.Worker.NodeHandler do
         Logger.error("[SESSION] Unauthorized - session invalid, stopping reconnects")
         Logger.error("[SESSION] Please clear session and re-pair")
         notify_qr(state, {:error, :unauthorized})
+        state = Safety.record_signal(state, :unauthorized)
         # Mark session as invalid to stop reconnection attempts
         {%{state | session_invalid: true, status: :idle}, []}
 
       "403" ->
         Logger.error("[SESSION] Forbidden - account may be banned")
         notify_qr(state, {:error, :forbidden})
+        state = Safety.record_signal(state, :forbidden)
         {%{state | session_invalid: true, status: :idle}, []}
 
       "405" ->
@@ -201,6 +204,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
           Logger.error("[SESSION] Device was removed (401)! Need to re-pair from scratch.")
           Logger.error("[SESSION] Delete session file and scan QR code again.")
           notify_qr(state, {:error, :device_removed})
+          state = Safety.record_signal(state, :device_removed)
           # Stop reconnection - device is permanently invalid
           %{state | status: :disconnected, reconnect_attempts: 999}
 
@@ -215,6 +219,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
         conflict_type == "replaced" ->
           Logger.error("[SESSION] Stream replaced by another connection, restarting transport")
           notify_qr(state, {:error, :stream_replaced})
+          state = Safety.record_signal(state, :stream_replaced)
           restart_connection_now(state, :stream_replaced)
 
         true ->

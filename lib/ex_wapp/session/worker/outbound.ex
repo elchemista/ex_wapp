@@ -3,7 +3,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   require Logger
 
-  alias ExWapp.{Binary, Chat, JID, Messages, Store, Telemetry}
+  alias ExWapp.{Binary, Chat, Config, JID, Messages, Store, Telemetry}
   alias ExWapp.Proto.Message
   alias ExWapp.Signal.{Encryption, SenderKey, SessionStore}
 
@@ -79,7 +79,7 @@ defmodule ExWapp.Session.Worker.Outbound do
              %{recipient: distribution_payload},
              prekey_bundles || %{}
            ) do
-      persist_signal_sessions(session_pid, persisted_sessions)
+      persist_signal_sessions(session_pid, persisted_sessions, state)
 
       pending_message = %{
         id: message_id,
@@ -405,7 +405,7 @@ defmodule ExWapp.Session.Worker.Outbound do
           {:prekey_error, ^message_id, error} ->
             {:error, {:group_info_query_error, error}}
         after
-          15_000 ->
+          group_info_timeout_ms(state) ->
             {:error, :group_info_timeout}
         end
 
@@ -660,7 +660,7 @@ defmodule ExWapp.Session.Worker.Outbound do
           {:prekey_error, ^message_id, error} ->
             {:error, {:prekey_fetch_error, error}}
         after
-          30_000 ->
+          prekey_timeout_ms(state) ->
             {:error, :prekey_timeout}
         end
 
@@ -687,7 +687,7 @@ defmodule ExWapp.Session.Worker.Outbound do
           {:prekey_error, ^message_id, error} ->
             {:error, {:prekey_fetch_error, error}}
         after
-          30_000 ->
+          prekey_timeout_ms(state) ->
             {:error, :prekey_timeout}
         end
 
@@ -832,7 +832,7 @@ defmodule ExWapp.Session.Worker.Outbound do
              payloads,
              prekey_bundles || %{}
            ) do
-      persist_signal_sessions(session_pid, updated_sessions)
+      persist_signal_sessions(session_pid, updated_sessions, state)
 
       Chat.add_message(store, jid, %{
         id: message_id,
@@ -1316,7 +1316,7 @@ defmodule ExWapp.Session.Worker.Outbound do
             Logger.warning("[USYNC] Device list query error: #{inspect(error)}")
             {:error, {:usync_query_error, error}}
         after
-          15_000 ->
+          usync_timeout_ms(state) ->
             Logger.warning("[USYNC] Device list query timed out")
             {:error, :usync_timeout}
         end
@@ -1363,14 +1363,26 @@ defmodule ExWapp.Session.Worker.Outbound do
     transport_mod.send_node(conn, node)
   end
 
-  defp persist_signal_sessions(session_pid, sessions) do
-    GenServer.call(session_pid, {:update_signal_sessions, sessions}, 30_000)
+  defp persist_signal_sessions(session_pid, sessions, state) do
+    GenServer.call(session_pid, {:update_signal_sessions, sessions}, iq_timeout_ms(state))
     :ok
   rescue
     e ->
       Logger.warning("[SEND] persist_signal_sessions failed: #{inspect(e)}")
       :ok
   end
+
+  defp iq_timeout_ms(state),
+    do: Config.get(state.runtime_cfg || %{}, [:iq, :default_timeout_ms], 30_000)
+
+  defp prekey_timeout_ms(state),
+    do: Config.get(state.runtime_cfg || %{}, [:iq, :prekey_timeout_ms], 30_000)
+
+  defp usync_timeout_ms(state),
+    do: Config.get(state.runtime_cfg || %{}, [:iq, :usync_timeout_ms], 15_000)
+
+  defp group_info_timeout_ms(state),
+    do: Config.get(state.runtime_cfg || %{}, [:iq, :group_info_timeout_ms], 15_000)
 
   defp emit_telemetry(event, measurements, state, extra_metadata) do
     metadata =

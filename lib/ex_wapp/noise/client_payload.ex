@@ -1,7 +1,7 @@
 defmodule ExWapp.Noise.ClientPayload do
   @moduledoc false
 
-  alias ExWapp.{MapPath, Noise}
+  alias ExWapp.{Config, MapPath, Noise}
   alias ExWapp.Signal
   alias ExWapp.Store
   alias WAWebProtobufsWa6.ClientPayload
@@ -10,8 +10,7 @@ defmodule ExWapp.Noise.ClientPayload do
   alias WAWebProtobufsWa6.ClientPayload.WebInfo
   alias WAWebProtobufsWa6.ClientPayload.DevicePairingRegistrationData
 
-  @version {2, 3000, 1_029_948_479}
-  @version_string "2.3000.1029948479"
+  @default_version {2, 3000, 1_029_948_479}
 
   @spec build(Noise.t()) :: {:ok, binary()} | {:ok, binary(), map()} | {:error, term()}
   def build(%Noise{store: store}) do
@@ -36,6 +35,7 @@ defmodule ExWapp.Noise.ClientPayload do
     Logger.info("[ClientPayload] Building LOGIN payload for #{inspect(jid)}")
 
     info = Map.get(data, :client_info, %{})
+    runtime_cfg = runtime_cfg()
 
     # Match Go's getLoginPayload() - must include lidDbMigrated!
     payload = %ClientPayload{
@@ -44,7 +44,7 @@ defmodule ExWapp.Noise.ClientPayload do
       passive: true,
       pull: true,
       lidDbMigrated: true,
-      userAgent: build_user_agent(nil, info),
+      userAgent: build_user_agent(nil, info, runtime_cfg),
       webInfo: build_web_info(info),
       connectType: :WIFI_UNKNOWN,
       connectReason: :USER_ACTIVATED
@@ -62,14 +62,15 @@ defmodule ExWapp.Noise.ClientPayload do
 
     with {:ok, signal_info, signal_state} <- ensure_signal_bundle(data) do
       info = Map.get(data, :client_info, %{})
+      runtime_cfg = runtime_cfg()
 
       # Match Go's getRegistrationPayload() exactly
       payload = %ClientPayload{
         passive: false,
         pull: false,
-        userAgent: build_user_agent(nil, info),
+        userAgent: build_user_agent(nil, info, runtime_cfg),
         webInfo: build_web_info(info),
-        devicePairingData: build_device_pairing_data(signal_info),
+        devicePairingData: build_device_pairing_data(signal_info, runtime_cfg),
         connectType: :WIFI_UNKNOWN,
         connectReason: :USER_ACTIVATED
       }
@@ -96,8 +97,8 @@ defmodule ExWapp.Noise.ClientPayload do
 
   defp jid_to_username(_), do: 0
 
-  defp build_user_agent(_phone_id, info) do
-    {primary, secondary, tertiary} = @version
+  defp build_user_agent(_phone_id, info, runtime_cfg) do
+    {primary, secondary, tertiary} = protocol_version(runtime_cfg)
 
     # Match Go's BaseClientPayload.UserAgent exactly
     %UserAgent{
@@ -132,11 +133,14 @@ defmodule ExWapp.Noise.ClientPayload do
     Signal.bootstrap(params)
   end
 
-  defp build_device_pairing_data(%{
-         registration_id: registration_id,
-         identity_key: identity_key,
-         signed_prekey: %{id: signed_id, public: signed_pub, signature: signed_sig}
-       }) do
+  defp build_device_pairing_data(
+         %{
+           registration_id: registration_id,
+           identity_key: identity_key,
+           signed_prekey: %{id: signed_id, public: signed_pub, signature: signed_sig}
+         },
+         runtime_cfg
+       ) do
     %DevicePairingRegistrationData{
       eRegid: encode_registration_id(registration_id),
       eKeytype: <<5>>,
@@ -144,7 +148,7 @@ defmodule ExWapp.Noise.ClientPayload do
       eSkeyID: encode_signed_prekey_id(signed_id),
       eSkeyVal: signed_pub,
       eSkeySig: signed_sig,
-      buildHash: version_hash(),
+      buildHash: version_hash(runtime_cfg),
       deviceProps: device_props()
     }
   end
@@ -158,8 +162,33 @@ defmodule ExWapp.Noise.ClientPayload do
     |> binary_part(1, 3)
   end
 
-  defp version_hash do
-    :crypto.hash(:md5, @version_string)
+  defp version_hash(runtime_cfg) do
+    :crypto.hash(:md5, version_string(runtime_cfg))
+  end
+
+  defp runtime_cfg do
+    case Config.resolve([]) do
+      {:ok, cfg} -> cfg
+      {:error, _} -> %{}
+    end
+  end
+
+  defp protocol_version(runtime_cfg) do
+    primary =
+      Config.get(runtime_cfg, [:protocol, :client_version, :primary], elem(@default_version, 0))
+
+    secondary =
+      Config.get(runtime_cfg, [:protocol, :client_version, :secondary], elem(@default_version, 1))
+
+    tertiary =
+      Config.get(runtime_cfg, [:protocol, :client_version, :tertiary], elem(@default_version, 2))
+
+    {primary, secondary, tertiary}
+  end
+
+  defp version_string(runtime_cfg) do
+    {primary, secondary, tertiary} = protocol_version(runtime_cfg)
+    "#{primary}.#{secondary}.#{tertiary}"
   end
 
   # Encoded WACompanionReg.DeviceProps payload

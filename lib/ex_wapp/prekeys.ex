@@ -6,7 +6,7 @@ defmodule ExWapp.Prekeys do
   """
 
   require Logger
-  alias ExWapp.{Binary, Store}
+  alias ExWapp.{Binary, Config, Store}
   alias ExWapp.Binary.Node
 
   # Number of prekeys to upload on initial registration
@@ -42,9 +42,12 @@ defmodule ExWapp.Prekeys do
   def build_prekey_upload(store, opts \\ []) do
     data = Store.load!(store)
     signal = Map.get(data, :signal, %{})
+    runtime_cfg = Keyword.get(opts, :runtime_cfg, %{})
 
     initial_upload = Keyword.get(opts, :initial, false)
-    prekey_count = if initial_upload, do: @initial_prekey_count, else: @wanted_prekey_count
+    initial_count = prekey_cfg(runtime_cfg, :initial_prekey_count, @initial_prekey_count)
+    refill_count = prekey_cfg(runtime_cfg, :refill_prekey_count, @wanted_prekey_count)
+    prekey_count = if initial_upload, do: initial_count, else: refill_count
 
     Logger.debug("[PREKEYS] Building upload, signal keys: #{inspect(Map.keys(signal))}")
 
@@ -123,6 +126,14 @@ defmodule ExWapp.Prekeys do
   """
   def needs_upload?(server_count, local_count) do
     server_count < @min_prekey_count or local_count < @min_prekey_count
+  end
+
+  @doc """
+  Configurable version of `needs_upload?/2` using runtime config.
+  """
+  def needs_upload?(server_count, local_count, runtime_cfg) when is_map(runtime_cfg) do
+    threshold = prekey_cfg(runtime_cfg, :min_threshold, @min_prekey_count)
+    server_count < threshold or local_count < threshold
   end
 
   @doc """
@@ -228,5 +239,9 @@ defmodule ExWapp.Prekeys do
 
   defp generate_request_id do
     :crypto.strong_rand_bytes(8) |> Base.encode64() |> String.slice(0, 12)
+  end
+
+  defp prekey_cfg(runtime_cfg, key, default) do
+    Config.get(runtime_cfg, [:prekeys, key], default)
   end
 end

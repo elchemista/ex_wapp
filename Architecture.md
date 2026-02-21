@@ -341,6 +341,10 @@ Noise protocol state — lives inside `ExWapp.Conn` state.
   send_workers:                    %{pid() => binary()},
   send_worker_mons:                %{reference() => pid()},
   opts:                            keyword(),
+  runtime_cfg:                     map(),
+  rate_limiter:                    map(),
+  quota:                           map(),
+  safety:                          map(),
   reconnect_attempts:              non_neg_integer(),
   last_disconnect_reason:          term() | nil,
   connected_at:                    DateTime.t() | nil,
@@ -898,6 +902,19 @@ The library executes `:telemetry` events for observability.
 | `[:ex_wapp, :message, :received]` | `%{jid, type}` | Message received |
 | `[:ex_wapp, :message, :sent]` | `%{jid, type}` | Message sent |
 | `[:ex_wapp, :noise, :handshake_error]` | `%{reason}` | Handshake failure |
+| `[:ex_wapp, :session, :error]` | `%{phase, reason}` | Includes policy blocks (`phase: :send_policy`) |
+
+### Runtime Hardening Controls
+
+`Session.Worker` resolves runtime configuration from:
+
+1. Session options (`runtime: [...]`)
+2. `config :ex_wapp, :runtime`
+3. Internal defaults
+
+Configured controls include reconnect caps, IQ/pending limits, outbound queue
+limits, send retry windows, throttling, daily quotas, and a safety breaker for
+repeated `401`/`403`/`stream_replaced` signals.
 
 ---
 
