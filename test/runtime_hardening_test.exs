@@ -64,11 +64,17 @@ defmodule ExWapp.RuntimeHardeningTest do
     {:ok, session} =
       ExWapp.start_link(
         store: ExWapp.Store.Memory,
-        runtime: [reconnect: [max_attempts: 3]]
+        runtime: [
+          reconnect: [max_attempts: 3],
+          compliance: [strict_mode: false],
+          risk: [block_threshold: 70]
+        ]
       )
 
     cfg = ExWapp.runtime_config(session)
     assert get_in(cfg, [:reconnect, :max_attempts]) == 3
+    assert get_in(cfg, [:compliance, :strict_mode]) == false
+    assert get_in(cfg, [:risk, :block_threshold]) == 70
 
     status = ExWapp.policy_status(session)
     assert is_map(status.safety)

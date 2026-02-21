@@ -35,6 +35,15 @@ Implemented configurable areas include:
 - send retry/confirmation limits
 - throttle and daily quota guards
 - safety breaker for repeated `401` / `403` / `stream_replaced`
+- trust/parity control surface per session:
+  - strict compliance mode
+  - adaptive governor
+  - account risk breaker
+  - canary checks
+  - release gates/kill switch
+  - auth churn guard
+  - protocol-health thresholds
+  - hygiene/enforcement settings
 
 Inspect active policy/config from a running session:
 
@@ -51,8 +60,19 @@ config :ex_wapp, :runtime,
   iq: [default_timeout_ms: 20_000, max_pending_requests: 500],
   queue: [max_size: 5_000, drop_policy: :reject_new],
   throttle: [enabled: true, global: [messages_per_second: 5, burst: 10]],
-  quota: [enabled: true, per_session: [daily_messages: 2_000]]
+  quota: [enabled: true, per_session: [daily_messages: 2_000]],
+  compliance: [strict_mode: true, require_explicit_opt_in: true],
+  risk: [enabled: true, block_threshold: 75],
+  protocol: [
+    user_agent: [
+      os_version: "Linux x86_64",
+      manufacturer: "Mozilla",
+      device_name: "Firefox"
+    ]
+  ]
 ```
+
+Detailed implementation checklist: `SESSION_TRUST_PARITY_CHECKLIST.md`.
 
 ## Quickstart
 

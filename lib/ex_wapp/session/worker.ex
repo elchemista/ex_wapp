@@ -952,7 +952,14 @@ defmodule ExWapp.Session.Worker do
 
   defp safe_start_connection(state) do
     Logger.debug("[SESSION] safe_start_connection calling transport.start_link...")
-    noise_opts = Keyword.get(state.opts, :noise, [])
+
+    noise_opts =
+      state.opts
+      |> Keyword.get(:noise, [])
+      |> Keyword.put_new(
+        :client_payload_fun,
+        &ExWapp.Noise.ClientPayload.build(&1, state.runtime_cfg)
+      )
 
     result =
       state.transport_mod.start_link(session: self(), store: state.store, noise: noise_opts)

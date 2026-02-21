@@ -83,6 +83,14 @@ defmodule ExWapp.Config do
           secondary: 3000,
           tertiary: 1_029_948_479
         },
+        user_agent: %{
+          os_version: "Linux x86_64",
+          manufacturer: "Mozilla",
+          device_name: "Firefox",
+          os_build: "Linux",
+          locale_language: "en",
+          locale_country: "US"
+        },
         allow_relaxed_adv_decode: true,
         fail_on_unknown_critical_node: false,
         capture_unknown_nodes: true
@@ -94,6 +102,92 @@ defmodule ExWapp.Config do
         max_stream_replaced_per_hour: 3,
         cooloff_on_rate_signal_ms: 900_000,
         disable_send_on_forbidden: true
+      },
+      compliance: %{
+        strict_mode: true,
+        require_explicit_opt_in: true,
+        enforce_opt_out: true,
+        high_risk_fanout: %{
+          max_new_jids_per_hour: 20,
+          max_groups_per_hour: 10,
+          max_mentions_per_hour: 200
+        },
+        on_violation: :block
+      },
+      adaptive_governor: %{
+        enabled: true,
+        baseline_mps: 8.0,
+        min_mps: 1.0,
+        degrade_step: 0.2,
+        recovery_step: 0.05,
+        signal_weights: %{
+          unauthorized: 1.0,
+          forbidden: 1.0,
+          stream_replaced: 0.5,
+          delivery_anomaly: 0.4,
+          retry_spike: 0.3
+        }
+      },
+      risk: %{
+        enabled: true,
+        block_threshold: 80,
+        decay_per_minute: 2,
+        manual_unblock_required: true,
+        cooloff_ms: 3_600_000,
+        weights: %{
+          unauthorized: 40,
+          forbidden: 60,
+          stream_replaced: 25,
+          rate_limited: 10,
+          retry_spike: 10,
+          delivery_anomaly: 15
+        }
+      },
+      canary: %{
+        enabled: false,
+        interval_ms: 900_000,
+        recipients: [],
+        checks: %{
+          login: true,
+          send_text: true,
+          send_media: false,
+          group_send: false
+        },
+        fail_fast_consecutive_failures: 2
+      },
+      release_gates: %{
+        enabled: true,
+        remote_kill_switch: false,
+        rollback_profile: :last_known_good,
+        feature_flags: %{},
+        blocked_features: []
+      },
+      auth_guard: %{
+        max_repair_attempts_per_hour: 3,
+        max_reauth_attempts_per_day: 10,
+        reauth_cooldown_ms: 300_000,
+        re_pair_cooldown_ms: 1_800_000
+      },
+      protocol_health: %{
+        enabled: true,
+        alert_thresholds: %{
+          bad_mac_per_minute: 20,
+          prekey_miss_per_minute: 20,
+          session_mismatch_per_minute: 20
+        }
+      },
+      hygiene: %{
+        enabled: true,
+        prevent_concurrent_store_use: true,
+        enforce_stable_resource: true,
+        max_fingerprint_changes_per_day: 1
+      },
+      enforcement: %{
+        enabled: true,
+        snapshot_on_signals: [:unauthorized, :forbidden, :stream_replaced, :device_removed],
+        include_runtime_config: true,
+        capture_last_events: 200,
+        max_snapshot_bytes: 262_144
       }
     }
   end

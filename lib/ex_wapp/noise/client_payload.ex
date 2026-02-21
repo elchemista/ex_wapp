@@ -13,29 +13,32 @@ defmodule ExWapp.Noise.ClientPayload do
   @default_version {2, 3000, 1_029_948_479}
 
   @spec build(Noise.t()) :: {:ok, binary()} | {:ok, binary(), map()} | {:error, term()}
-  def build(%Noise{store: store}) do
+  def build(%Noise{} = noise), do: build(noise, default_runtime_cfg())
+  def build(_), do: {:error, :invalid_noise_state}
+
+  @spec build(Noise.t(), map()) :: {:ok, binary()} | {:ok, binary(), map()} | {:error, term()}
+  def build(%Noise{store: store}, runtime_cfg) when is_map(runtime_cfg) do
     data = Store.load!(store)
 
     # Check if we're already paired (have a JID stored)
     case MapPath.get(data, ["pairing", "device", "jid"]) do
       %ExWapp.JID{} = jid ->
         # Already paired - use login payload
-        build_login_payload(data, jid)
+        build_login_payload(data, jid, runtime_cfg)
 
       _ ->
         # Not paired - use registration payload
-        build_registration_payload(data)
+        build_registration_payload(data, runtime_cfg)
     end
   end
 
-  def build(_), do: {:error, :invalid_noise_state}
+  def build(_, _), do: {:error, :invalid_noise_state}
 
-  defp build_login_payload(data, jid) do
+  defp build_login_payload(data, jid, runtime_cfg) do
     require Logger
     Logger.info("[ClientPayload] Building LOGIN payload for #{inspect(jid)}")
 
     info = Map.get(data, :client_info, %{})
-    runtime_cfg = runtime_cfg()
 
     # Match Go's getLoginPayload() - must include lidDbMigrated!
     payload = %ClientPayload{
@@ -56,13 +59,12 @@ defmodule ExWapp.Noise.ClientPayload do
     end
   end
 
-  defp build_registration_payload(data) do
+  defp build_registration_payload(data, runtime_cfg) do
     require Logger
     Logger.info("[ClientPayload] Building REGISTRATION payload")
 
     with {:ok, signal_info, signal_state} <- ensure_signal_bundle(data) do
       info = Map.get(data, :client_info, %{})
-      runtime_cfg = runtime_cfg()
 
       # Match Go's getRegistrationPayload() exactly
       payload = %ClientPayload{
@@ -99,6 +101,7 @@ defmodule ExWapp.Noise.ClientPayload do
 
   defp build_user_agent(_phone_id, info, runtime_cfg) do
     {primary, secondary, tertiary} = protocol_version(runtime_cfg)
+    ua_defaults = Config.get(runtime_cfg, [:protocol, :user_agent], %{})
 
     # Match Go's BaseClientPayload.UserAgent exactly
     %UserAgent{
@@ -106,13 +109,15 @@ defmodule ExWapp.Noise.ClientPayload do
       appVersion: %AppVersion{primary: primary, secondary: secondary, tertiary: tertiary},
       mcc: "000",
       mnc: "000",
-      osVersion: Map.get(info, :os_version, "Linux"),
-      manufacturer: Map.get(info, :manufacturer, ""),
-      device: Map.get(info, :device_name, "Desktop"),
-      osBuildNumber: Map.get(info, :os_build, "Linux"),
+      osVersion: Map.get(info, :os_version, Map.get(ua_defaults, :os_version, "Linux")),
+      manufacturer: Map.get(info, :manufacturer, Map.get(ua_defaults, :manufacturer, "")),
+      device: Map.get(info, :device_name, Map.get(ua_defaults, :device_name, "Desktop")),
+      osBuildNumber: Map.get(info, :os_build, Map.get(ua_defaults, :os_build, "Linux")),
       releaseChannel: :RELEASE,
-      localeLanguageIso6391: Map.get(info, :locale_language, "en"),
-      localeCountryIso31661Alpha2: Map.get(info, :locale_country, "US")
+      localeLanguageIso6391:
+        Map.get(info, :locale_language, Map.get(ua_defaults, :locale_language, "en")),
+      localeCountryIso31661Alpha2:
+        Map.get(info, :locale_country, Map.get(ua_defaults, :locale_country, "US"))
       # Note: Go doesn't set phoneID, deviceType, or deviceModelType
     }
   end
@@ -166,7 +171,7 @@ defmodule ExWapp.Noise.ClientPayload do
     :crypto.hash(:md5, version_string(runtime_cfg))
   end
 
-  defp runtime_cfg do
+  defp default_runtime_cfg do
     case Config.resolve([]) do
       {:ok, cfg} -> cfg
       {:error, _} -> %{}

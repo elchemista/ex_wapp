@@ -2,6 +2,7 @@ defmodule ExWapp.Noise.ClientPayloadTest do
   @moduledoc false
   use ExUnit.Case, async: true
 
+  alias ExWapp.Config
   alias ExWapp.Noise
   alias ExWapp.Noise.ClientPayload, as: NoiseClientPayload
   alias ExWapp.Store
@@ -93,6 +94,26 @@ defmodule ExWapp.Noise.ClientPayloadTest do
       assert pairing1.eSkeySig == pairing2.eSkeySig
       assert pairing1.eSkeyID == pairing2.eSkeyID
       assert Map.drop(data1[:signal], [:updated_at]) == Map.drop(data2[:signal], [:updated_at])
+    end
+
+    test "supports runtime user-agent defaults for Firefox/Linux profile" do
+      store = store_fixture()
+      noise = %Noise{store: store}
+
+      runtime_cfg =
+        Config.defaults()
+        |> put_in([:protocol, :user_agent, :os_version], "Linux 6.8")
+        |> put_in([:protocol, :user_agent, :manufacturer], "Mozilla")
+        |> put_in([:protocol, :user_agent, :device_name], "Firefox")
+        |> put_in([:protocol, :user_agent, :os_build], "x86_64")
+
+      assert {:ok, payload, _data} = NoiseClientPayload.build(noise, runtime_cfg)
+      assert {:ok, decoded} = ClientPayloadProto.decode(payload)
+
+      assert decoded.userAgent.osVersion == "Linux 6.8"
+      assert decoded.userAgent.manufacturer == "Mozilla"
+      assert decoded.userAgent.device == "Firefox"
+      assert decoded.userAgent.osBuildNumber == "x86_64"
     end
   end
 
