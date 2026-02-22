@@ -422,17 +422,17 @@ defmodule ExWapp.Signal.WireFormat do
     ]
 
     Enum.reduce_while(checks, :error, fn {strategy, decode_fun, lhs, rhs}, _acc ->
-      with {:ok, lhs_bytes} <- decode_fun.(lhs),
-           {:ok, rhs_bytes} <- decode_fun.(rhs) do
-        expected = calculate_mac_bytes(mac_key, lhs_bytes, rhs_bytes, version_and_proto)
-
-        if secure_compare(mac, expected) do
-          {:halt, {:ok, strategy}}
-        else
-          {:cont, :error}
-        end
+      if signal_mac_matches_strategy?(
+           mac,
+           mac_key,
+           version_and_proto,
+           decode_fun,
+           lhs,
+           rhs
+         ) do
+        {:halt, {:ok, strategy}}
       else
-        _ -> {:cont, :error}
+        {:cont, :error}
       end
     end)
   end
@@ -449,35 +449,55 @@ defmodule ExWapp.Signal.WireFormat do
     with {:ok, tag, rest} <- decode_varint(binary) do
       field_num = tag >>> 3
       wire_type = tag &&& 0x07
+      decode_wire_field(wire_type, rest, acc, field_num)
+    end
+  end
 
-      case wire_type do
-        0 ->
-          with {:ok, value, tail} <- decode_varint(rest) do
-            decode_fields(tail, Map.put(acc, field_num, value))
-          end
+  defp decode_wire_field(0, rest, acc, field_num) do
+    with {:ok, value, tail} <- decode_varint(rest) do
+      decode_fields(tail, Map.put(acc, field_num, value))
+    end
+  end
 
-        2 ->
-          with {:ok, len, tail} <- decode_varint(rest),
-               true <- byte_size(tail) >= len do
-            <<value::binary-size(len), next::binary>> = tail
-            decode_fields(next, Map.put(acc, field_num, value))
-          else
-            false -> {:error, :invalid_length_delimited_field}
-          end
+  defp decode_wire_field(2, rest, acc, field_num) do
+    with {:ok, len, tail} <- decode_varint(rest),
+         true <- byte_size(tail) >= len do
+      <<value::binary-size(len), next::binary>> = tail
+      decode_fields(next, Map.put(acc, field_num, value))
+    else
+      false -> {:error, :invalid_length_delimited_field}
+    end
+  end
 
-        # fixed64
-        1 when byte_size(rest) >= 8 ->
-          <<_skip::binary-size(8), tail::binary>> = rest
-          decode_fields(tail, acc)
+  # fixed64
+  defp decode_wire_field(1, rest, acc, _field_num) when byte_size(rest) >= 8 do
+    <<_skip::binary-size(8), tail::binary>> = rest
+    decode_fields(tail, acc)
+  end
 
-        # fixed32
-        5 when byte_size(rest) >= 4 ->
-          <<_skip::binary-size(4), tail::binary>> = rest
-          decode_fields(tail, acc)
+  # fixed32
+  defp decode_wire_field(5, rest, acc, _field_num) when byte_size(rest) >= 4 do
+    <<_skip::binary-size(4), tail::binary>> = rest
+    decode_fields(tail, acc)
+  end
 
-        _ ->
-          {:error, {:unsupported_wire_type, wire_type}}
-      end
+  defp decode_wire_field(wire_type, _rest, _acc, _field_num),
+    do: {:error, {:unsupported_wire_type, wire_type}}
+
+  defp signal_mac_matches_strategy?(
+         mac,
+         mac_key,
+         version_and_proto,
+         decode_fun,
+         lhs,
+         rhs
+       ) do
+    with {:ok, lhs_bytes} <- decode_fun.(lhs),
+         {:ok, rhs_bytes} <- decode_fun.(rhs) do
+      expected = calculate_mac_bytes(mac_key, lhs_bytes, rhs_bytes, version_and_proto)
+      secure_compare(mac, expected)
+    else
+      _ -> false
     end
   end
 

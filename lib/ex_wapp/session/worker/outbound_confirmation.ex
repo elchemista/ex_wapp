@@ -152,23 +152,15 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
     session_pid = self()
 
     case start_worker_fn.(state, jid, fn ->
-           result = send_fn.(session_pid, state, jid, text, self_chat_mode: :recipient_primary)
-
-           send(session_pid, {:send_result, jid, text, result, :fallback, attempt})
-
-           case result do
-             {:ok, new_id} ->
-               Logger.warning(
-                 "[SEND] Fallback resend for #{jid} previous_id=#{previous_message_id} new_id=#{new_id}"
-               )
-
-             {:error, reason} ->
-               Logger.warning(
-                 "[SEND] Fallback resend failed for #{jid} previous_id=#{previous_message_id}: #{inspect(reason)}"
-               )
-           end
-
-           result
+           run_silent_drop_fallback_send(
+             session_pid,
+             state,
+             jid,
+             text,
+             attempt,
+             previous_message_id,
+             send_fn
+           )
          end) do
       {:ok, worker, mon} ->
         register_fn.(state, worker, mon, jid)
@@ -177,6 +169,33 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
         Logger.warning("[SEND] Failed to start fallback worker for #{jid}: #{inspect(reason)}")
         state
     end
+  end
+
+  defp run_silent_drop_fallback_send(
+         session_pid,
+         state,
+         jid,
+         text,
+         attempt,
+         previous_message_id,
+         send_fn
+       ) do
+    result = send_fn.(session_pid, state, jid, text, self_chat_mode: :recipient_primary)
+    send(session_pid, {:send_result, jid, text, result, :fallback, attempt})
+    log_silent_drop_fallback_result(result, jid, previous_message_id)
+    result
+  end
+
+  defp log_silent_drop_fallback_result({:ok, new_id}, jid, previous_message_id) do
+    Logger.warning(
+      "[SEND] Fallback resend for #{jid} previous_id=#{previous_message_id} new_id=#{new_id}"
+    )
+  end
+
+  defp log_silent_drop_fallback_result({:error, reason}, jid, previous_message_id) do
+    Logger.warning(
+      "[SEND] Fallback resend failed for #{jid} previous_id=#{previous_message_id}: #{inspect(reason)}"
+    )
   end
 
   defp watch_self_chat?(store, jid, attempt, max_fallback_attempts)
