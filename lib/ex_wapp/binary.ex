@@ -325,24 +325,38 @@ defmodule ExWapp.Binary do
       do: raise(Error, message: "unsupported payload type: #{inspect(other)}")
 
     defp write_string(encoder, value) do
+      case token_lookup(value) do
+        {:single, index} ->
+          push_byte(encoder, index)
+
+        {:double, dict, index} ->
+          encoder
+          |> push_byte(Token.dictionary0() + dict)
+          |> push_byte(index)
+
+        :none ->
+          write_string_with_packing(encoder, value)
+      end
+    end
+
+    defp token_lookup(value) do
       case Token.index_of_single_token(value) do
         {:ok, index} ->
-          push_byte(encoder, index)
+          {:single, index}
 
         :error ->
           case Token.index_of_double_token(value) do
-            {:ok, dict, index} ->
-              encoder
-              |> push_byte(Token.dictionary0() + dict)
-              |> push_byte(index)
-
-            :error ->
-              cond do
-                validate_nibble?(value) -> write_packed_bytes(encoder, value, Token.nibble8())
-                validate_hex?(value) -> write_packed_bytes(encoder, value, Token.hex8())
-                true -> write_string_raw(encoder, value)
-              end
+            {:ok, dict, index} -> {:double, dict, index}
+            :error -> :none
           end
+      end
+    end
+
+    defp write_string_with_packing(encoder, value) do
+      cond do
+        validate_nibble?(value) -> write_packed_bytes(encoder, value, Token.nibble8())
+        validate_hex?(value) -> write_packed_bytes(encoder, value, Token.hex8())
+        true -> write_string_raw(encoder, value)
       end
     end
 
@@ -610,62 +624,93 @@ defmodule ExWapp.Binary do
 
     defp read(%__MODULE__{} = decoder, as_string) do
       {tag, decoder} = read_int8(decoder)
+      resolve_read_tag(tag, decoder, as_string)
+    end
 
+    defp resolve_read_tag(tag, decoder, as_string) do
+      resolve_nil_tag(tag, decoder, as_string)
+    end
+
+    defp resolve_nil_tag(tag, decoder, as_string) do
+      if tag == Token.list_empty() do
+        {nil, decoder}
+      else
+        resolve_list_tag(tag, decoder, as_string)
+      end
+    end
+
+    defp resolve_list_tag(tag, decoder, as_string) do
+      if tag in [Token.list8(), Token.list16()] do
+        read_list(decoder, tag)
+      else
+        resolve_binary_tag(tag, decoder, as_string)
+      end
+    end
+
+    defp resolve_binary_tag(tag, decoder, as_string) do
       cond do
-        tag == Token.list_empty() ->
-          {nil, decoder}
+        tag == Token.binary8() -> read_length_prefixed(decoder, 1, as_string)
+        tag == Token.binary20() -> read_length_prefixed(decoder, :int20, as_string)
+        tag == Token.binary32() -> read_length_prefixed(decoder, 4, as_string)
+        true -> resolve_dictionary_tag(tag, decoder, as_string)
+      end
+    end
 
-        tag in [Token.list8(), Token.list16()] ->
-          read_list(decoder, tag)
+    defp resolve_dictionary_tag(tag, decoder, as_string) do
+      if tag in [
+           Token.dictionary0(),
+           Token.dictionary1(),
+           Token.dictionary2(),
+           Token.dictionary3()
+         ] do
+        read_double_token(decoder, tag)
+      else
+        resolve_jid_tag(tag, decoder, as_string)
+      end
+    end
 
-        tag == Token.binary8() ->
-          read_length_prefixed(decoder, 1, as_string)
+    defp resolve_jid_tag(tag, decoder, as_string) do
+      cond do
+        tag == Token.fb_jid() -> read_fb_jid(decoder)
+        tag == Token.interop_jid() -> read_interop_jid(decoder)
+        tag == Token.jid_pair() -> read_jid_pair(decoder)
+        tag == Token.ad_jid() -> read_ad_jid(decoder)
+        true -> resolve_packed_tag(tag, decoder, as_string)
+      end
+    end
 
-        tag == Token.binary20() ->
-          read_length_prefixed(decoder, :int20, as_string)
+    defp resolve_packed_tag(tag, decoder, as_string) do
+      if tag in [Token.nibble8(), Token.hex8()] do
+        read_packed(decoder, tag)
+      else
+        resolve_single_token_tag(tag, decoder, as_string)
+      end
+    end
 
-        tag == Token.binary32() ->
-          read_length_prefixed(decoder, 4, as_string)
+    defp resolve_single_token_tag(tag, decoder, _as_string) do
+      if tag >= 1 and tag < Token.single_byte_max() do
+        read_single_token(decoder, tag)
+      else
+        raise(Error, message: "invalid token #{tag} at position #{decoder.index}")
+      end
+    end
 
-        tag in [
-          Token.dictionary0(),
-          Token.dictionary1(),
-          Token.dictionary2(),
-          Token.dictionary3()
-        ] ->
-          {index, decoder} = read_int8(decoder)
+    defp read_double_token(decoder, tag) do
+      {index, decoder} = read_int8(decoder)
 
-          case Token.get_double_token(tag - Token.dictionary0(), index) do
-            {:ok, token} -> {token, decoder}
-            :error -> raise(Error, message: "double token out of range")
-          end
+      case Token.get_double_token(tag - Token.dictionary0(), index) do
+        {:ok, token} -> {token, decoder}
+        :error -> raise(Error, message: "double token out of range")
+      end
+    end
 
-        tag == Token.fb_jid() ->
-          read_fb_jid(decoder)
+    defp read_single_token(decoder, tag) do
+      tokens = Token.single_byte_tokens()
 
-        tag == Token.interop_jid() ->
-          read_interop_jid(decoder)
-
-        tag == Token.jid_pair() ->
-          read_jid_pair(decoder)
-
-        tag == Token.ad_jid() ->
-          read_ad_jid(decoder)
-
-        tag in [Token.nibble8(), Token.hex8()] ->
-          read_packed(decoder, tag)
-
-        tag >= 1 and tag < Token.single_byte_max() ->
-          tokens = Token.single_byte_tokens()
-
-          if tag < length(tokens) do
-            {Enum.at(tokens, tag), decoder}
-          else
-            raise(Error, message: "invalid single byte token index #{tag}")
-          end
-
-        true ->
-          raise(Error, message: "invalid token #{tag} at position #{decoder.index}")
+      if tag < length(tokens) do
+        {Enum.at(tokens, tag), decoder}
+      else
+        raise(Error, message: "invalid single byte token index #{tag}")
       end
     end
 
