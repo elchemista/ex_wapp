@@ -358,28 +358,25 @@ defmodule ExWapp.MessageHandler do
   end
 
   defp extract_app_state_collection_names(content) when is_list(content) do
-    Enum.flat_map(content, fn
-      %Node{tag: "sync", content: children} when is_list(children) ->
-        Enum.flat_map(children, fn
-          %Node{tag: "collection", attrs: attrs} ->
-            name = Map.get(attrs, "name")
-            if is_binary(name) and name != "", do: [name], else: []
-
-          _ ->
-            []
-        end)
-
-      %Node{tag: "collection", attrs: attrs} ->
-        name = Map.get(attrs, "name")
-        if is_binary(name) and name != "", do: [name], else: []
-
-      _ ->
-        []
-    end)
+    content
+    |> Enum.flat_map(&collection_names_from_node/1)
     |> Enum.uniq()
   end
 
   defp extract_app_state_collection_names(_), do: []
+
+  defp collection_names_from_node(%Node{tag: "sync", content: children}) when is_list(children) do
+    Enum.flat_map(children, &collection_names_from_node/1)
+  end
+
+  defp collection_names_from_node(%Node{tag: "collection", attrs: attrs}) do
+    case Map.get(attrs, "name") do
+      name when is_binary(name) and name != "" -> [name]
+      _ -> []
+    end
+  end
+
+  defp collection_names_from_node(_node), do: []
 
   defp handle_server_sync(content, session, state) do
     process_sync_collections(content, chat_target(session, state))
@@ -1054,27 +1051,7 @@ defmodule ExWapp.MessageHandler do
       existing_keys = Map.get(data, :app_state_keys, %{})
 
       updated_keys =
-        Enum.reduce(keys, existing_keys, fn key, acc ->
-          key_id = Map.get(key, :key_id)
-          key_data = Map.get(key, :key_data)
-
-          if is_binary(key_id) and is_map(key_data) and is_binary(Map.get(key_data, :key_data)) do
-            key_id_hex = Base.encode16(key_id, case: :lower)
-
-            Logger.debug(
-              "[APP_STATE] Storing app state key #{key_id_hex} (ts: #{Map.get(key_data, :timestamp)})"
-            )
-
-            Map.put(acc, key_id_hex, %{
-              data: Map.get(key_data, :key_data),
-              timestamp: Map.get(key_data, :timestamp),
-              fingerprint: Map.get(key_data, :fingerprint)
-            })
-          else
-            Logger.warning("[APP_STATE] Skipping malformed key: #{inspect(key)}")
-            acc
-          end
-        end)
+        Enum.reduce(keys, existing_keys, &maybe_put_app_state_key/2)
 
       if updated_keys != existing_keys do
         Store.persist(store, Map.put(data, :app_state_keys, updated_keys))
@@ -1089,6 +1066,44 @@ defmodule ExWapp.MessageHandler do
       Logger.warning("[APP_STATE] Failed to store app state keys: #{inspect(error)}")
       {:error, {:store_failed, error}}
   end
+
+  defp maybe_put_app_state_key(key, acc) do
+    case extract_app_state_key_data(key) do
+      {:ok, key_id, key_data_bin, timestamp, fingerprint} ->
+        key_id_hex = Base.encode16(key_id, case: :lower)
+
+        Logger.debug(
+          "[APP_STATE] Storing app state key #{key_id_hex} (ts: #{inspect(timestamp)})"
+        )
+
+        Map.put(acc, key_id_hex, %{
+          data: key_data_bin,
+          timestamp: timestamp,
+          fingerprint: fingerprint
+        })
+
+      :error ->
+        Logger.warning("[APP_STATE] Skipping malformed key: #{inspect(key)}")
+        acc
+    end
+  end
+
+  defp extract_app_state_key_data(key) when is_map(key) do
+    key_id = Map.get(key, :key_id)
+    key_data = Map.get(key, :key_data)
+
+    case {key_id, key_data} do
+      {key_id, %{key_data: key_data_bin} = key_data_map}
+      when is_binary(key_id) and is_binary(key_data_bin) ->
+        {:ok, key_id, key_data_bin, Map.get(key_data_map, :timestamp),
+         Map.get(key_data_map, :fingerprint)}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp extract_app_state_key_data(_key), do: :error
 
   defp maybe_trigger_initial_app_state_sync(session) do
     if is_pid(session) and Process.alive?(session) do
@@ -1115,42 +1130,46 @@ defmodule ExWapp.MessageHandler do
     with {:ok, tag, rest} <- decode_varint_safe(binary),
          wire_type <- Bitwise.band(tag, 0x07),
          field_num <- Bitwise.bsr(tag, 3) do
-      case wire_type do
-        0 ->
-          with {:ok, value, tail} <- decode_varint_safe(rest) do
-            decode_wire_fields_acc(tail, [{field_num, 0, value} | acc])
-          end
-
-        1 ->
-          if byte_size(rest) >= 8 do
-            <<_skip::binary-size(8), tail::binary>> = rest
-            decode_wire_fields_acc(tail, [{field_num, 1, :fixed64} | acc])
-          else
-            {:error, :invalid_fixed64}
-          end
-
-        2 ->
-          with {:ok, len, tail} <- decode_varint_safe(rest),
-               true <- byte_size(tail) >= len do
-            <<value::binary-size(len), next::binary>> = tail
-            decode_wire_fields_acc(next, [{field_num, 2, value} | acc])
-          else
-            false -> {:error, :invalid_length}
-          end
-
-        5 ->
-          if byte_size(rest) >= 4 do
-            <<_skip::binary-size(4), tail::binary>> = rest
-            decode_wire_fields_acc(tail, [{field_num, 5, :fixed32} | acc])
-          else
-            {:error, :invalid_fixed32}
-          end
-
-        _ ->
-          {:error, {:unsupported_wire_type, wire_type}}
-      end
+      decode_wire_field_acc(wire_type, rest, field_num, acc)
     end
   end
+
+  defp decode_wire_field_acc(0, rest, field_num, acc) do
+    with {:ok, value, tail} <- decode_varint_safe(rest) do
+      decode_wire_fields_acc(tail, [{field_num, 0, value} | acc])
+    end
+  end
+
+  defp decode_wire_field_acc(1, rest, field_num, acc) do
+    if byte_size(rest) >= 8 do
+      <<_skip::binary-size(8), tail::binary>> = rest
+      decode_wire_fields_acc(tail, [{field_num, 1, :fixed64} | acc])
+    else
+      {:error, :invalid_fixed64}
+    end
+  end
+
+  defp decode_wire_field_acc(2, rest, field_num, acc) do
+    with {:ok, len, tail} <- decode_varint_safe(rest),
+         true <- byte_size(tail) >= len do
+      <<value::binary-size(len), next::binary>> = tail
+      decode_wire_fields_acc(next, [{field_num, 2, value} | acc])
+    else
+      false -> {:error, :invalid_length}
+    end
+  end
+
+  defp decode_wire_field_acc(5, rest, field_num, acc) do
+    if byte_size(rest) >= 4 do
+      <<_skip::binary-size(4), tail::binary>> = rest
+      decode_wire_fields_acc(tail, [{field_num, 5, :fixed32} | acc])
+    else
+      {:error, :invalid_fixed32}
+    end
+  end
+
+  defp decode_wire_field_acc(wire_type, _rest, _field_num, _acc),
+    do: {:error, {:unsupported_wire_type, wire_type}}
 
   defp decode_varint_safe(binary), do: decode_varint_safe(binary, 0, 0)
   defp decode_varint_safe(_, _, shift) when shift > 63, do: {:error, :invalid_varint}
@@ -1190,37 +1209,52 @@ defmodule ExWapp.MessageHandler do
 
     Chat.merge_metadata(target, jid, metadata)
 
-    history_messages = Map.get(conversation, :messages, [])
+    conversation
+    |> Map.get(:messages, [])
+    |> history_sync_chat_messages(jid)
+    |> maybe_merge_history_sync_chat_messages(target, jid)
 
-    if is_list(history_messages) and history_messages != [] do
-      chat_messages =
-        history_messages
-        |> Enum.with_index()
-        |> Enum.map(fn {history_message, index} ->
-          history_sync_message_to_chat_message(history_message, jid, index)
-        end)
-        |> Enum.reject(&is_nil/1)
-
-      if chat_messages != [] do
-        Chat.merge_messages(target, jid, chat_messages)
-      end
-    end
-
-    # For DM conversations, also create/update a contact from the chat name
-    if not Map.get(conversation, :is_group, false) do
-      name = Map.get(conversation, :name)
-
-      if is_binary(name) and name != "" do
-        store = resolve_store_from_target(target)
-
-        if store do
-          ExWapp.Contact.update_push_name(store, jid, name)
-        end
-      end
-    end
+    maybe_update_history_sync_contact_name(target, jid, conversation)
   end
 
   defp upsert_chat_from_history_sync(_target, _conversation), do: :ok
+
+  defp history_sync_chat_messages(history_messages, jid)
+       when is_list(history_messages) and history_messages != [] do
+    history_messages
+    |> Enum.with_index()
+    |> Enum.map(fn {history_message, index} ->
+      history_sync_message_to_chat_message(history_message, jid, index)
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp history_sync_chat_messages(_history_messages, _jid), do: []
+
+  defp maybe_merge_history_sync_chat_messages([], _target, _jid), do: :ok
+
+  defp maybe_merge_history_sync_chat_messages(chat_messages, target, jid)
+       when is_list(chat_messages) do
+    Chat.merge_messages(target, jid, chat_messages)
+  end
+
+  defp maybe_update_history_sync_contact_name(target, jid, conversation) do
+    if Map.get(conversation, :is_group, false) do
+      :ok
+    else
+      maybe_update_push_name_from_history_sync(target, jid, Map.get(conversation, :name))
+    end
+  end
+
+  defp maybe_update_push_name_from_history_sync(target, jid, name)
+       when is_binary(name) and name != "" do
+    case resolve_store_from_target(target) do
+      nil -> :ok
+      store -> ExWapp.Contact.update_push_name(store, jid, name)
+    end
+  end
+
+  defp maybe_update_push_name_from_history_sync(_target, _jid, _name), do: :ok
 
   defp history_sync_message_to_chat_message(message, conversation_jid, index)
        when is_map(message) and is_binary(conversation_jid) and is_integer(index) do
@@ -1814,19 +1848,26 @@ defmodule ExWapp.MessageHandler do
         {:ok, text}
 
       :error ->
-        case collect_length_delimited_fields(payload) do
-          {:ok, nested_values} ->
-            nested_values
-            |> Enum.reduce_while(:error, fn nested, _acc ->
-              case decode_message_text_recursive(nested, depth + 1) do
-                {:ok, text} -> {:halt, {:ok, text}}
-                :error -> {:cont, :error}
-              end
-            end)
+        decode_nested_message_text(payload, depth)
+    end
+  end
 
-          {:error, _reason} ->
-            :error
-        end
+  defp decode_nested_message_text(payload, depth) do
+    case collect_length_delimited_fields(payload) do
+      {:ok, nested_values} ->
+        Enum.reduce_while(nested_values, :error, fn nested, _acc ->
+          reduce_nested_message_text(nested, depth)
+        end)
+
+      {:error, _reason} ->
+        :error
+    end
+  end
+
+  defp reduce_nested_message_text(nested, depth) do
+    case decode_message_text_recursive(nested, depth + 1) do
+      {:ok, text} -> {:halt, {:ok, text}}
+      :error -> {:cont, :error}
     end
   end
 
@@ -1867,47 +1908,51 @@ defmodule ExWapp.MessageHandler do
     with {:ok, tag, rest} <- decode_varint(binary),
          wire_type <- Bitwise.band(tag, 0x07),
          field <- Bitwise.bsr(tag, 3) do
-      case wire_type do
-        0 ->
-          with {:ok, _value, tail} <- decode_varint(rest) do
-            do_find_length_delimited_field(tail, field_num)
-          end
-
-        1 ->
-          if byte_size(rest) >= 8 do
-            <<_skip::binary-size(8), tail::binary>> = rest
-            do_find_length_delimited_field(tail, field_num)
-          else
-            {:error, :invalid_fixed64}
-          end
-
-        2 ->
-          with {:ok, len, tail} <- decode_varint(rest),
-               true <- byte_size(tail) >= len do
-            <<value::binary-size(len), next::binary>> = tail
-
-            if field == field_num do
-              {:ok, value}
-            else
-              do_find_length_delimited_field(next, field_num)
-            end
-          else
-            false -> {:error, :invalid_length}
-          end
-
-        5 ->
-          if byte_size(rest) >= 4 do
-            <<_skip::binary-size(4), tail::binary>> = rest
-            do_find_length_delimited_field(tail, field_num)
-          else
-            {:error, :invalid_fixed32}
-          end
-
-        _ ->
-          {:error, {:unsupported_wire_type, wire_type}}
-      end
+      find_length_delimited_by_wire_type(wire_type, rest, field, field_num)
     end
   end
+
+  defp find_length_delimited_by_wire_type(0, rest, _field, field_num) do
+    with {:ok, _value, tail} <- decode_varint(rest) do
+      do_find_length_delimited_field(tail, field_num)
+    end
+  end
+
+  defp find_length_delimited_by_wire_type(1, rest, _field, field_num) do
+    if byte_size(rest) >= 8 do
+      <<_skip::binary-size(8), tail::binary>> = rest
+      do_find_length_delimited_field(tail, field_num)
+    else
+      {:error, :invalid_fixed64}
+    end
+  end
+
+  defp find_length_delimited_by_wire_type(2, rest, field, field_num) do
+    with {:ok, len, tail} <- decode_varint(rest),
+         true <- byte_size(tail) >= len do
+      <<value::binary-size(len), next::binary>> = tail
+
+      if field == field_num do
+        {:ok, value}
+      else
+        do_find_length_delimited_field(next, field_num)
+      end
+    else
+      false -> {:error, :invalid_length}
+    end
+  end
+
+  defp find_length_delimited_by_wire_type(5, rest, _field, field_num) do
+    if byte_size(rest) >= 4 do
+      <<_skip::binary-size(4), tail::binary>> = rest
+      do_find_length_delimited_field(tail, field_num)
+    else
+      {:error, :invalid_fixed32}
+    end
+  end
+
+  defp find_length_delimited_by_wire_type(wire_type, _rest, _field, _field_num),
+    do: {:error, {:unsupported_wire_type, wire_type}}
 
   defp decode_varint(binary), do: decode_varint(binary, 0, 0)
   defp decode_varint(_, _, shift) when shift > 63, do: {:error, :invalid_varint}
@@ -1930,42 +1975,46 @@ defmodule ExWapp.MessageHandler do
   defp collect_length_delimited_fields(binary, acc) do
     with {:ok, tag, rest} <- decode_varint(binary),
          wire_type <- Bitwise.band(tag, 0x07) do
-      case wire_type do
-        0 ->
-          with {:ok, _value, tail} <- decode_varint(rest) do
-            collect_length_delimited_fields(tail, acc)
-          end
-
-        1 ->
-          if byte_size(rest) >= 8 do
-            <<_skip::binary-size(8), tail::binary>> = rest
-            collect_length_delimited_fields(tail, acc)
-          else
-            {:error, :invalid_fixed64}
-          end
-
-        2 ->
-          with {:ok, len, tail} <- decode_varint(rest),
-               true <- byte_size(tail) >= len do
-            <<value::binary-size(len), next::binary>> = tail
-            collect_length_delimited_fields(next, [value | acc])
-          else
-            false -> {:error, :invalid_length}
-          end
-
-        5 ->
-          if byte_size(rest) >= 4 do
-            <<_skip::binary-size(4), tail::binary>> = rest
-            collect_length_delimited_fields(tail, acc)
-          else
-            {:error, :invalid_fixed32}
-          end
-
-        _ ->
-          {:error, {:unsupported_wire_type, wire_type}}
-      end
+      collect_length_delimited_by_wire_type(wire_type, rest, acc)
     end
   end
+
+  defp collect_length_delimited_by_wire_type(0, rest, acc) do
+    with {:ok, _value, tail} <- decode_varint(rest) do
+      collect_length_delimited_fields(tail, acc)
+    end
+  end
+
+  defp collect_length_delimited_by_wire_type(1, rest, acc) do
+    if byte_size(rest) >= 8 do
+      <<_skip::binary-size(8), tail::binary>> = rest
+      collect_length_delimited_fields(tail, acc)
+    else
+      {:error, :invalid_fixed64}
+    end
+  end
+
+  defp collect_length_delimited_by_wire_type(2, rest, acc) do
+    with {:ok, len, tail} <- decode_varint(rest),
+         true <- byte_size(tail) >= len do
+      <<value::binary-size(len), next::binary>> = tail
+      collect_length_delimited_fields(next, [value | acc])
+    else
+      false -> {:error, :invalid_length}
+    end
+  end
+
+  defp collect_length_delimited_by_wire_type(5, rest, acc) do
+    if byte_size(rest) >= 4 do
+      <<_skip::binary-size(4), tail::binary>> = rest
+      collect_length_delimited_fields(tail, acc)
+    else
+      {:error, :invalid_fixed32}
+    end
+  end
+
+  defp collect_length_delimited_by_wire_type(wire_type, _rest, _acc),
+    do: {:error, {:unsupported_wire_type, wire_type}}
 
   @spec chat_target(pid() | term(), map()) :: chat_target() | nil
   defp chat_target(session, state) do
