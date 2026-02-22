@@ -26,43 +26,58 @@ defmodule ExWapp.Quota do
 
     if enabled? do
       quota_state = refresh_period(state.quota || new(state.runtime_cfg), state.runtime_cfg)
-
-      session_limit =
-        Config.get(state.runtime_cfg, [:quota, :per_session, :daily_messages], 5_000)
-
-      jid_limit = Config.get(state.runtime_cfg, [:quota, :per_jid, :daily_messages], 500)
-      group_limit = Config.get(state.runtime_cfg, [:quota, :per_group, :daily_messages], 1_000)
-      on_exceeded = Config.get(state.runtime_cfg, [:quota, :on_exceeded], :block)
-
+      limits = quota_limits(state.runtime_cfg)
       normalized = normalize_jid(jid)
-      session_next = quota_state.session_count + 1
-      jid_next = Map.get(quota_state.per_jid, normalized, 0) + 1
-      group_next = Map.get(quota_state.per_group, normalized, 0) + 1
+      exceeded = quota_exceeded(quota_state, normalized, limits)
 
-      exceeded =
-        cond do
-          session_next > session_limit -> {:session, session_limit}
-          group_jid?(normalized) and group_next > group_limit -> {:group, group_limit}
-          not group_jid?(normalized) and jid_next > jid_limit -> {:jid, jid_limit}
-          true -> nil
-        end
-
-      cond do
-        exceeded == nil ->
-          {:ok, %{state | quota: increment(quota_state, normalized)}}
-
-        on_exceeded == :warn_only ->
-          {:ok, %{state | quota: increment(quota_state, normalized)}}
-
-        true ->
-          {:error, {:quota_exceeded, exceeded}, %{state | quota: quota_state}}
-      end
+      apply_quota_decision(state, quota_state, normalized, exceeded, limits.on_exceeded)
     else
       {:ok, state}
     end
   end
 
   def check_and_increment(state, _jid), do: {:ok, state}
+
+  defp quota_limits(runtime_cfg) do
+    %{
+      session_limit: Config.get(runtime_cfg, [:quota, :per_session, :daily_messages], 5_000),
+      jid_limit: Config.get(runtime_cfg, [:quota, :per_jid, :daily_messages], 500),
+      group_limit: Config.get(runtime_cfg, [:quota, :per_group, :daily_messages], 1_000),
+      on_exceeded: Config.get(runtime_cfg, [:quota, :on_exceeded], :block)
+    }
+  end
+
+  defp quota_exceeded(quota_state, normalized_jid, limits) do
+    session_next = quota_state.session_count + 1
+    jid_next = Map.get(quota_state.per_jid, normalized_jid, 0) + 1
+    group_next = Map.get(quota_state.per_group, normalized_jid, 0) + 1
+
+    cond do
+      session_next > limits.session_limit ->
+        {:session, limits.session_limit}
+
+      group_jid?(normalized_jid) and group_next > limits.group_limit ->
+        {:group, limits.group_limit}
+
+      not group_jid?(normalized_jid) and jid_next > limits.jid_limit ->
+        {:jid, limits.jid_limit}
+
+      true ->
+        nil
+    end
+  end
+
+  defp apply_quota_decision(state, quota_state, normalized_jid, nil, _on_exceeded) do
+    {:ok, %{state | quota: increment(quota_state, normalized_jid)}}
+  end
+
+  defp apply_quota_decision(state, quota_state, normalized_jid, _exceeded, :warn_only) do
+    {:ok, %{state | quota: increment(quota_state, normalized_jid)}}
+  end
+
+  defp apply_quota_decision(state, quota_state, _normalized_jid, exceeded, _on_exceeded) do
+    {:error, {:quota_exceeded, exceeded}, %{state | quota: quota_state}}
+  end
 
   defp increment(quota_state, jid) do
     if group_jid?(jid) do

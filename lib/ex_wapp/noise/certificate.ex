@@ -17,39 +17,106 @@ defmodule ExWapp.Noise.Certificate do
   @spec verify(binary(), binary()) :: :ok | {:error, term()}
   def verify(cert_bytes, static_key) when is_binary(cert_bytes) and is_binary(static_key) do
     with {:ok, %CertChain{} = chain} <- CertChain.decode(cert_bytes),
-         %NoiseCertificate{details: int_details_raw, signature: int_signature} = _intermediate
-         when is_binary(int_details_raw) and is_binary(int_signature) <- chain.intermediate,
-         true <-
-           byte_size(int_signature) == 64 || {:error, :invalid_intermediate_signature_length},
-         true <-
-           verify_signature(@wa_cert_pub_key, int_details_raw, int_signature) ||
-             {:error, :invalid_intermediate_signature},
-         {:ok, %Details{} = intermediate_details} <- Details.decode(int_details_raw),
-         true <-
-           intermediate_details.issuerSerial == @issuer_serial ||
-             {:error, :invalid_intermediate_issuer},
-         true <- byte_size(intermediate_details.key) == 32 || {:error, :invalid_intermediate_key},
-         %NoiseCertificate{details: leaf_details_raw, signature: leaf_signature} = _leaf
-         when is_binary(leaf_details_raw) and is_binary(leaf_signature) <- chain.leaf,
-         true <- byte_size(leaf_signature) == 64 || {:error, :invalid_leaf_signature_length},
-         true <-
-           verify_signature(intermediate_details.key, leaf_details_raw, leaf_signature) ||
-             {:error, :invalid_leaf_signature},
-         {:ok, %Details{} = leaf_details} <- Details.decode(leaf_details_raw),
-         true <-
-           leaf_details.issuerSerial == intermediate_details.serial ||
-             {:error, :unexpected_leaf_issuer},
-         true <- leaf_details.key == static_key || {:error, :static_mismatch} do
+         {:ok, intermediate_details} <- verify_intermediate_certificate(chain.intermediate),
+         :ok <- verify_leaf_certificate(chain.leaf, intermediate_details, static_key) do
       :ok
     else
       nil -> {:error, :missing_certificate_parts}
       {:error, _} = error -> error
-      false -> {:error, :invalid_signature}
       other -> {:error, other}
     end
   end
 
   def verify(_cert_bytes, _static_key), do: {:error, :invalid_certificate}
+
+  defp verify_intermediate_certificate(%NoiseCertificate{
+         details: int_details_raw,
+         signature: int_signature
+       })
+       when is_binary(int_details_raw) and is_binary(int_signature) do
+    with :ok <- validate_signature_length(int_signature, :intermediate),
+         :ok <-
+           validate_signature(@wa_cert_pub_key, int_details_raw, int_signature, :intermediate),
+         {:ok, %Details{} = intermediate_details} <- Details.decode(int_details_raw),
+         :ok <- validate_intermediate_details(intermediate_details) do
+      {:ok, intermediate_details}
+    end
+  end
+
+  defp verify_intermediate_certificate(_), do: {:error, :missing_certificate_parts}
+
+  defp verify_leaf_certificate(
+         %NoiseCertificate{details: leaf_details_raw, signature: leaf_signature},
+         %Details{} = intermediate_details,
+         static_key
+       )
+       when is_binary(leaf_details_raw) and is_binary(leaf_signature) and is_binary(static_key) do
+    with :ok <- validate_signature_length(leaf_signature, :leaf),
+         :ok <-
+           validate_signature(
+             intermediate_details.key,
+             leaf_details_raw,
+             leaf_signature,
+             :leaf
+           ),
+         {:ok, %Details{} = leaf_details} <- Details.decode(leaf_details_raw) do
+      validate_leaf_details(leaf_details, intermediate_details, static_key)
+    end
+  end
+
+  defp verify_leaf_certificate(_leaf, _intermediate_details, _static_key),
+    do: {:error, :missing_certificate_parts}
+
+  defp validate_signature_length(signature, :intermediate) when byte_size(signature) == 64,
+    do: :ok
+
+  defp validate_signature_length(_signature, :intermediate),
+    do: {:error, :invalid_intermediate_signature_length}
+
+  defp validate_signature_length(signature, :leaf) when byte_size(signature) == 64, do: :ok
+  defp validate_signature_length(_signature, :leaf), do: {:error, :invalid_leaf_signature_length}
+
+  defp validate_signature(public_key, details_raw, signature, :intermediate) do
+    if verify_signature(public_key, details_raw, signature),
+      do: :ok,
+      else: {:error, :invalid_intermediate_signature}
+  end
+
+  defp validate_signature(public_key, details_raw, signature, :leaf) do
+    if verify_signature(public_key, details_raw, signature),
+      do: :ok,
+      else: {:error, :invalid_leaf_signature}
+  end
+
+  defp validate_intermediate_details(%Details{} = intermediate_details) do
+    cond do
+      intermediate_details.issuerSerial != @issuer_serial ->
+        {:error, :invalid_intermediate_issuer}
+
+      byte_size(intermediate_details.key) != 32 ->
+        {:error, :invalid_intermediate_key}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_leaf_details(
+         %Details{} = leaf_details,
+         %Details{} = intermediate_details,
+         static_key
+       ) do
+    cond do
+      leaf_details.issuerSerial != intermediate_details.serial ->
+        {:error, :unexpected_leaf_issuer}
+
+      leaf_details.key != static_key ->
+        {:error, :static_mismatch}
+
+      true ->
+        :ok
+    end
+  end
 
   @spec verify_signature(binary(), binary(), binary()) :: boolean()
   def verify_signature(public_key, message, signature)
