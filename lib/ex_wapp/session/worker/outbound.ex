@@ -178,111 +178,159 @@ defmodule ExWapp.Session.Worker.Outbound do
     own_lid_jid = Account.local_account_lid_jid(state.store)
     own_device_id = Account.local_account_device_id(state.store)
 
-    # Only add the own JID variant that matches the group's addressing_mode.
-    # Mixing PN and LID in a LID-addressed message causes the server to drop it.
-    own_jids_for_query =
-      case addressing_mode do
-        "lid" -> [own_lid_jid]
-        _ -> [own_base_jid]
-      end
-
-    query_jids =
-      (participant_jids ++ own_jids_for_query)
-      |> Enum.reject(&(&1 in [nil, ""]))
-      |> Enum.map(&strip_device_from_jid/1)
-      |> Enum.uniq()
-
-    device_map =
-      case query_device_list_worker(state, query_jids) do
-        {:ok, map} ->
-          Logger.debug("[SEND] Group usync device map for #{group_jid}: #{inspect(map)}")
-          map
-
-        {:error, reason} ->
-          Logger.warning("[SEND] Group usync query failed for #{group_jid}: #{inspect(reason)}")
-
-          %{}
-      end
+    own_jids_for_query = own_jids_for_group_query(addressing_mode, own_base_jid, own_lid_jid)
+    query_jids = build_group_query_jids(participant_jids, own_jids_for_query)
+    device_map = fetch_group_device_map(state, group_jid, query_jids)
 
     distribution_targets =
-      query_jids
-      |> Enum.flat_map(fn participant ->
-        base_participant = strip_device_from_jid(participant)
-
-        case Map.get(device_map, base_participant, []) do
-          [] -> [base_participant]
-          devices -> devices
-        end
-      end)
-      |> JIDUtils.normalize_target_list()
-      |> filter_group_targets_for_addressing_mode(addressing_mode)
-      |> Enum.reject(
-        &group_current_device_target?(&1, own_device_id, [own_base_jid, own_lid_jid])
+      build_group_distribution_targets(
+        query_jids,
+        device_map,
+        addressing_mode,
+        own_device_id,
+        own_base_jid,
+        own_lid_jid
       )
-      |> Enum.uniq()
 
     Logger.debug(
       "[SEND] Group sender-key distribution targets for #{group_jid}: #{inspect(distribution_targets)}"
     )
 
-    own_identity_set =
-      [own_base_jid, own_lid_jid]
-      |> Enum.map(&JIDUtils.identity/1)
-      |> Enum.reject(fn {user, server} -> user == "" or server == "" end)
-      |> MapSet.new()
-
+    own_identity_set = group_own_identity_set(own_base_jid, own_lid_jid)
     lid_mapping = Account.load_lid_mapping(state.store)
 
     devices_needing_prekeys =
-      Enum.filter(distribution_targets, fn device_jid ->
-        device_jid = normalize_jid_with_device(device_jid)
-        signal_jid = JIDUtils.resolve_signal_encryption_jid(device_jid, lid_mapping)
-        target_identity = JIDUtils.identity(device_jid)
-
-        # Pragmatic sync fix: always refresh our own targets so distribution fanout
-        # to phone/other linked devices starts with a clean pkmsg bootstrap.
-        MapSet.member?(own_identity_set, target_identity) or
-          not (SessionStore.has_session?(signal_sessions, signal_jid) or
-                 SessionStore.has_session?(signal_sessions, device_jid))
-      end)
-
-    {updated_sessions, prekey_bundles} =
-      if devices_needing_prekeys == [] do
-        {signal_sessions, %{}}
-      else
-        Logger.debug(
-          "[SEND] Fetching group prekeys for #{length(devices_needing_prekeys)} devices: #{inspect(devices_needing_prekeys)}"
-        )
-
-        case fetch_prekeys_batch_worker(state, devices_needing_prekeys, signal_sessions) do
-          {:ok, sessions, bundles} ->
-            {sessions, bundles}
-
-          {:error, reason} ->
-            Logger.warning(
-              "[SEND] Group batch prekey fetch failed: #{inspect(reason)}, retrying individually"
-            )
-
-            fetch_prekeys_individually_worker(state, devices_needing_prekeys, signal_sessions)
-        end
-      end
-
-    {updated_sessions, prekey_bundles} =
-      retry_missing_prekeys_worker(
-        state,
-        devices_needing_prekeys,
-        updated_sessions,
-        prekey_bundles,
-        "group"
+      find_group_devices_needing_prekeys(
+        distribution_targets,
+        signal_sessions,
+        lid_mapping,
+        own_identity_set
       )
 
-    case updated_sessions do
-      {:error, reason} ->
-        {:error, reason}
+    {updated_sessions, prekey_bundles} =
+      fetch_group_prekeys(state, devices_needing_prekeys, signal_sessions, "group")
 
-      sessions ->
-        {:ok, sessions, prekey_bundles, distribution_targets}
+    finalize_group_sessions_result(updated_sessions, prekey_bundles, distribution_targets)
+  end
+
+  # Only add the own JID variant that matches the group's addressing_mode.
+  # Mixing PN and LID in a LID-addressed message causes the server to drop it.
+  defp own_jids_for_group_query("lid", _own_base_jid, own_lid_jid), do: [own_lid_jid]
+  defp own_jids_for_group_query(_mode, own_base_jid, _own_lid_jid), do: [own_base_jid]
+
+  defp build_group_query_jids(participant_jids, own_jids_for_query) do
+    (participant_jids ++ own_jids_for_query)
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.map(&strip_device_from_jid/1)
+    |> Enum.uniq()
+  end
+
+  defp fetch_group_device_map(state, group_jid, query_jids) do
+    case query_device_list_worker(state, query_jids) do
+      {:ok, map} ->
+        Logger.debug("[SEND] Group usync device map for #{group_jid}: #{inspect(map)}")
+        map
+
+      {:error, reason} ->
+        Logger.warning("[SEND] Group usync query failed for #{group_jid}: #{inspect(reason)}")
+        %{}
     end
+  end
+
+  defp build_group_distribution_targets(
+         query_jids,
+         device_map,
+         addressing_mode,
+         own_device_id,
+         own_base_jid,
+         own_lid_jid
+       ) do
+    query_jids
+    |> expand_group_distribution_targets(device_map)
+    |> JIDUtils.normalize_target_list()
+    |> filter_group_targets_for_addressing_mode(addressing_mode)
+    |> Enum.reject(&group_current_device_target?(&1, own_device_id, [own_base_jid, own_lid_jid]))
+    |> Enum.uniq()
+  end
+
+  defp expand_group_distribution_targets(query_jids, device_map) when is_list(query_jids) do
+    Enum.flat_map(query_jids, fn participant ->
+      base_participant = strip_device_from_jid(participant)
+
+      case Map.get(device_map, base_participant, []) do
+        [] -> [base_participant]
+        devices -> devices
+      end
+    end)
+  end
+
+  defp group_own_identity_set(own_base_jid, own_lid_jid) do
+    [own_base_jid, own_lid_jid]
+    |> Enum.map(&JIDUtils.identity/1)
+    |> Enum.reject(fn {user, server} -> user == "" or server == "" end)
+    |> MapSet.new()
+  end
+
+  defp find_group_devices_needing_prekeys(
+         distribution_targets,
+         signal_sessions,
+         lid_mapping,
+         own_identity_set
+       ) do
+    Enum.filter(distribution_targets, fn device_jid ->
+      group_target_needs_prekey?(device_jid, signal_sessions, lid_mapping, own_identity_set)
+    end)
+  end
+
+  defp group_target_needs_prekey?(device_jid, signal_sessions, lid_mapping, own_identity_set) do
+    device_jid = normalize_jid_with_device(device_jid)
+    signal_jid = JIDUtils.resolve_signal_encryption_jid(device_jid, lid_mapping)
+    target_identity = JIDUtils.identity(device_jid)
+
+    # Pragmatic sync fix: always refresh our own targets so distribution fanout
+    # to phone/other linked devices starts with a clean pkmsg bootstrap.
+    MapSet.member?(own_identity_set, target_identity) or
+      not (SessionStore.has_session?(signal_sessions, signal_jid) or
+             SessionStore.has_session?(signal_sessions, device_jid))
+  end
+
+  defp fetch_group_prekeys(_state, [], signal_sessions, _context), do: {signal_sessions, %{}}
+
+  defp fetch_group_prekeys(state, devices_needing_prekeys, signal_sessions, context) do
+    Logger.debug(
+      "[SEND] Fetching group prekeys for #{length(devices_needing_prekeys)} devices: #{inspect(devices_needing_prekeys)}"
+    )
+
+    {updated_sessions, prekey_bundles} =
+      case fetch_prekeys_batch_worker(state, devices_needing_prekeys, signal_sessions) do
+        {:ok, sessions, bundles} ->
+          {sessions, bundles}
+
+        {:error, reason} ->
+          Logger.warning(
+            "[SEND] Group batch prekey fetch failed: #{inspect(reason)}, retrying individually"
+          )
+
+          case fetch_prekeys_individually_worker(state, devices_needing_prekeys, signal_sessions) do
+            {:ok, sessions, bundles} -> {sessions, bundles}
+            {:error, fallback_reason} -> {{:error, fallback_reason}, %{}}
+          end
+      end
+
+    retry_missing_prekeys_worker(
+      state,
+      devices_needing_prekeys,
+      updated_sessions,
+      prekey_bundles,
+      context
+    )
+  end
+
+  defp finalize_group_sessions_result({:error, reason}, _prekey_bundles, _distribution_targets),
+    do: {:error, reason}
+
+  defp finalize_group_sessions_result(sessions, prekey_bundles, distribution_targets) do
+    {:ok, sessions, prekey_bundles, distribution_targets}
   end
 
   defp group_current_device_target?(target_jid, own_device_id, own_identities) do
@@ -1007,73 +1055,126 @@ defmodule ExWapp.Session.Worker.Outbound do
        ) do
     requested_jid = normalize_jid_for_signal(requested_jid)
 
-    case Enum.reduce_while(
-           bundles,
-           {:ok, signal_sessions, %{}},
-           fn bundle, {:ok, sessions, bundle_map} ->
-             device_jid =
-               bundle
-               |> Map.get(:device_jid, requested_jid)
-               |> normalize_jid_with_device()
+    bundles
+    |> Enum.reduce_while({:ok, signal_sessions, %{}}, fn bundle, acc ->
+      create_session_for_bundle(
+        bundle,
+        requested_jid,
+        acc,
+        local_identity,
+        local_reg_id,
+        lid_mapping
+      )
+    end)
+    |> finalize_bundle_session_creation()
+  end
 
-             device_jid = if device_jid == "", do: requested_jid, else: device_jid
-             signal_jid = JIDUtils.resolve_signal_encryption_jid(device_jid, lid_mapping)
-             signal_jid = if signal_jid == "", do: device_jid, else: signal_jid
+  defp create_session_for_bundle(
+         bundle,
+         requested_jid,
+         {:ok, sessions, bundle_map},
+         local_identity,
+         local_reg_id,
+         lid_mapping
+       ) do
+    {device_jid, signal_jid} = resolve_bundle_jids(bundle, requested_jid, lid_mapping)
 
-             if device_jid == "" do
-               {:halt, {:error, :invalid_device_jid}}
-             else
-               Logger.debug(
-                 "[PREKEY] Creating session for wire_jid=#{device_jid} signal_jid=#{signal_jid} (request_jid=#{requested_jid})"
-               )
+    if device_jid == "" do
+      {:halt, {:error, :invalid_device_jid}}
+    else
+      Logger.debug(
+        "[PREKEY] Creating session for wire_jid=#{device_jid} signal_jid=#{signal_jid} (request_jid=#{requested_jid})"
+      )
 
-               case SessionStore.get_or_create_session(
-                      sessions,
-                      signal_jid,
-                      local_identity,
-                      bundle,
-                      local_reg_id,
-                      force: true
-                    ) do
-                 {:ok, created_session, base_key, updated_sessions} ->
-                   updated_sessions =
-                     updated_sessions
-                     |> maybe_alias_signal_session(requested_jid, signal_jid, created_session)
-                     |> maybe_alias_signal_session(device_jid, signal_jid, created_session)
+      case SessionStore.get_or_create_session(
+             sessions,
+             signal_jid,
+             local_identity,
+             bundle,
+             local_reg_id,
+             force: true
+           ) do
+        {:ok, created_session, base_key, updated_sessions} ->
+          {:cont,
+           finalize_created_bundle_session(
+             bundle,
+             requested_jid,
+             signal_jid,
+             device_jid,
+             created_session,
+             base_key,
+             updated_sessions,
+             bundle_map
+           )}
 
-                   Logger.debug(
-                     "[PREKEY] Session ready for wire_jid=#{device_jid} signal_jid=#{signal_jid}, base_key=#{if base_key, do: byte_size(base_key), else: "nil"} bytes"
-                   )
-
-                   bundle_with_info =
-                     bundle
-                     |> Map.put(:base_key, base_key)
-                     |> Map.put(:device_jid, device_jid)
-                     |> Map.put(:signal_jid, signal_jid)
-
-                   bundle_map =
-                     bundle_map
-                     |> Map.put(device_jid, bundle_with_info)
-                     |> maybe_put_bundle_alias(signal_jid, device_jid, bundle_with_info)
-
-                   {:cont, {:ok, updated_sessions, bundle_map}}
-
-                 {:error, reason} ->
-                   {:halt, {:error, {:session_create_failed, device_jid, reason}}}
-               end
-             end
-           end
-         ) do
-      {:ok, updated_sessions, bundle_map} when map_size(bundle_map) > 0 ->
-        {:ok, updated_sessions, bundle_map}
-
-      {:ok, _updated_sessions, _bundle_map} ->
-        {:error, :no_sessions_created}
-
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          {:halt, {:error, {:session_create_failed, device_jid, reason}}}
+      end
     end
   end
+
+  defp resolve_bundle_jids(bundle, requested_jid, lid_mapping) do
+    device_jid =
+      bundle
+      |> Map.get(:device_jid, requested_jid)
+      |> normalize_jid_with_device()
+      |> case do
+        "" -> requested_jid
+        jid -> jid
+      end
+
+    signal_jid =
+      device_jid
+      |> JIDUtils.resolve_signal_encryption_jid(lid_mapping)
+      |> case do
+        "" -> device_jid
+        jid -> jid
+      end
+
+    {device_jid, signal_jid}
+  end
+
+  defp finalize_created_bundle_session(
+         bundle,
+         requested_jid,
+         signal_jid,
+         device_jid,
+         created_session,
+         base_key,
+         updated_sessions,
+         bundle_map
+       ) do
+    updated_sessions =
+      updated_sessions
+      |> maybe_alias_signal_session(requested_jid, signal_jid, created_session)
+      |> maybe_alias_signal_session(device_jid, signal_jid, created_session)
+
+    Logger.debug(
+      "[PREKEY] Session ready for wire_jid=#{device_jid} signal_jid=#{signal_jid}, base_key=#{if base_key, do: byte_size(base_key), else: "nil"} bytes"
+    )
+
+    bundle_with_info =
+      bundle
+      |> Map.put(:base_key, base_key)
+      |> Map.put(:device_jid, device_jid)
+      |> Map.put(:signal_jid, signal_jid)
+
+    bundle_map =
+      bundle_map
+      |> Map.put(device_jid, bundle_with_info)
+      |> maybe_put_bundle_alias(signal_jid, device_jid, bundle_with_info)
+
+    {:ok, updated_sessions, bundle_map}
+  end
+
+  defp finalize_bundle_session_creation({:ok, updated_sessions, bundle_map})
+       when map_size(bundle_map) > 0,
+       do: {:ok, updated_sessions, bundle_map}
+
+  defp finalize_bundle_session_creation({:ok, _updated_sessions, _bundle_map}),
+    do: {:error, :no_sessions_created}
+
+  defp finalize_bundle_session_creation({:error, reason}), do: {:error, reason}
 
   defp maybe_put_bundle_alias(bundle_map, alias_jid, source_jid, bundle)
        when is_binary(alias_jid) and is_binary(source_jid) and alias_jid != "" and
@@ -1171,52 +1272,80 @@ defmodule ExWapp.Session.Worker.Outbound do
   end
 
   defp do_encrypt_and_accumulate(store, acc, sessions, target_jid, signal_jid, payload, bundle) do
-    result =
-      Encryption.encrypt_for_recipient_sync(store, sessions, signal_jid, payload, bundle)
-
-    result =
-      case result do
-        {:error, :missing_bundle} when signal_jid != target_jid ->
-          Logger.debug("[SEND] No session for signal_jid=#{signal_jid}, retrying with wire jid")
-          Encryption.encrypt_for_recipient_sync(store, sessions, target_jid, payload, bundle)
-
-        other ->
-          other
-      end
-
-    case result do
+    case encrypt_for_target_with_fallback(
+           store,
+           sessions,
+           target_jid,
+           signal_jid,
+           payload,
+           bundle
+         ) do
       {:ok, ciphertext, enc_type, updated_sessions} ->
-        if enc_type == :prekey do
-          case ExWapp.Signal.WireFormat.parse_prekey_signal_message(ciphertext) do
-            {:ok, parsed} ->
-              Logger.debug(
-                "[SEND] pkmsg wire fields target=#{target_jid} reg_id=#{parsed.registration_id} signed_prekey_id=#{parsed.signed_prekey_id} prekey_id=#{inspect(parsed.prekey_id)} base_key_size=#{byte_size(parsed.base_key)} inner_size=#{byte_size(parsed.message)}"
-              )
-
-            {:error, reason} ->
-              Logger.warning(
-                "[SEND] pkmsg wire parse failed for target=#{target_jid}: #{inspect(reason)}"
-              )
-          end
-        end
-
-        updated_sessions =
-          if signal_jid != target_jid,
-            do: ensure_signal_session_alias(updated_sessions, signal_jid, target_jid),
-            else: updated_sessions
-
-        node = MessageNode.build_participant_encrypted_node(target_jid, ciphertext, enc_type)
-
-        %{
-          acc
-          | nodes: [node | acc.nodes],
-            sessions: updated_sessions,
-            include_identity: acc.include_identity or enc_type == :prekey
-        }
+        accumulate_encrypted_target(
+          acc,
+          target_jid,
+          signal_jid,
+          ciphertext,
+          enc_type,
+          updated_sessions
+        )
 
       {:error, reason} ->
         Logger.warning("[SEND] Failed to encrypt for wire_jid=#{target_jid}: #{inspect(reason)}")
         %{acc | errors: [{target_jid, reason} | acc.errors]}
+    end
+  end
+
+  defp encrypt_for_target_with_fallback(store, sessions, target_jid, signal_jid, payload, bundle) do
+    case Encryption.encrypt_for_recipient_sync(store, sessions, signal_jid, payload, bundle) do
+      {:error, :missing_bundle} when signal_jid != target_jid ->
+        Logger.debug("[SEND] No session for signal_jid=#{signal_jid}, retrying with wire jid")
+        Encryption.encrypt_for_recipient_sync(store, sessions, target_jid, payload, bundle)
+
+      other ->
+        other
+    end
+  end
+
+  defp accumulate_encrypted_target(
+         acc,
+         target_jid,
+         signal_jid,
+         ciphertext,
+         enc_type,
+         updated_sessions
+       ) do
+    maybe_log_prekey_wire_fields(target_jid, enc_type, ciphertext)
+
+    updated_sessions =
+      if signal_jid != target_jid,
+        do: ensure_signal_session_alias(updated_sessions, signal_jid, target_jid),
+        else: updated_sessions
+
+    node = MessageNode.build_participant_encrypted_node(target_jid, ciphertext, enc_type)
+
+    %{
+      acc
+      | nodes: [node | acc.nodes],
+        sessions: updated_sessions,
+        include_identity: acc.include_identity or enc_type == :prekey
+    }
+  end
+
+  defp maybe_log_prekey_wire_fields(_target_jid, enc_type, _ciphertext) when enc_type != :prekey,
+    do: :ok
+
+  defp maybe_log_prekey_wire_fields(target_jid, :prekey, ciphertext) do
+    case ExWapp.Signal.WireFormat.parse_prekey_signal_message(ciphertext) do
+      {:ok, parsed} ->
+        Logger.debug(
+          "[SEND] pkmsg wire fields target=#{target_jid} reg_id=#{parsed.registration_id} signed_prekey_id=#{parsed.signed_prekey_id} prekey_id=#{inspect(parsed.prekey_id)} base_key_size=#{byte_size(parsed.base_key)} inner_size=#{byte_size(parsed.message)}"
+        )
+
+      {:error, reason} ->
+        Logger.warning(
+          "[SEND] pkmsg wire parse failed for target=#{target_jid}: #{inspect(reason)}"
+        )
     end
   end
 

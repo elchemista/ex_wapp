@@ -845,106 +845,186 @@ defmodule ExWapp.MessageHandler do
          participant,
          attrs
        ) do
-    sender_candidates = signal_sender_jids(from, participant, attrs, state)
-    payload_candidates = encrypted_payload_candidates(message_data)
+    decrypt_ctx = build_decrypt_context(message_data, state, from, participant, attrs)
+    log_decrypt_attempt(enc_type, decrypt_ctx, from)
 
-    ordered_payload_candidates =
-      prioritize_payload_candidates(payload_candidates, state, attrs)
-
-    decryptable_payloads =
-      Enum.filter(ordered_payload_candidates, &is_binary(&1.ciphertext))
-
-    Logger.debug(
-      "[DECRYPT] Attempting decrypt: enc_type=#{inspect(enc_type)} payload_candidates=#{length(payload_candidates)} decryptable_payloads=#{length(decryptable_payloads)} from=#{inspect(from)} sender_candidates=#{inspect(sender_candidates)}"
-    )
-
-    case {Map.get(state, :store), sender_candidates, decryptable_payloads} do
-      {nil, _, _} ->
-        Logger.warning("[DECRYPT] Missing store in state, cannot decrypt")
-        {Map.put(message_data, :decrypt_status, {:error, :missing_store}), state}
-
-      {_store, [], _payloads} ->
-        Logger.warning(
-          "[DECRYPT] No sender candidates found from from/participant/sender_lid attrs"
+    case validate_decrypt_context(state, decrypt_ctx) do
+      {:ok, store} ->
+        decrypt_and_decode_message(
+          store,
+          state,
+          from,
+          message_data,
+          enc_type,
+          decrypt_ctx
         )
 
-        {Map.put(message_data, :decrypt_status, {:error, :no_sender_candidates}), state}
-
-      {_store, _candidates, []} ->
-        Logger.warning(
-          "[DECRYPT] Skipping decrypt: no binary ciphertext candidates. first_candidate=#{inspect(List.first(payload_candidates))}"
-        )
-
-        {Map.put(message_data, :decrypt_status, {:error, :no_ciphertext_candidates}), state}
-
-      {store, candidates, payloads} ->
-        case decrypt_with_payload_candidates(
-               store,
-               Map.get(state, :signal_sessions),
-               candidates,
-               payloads,
-               from
-             ) do
-          {:ok, padded_plaintext, updated_sessions, sender_jid, payload} ->
-            plaintext =
-              Encryption.unpad_message(
-                padded_plaintext,
-                Map.get(payload, :enc_version) || Map.get(message_data, :enc_version)
-              )
-
-            {sender_key_dist_count, state} =
-              maybe_process_sender_key_distributions(state, from, sender_jid, plaintext)
-
-            {content_type, decoded_text} =
-              classify_decrypted_content(plaintext, sender_key_dist_count)
-
-            text = decoded_text || "(encrypted: #{Map.get(payload, :enc_type, enc_type)})"
-
-            if content_type == :protocol do
-              Logger.debug(
-                "[DECRYPT] Protocol message (#{Map.get(payload, :enc_type)}), plaintext_size=#{byte_size(plaintext)} — skipping chat display"
-              )
-            else
-              if is_nil(decoded_text) do
-                preview_size = min(byte_size(plaintext), 24)
-                preview = Base.encode16(binary_part(plaintext, 0, preview_size), case: :lower)
-
-                Logger.warning(
-                  "[DECRYPT] Decrypted payload but could not extract text. sender_jid=#{sender_jid} enc_type=#{Map.get(payload, :enc_type)} plaintext_size=#{byte_size(plaintext)} preview=#{preview}"
-                )
-              end
-
-              Logger.debug(
-                "[DECRYPT] Success! sender_jid=#{sender_jid} enc_type=#{Map.get(payload, :enc_type)} plaintext_size=#{byte_size(plaintext)} text=#{inspect(String.slice(text || "", 0, 50))}"
-              )
-            end
-
-            updated_state = Map.put(state, :signal_sessions, updated_sessions)
-
-            decoded_message_data =
-              message_data
-              |> Map.put(:text, text)
-              |> Map.put(:decrypt_status, :ok)
-              |> Map.put(:message_content_type, content_type)
-
-            decoded_message_data =
-              if content_type == :protocol do
-                Map.put(decoded_message_data, :protocol_payload, plaintext)
-              else
-                decoded_message_data
-              end
-
-            {decoded_message_data, updated_state}
-
-          {:error, reason} ->
-            Logger.warning("[DECRYPT] Failed to decrypt message: #{inspect(reason)}")
-            {Map.put(message_data, :decrypt_status, {:error, reason}), state}
-        end
+      {:error, reason} ->
+        decrypt_error_result(message_data, state, reason)
     end
   end
 
   defp maybe_decrypt_message(message_data, state, _from, _participant, _attrs),
     do: {message_data, state}
+
+  defp build_decrypt_context(message_data, state, from, participant, attrs) do
+    sender_candidates = signal_sender_jids(from, participant, attrs, state)
+    payload_candidates = encrypted_payload_candidates(message_data)
+
+    decryptable_payloads =
+      payload_candidates
+      |> prioritize_payload_candidates(state, attrs)
+      |> Enum.filter(&is_binary(&1.ciphertext))
+
+    %{
+      sender_candidates: sender_candidates,
+      payload_candidates: payload_candidates,
+      decryptable_payloads: decryptable_payloads
+    }
+  end
+
+  defp log_decrypt_attempt(enc_type, decrypt_ctx, from) do
+    Logger.debug(
+      "[DECRYPT] Attempting decrypt: enc_type=#{inspect(enc_type)} payload_candidates=#{length(decrypt_ctx.payload_candidates)} decryptable_payloads=#{length(decrypt_ctx.decryptable_payloads)} from=#{inspect(from)} sender_candidates=#{inspect(decrypt_ctx.sender_candidates)}"
+    )
+  end
+
+  defp validate_decrypt_context(state, decrypt_ctx) do
+    cond do
+      is_nil(Map.get(state, :store)) ->
+        Logger.warning("[DECRYPT] Missing store in state, cannot decrypt")
+        {:error, :missing_store}
+
+      decrypt_ctx.sender_candidates == [] ->
+        Logger.warning(
+          "[DECRYPT] No sender candidates found from from/participant/sender_lid attrs"
+        )
+
+        {:error, :no_sender_candidates}
+
+      decrypt_ctx.decryptable_payloads == [] ->
+        Logger.warning(
+          "[DECRYPT] Skipping decrypt: no binary ciphertext candidates. first_candidate=#{inspect(List.first(decrypt_ctx.payload_candidates))}"
+        )
+
+        {:error, :no_ciphertext_candidates}
+
+      true ->
+        {:ok, Map.get(state, :store)}
+    end
+  end
+
+  defp decrypt_and_decode_message(store, state, from, message_data, enc_type, decrypt_ctx) do
+    case decrypt_with_payload_candidates(
+           store,
+           Map.get(state, :signal_sessions),
+           decrypt_ctx.sender_candidates,
+           decrypt_ctx.decryptable_payloads,
+           from
+         ) do
+      {:ok, padded_plaintext, updated_sessions, sender_jid, payload} ->
+        decode_decrypted_message(
+          message_data,
+          state,
+          from,
+          enc_type,
+          padded_plaintext,
+          updated_sessions,
+          sender_jid,
+          payload
+        )
+
+      {:error, reason} ->
+        Logger.warning("[DECRYPT] Failed to decrypt message: #{inspect(reason)}")
+        decrypt_error_result(message_data, state, reason)
+    end
+  end
+
+  defp decode_decrypted_message(
+         message_data,
+         state,
+         from,
+         enc_type,
+         padded_plaintext,
+         updated_sessions,
+         sender_jid,
+         payload
+       ) do
+    plaintext =
+      Encryption.unpad_message(
+        padded_plaintext,
+        Map.get(payload, :enc_version) || Map.get(message_data, :enc_version)
+      )
+
+    {sender_key_dist_count, state} =
+      maybe_process_sender_key_distributions(state, from, sender_jid, plaintext)
+
+    {content_type, decoded_text} =
+      classify_decrypted_content(plaintext, sender_key_dist_count)
+
+    text = decoded_text || "(encrypted: #{Map.get(payload, :enc_type, enc_type)})"
+
+    log_decrypted_message(content_type, decoded_text, sender_jid, payload, plaintext, text)
+
+    updated_state = Map.put(state, :signal_sessions, updated_sessions)
+    decoded_message_data = build_decoded_message_data(message_data, text, content_type, plaintext)
+
+    {decoded_message_data, updated_state}
+  end
+
+  defp log_decrypted_message(
+         :protocol,
+         _decoded_text,
+         _sender_jid,
+         payload,
+         plaintext,
+         _text
+       ) do
+    Logger.debug(
+      "[DECRYPT] Protocol message (#{Map.get(payload, :enc_type)}), plaintext_size=#{byte_size(plaintext)} — skipping chat display"
+    )
+  end
+
+  defp log_decrypted_message(
+         _content_type,
+         decoded_text,
+         sender_jid,
+         payload,
+         plaintext,
+         text
+       ) do
+    if is_nil(decoded_text) do
+      preview_size = min(byte_size(plaintext), 24)
+      preview = Base.encode16(binary_part(plaintext, 0, preview_size), case: :lower)
+
+      Logger.warning(
+        "[DECRYPT] Decrypted payload but could not extract text. sender_jid=#{sender_jid} enc_type=#{Map.get(payload, :enc_type)} plaintext_size=#{byte_size(plaintext)} preview=#{preview}"
+      )
+    end
+
+    Logger.debug(
+      "[DECRYPT] Success! sender_jid=#{sender_jid} enc_type=#{Map.get(payload, :enc_type)} plaintext_size=#{byte_size(plaintext)} text=#{inspect(String.slice(text || "", 0, 50))}"
+    )
+  end
+
+  defp build_decoded_message_data(message_data, text, :protocol, plaintext) do
+    message_data
+    |> Map.put(:text, text)
+    |> Map.put(:decrypt_status, :ok)
+    |> Map.put(:message_content_type, :protocol)
+    |> Map.put(:protocol_payload, plaintext)
+  end
+
+  defp build_decoded_message_data(message_data, text, content_type, _plaintext) do
+    message_data
+    |> Map.put(:text, text)
+    |> Map.put(:decrypt_status, :ok)
+    |> Map.put(:message_content_type, content_type)
+  end
+
+  defp decrypt_error_result(message_data, state, reason) do
+    {Map.put(message_data, :decrypt_status, {:error, reason}), state}
+  end
 
   defp maybe_ingest_history_sync(
          %{message_content_type: :protocol, protocol_payload: payload},

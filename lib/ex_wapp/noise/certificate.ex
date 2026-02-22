@@ -21,7 +21,6 @@ defmodule ExWapp.Noise.Certificate do
          :ok <- verify_leaf_certificate(chain.leaf, intermediate_details, static_key) do
       :ok
     else
-      nil -> {:error, :missing_certificate_parts}
       {:error, _} = error -> error
       other -> {:error, other}
     end
