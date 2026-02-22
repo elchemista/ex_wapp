@@ -245,40 +245,34 @@ defmodule ExWapp.MessageHandler do
   # Reference: Baileys messages-recv.ts handlePrivacyTokenNotification
   defp handle_privacy_token_notification(attrs, content, state) do
     from = normalize_jid(Map.get(attrs, "from", ""))
-    tokens_node = find_child_node(content, "tokens")
 
-    if tokens_node do
-      token_nodes =
-        case tokens_node do
-          %Node{content: children} when is_list(children) ->
-            Enum.filter(children, fn
-              %Node{tag: "token"} -> true
-              _ -> false
-            end)
-
-          _ ->
-            []
-        end
-
-      Enum.each(token_nodes, fn %Node{attrs: token_attrs, content: token_content} ->
-        type = Map.get(token_attrs, "type")
-        timestamp = Map.get(token_attrs, "t")
-
-        if type == "trusted_contact" do
-          token_data = normalize_content(token_content)
-
-          if is_binary(token_data) and from != "" do
-            Logger.debug(
-              "[PRIVACY_TOKEN] Storing trusted_contact token for #{from} (#{byte_size(token_data)} bytes)"
-            )
-
-            store_tctoken(state, from, token_data, timestamp)
-          end
-        end
-      end)
-    end
+    content
+    |> find_child_node("tokens")
+    |> extract_privacy_token_nodes()
+    |> Enum.each(&maybe_store_privacy_token(state, from, &1))
 
     {:ok, state}
+  end
+
+  defp extract_privacy_token_nodes(%Node{content: children}) when is_list(children) do
+    Enum.filter(children, &match?(%Node{tag: "token"}, &1))
+  end
+
+  defp extract_privacy_token_nodes(_tokens_node), do: []
+
+  defp maybe_store_privacy_token(state, from, %Node{attrs: token_attrs, content: token_content}) do
+    if Map.get(token_attrs, "type") == "trusted_contact" do
+      timestamp = Map.get(token_attrs, "t")
+      token_data = normalize_content(token_content)
+
+      if is_binary(token_data) and from != "" do
+        Logger.debug(
+          "[PRIVACY_TOKEN] Storing trusted_contact token for #{from} (#{byte_size(token_data)} bytes)"
+        )
+
+        store_tctoken(state, from, token_data, timestamp)
+      end
+    end
   end
 
   defp store_tctoken(state, jid, token, timestamp) do
@@ -786,20 +780,21 @@ defmodule ExWapp.MessageHandler do
   defp parse_sync_boolean(0), do: {:ok, false}
 
   defp parse_sync_boolean(value) when is_binary(value) do
-    case String.downcase(String.trim(value)) do
-      "1" -> {:ok, true}
-      "true" -> {:ok, true}
-      "yes" -> {:ok, true}
-      "on" -> {:ok, true}
-      "0" -> {:ok, false}
-      "false" -> {:ok, false}
-      "no" -> {:ok, false}
-      "off" -> {:ok, false}
-      _ -> :error
-    end
+    value
+    |> String.trim()
+    |> String.downcase()
+    |> parse_sync_boolean_string()
   end
 
   defp parse_sync_boolean(_), do: :error
+
+  defp parse_sync_boolean_string(value) when value in ["1", "true", "yes", "on"],
+    do: {:ok, true}
+
+  defp parse_sync_boolean_string(value) when value in ["0", "false", "no", "off"],
+    do: {:ok, false}
+
+  defp parse_sync_boolean_string(_value), do: :error
 
   defp normalize_optional_text(%JID{} = jid), do: normalize_optional_text(JID.to_string(jid))
 

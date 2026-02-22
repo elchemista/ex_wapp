@@ -212,31 +212,34 @@ defmodule ExWapp.Live do
     |> ExWapp.qr_stream()
     |> Enum.reduce_while(:waiting, fn event, _acc ->
       elapsed = System.monotonic_time(:millisecond) - started_at
-
-      if elapsed >= timeout_ms do
-        {:halt, {:error, :pair_timeout}}
-      else
-        case event do
-          {:code, code} ->
-            case save_qr(code, qr_path) do
-              :ok ->
-                IO.puts("QR updated: #{qr_path} (exists? #{File.exists?(qr_path)})")
-
-              {:error, reason} ->
-                IO.puts("Failed to save QR: #{inspect(reason)}")
-            end
-
-            {:cont, :waiting}
-
-          :success ->
-            IO.puts("Pairing complete.")
-            {:halt, :ok}
-
-          {:error, reason} ->
-            {:halt, {:error, reason}}
-        end
-      end
+      handle_pairing_event(event, elapsed, timeout_ms, qr_path)
     end)
+  end
+
+  defp handle_pairing_event(_event, elapsed, timeout_ms, _qr_path) when elapsed >= timeout_ms do
+    {:halt, {:error, :pair_timeout}}
+  end
+
+  defp handle_pairing_event({:code, code}, _elapsed, _timeout_ms, qr_path) do
+    log_qr_save_result(save_qr(code, qr_path), qr_path)
+    {:cont, :waiting}
+  end
+
+  defp handle_pairing_event(:success, _elapsed, _timeout_ms, _qr_path) do
+    IO.puts("Pairing complete.")
+    {:halt, :ok}
+  end
+
+  defp handle_pairing_event({:error, reason}, _elapsed, _timeout_ms, _qr_path) do
+    {:halt, {:error, reason}}
+  end
+
+  defp log_qr_save_result(:ok, qr_path) do
+    IO.puts("QR updated: #{qr_path} (exists? #{File.exists?(qr_path)})")
+  end
+
+  defp log_qr_save_result({:error, reason}, _qr_path) do
+    IO.puts("Failed to save QR: #{inspect(reason)}")
   end
 
   defp wait_until_connected(session, timeout_ms) do

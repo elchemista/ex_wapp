@@ -240,15 +240,7 @@ defmodule ExWapp.Chat do
   def update_message_status(target, jid, message_id, status) do
     case get(target, jid) do
       {:ok, chat} ->
-        updated_messages =
-          Enum.map(chat.messages, fn msg ->
-            if msg.id == message_id do
-              %{msg | status: status}
-            else
-              msg
-            end
-          end)
-
+        updated_messages = replace_message_status(chat.messages, message_id, status)
         save_chat(target, %{chat | messages: updated_messages})
 
       {:error, _} ->
@@ -263,28 +255,7 @@ defmodule ExWapp.Chat do
   """
   @spec update_message_status_by_id(target(), String.t(), message_status()) :: :ok
   def update_message_status_by_id(target, message_id, status) when is_binary(message_id) do
-    store = resolve_store(target)
-
-    if store do
-      data = Store.load!(store)
-      chats = Map.get(data, :chats, %{})
-
-      updated_chats =
-        Enum.reduce(chats, %{}, fn {jid, chat}, acc ->
-          updated_messages =
-            Enum.map(chat.messages, fn msg ->
-              if msg.id == message_id do
-                %{msg | status: status}
-              else
-                msg
-              end
-            end)
-
-          Map.put(acc, jid, %{chat | messages: updated_messages})
-        end)
-
-      Store.persist(store, Map.put(data, :chats, updated_chats))
-    end
+    persist_status_by_id(resolve_store(target), message_id, status)
 
     :ok
   end
@@ -673,5 +644,26 @@ defmodule ExWapp.Chat do
       {:error, _} ->
         :ok
     end
+  end
+
+  defp persist_status_by_id(nil, _message_id, _status), do: :ok
+
+  defp persist_status_by_id(store, message_id, status) do
+    data = Store.load!(store)
+    chats = Map.get(data, :chats, %{})
+
+    updated_chats =
+      Enum.into(chats, %{}, fn {jid, chat} ->
+        updated_messages = replace_message_status(chat.messages, message_id, status)
+        {jid, %{chat | messages: updated_messages}}
+      end)
+
+    Store.persist(store, Map.put(data, :chats, updated_chats))
+  end
+
+  defp replace_message_status(messages, message_id, status) when is_list(messages) do
+    Enum.map(messages, fn msg ->
+      if msg.id == message_id, do: %{msg | status: status}, else: msg
+    end)
   end
 end

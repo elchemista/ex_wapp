@@ -151,24 +151,17 @@ defmodule ExWapp.Session.JIDUtils do
       Enum.map(recipient_targets, &%{jid: &1, payload_kind: :recipient}) ++
         Enum.map(own_targets, &%{jid: &1, payload_kind: :own})
 
-    specs
-    |> Enum.reduce([], fn %{jid: jid, payload_kind: payload_kind} = spec, acc ->
-      case Enum.find_index(acc, fn existing -> existing.jid == jid end) do
-        nil ->
-          [spec | acc]
+    {order, payload_kinds} =
+      Enum.reduce(specs, {[], %{}}, fn %{jid: jid, payload_kind: payload_kind}, {order, kinds} ->
+        {
+          maybe_prepend_order(order, kinds, jid),
+          Map.update(kinds, jid, payload_kind, &merge_payload_kind(&1, payload_kind))
+        }
+      end)
 
-        idx when payload_kind == :own ->
-          existing = Enum.at(acc, idx)
-
-          if existing.payload_kind == :own,
-            do: acc,
-            else: List.replace_at(acc, idx, %{existing | payload_kind: :own})
-
-        _ ->
-          acc
-      end
-    end)
+    order
     |> Enum.reverse()
+    |> Enum.map(fn jid -> %{jid: jid, payload_kind: Map.fetch!(payload_kinds, jid)} end)
   end
 
   @doc """
@@ -235,4 +228,12 @@ defmodule ExWapp.Session.JIDUtils do
         mapped_jid
     end
   end
+
+  defp maybe_prepend_order(order, kinds, jid) do
+    if Map.has_key?(kinds, jid), do: order, else: [jid | order]
+  end
+
+  defp merge_payload_kind(:own, _new_kind), do: :own
+  defp merge_payload_kind(_existing_kind, :own), do: :own
+  defp merge_payload_kind(_existing_kind, _new_kind), do: :recipient
 end

@@ -72,17 +72,7 @@ defmodule ExWapp.Session.MessageNode do
   def jid_to_ad_string(jid) when is_binary(jid) do
     case String.split(jid, "@", parts: 2) do
       [user_part, server] ->
-        {user, device} =
-          case String.split(user_part, ":", parts: 2) do
-            [user, device_str] ->
-              case Integer.parse(device_str) do
-                {device_id, ""} -> {user, device_id}
-                _ -> {user_part, 0}
-              end
-
-            _ ->
-              {user_part, 0}
-          end
+        {user, device} = parse_ad_user_and_device(user_part)
 
         "#{user}.0:#{device}@#{server}"
 
@@ -92,6 +82,19 @@ defmodule ExWapp.Session.MessageNode do
   end
 
   def jid_to_ad_string(jid), do: to_string(jid)
+
+  defp parse_ad_user_and_device(user_part) do
+    case String.split(user_part, ":", parts: 2) do
+      [user, device_str] ->
+        case Integer.parse(device_str) do
+          {device_id, ""} -> {user, device_id}
+          _ -> {user_part, 0}
+        end
+
+      _ ->
+        {user_part, 0}
+    end
+  end
 
   @spec maybe_put_message_attr(map(), String.t(), term()) :: map()
   def maybe_put_message_attr(attrs, _key, nil), do: attrs

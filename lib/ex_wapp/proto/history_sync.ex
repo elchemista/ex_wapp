@@ -61,32 +61,7 @@ defmodule ExWapp.Proto.HistorySync do
           {:error, :history_sync_download_required}
 
         inline_payload ->
-          with {:ok, history_payload} <- inflate_history_payload(inline_payload),
-               {:ok, history_fields} <- decode_wire_fields(history_payload) do
-            conversations =
-              history_fields
-              |> all_length_delimited_fields(2)
-              |> Enum.map(&parse_conversation/1)
-              |> Enum.reject(&is_nil/1)
-
-            explicit_mappings =
-              history_fields
-              |> all_length_delimited_fields(15)
-              |> Enum.map(&parse_phone_number_lid_mapping/1)
-              |> Enum.reject(&is_nil/1)
-
-            conversation_mappings =
-              conversations
-              |> Enum.map(&conversation_mapping/1)
-              |> Enum.reject(&is_nil/1)
-
-            {:ok,
-             %{
-               sync_type: first_varint_field(history_fields, 1) || sync_type_from_notification,
-               conversations: conversations,
-               lid_mappings: Enum.uniq(explicit_mappings ++ conversation_mappings)
-             }}
-          end
+          parse_inline_history_payload(inline_payload, sync_type_from_notification)
       end
     else
       nil ->
@@ -98,6 +73,35 @@ defmodule ExWapp.Proto.HistorySync do
   end
 
   def extract_from_message(_), do: :not_history_sync
+
+  defp parse_inline_history_payload(inline_payload, sync_type_from_notification) do
+    with {:ok, history_payload} <- inflate_history_payload(inline_payload),
+         {:ok, history_fields} <- decode_wire_fields(history_payload) do
+      conversations =
+        history_fields
+        |> all_length_delimited_fields(2)
+        |> Enum.map(&parse_conversation/1)
+        |> Enum.reject(&is_nil/1)
+
+      explicit_mappings =
+        history_fields
+        |> all_length_delimited_fields(15)
+        |> Enum.map(&parse_phone_number_lid_mapping/1)
+        |> Enum.reject(&is_nil/1)
+
+      conversation_mappings =
+        conversations
+        |> Enum.map(&conversation_mapping/1)
+        |> Enum.reject(&is_nil/1)
+
+      {:ok,
+       %{
+         sync_type: first_varint_field(history_fields, 1) || sync_type_from_notification,
+         conversations: conversations,
+         lid_mappings: Enum.uniq(explicit_mappings ++ conversation_mappings)
+       }}
+    end
+  end
 
   defp parse_conversation(conversation_payload) when is_binary(conversation_payload) do
     with {:ok, fields} <- decode_wire_fields(conversation_payload),
@@ -222,23 +226,30 @@ defmodule ExWapp.Proto.HistorySync do
         {:ok, text}
 
       :error ->
-        case collect_length_delimited_fields(payload) do
-          {:ok, nested_values} ->
-            nested_values
-            |> Enum.reduce_while(:error, fn nested, _acc ->
-              case decode_message_text_recursive(nested, depth + 1) do
-                {:ok, text} -> {:halt, {:ok, text}}
-                :error -> {:cont, :error}
-              end
-            end)
-
-          {:error, _reason} ->
-            :error
-        end
+        decode_nested_message_text(payload, depth)
     end
   end
 
   defp decode_message_text_recursive(_payload, _depth), do: :error
+
+  defp decode_nested_message_text(payload, depth) do
+    case collect_length_delimited_fields(payload) do
+      {:ok, nested_values} ->
+        Enum.reduce_while(nested_values, :error, fn nested, _acc ->
+          reduce_nested_text(nested, depth)
+        end)
+
+      {:error, _reason} ->
+        :error
+    end
+  end
+
+  defp reduce_nested_text(nested_payload, depth) do
+    case decode_message_text_recursive(nested_payload, depth + 1) do
+      {:ok, text} -> {:halt, {:ok, text}}
+      :error -> {:cont, :error}
+    end
+  end
 
   defp decode_message_text_shallow(payload) when is_binary(payload) do
     with {:ok, fields} <- decode_wire_fields(payload),
@@ -432,42 +443,46 @@ defmodule ExWapp.Proto.HistorySync do
     with {:ok, tag, rest} <- decode_varint(binary),
          wire_type <- band(tag, 0x07),
          field_num <- bsr(tag, 3) do
-      case wire_type do
-        0 ->
-          with {:ok, value, tail} <- decode_varint(rest) do
-            decode_wire_fields(tail, [{field_num, 0, value} | acc])
-          end
-
-        1 ->
-          if byte_size(rest) >= 8 do
-            <<_skip::binary-size(8), tail::binary>> = rest
-            decode_wire_fields(tail, [{field_num, 1, :fixed64} | acc])
-          else
-            {:error, :invalid_fixed64}
-          end
-
-        2 ->
-          with {:ok, len, tail} <- decode_varint(rest),
-               true <- byte_size(tail) >= len do
-            <<value::binary-size(len), next::binary>> = tail
-            decode_wire_fields(next, [{field_num, 2, value} | acc])
-          else
-            false -> {:error, :invalid_length_delimited_field}
-          end
-
-        5 ->
-          if byte_size(rest) >= 4 do
-            <<_skip::binary-size(4), tail::binary>> = rest
-            decode_wire_fields(tail, [{field_num, 5, :fixed32} | acc])
-          else
-            {:error, :invalid_fixed32}
-          end
-
-        _ ->
-          {:error, {:unsupported_wire_type, wire_type}}
-      end
+      decode_wire_field(wire_type, rest, field_num, acc)
     end
   end
+
+  defp decode_wire_field(0, rest, field_num, acc) do
+    with {:ok, value, tail} <- decode_varint(rest) do
+      decode_wire_fields(tail, [{field_num, 0, value} | acc])
+    end
+  end
+
+  defp decode_wire_field(1, rest, field_num, acc) do
+    if byte_size(rest) >= 8 do
+      <<_skip::binary-size(8), tail::binary>> = rest
+      decode_wire_fields(tail, [{field_num, 1, :fixed64} | acc])
+    else
+      {:error, :invalid_fixed64}
+    end
+  end
+
+  defp decode_wire_field(2, rest, field_num, acc) do
+    with {:ok, len, tail} <- decode_varint(rest),
+         true <- byte_size(tail) >= len do
+      <<value::binary-size(len), next::binary>> = tail
+      decode_wire_fields(next, [{field_num, 2, value} | acc])
+    else
+      false -> {:error, :invalid_length_delimited_field}
+    end
+  end
+
+  defp decode_wire_field(5, rest, field_num, acc) do
+    if byte_size(rest) >= 4 do
+      <<_skip::binary-size(4), tail::binary>> = rest
+      decode_wire_fields(tail, [{field_num, 5, :fixed32} | acc])
+    else
+      {:error, :invalid_fixed32}
+    end
+  end
+
+  defp decode_wire_field(wire_type, _rest, _field_num, _acc),
+    do: {:error, {:unsupported_wire_type, wire_type}}
 
   defp decode_varint(binary), do: decode_varint(binary, 0, 0)
   defp decode_varint(_, _, shift) when shift > 63, do: {:error, :invalid_varint}

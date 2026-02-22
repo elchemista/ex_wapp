@@ -116,23 +116,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   defp handle_connection_node(%Binary.Node{tag: "ib", content: children}, state) do
     Logger.debug("[SESSION] Received ib (initialization) node")
 
-    if is_list(children) do
-      Enum.each(children, fn child ->
-        case child do
-          %Binary.Node{tag: "offline_preview", attrs: attrs} ->
-            Logger.debug("[SESSION] Offline preview: #{inspect(attrs)}")
-
-          %Binary.Node{tag: "offline", attrs: attrs} ->
-            Logger.debug("[SESSION] Offline sync completed: #{inspect(attrs)}")
-
-          %Binary.Node{tag: "dirty", attrs: attrs} ->
-            Logger.debug("[SESSION] Dirty state: #{inspect(attrs)}")
-
-          other ->
-            Logger.debug("[SESSION] IB child: #{inspect(other.tag)}")
-        end
-      end)
-    end
+    log_ib_children(children)
 
     {state, []}
   end
@@ -188,15 +172,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     Logger.error("[SESSION] Stream error: code=#{code}")
 
     # Check for conflict type in children
-    conflict_type =
-      if is_list(children) do
-        case Enum.find(children, fn c -> c.tag == "conflict" end) do
-          %Binary.Node{attrs: conflict_attrs} -> Map.get(conflict_attrs, "type")
-          _ -> nil
-        end
-      else
-        nil
-      end
+    conflict_type = extract_conflict_type(children)
 
     new_state =
       cond do
@@ -268,10 +244,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     if map_size(workers) > 0 do
       Logger.debug("[SESSION] Forwarding IQ #{iq_id} to #{map_size(workers)} workers")
       msg_tag = if iq_type == "result", do: :prekey_response, else: :prekey_error
-
-      Enum.each(workers, fn {worker_pid, _jid} ->
-        if Process.alive?(worker_pid), do: send(worker_pid, {msg_tag, iq_id, node})
-      end)
+      broadcast_iq_to_workers(workers, msg_tag, iq_id, node)
     end
 
     state
@@ -294,6 +267,48 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   end
 
   defp resolve_pending_iq(state, _iq_type, _iq_id, _node), do: {state, false}
+
+  defp log_ib_children(children) when is_list(children), do: Enum.each(children, &log_ib_child/1)
+  defp log_ib_children(_children), do: :ok
+
+  defp log_ib_child(%Binary.Node{tag: "offline_preview", attrs: attrs}) do
+    Logger.debug("[SESSION] Offline preview: #{inspect(attrs)}")
+  end
+
+  defp log_ib_child(%Binary.Node{tag: "offline", attrs: attrs}) do
+    Logger.debug("[SESSION] Offline sync completed: #{inspect(attrs)}")
+  end
+
+  defp log_ib_child(%Binary.Node{tag: "dirty", attrs: attrs}) do
+    Logger.debug("[SESSION] Dirty state: #{inspect(attrs)}")
+  end
+
+  defp log_ib_child(%Binary.Node{tag: tag}) do
+    Logger.debug("[SESSION] IB child: #{inspect(tag)}")
+  end
+
+  defp log_ib_child(_child), do: :ok
+
+  defp extract_conflict_type(children) when is_list(children) do
+    case Enum.find(children, &match?(%Binary.Node{tag: "conflict"}, &1)) do
+      %Binary.Node{attrs: conflict_attrs} -> Map.get(conflict_attrs, "type")
+      _ -> nil
+    end
+  end
+
+  defp extract_conflict_type(_children), do: nil
+
+  defp broadcast_iq_to_workers(workers, msg_tag, iq_id, node) when is_map(workers) do
+    Enum.each(workers, fn {worker_pid, _jid} ->
+      send_iq_to_worker(worker_pid, msg_tag, iq_id, node)
+    end)
+  end
+
+  defp send_iq_to_worker(worker_pid, msg_tag, iq_id, node) when is_pid(worker_pid) do
+    if Process.alive?(worker_pid), do: send(worker_pid, {msg_tag, iq_id, node})
+  end
+
+  defp send_iq_to_worker(_worker_pid, _msg_tag, _iq_id, _node), do: :ok
 
   defp dispatch_iq(state, _node, attrs, "urn:xmpp:ping", "get", _iq_id) do
     Logger.debug("[SESSION] Received ping, sending pong")
