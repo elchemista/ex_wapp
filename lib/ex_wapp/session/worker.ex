@@ -496,22 +496,11 @@ defmodule ExWapp.Session.Worker do
       case start_send_worker(
              policy_state,
              jid,
-             fn ->
-               result = do_send_text_worker(session_pid, policy_state, jid, text)
-               send(session_pid, {:send_result, jid, text, result, :primary, 0})
-               result
-             end,
+             primary_send_task_fun(session_pid, policy_state, jid, text, :primary, 0),
              from
            ) do
         {:ok, worker, mon} ->
-          new_state =
-            policy_state
-            |> Map.update(:send_workers, %{worker => jid}, fn workers ->
-              Map.put(workers, worker, jid)
-            end)
-            |> Map.update(:send_worker_mons, %{mon => worker}, fn mons ->
-              Map.put(mons, mon, worker)
-            end)
+          new_state = register_send_worker(policy_state, worker, mon, jid)
 
           {:noreply, update_stats(new_state, :messages_sent)}
 
@@ -813,11 +802,7 @@ defmodule ExWapp.Session.Worker do
       case start_send_worker(
              policy_state,
              jid,
-             fn ->
-               result = do_send_text_worker(session_pid, policy_state, jid, text)
-               send(session_pid, {:send_result, jid, text, result, :primary, 0})
-               result
-             end
+             primary_send_task_fun(session_pid, policy_state, jid, text, :primary, 0)
            ) do
         {:ok, worker, mon} ->
           {:noreply,
@@ -1303,6 +1288,14 @@ defmodule ExWapp.Session.Worker do
     Outbound.send_text_worker(session_pid, state, jid, text, opts)
   end
 
+  defp primary_send_task_fun(session_pid, state, jid, text, strategy, attempt) do
+    fn ->
+      result = do_send_text_worker(session_pid, state, jid, text)
+      send(session_pid, {:send_result, jid, text, result, strategy, attempt})
+      result
+    end
+  end
+
   defp schedule_outbound_confirmation(state, jid, text, message_id, strategy, attempt)
        when is_binary(jid) and is_binary(message_id) and is_integer(attempt) and attempt >= 0 do
     confirm_timeout_ms = configured_confirm_timeout_ms(state.runtime_cfg)
@@ -1394,8 +1387,7 @@ defmodule ExWapp.Session.Worker do
   defp start_send_worker(%__MODULE__{send_worker_sup: sup}, jid, fun, from)
        when is_pid(sup) and is_function(fun, 0) do
     case Task.Supervisor.start_child(sup, fn ->
-           result = fun.()
-           if from, do: GenServer.reply(from, result)
+           run_send_worker_fun(fun, from)
          end) do
       {:ok, worker} ->
         mon = Process.monitor(worker)
@@ -1409,6 +1401,11 @@ defmodule ExWapp.Session.Worker do
 
   defp start_send_worker(_state, jid, _fun, _from) do
     {:error, {:missing_send_worker_supervisor, jid}}
+  end
+
+  defp run_send_worker_fun(fun, from) when is_function(fun, 0) do
+    result = fun.()
+    if from, do: GenServer.reply(from, result)
   end
 
   defp cleanup_dead_send_worker(%__MODULE__{send_workers: workers} = state, mon)
@@ -1609,35 +1606,22 @@ defmodule ExWapp.Session.Worker do
 
   defp maybe_apply_send_error_guard(state, reason) do
     guard_cfg = Config.get(state.runtime_cfg, [:send_error_guard], %{})
-    enabled = Map.get(guard_cfg, :enabled, false)
 
-    if enabled do
-      consecutive = health_get(state, :consecutive_send_errors, 0)
-      errors_min = length(health_get(state, :errors_window_ms, []))
-      drops_min = length(health_get(state, :drops_window_ms, []))
+    if Map.get(guard_cfg, :enabled, false) do
+      apply_enabled_send_error_guard(state, reason, guard_cfg)
+    else
+      {:continue, state}
+    end
+  end
 
-      max_consecutive = Map.get(guard_cfg, :max_consecutive_errors, 3)
-      max_errors_min = Map.get(guard_cfg, :max_errors_per_minute, 20)
-      max_drops_min = Map.get(guard_cfg, :max_drops_per_minute, 10)
+  defp apply_enabled_send_error_guard(state, reason, guard_cfg) do
+    metrics = send_error_guard_metrics(state)
 
-      trigger_reason =
-        cond do
-          consecutive >= max_consecutive ->
-            {:max_consecutive_errors, consecutive}
-
-          errors_min >= max_errors_min ->
-            {:max_errors_per_minute, errors_min}
-
-          drops_min >= max_drops_min ->
-            {:max_drops_per_minute, drops_min}
-
-          true ->
-            nil
-        end
-
-      if is_nil(trigger_reason) do
+    case compute_guard_trigger_reason(metrics, guard_cfg) do
+      nil ->
         {:continue, state}
-      else
+
+      trigger_reason ->
         action = Map.get(guard_cfg, :action, :stop_session)
         notify_only = Map.get(guard_cfg, :notify_only, false)
 
@@ -1651,22 +1635,50 @@ defmodule ExWapp.Session.Worker do
           action: action,
           reason: reason,
           trigger_reason: trigger_reason,
-          consecutive_send_errors: consecutive,
-          errors_per_minute: errors_min,
-          drops_per_minute: drops_min,
+          consecutive_send_errors: metrics.consecutive,
+          errors_per_minute: metrics.errors_min,
+          drops_per_minute: metrics.drops_min,
           notify_only: notify_only
         })
 
-        if notify_only do
-          {:continue, state}
-        else
-          apply_guard_action(state, action, trigger_reason)
-        end
-      end
-    else
-      {:continue, state}
+        continue_or_apply_guard_action(state, action, trigger_reason, notify_only)
     end
   end
+
+  defp send_error_guard_metrics(state) do
+    %{
+      consecutive: health_get(state, :consecutive_send_errors, 0),
+      errors_min: length(health_get(state, :errors_window_ms, [])),
+      drops_min: length(health_get(state, :drops_window_ms, []))
+    }
+  end
+
+  defp compute_guard_trigger_reason(metrics, guard_cfg) do
+    max_consecutive = Map.get(guard_cfg, :max_consecutive_errors, 3)
+    max_errors_min = Map.get(guard_cfg, :max_errors_per_minute, 20)
+    max_drops_min = Map.get(guard_cfg, :max_drops_per_minute, 10)
+
+    cond do
+      metrics.consecutive >= max_consecutive ->
+        {:max_consecutive_errors, metrics.consecutive}
+
+      metrics.errors_min >= max_errors_min ->
+        {:max_errors_per_minute, metrics.errors_min}
+
+      metrics.drops_min >= max_drops_min ->
+        {:max_drops_per_minute, metrics.drops_min}
+
+      true ->
+        nil
+    end
+  end
+
+  defp continue_or_apply_guard_action(state, _action, _trigger_reason, notify_only)
+       when notify_only in [true],
+       do: {:continue, state}
+
+  defp continue_or_apply_guard_action(state, action, trigger_reason, _notify_only),
+    do: apply_guard_action(state, action, trigger_reason)
 
   defp apply_guard_action(state, :none, _trigger_reason), do: {:continue, state}
 
@@ -1844,14 +1856,18 @@ defmodule ExWapp.Session.Worker do
 
     spawn(fn ->
       Enum.each(names, fn collection_name ->
-        case ExWapp.AppState.Engine.fetch_collection(session_pid, store, collection_name) do
-          :ok ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning("[APP_STATE] Failed to fetch #{collection_name}: #{inspect(reason)}")
-        end
+        fetch_app_state_collection(session_pid, store, collection_name)
       end)
     end)
+  end
+
+  defp fetch_app_state_collection(session_pid, store, collection_name) do
+    case ExWapp.AppState.Engine.fetch_collection(session_pid, store, collection_name) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[APP_STATE] Failed to fetch #{collection_name}: #{inspect(reason)}")
+    end
   end
 end

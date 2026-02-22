@@ -123,6 +123,7 @@ and print known chats/groups from the local synced chat store:
 ```elixir
 {:ok, result} =
   ExWapp.Live.run(
+    session_id: "acc_1",
     store_path: "tmp/ex_wapp/live_test_session.etf",
     qr_path: "tmp/whatsapp_qr.svg",
     pair_timeout_ms: 300_000,
