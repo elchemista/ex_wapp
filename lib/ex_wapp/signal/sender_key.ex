@@ -96,7 +96,7 @@ defmodule ExWapp.Signal.SenderKey do
             message_keys: %{}
           })
 
-        Logger.info(
+        Logger.debug(
           "[SENDER_KEY] Stored distribution: group=#{group_jid} sender=#{sender} id=#{parsed.id} iteration=#{parsed.iteration} source_field=#{source_field}"
         )
 

@@ -99,7 +99,7 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
 
     case outbound_message_status(state.store, jid, message_id) do
       status when status in [:delivered, :read, :received] ->
-        Logger.info("[SEND] Outbound confirmed id=#{message_id} status=#{status}")
+        Logger.debug("[SEND] Outbound confirmed id=#{message_id} status=#{status}")
         state
 
       :failed ->

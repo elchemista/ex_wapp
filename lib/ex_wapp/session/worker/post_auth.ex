@@ -19,7 +19,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
   def persist_lid_and_mapping(state, nil), do: state
 
   def persist_lid_and_mapping(state, lid) when is_binary(lid) do
-    Logger.info("[SESSION] LID from success: #{inspect(lid)}")
+    Logger.debug("[SESSION] LID from success: #{inspect(lid)}")
 
     data = Store.load!(state.store)
 
@@ -41,7 +41,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
         pn_normalized = normalize_jid_string(to_string(own_pn))
         lid_normalized = normalize_jid_string(to_string(lid))
 
-        Logger.info(
+        Logger.debug(
           "[SESSION] Storing own PN<->LID mapping: #{pn_normalized} <-> #{lid_normalized}"
         )
 
@@ -73,7 +73,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
     state = %{state | prekey_count_query_id: nil}
 
     server_count = ExWapp.Prekeys.parse_count_response(content)
-    Logger.info("[SESSION] Server prekey count: #{server_count}")
+    Logger.debug("[SESSION] Server prekey count: #{server_count}")
 
     data = Store.load!(state.store)
     signal = Map.get(data, :signal, %{})
@@ -83,18 +83,18 @@ defmodule ExWapp.Session.Worker.PostAuth do
     # For fresh devices, server_count == 0 always needs full initial upload
     cond do
       server_count == 0 ->
-        Logger.info(
+        Logger.debug(
           "[SESSION] No prekeys on server, uploading initial batch (local=#{local_count})"
         )
 
         do_prekey_upload(state, initial: true)
 
       server_count <= min_prekey_threshold(state) ->
-        Logger.info("[SESSION] Server prekeys low (#{server_count}), uploading refill batch")
+        Logger.debug("[SESSION] Server prekeys low (#{server_count}), uploading refill batch")
         do_prekey_upload(state, initial: false)
 
       true ->
-        Logger.info(
+        Logger.debug(
           "[SESSION] Prekey count OK (server=#{server_count}, local=#{local_count}), skipping upload"
         )
 
@@ -112,7 +112,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
       {:ok, prekey_node, prekeys} ->
         persist_uploaded_prekeys(state.store, prekeys)
         initial = Keyword.get(opts, :initial, false)
-        Logger.info("[SESSION] Uploading prekeys (initial=#{initial}, count=#{length(prekeys)})")
+        Logger.debug("[SESSION] Uploading prekeys (initial=#{initial}, count=#{length(prekeys)})")
         {state, [{:send_node, prekey_node}]}
 
       {:error, reason} ->

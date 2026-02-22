@@ -290,9 +290,8 @@ defmodule ExWapp.Pairing do
 
   defp parse_adv_identity(data, adv_identity) when is_binary(adv_identity) do
     with {:ok, adv_secret} <- fetch_adv_secret(data),
-         {:ok, identity} <- fetch_identity_keypair(data),
-         {:ok, parsed} <- ADV.parse_signed_device_identity(adv_identity, adv_secret, identity) do
-      {:ok, parsed}
+         {:ok, identity} <- fetch_identity_keypair(data) do
+      ADV.parse_signed_device_identity(adv_identity, adv_secret, identity)
     end
   end
 
@@ -321,8 +320,7 @@ defmodule ExWapp.Pairing do
        })
        when is_binary(pub) and byte_size(pub) == 32 and
               is_binary(priv) and byte_size(priv) == 32 do
-    require Logger
-    Logger.info("[PAIRING] Keeping existing Signal identity: #{Base.encode64(pub)}")
+    Logger.debug("[PAIRING] Keeping existing Signal identity: #{Base.encode64(pub)}")
     Map.put(signal, :identity_key, identity)
   end
 
@@ -332,8 +330,6 @@ defmodule ExWapp.Pairing do
        })
        when is_binary(pub) and byte_size(pub) == 32 and
               is_binary(priv) and byte_size(priv) == 32 do
-    require Logger
-
     Logger.warning(
       "[PAIRING] Signal identity missing, falling back to pairing identity: #{Base.encode64(pub)}"
     )
@@ -346,8 +342,6 @@ defmodule ExWapp.Pairing do
        })
        when is_binary(pub) and byte_size(pub) == 32 and
               is_binary(priv) and byte_size(priv) == 32 do
-    require Logger
-
     Logger.warning(
       "[PAIRING] Signal identity missing, creating state from pairing identity: #{Base.encode64(pub)}"
     )
@@ -356,7 +350,6 @@ defmodule ExWapp.Pairing do
   end
 
   defp merge_pairing_identity(%{identity: identity}) do
-    require Logger
     Logger.warning("[PAIRING] Invalid pairing identity: #{inspect(identity)}")
     %{}
   end
@@ -370,7 +363,7 @@ defmodule ExWapp.Pairing do
 
     case build_pair_device_sign(pairing_data) do
       {:ok, pair_device_sign} ->
-        Logger.info("[PAIRING] ✓ Built pair-device-sign for acknowledgment")
+        Logger.debug("[PAIRING] ✓ Built pair-device-sign for acknowledgment")
         %Binary.Node{tag: "iq", attrs: base_attrs, content: [pair_device_sign]}
 
       :error ->

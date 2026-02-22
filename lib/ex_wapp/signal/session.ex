@@ -134,7 +134,7 @@ defmodule ExWapp.Signal.Session do
         remote_ratchet_key: remote_signed_prekey
       }
 
-      Logger.info("[SIGNAL] Session created with X3DH + initial ratchet")
+      Logger.debug("[SIGNAL] Session created with X3DH + initial ratchet")
 
       # Return ephemeral.public as base_key for PreKeySignalMessage
       {:ok, session, ephemeral.public}
@@ -236,13 +236,13 @@ defmodule ExWapp.Signal.Session do
   @spec decrypt_prekey_message(binary(), map(), map()) ::
           {:ok, binary(), session_state()} | {:error, term()}
   def decrypt_prekey_message(message, local_identity, local_prekeys) do
-    Logger.info(
+    Logger.debug(
       "[SIGNAL] decrypt_prekey_message: msg_size=#{byte_size(message)} first_byte=0x#{Base.encode16(binary_part(message, 0, 1))}"
     )
 
     case parse_prekey_signal_message(message) do
       {:ok, reg_id, prekey_id, signed_prekey_id, base_key, remote_identity, inner_ciphertext} ->
-        Logger.info(
+        Logger.debug(
           "[SIGNAL] Parsed pkmsg: reg_id=#{reg_id} prekey_id=#{inspect(prekey_id)} " <>
             "signed_prekey_id=#{signed_prekey_id} base_key_size=#{byte_size(base_key)} " <>
             "inner_size=#{byte_size(inner_ciphertext)}"
@@ -314,7 +314,7 @@ defmodule ExWapp.Signal.Session do
 
   defp maybe_ratchet(session, ratchet_key) do
     if ratchet_key != session.remote_ratchet_key do
-      Logger.info("[SIGNAL] Performing DH ratchet step")
+      Logger.debug("[SIGNAL] Performing DH ratchet step")
       perform_dh_ratchet(session, ratchet_key)
     else
       session
@@ -333,7 +333,7 @@ defmodule ExWapp.Signal.Session do
           parsed.version_and_proto
         )
 
-      Logger.info("[SIGNAL] MAC verification: #{mac_valid}")
+      Logger.debug("[SIGNAL] MAC verification: #{mac_valid}")
 
       if mac_valid do
         plaintext =
@@ -375,7 +375,7 @@ defmodule ExWapp.Signal.Session do
            {dh1, dh2, dh3, dh4}
          ) do
       {:ok, plaintext, updated_session, variant} ->
-        Logger.info(
+        Logger.debug(
           "[SIGNAL] Inner decrypt succeeded with #{variant}, plaintext_size=#{byte_size(plaintext)}"
         )
 
@@ -405,7 +405,7 @@ defmodule ExWapp.Signal.Session do
     Enum.reduce_while(variants, {:error, :invalid_mac}, fn {variant, shared_secret}, _acc ->
       {root_key, chain_key} = hkdf_derive_initial(shared_secret)
 
-      Logger.info(
+      Logger.debug(
         "[SIGNAL] Trying #{variant}: root_key=#{Base.encode16(binary_part(root_key, 0, 4))}... " <>
           "chain_key=#{Base.encode16(binary_part(chain_key, 0, 4))}..."
       )

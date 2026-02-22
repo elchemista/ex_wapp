@@ -43,21 +43,17 @@ defmodule ExWapp.Transport.Frame do
   end
 
   defp do_decode(buffer, acc) do
-    cond do
-      byte_size(buffer) < @length_size ->
+    if byte_size(buffer) < @length_size do
+      {Enum.reverse(acc), buffer}
+    else
+      <<len::unsigned-big-size(24), rest::binary>> = buffer
+
+      if byte_size(rest) < len do
         {Enum.reverse(acc), buffer}
-
-      true ->
-        <<len::unsigned-big-size(24), rest::binary>> = buffer
-
-        cond do
-          byte_size(rest) < len ->
-            {Enum.reverse(acc), buffer}
-
-          true ->
-            <<frame::binary-size(len), tail::binary>> = rest
-            do_decode(tail, [frame | acc])
-        end
+      else
+        <<frame::binary-size(len), tail::binary>> = rest
+        do_decode(tail, [frame | acc])
+      end
     end
   end
 end

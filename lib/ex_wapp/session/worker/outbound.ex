@@ -20,7 +20,7 @@ defmodule ExWapp.Session.Worker.Outbound do
   def send_text_worker(session_pid, state, jid, text, opts \\ []) do
     normalized_jid = normalize_jid_with_device(jid)
 
-    if JID.is_group?(normalized_jid) do
+    if JID.group?(normalized_jid) do
       do_send_group_worker(session_pid, state, normalized_jid, text)
     else
       jid = normalize_jid_for_signal(normalized_jid)
@@ -106,7 +106,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
       case send_transport_node(state, conn, node) do
         :ok ->
-          Logger.info(
+          Logger.debug(
             "[SEND] Sent group encrypted message to #{group_jid} (distribution_targets=#{length(participant_nodes)})"
           )
 
@@ -537,7 +537,7 @@ defmodule ExWapp.Session.Worker.Outbound do
   defp clear_self_chat_sessions(store, signal_sessions, all_device_jids) do
     lid_mapping = Account.load_lid_mapping(store)
 
-    Logger.info(
+    Logger.debug(
       "[SEND] Self-chat: clearing #{length(all_device_jids)} existing sessions to force fresh pkmsg"
     )
 
@@ -946,11 +946,11 @@ defmodule ExWapp.Session.Worker.Outbound do
               JIDUtils.build_self_chat_fallback_target_specs(recipient_targets, own_targets, jid)
 
             _ ->
-              Logger.info("[SEND] Self-chat detected: DSM payload for all non-current targets")
+              Logger.debug("[SEND] Self-chat detected: DSM payload for all non-current targets")
               JIDUtils.build_self_chat_target_specs(recipient_targets, own_targets, jid)
           end
 
-        Logger.info("[SEND] Self-chat target specs: #{inspect(specs)}")
+        Logger.debug("[SEND] Self-chat target specs: #{inspect(specs)}")
         specs
       else
         JIDUtils.build_dm_target_specs(recipient_targets, own_targets)
@@ -980,7 +980,7 @@ defmodule ExWapp.Session.Worker.Outbound do
   defp send_encrypted_node(state, conn, store, jid, message_id, node, payloads) do
     case send_transport_node(state, conn, node) do
       :ok ->
-        Logger.info("[SEND] Sent encrypted message to #{jid} id=#{message_id}")
+        Logger.debug("[SEND] Sent encrypted message to #{jid} id=#{message_id}")
 
         emit_telemetry(
           :message_sent,
@@ -1189,7 +1189,7 @@ defmodule ExWapp.Session.Worker.Outbound do
         if enc_type == :prekey do
           case ExWapp.Signal.WireFormat.parse_prekey_signal_message(ciphertext) do
             {:ok, parsed} ->
-              Logger.info(
+              Logger.debug(
                 "[SEND] pkmsg wire fields target=#{target_jid} reg_id=#{parsed.registration_id} signed_prekey_id=#{parsed.signed_prekey_id} prekey_id=#{inspect(parsed.prekey_id)} base_key_size=#{byte_size(parsed.base_key)} inner_size=#{byte_size(parsed.message)}"
               )
 

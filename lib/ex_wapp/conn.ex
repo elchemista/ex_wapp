@@ -159,9 +159,7 @@ defmodule ExWapp.Conn do
     {buffer, header_seen?, proceed?} = maybe_consume_header(buffer, state.header_seen?)
     state = %{state | header_seen?: header_seen?}
 
-    if not proceed? do
-      {:ok, %{state | buffer: buffer}}
-    else
+    if proceed? do
       {frames, rest} = Frame.decode(buffer)
       noise_phase = if state.noise, do: state.noise.phase, else: nil
 
@@ -176,6 +174,8 @@ defmodule ExWapp.Conn do
         {:ok, new_state, replies} -> {:reply, replies, new_state}
         {:close, new_state} -> {:close, new_state}
       end
+    else
+      {:ok, %{state | buffer: buffer}}
     end
   end
 
@@ -194,7 +194,7 @@ defmodule ExWapp.Conn do
          {:ok, ciphertext, noise_state} <- Noise.encrypt(noise, encoded) do
       state = %{state | noise: noise_state}
       {state, reply} = build_reply(state, ciphertext)
-      Logger.info("sending encrypted node size=#{byte_size(ciphertext)}")
+      Logger.debug("sending encrypted node size=#{byte_size(ciphertext)}")
       {:reply, reply, state}
     else
       {:error, reason} ->
@@ -332,7 +332,7 @@ defmodule ExWapp.Conn do
         "none"
       end
 
-    Logger.info(
+    Logger.debug(
       "sending frame include_header=#{include_header} header_hex=#{header_hex} payload=#{byte_size(payload)} bytes frame=#{byte_size(frame)} bytes"
     )
 
@@ -364,7 +364,7 @@ defmodule ExWapp.Conn do
   defp normalize_replies(replies) when is_list(replies), do: replies
 
   defp maybe_send_stream_start(%State{noise: %Noise{phase: :transport} = noise} = state) do
-    Logger.info("[CONN] Sending stream_start only (no handshake for initial pairing)")
+    Logger.debug("[CONN] Sending stream_start only (no handshake for initial pairing)")
 
     with {:ok, stream_start} <- build_stream_start_node(state),
          {:ok, stream_bin} <- Binary.encode(stream_start),
@@ -373,7 +373,7 @@ defmodule ExWapp.Conn do
          {:ok, stream_cipher, noise_state} <- Noise.encrypt(noise, stream_bin),
          {new_state, stream_reply} <-
            build_reply(%{state | noise: noise_state, stream_started?: true}, stream_cipher) do
-      Logger.info("[CONN] Stream start ready (#{byte_size(stream_cipher)} bytes)")
+      Logger.debug("[CONN] Stream start ready (#{byte_size(stream_cipher)} bytes)")
       {:ok, new_state, [stream_reply]}
     else
       {:error, reason} ->
@@ -416,7 +416,7 @@ defmodule ExWapp.Conn do
     if quiet_iq_result?(node) do
       Logger.debug(message)
     else
-      Logger.info(message)
+      Logger.debug(message)
     end
   end
 
@@ -453,19 +453,17 @@ defmodule ExWapp.Conn do
   end
 
   defp node_to_xml(%Node{tag: tag, attrs: attrs, content: content}) when is_list(content) do
-    inner = content |> Enum.map(&node_to_xml/1) |> Enum.join()
+    inner = Enum.map_join(content, "", &node_to_xml/1)
     "<#{tag}#{attrs_to_string(attrs)}>#{inner}</#{tag}>"
   end
 
   defp node_to_xml(other), do: inspect(other)
 
   defp attrs_to_string(attrs) do
-    attrs
-    |> Enum.map(fn
+    Enum.map_join(attrs, "", fn
       {key, true} -> " #{key}"
       {key, value} -> " #{key}=\"#{value}\""
     end)
-    |> Enum.join()
   end
 
   defp build_stream_start_node(%State{store: store}) do

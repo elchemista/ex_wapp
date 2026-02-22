@@ -734,7 +734,7 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_info({:reconnect, attempt}, state) do
-    Logger.info("Reconnection attempt #{attempt}")
+    Logger.debug("Reconnection attempt #{attempt}")
     emit_telemetry(:reconnect, %{attempt: attempt}, state)
     {:noreply, do_connect(%{state | reconnect_attempts: attempt})}
   end
@@ -927,7 +927,7 @@ defmodule ExWapp.Session.Worker do
 
   def handle_info({:signal_sessions_updated, sessions}, state) do
     session_count = map_size(Map.get(sessions || %{}, :sessions, %{}))
-    Logger.info("[SEND] Async signal session update received (sessions=#{session_count})")
+    Logger.debug("[SEND] Async signal session update received (sessions=#{session_count})")
     {:noreply, %{state | signal_sessions: sessions}}
   end
 
@@ -1012,7 +1012,7 @@ defmodule ExWapp.Session.Worker do
 
   @impl true
   def terminate(reason, state) do
-    Logger.info("Session terminating: #{inspect(reason)}")
+    Logger.debug("Session terminating: #{inspect(reason)}")
     emit_telemetry(:terminate, %{reason: reason}, state)
     Subscribers.broadcast_lifecycle(state.session_id, {:ex_wapp_session, :terminated, reason})
 
@@ -1169,7 +1169,7 @@ defmodule ExWapp.Session.Worker do
         %{state | status: :idle}
 
       {:reconnect, attempt, delay} ->
-        Logger.info("Scheduling reconnect attempt #{attempt} in #{delay}ms")
+        Logger.debug("Scheduling reconnect attempt #{attempt} in #{delay}ms")
         Process.send_after(self(), {:reconnect, attempt}, delay)
 
         %{state | status: :disconnected}
@@ -1303,17 +1303,20 @@ defmodule ExWapp.Session.Worker do
     Outbound.send_text_worker(session_pid, state, jid, text, opts)
   end
 
-  defp schedule_outbound_confirmation(state, jid, text, message_id, strategy, attempt) do
-    confirm_timeout_ms = Config.get(state.runtime_cfg, [:send, :confirm_timeout_ms], 6_000)
+  defp schedule_outbound_confirmation(state, jid, text, message_id, strategy, attempt)
+       when is_binary(jid) and is_binary(message_id) and is_integer(attempt) and attempt >= 0 do
+    confirm_timeout_ms = configured_confirm_timeout_ms(state.runtime_cfg)
+    max_fallback_attempts = configured_max_fallback_attempts(state.runtime_cfg)
+    normalized_text = normalize_outbound_text(text)
 
-    max_fallback_attempts =
-      Config.get(state.runtime_cfg, [:send, :max_silent_drop_fallback_attempts], 1)
-
-    OutboundConfirmation.schedule(state, jid, text, message_id, strategy, attempt,
+    OutboundConfirmation.schedule(state, jid, normalized_text, message_id, strategy, attempt,
       timeout_ms: confirm_timeout_ms,
       max_silent_drop_fallback_attempts: max_fallback_attempts
     )
   end
+
+  defp schedule_outbound_confirmation(state, _jid, _text, _message_id, _strategy, _attempt),
+    do: state
 
   defp register_send_worker(state, worker, mon, jid) do
     state
@@ -1509,13 +1512,28 @@ defmodule ExWapp.Session.Worker do
 
       :forbidden_locked ->
         :telemetry.execute([:ex_wapp, :safety, :trip], %{count: 1}, metadata)
-
-      _ ->
-        :telemetry.execute([:ex_wapp, :policy, :blocked_send], %{count: 1}, metadata)
     end
   rescue
     _ -> :ok
   end
+
+  defp configured_confirm_timeout_ms(runtime_cfg) do
+    case Config.get(runtime_cfg, [:send, :confirm_timeout_ms], 6_000) do
+      value when is_integer(value) and value > 0 -> value
+      _ -> 6_000
+    end
+  end
+
+  defp configured_max_fallback_attempts(runtime_cfg) do
+    case Config.get(runtime_cfg, [:send, :max_silent_drop_fallback_attempts], 1) do
+      value when is_integer(value) and value >= 0 -> value
+      _ -> 1
+    end
+  end
+
+  defp normalize_outbound_text(text) when is_binary(text), do: text
+  defp normalize_outbound_text(text) when is_list(text), do: IO.iodata_to_binary(text)
+  defp normalize_outbound_text(_), do: ""
 
   defp ensure_send_enabled(state, jid) do
     cond do
@@ -1593,9 +1611,7 @@ defmodule ExWapp.Session.Worker do
     guard_cfg = Config.get(state.runtime_cfg, [:send_error_guard], %{})
     enabled = Map.get(guard_cfg, :enabled, false)
 
-    if not enabled do
-      {:continue, state}
-    else
+    if enabled do
       consecutive = health_get(state, :consecutive_send_errors, 0)
       errors_min = length(health_get(state, :errors_window_ms, []))
       drops_min = length(health_get(state, :drops_window_ms, []))
@@ -1647,6 +1663,8 @@ defmodule ExWapp.Session.Worker do
           apply_guard_action(state, action, trigger_reason)
         end
       end
+    else
+      {:continue, state}
     end
   end
 
@@ -1794,7 +1812,7 @@ defmodule ExWapp.Session.Worker do
 
   defp maybe_schedule_initial_app_state_sync(state) do
     if has_app_state_keys?(state.store) do
-      Logger.info(
+      Logger.debug(
         "[APP_STATE] Existing keys found on connect, scheduling initial collection fetch"
       )
 
@@ -1820,7 +1838,7 @@ defmodule ExWapp.Session.Worker do
       |> Enum.filter(&is_binary/1)
       |> Enum.uniq()
 
-    Logger.info(
+    Logger.debug(
       "[APP_STATE] Fetching #{length(names)} collections from #{source}: #{inspect(names)}"
     )
 

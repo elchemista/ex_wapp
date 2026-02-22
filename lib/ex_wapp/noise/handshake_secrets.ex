@@ -1,6 +1,8 @@
-# credo:disable-for-this-file Credo.Check.Readability.ModuleDoc
-
 defmodule ExWapp.Noise.HandshakeSecrets do
+  @moduledoc """
+  Immutable container for the transport keys and metadata derived from a Noise handshake.
+  """
+
   @enforce_keys [
     :write_key,
     :read_key,
@@ -27,6 +29,17 @@ defmodule ExWapp.Noise.HandshakeSecrets do
           server_certificate: binary()
         }
 
+  @typep required_field ::
+           :write_key
+           | :read_key
+           | :handshake_hash
+           | :handshake_salt
+           | :server_static
+           | :server_certificate
+
+  @doc """
+  Builds a `t:t/0` struct from a map or keyword list.
+  """
   @spec new(map() | keyword()) :: t()
   def new(attrs) when is_map(attrs) do
     %__MODULE__{
@@ -45,13 +58,19 @@ defmodule ExWapp.Noise.HandshakeSecrets do
     |> new()
   end
 
+  @spec fetch_binary!(map(), required_field()) :: binary()
   defp fetch_binary!(attrs, key) do
     attrs
     |> Map.fetch!(key)
     |> ensure_binary()
   end
 
+  @spec ensure_binary(term()) :: binary()
   defp ensure_binary(value) when is_binary(value), do: value
   defp ensure_binary(value) when is_list(value), do: :erlang.list_to_binary(value)
-  defp ensure_binary(value), do: value
+
+  defp ensure_binary(value) do
+    raise ArgumentError,
+          "expected binary-compatible handshake secret field, got: #{inspect(value)}"
+  end
 end

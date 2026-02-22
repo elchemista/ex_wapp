@@ -318,14 +318,14 @@ defmodule ExWapp.Proto.SyncActionTest do
     test "nil value fields are omitted (no action)" do
       data = %SyncActionData{
         index: "test",
-        value: %SyncActionValue{timestamp: 12345},
+        value: %SyncActionValue{timestamp: 12_345},
         version: 1
       }
 
       encoded = SyncAction.encode_sync_action_data(data)
       {:ok, decoded} = SyncAction.decode_sync_action_data(encoded)
 
-      assert decoded.value.timestamp == 12345
+      assert decoded.value.timestamp == 12_345
       assert decoded.value.contact_action == nil
       assert decoded.value.mute_action == nil
       assert decoded.value.pin_action == nil

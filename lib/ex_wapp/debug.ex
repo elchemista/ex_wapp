@@ -77,6 +77,7 @@ defmodule ExWapp.Debug do
   defmodule FullClient do
     use WebSockex
     require Logger
+    @moduledoc false
 
     def handle_connect(_conn, state) do
       Logger.info("Connected, will send client hello...")
@@ -264,7 +265,7 @@ defmodule ExWapp.Debug do
       # Generate signal keys
       identity = ExWapp.Signal.Keys.generate_key_pair()
       signed_prekey = ExWapp.Signal.Keys.generate_signed_prekey(identity, 1)
-      reg_id = :rand.uniform(65535)
+      reg_id = :rand.uniform(65_535)
 
       # Build device props (Firefox/Linux identity)
       device_props = <<
@@ -491,6 +492,7 @@ defmodule ExWapp.Debug do
   # Simple WebSockex client for debugging
   defmodule DebugClient do
     use WebSockex
+    @moduledoc false
 
     def handle_connect(_conn, state) do
       send(state.parent, {:ws_connected})

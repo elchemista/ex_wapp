@@ -74,7 +74,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   end
 
   defp handle_connection_node(%Binary.Node{tag: "success", attrs: attrs}, state) do
-    Logger.info("[SESSION] Received success node - login successful!")
+    Logger.debug("[SESSION] Received success node - login successful!")
 
     # Persist LID if present (Baileys: CB:success -> creds.update me.lid)
     lid = Map.get(attrs, "lid")
@@ -104,7 +104,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
       {:send_node, presence_node}
     ]
 
-    Logger.info(
+    Logger.debug(
       "[SESSION] Sending prekey count query (id=#{query_id}) + passive IQ + presence available"
     )
 
@@ -114,16 +114,16 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   # Handle ib (initialization) node - server sends this after successful login
   # Reference: whatsmeow/connectionevents.go handleIB()
   defp handle_connection_node(%Binary.Node{tag: "ib", content: children}, state) do
-    Logger.info("[SESSION] Received ib (initialization) node")
+    Logger.debug("[SESSION] Received ib (initialization) node")
 
     if is_list(children) do
       Enum.each(children, fn child ->
         case child do
           %Binary.Node{tag: "offline_preview", attrs: attrs} ->
-            Logger.info("[SESSION] Offline preview: #{inspect(attrs)}")
+            Logger.debug("[SESSION] Offline preview: #{inspect(attrs)}")
 
           %Binary.Node{tag: "offline", attrs: attrs} ->
-            Logger.info("[SESSION] Offline sync completed: #{inspect(attrs)}")
+            Logger.debug("[SESSION] Offline sync completed: #{inspect(attrs)}")
 
           %Binary.Node{tag: "dirty", attrs: attrs} ->
             Logger.debug("[SESSION] Dirty state: #{inspect(attrs)}")

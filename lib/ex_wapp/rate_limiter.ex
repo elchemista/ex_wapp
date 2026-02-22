@@ -149,7 +149,6 @@ defmodule ExWapp.RateLimiter do
   end
 
   defp normalize_jid(jid) when is_binary(jid), do: String.trim(jid)
-  defp normalize_jid(_), do: ""
 
   defp group_jid?(jid), do: String.ends_with?(jid, "@g.us")
 

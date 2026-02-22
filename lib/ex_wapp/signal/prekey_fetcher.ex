@@ -19,7 +19,7 @@ defmodule ExWapp.Signal.PrekeyFetcher do
 
     node = build_prekey_request(jid, message_id)
 
-    Logger.info("[PREKEY] Fetching prekeys for #{jid}")
+    Logger.debug("[PREKEY] Fetching prekeys for #{jid}")
 
     # Register for the response
     case GenServer.call(session, {:send_iq, node, message_id}, 30_000) do
@@ -42,7 +42,7 @@ defmodule ExWapp.Signal.PrekeyFetcher do
 
     node = build_batch_prekey_request(jids, message_id)
 
-    Logger.info("[PREKEY] Fetching prekeys for #{length(jids)} recipients")
+    Logger.debug("[PREKEY] Fetching prekeys for #{length(jids)} recipients")
 
     case GenServer.call(session, {:send_iq, node, message_id}, 30_000) do
       {:ok, response} ->
@@ -183,7 +183,7 @@ defmodule ExWapp.Signal.PrekeyFetcher do
         prekey: one_time_prekey
       }
 
-      Logger.info(
+      Logger.debug(
         "[PREKEY] Got bundle for #{jid}: reg=#{registration_id}, spk_id=#{signed_prekey.id}"
       )
 

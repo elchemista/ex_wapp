@@ -170,7 +170,7 @@ defmodule ExWapp.Messages do
           Binary.Node.t()
   def build_message_node(jid, message_id, payload, timestamp, _opts \\ []) do
     # Determine message type and device info
-    type = if JID.is_group?(jid), do: "text", else: "text"
+    type = if JID.group?(jid), do: "text", else: "text"
 
     attrs = %{
       "id" => message_id,

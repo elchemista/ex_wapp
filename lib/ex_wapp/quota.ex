@@ -24,9 +24,7 @@ defmodule ExWapp.Quota do
   def check_and_increment(state, jid) when is_map(state) and is_binary(jid) do
     enabled? = Config.get(state.runtime_cfg, [:quota, :enabled], true)
 
-    if not enabled? do
-      {:ok, state}
-    else
+    if enabled? do
       quota_state = refresh_period(state.quota || new(state.runtime_cfg), state.runtime_cfg)
 
       session_limit =
@@ -59,6 +57,8 @@ defmodule ExWapp.Quota do
         true ->
           {:error, {:quota_exceeded, exceeded}, %{state | quota: quota_state}}
       end
+    else
+      {:ok, state}
     end
   end
 
@@ -116,8 +116,6 @@ defmodule ExWapp.Quota do
     |> String.trim()
     |> String.replace(~r/:\d+@/, "@")
   end
-
-  defp normalize_jid(_), do: ""
 
   defp group_jid?(jid), do: String.ends_with?(jid, "@g.us")
 end

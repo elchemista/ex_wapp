@@ -65,47 +65,49 @@ defmodule ExWapp.Noise do
   """
   @spec init(keyword()) :: {:ok, binary(), t()} | {:error, term()}
   def init(opts) do
-    with {:ok, store} <- Keyword.fetch(opts, :store) do
-      client_payload_fun = Keyword.get(opts, :client_payload_fun, &ClientPayload.build/1)
+    case Keyword.fetch(opts, :store) do
+      {:ok, store} ->
+        client_payload_fun = Keyword.get(opts, :client_payload_fun, &ClientPayload.build/1)
 
-      certificate_verifier =
-        Keyword.get(opts, :certificate_verifier, &ExWapp.Noise.Certificate.verify/2)
+        certificate_verifier =
+          Keyword.get(opts, :certificate_verifier, &ExWapp.Noise.Certificate.verify/2)
 
-      handshake_header = Keyword.get(opts, :handshake_header, Frame.header())
+        handshake_header = Keyword.get(opts, :handshake_header, Frame.header())
 
-      static_key = load_static_key(store)
+        static_key = load_static_key(store)
 
-      base_state = %__MODULE__{
-        store: store,
-        static_key: static_key,
-        client_payload_fun: client_payload_fun,
-        certificate_verifier: certificate_verifier,
-        handshake_header: handshake_header
-      }
+        base_state = %__MODULE__{
+          store: store,
+          static_key: static_key,
+          client_payload_fun: client_payload_fun,
+          certificate_verifier: certificate_verifier,
+          handshake_header: handshake_header
+        }
 
-      Logger.debug("[NOISE] init: static_key_loaded=#{not is_nil(static_key)}")
+        Logger.debug("[NOISE] init: static_key_loaded=#{not is_nil(static_key)}")
 
-      with {:ok, client_payload, pending_data} <- build_client_payload(base_state),
-           {:ok, handshake_ref, client_hello, static_map} <-
-             start_handshake(base_state, client_payload, static_key),
-           _ = Logger.debug("[NOISE] static_map from handshake: #{inspect(static_map)}"),
-           :ok <- persist_static_key(store, static_map) do
-        state =
-          base_state
-          |> Map.put(:handshake_ref, handshake_ref)
-          |> Map.put(:static_key, static_map)
-          |> Map.put(:pending_store_data, pending_data)
+        with {:ok, client_payload, pending_data} <- build_client_payload(base_state),
+             {:ok, handshake_ref, client_hello, static_map} <-
+               start_handshake(base_state, client_payload, static_key),
+             _ = Logger.debug("[NOISE] static_map from handshake: #{inspect(static_map)}"),
+             :ok <- persist_static_key(store, static_map) do
+          state =
+            base_state
+            |> Map.put(:handshake_ref, handshake_ref)
+            |> Map.put(:static_key, static_map)
+            |> Map.put(:pending_store_data, pending_data)
 
-        Logger.info(
-          "Noise init: client hello #{byte_size(client_hello)} bytes, header=#{Base.encode16(handshake_header, case: :lower)}"
-        )
+          Logger.debug(
+            "Noise init: client hello #{byte_size(client_hello)} bytes, header=#{Base.encode16(handshake_header, case: :lower)}"
+          )
 
-        Logger.debug("Handshake client hello hex: #{hex(client_hello)}")
+          Logger.debug("Handshake client hello hex: #{hex(client_hello)}")
 
-        {:ok, client_hello, state}
-      end
-    else
-      :error -> {:error, :missing_store}
+          {:ok, client_hello, state}
+        end
+
+      :error ->
+        {:error, :missing_store}
     end
   end
 

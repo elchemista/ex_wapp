@@ -191,7 +191,7 @@ defmodule ExWapp.Session.IQ do
     one_time_prekey = if key, do: parse_prekey_node(key), else: nil
 
     if identity_key && signed_prekey do
-      Logger.info(
+      Logger.debug(
         "[PREKEY] Bundle parsed: reg_id=#{registration_id} signed_prekey_id=#{signed_prekey.id} prekey_id=#{if(one_time_prekey, do: one_time_prekey.id, else: "none")}"
       )
 

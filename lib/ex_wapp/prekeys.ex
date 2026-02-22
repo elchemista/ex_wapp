@@ -80,7 +80,7 @@ defmodule ExWapp.Prekeys do
         ]
       }
 
-      Logger.info(
+      Logger.debug(
         "[PREKEYS] Built upload for #{length(prekeys)} prekeys (initial=#{initial_upload})"
       )
 

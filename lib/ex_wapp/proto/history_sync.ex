@@ -116,7 +116,7 @@ defmodule ExWapp.Proto.HistorySync do
         pinned: parse_optional_boolean(first_varint_field(fields, 24)),
         archived: parse_optional_boolean(first_varint_field(fields, 16)),
         muted_until: first_non_neg_integer_field(fields, [25]),
-        is_group: JID.is_group?(jid),
+        is_group: JID.group?(jid),
         pn_jid: normalize_optional_jid(first_length_delimited_field(fields, 39)),
         lid_jid: normalize_optional_jid(first_length_delimited_field(fields, 42)),
         messages: parse_conversation_messages(fields)
@@ -136,8 +136,6 @@ defmodule ExWapp.Proto.HistorySync do
     |> Enum.reject(&is_nil/1)
   end
 
-  defp parse_conversation_messages(_), do: []
-
   defp parse_history_sync_message(payload) when is_binary(payload) do
     with {:ok, fields} <- decode_wire_fields(payload),
          web_message when is_binary(web_message) <- first_length_delimited_field(fields, 1),
@@ -151,54 +149,56 @@ defmodule ExWapp.Proto.HistorySync do
   defp parse_history_sync_message(_), do: nil
 
   defp parse_web_message_info(payload) when is_binary(payload) do
-    with {:ok, fields} <- decode_wire_fields(payload) do
-      key = parse_message_key(first_length_delimited_field(fields, 1))
+    case decode_wire_fields(payload) do
+      {:ok, fields} ->
+        key = parse_message_key(first_length_delimited_field(fields, 1))
 
-      timestamp =
-        case first_varint_field(fields, 3) do
-          value when is_integer(value) and value >= 0 -> value
-          _ -> nil
+        timestamp =
+          case first_varint_field(fields, 3) do
+            value when is_integer(value) and value >= 0 -> value
+            _ -> nil
+          end
+
+        text = extract_web_message_text(first_length_delimited_field(fields, 2))
+
+        participant =
+          first_non_empty([
+            normalize_optional_jid(first_length_delimited_field(fields, 9)),
+            Map.get(key, :participant)
+          ])
+
+        id = Map.get(key, :id)
+
+        if is_binary(id) or is_integer(timestamp) or is_binary(text) do
+          %{
+            id: id,
+            from_me: Map.get(key, :from_me, false),
+            timestamp: timestamp,
+            text: text,
+            participant: participant,
+            remote_jid: Map.get(key, :remote_jid)
+          }
+        else
+          nil
         end
 
-      text = extract_web_message_text(first_length_delimited_field(fields, 2))
-
-      participant =
-        first_non_empty([
-          normalize_optional_jid(first_length_delimited_field(fields, 9)),
-          Map.get(key, :participant)
-        ])
-
-      id = Map.get(key, :id)
-
-      if is_binary(id) or is_integer(timestamp) or is_binary(text) do
-        %{
-          id: id,
-          from_me: Map.get(key, :from_me, false),
-          timestamp: timestamp,
-          text: text,
-          participant: participant,
-          remote_jid: Map.get(key, :remote_jid)
-        }
-      else
+      _ ->
         nil
-      end
-    else
-      _ -> nil
     end
   end
 
-  defp parse_web_message_info(_), do: nil
-
   defp parse_message_key(payload) when is_binary(payload) do
-    with {:ok, fields} <- decode_wire_fields(payload) do
-      %{
-        remote_jid: normalize_optional_jid(first_length_delimited_field(fields, 1)),
-        from_me: parse_optional_boolean(first_varint_field(fields, 2)) || false,
-        id: normalize_optional_text(first_length_delimited_field(fields, 3)),
-        participant: normalize_optional_jid(first_length_delimited_field(fields, 4))
-      }
-    else
-      _ -> %{remote_jid: nil, from_me: false, id: nil, participant: nil}
+    case decode_wire_fields(payload) do
+      {:ok, fields} ->
+        %{
+          remote_jid: normalize_optional_jid(first_length_delimited_field(fields, 1)),
+          from_me: parse_optional_boolean(first_varint_field(fields, 2)) || false,
+          id: normalize_optional_text(first_length_delimited_field(fields, 3)),
+          participant: normalize_optional_jid(first_length_delimited_field(fields, 4))
+        }
+
+      _ ->
+        %{remote_jid: nil, from_me: false, id: nil, participant: nil}
     end
   end
 
@@ -259,8 +259,6 @@ defmodule ExWapp.Proto.HistorySync do
     end
   end
 
-  defp decode_message_text_shallow(_), do: :error
-
   defp collect_length_delimited_fields(payload) when is_binary(payload) do
     with {:ok, fields} <- decode_wire_fields(payload) do
       values =
@@ -275,16 +273,12 @@ defmodule ExWapp.Proto.HistorySync do
     end
   end
 
-  defp collect_length_delimited_fields(_), do: {:error, :invalid_payload}
-
   defp valid_text_payload?(value) when is_binary(value) do
     trimmed = String.trim(value)
 
     trimmed != "" and String.valid?(trimmed) and
       not Regex.match?(@jid_like_payload_pattern, trimmed)
   end
-
-  defp valid_text_payload?(_), do: false
 
   defp parse_phone_number_lid_mapping(mapping_payload) when is_binary(mapping_payload) do
     with {:ok, fields} <- decode_wire_fields(mapping_payload),
@@ -328,7 +322,7 @@ defmodule ExWapp.Proto.HistorySync do
   defp lid_jid?(_), do: false
 
   defp pn_jid?(jid) when is_binary(jid) do
-    not lid_jid?(jid) and not JID.is_group?(jid) and String.contains?(jid, "@")
+    not lid_jid?(jid) and not JID.group?(jid) and String.contains?(jid, "@")
   end
 
   defp pn_jid?(_), do: false

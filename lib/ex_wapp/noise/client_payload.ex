@@ -1,6 +1,8 @@
 defmodule ExWapp.Noise.ClientPayload do
   @moduledoc false
 
+  require Logger
+
   alias ExWapp.{Config, MapPath, Noise}
   alias ExWapp.Signal
   alias ExWapp.Store
@@ -35,8 +37,7 @@ defmodule ExWapp.Noise.ClientPayload do
   def build(_, _), do: {:error, :invalid_noise_state}
 
   defp build_login_payload(data, jid, runtime_cfg) do
-    require Logger
-    Logger.info("[ClientPayload] Building LOGIN payload for #{inspect(jid)}")
+    Logger.debug("[ClientPayload] Building LOGIN payload for #{inspect(jid)}")
 
     info = resolve_client_info(data, runtime_cfg)
 
@@ -61,8 +62,7 @@ defmodule ExWapp.Noise.ClientPayload do
   end
 
   defp build_registration_payload(data, runtime_cfg) do
-    require Logger
-    Logger.info("[ClientPayload] Building REGISTRATION payload")
+    Logger.debug("[ClientPayload] Building REGISTRATION payload")
 
     with {:ok, signal_info, signal_state} <- ensure_signal_bundle(data) do
       info = resolve_client_info(data, runtime_cfg)

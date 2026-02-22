@@ -141,7 +141,7 @@ defmodule ExWapp.Chat do
     %__MODULE__{
       jid: jid,
       name: Keyword.get(opts, :name),
-      is_group: JID.is_group?(jid),
+      is_group: JID.group?(jid),
       unread_count: 0,
       messages: []
     }

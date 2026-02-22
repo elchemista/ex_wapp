@@ -87,7 +87,7 @@ defmodule ExWapp.MessageHandler do
     timestamp = parse_timestamp(Map.get(attrs, "t"))
     participant = Map.get(attrs, "participant")
 
-    Logger.info("Received message from=#{from} id=#{id} type=#{type}")
+    Logger.debug("Received message from=#{from} id=#{id} type=#{type}")
 
     # Extract message content
     message_data = extract_message_content(content, type)
@@ -186,7 +186,7 @@ defmodule ExWapp.MessageHandler do
     id = Map.get(attrs, "id", "")
     participant = Map.get(attrs, "participant")
 
-    Logger.info("Notification type=#{type} from=#{from} id=#{id}")
+    Logger.debug("Notification type=#{type} from=#{from} id=#{id}")
 
     # Always acknowledge notifications so the server keeps sending them
     # Notifications use <ack class="notification"> not <receipt>
@@ -227,7 +227,7 @@ defmodule ExWapp.MessageHandler do
         {:ok, state}
 
       _ ->
-        Logger.info("[NOTIFICATION] Unhandled type=#{type} from=#{from}")
+        Logger.debug("[NOTIFICATION] Unhandled type=#{type} from=#{from}")
         {:ok, state}
     end
     |> append_actions(ack_actions)
@@ -238,7 +238,7 @@ defmodule ExWapp.MessageHandler do
   end
 
   defp handle_encrypt_notification(_content, _session, state) do
-    Logger.info("Received encryption notification (identity key change)")
+    Logger.debug("Received encryption notification (identity key change)")
     {:ok, state}
   end
 
@@ -268,7 +268,7 @@ defmodule ExWapp.MessageHandler do
           token_data = normalize_content(token_content)
 
           if is_binary(token_data) and from != "" do
-            Logger.info(
+            Logger.debug(
               "[PRIVACY_TOKEN] Storing trusted_contact token for #{from} (#{byte_size(token_data)} bytes)"
             )
 
@@ -302,7 +302,7 @@ defmodule ExWapp.MessageHandler do
     if is_list(content) do
       Enum.each(content, fn
         %Node{tag: tag, attrs: node_attrs} ->
-          Logger.info("[DEVICES] #{tag}: #{inspect(node_attrs)}")
+          Logger.debug("[DEVICES] #{tag}: #{inspect(node_attrs)}")
 
         _ ->
           :ok
@@ -345,7 +345,7 @@ defmodule ExWapp.MessageHandler do
     collection_names = extract_app_state_collection_names(content)
 
     if collection_names != [] do
-      Logger.info(
+      Logger.debug(
         "[APP_STATE] Received sync notification for collections: #{inspect(collection_names)}"
       )
 
@@ -454,7 +454,7 @@ defmodule ExWapp.MessageHandler do
         Logger.warning("[RECEIPT] Retry requested from=#{from} id=#{id}")
 
       _ ->
-        Logger.info("[RECEIPT] from=#{from} id=#{id} type=#{type}")
+        Logger.debug("[RECEIPT] from=#{from} id=#{id} type=#{type}")
     end
 
     # Update message status
@@ -645,7 +645,7 @@ defmodule ExWapp.MessageHandler do
           :archived,
           extract_sync_boolean(attrs, ["archive", "archived"])
         )
-        |> maybe_put_sync_metadata(:is_group, JID.is_group?(jid))
+        |> maybe_put_sync_metadata(:is_group, JID.group?(jid))
         |> maybe_put_sync_mute(attrs)
         |> Map.merge(extra_metadata)
 
@@ -856,7 +856,7 @@ defmodule ExWapp.MessageHandler do
     decryptable_payloads =
       Enum.filter(ordered_payload_candidates, &is_binary(&1.ciphertext))
 
-    Logger.info(
+    Logger.debug(
       "[DECRYPT] Attempting decrypt: enc_type=#{inspect(enc_type)} payload_candidates=#{length(payload_candidates)} decryptable_payloads=#{length(decryptable_payloads)} from=#{inspect(from)} sender_candidates=#{inspect(sender_candidates)}"
     )
 
@@ -903,7 +903,7 @@ defmodule ExWapp.MessageHandler do
             text = decoded_text || "(encrypted: #{Map.get(payload, :enc_type, enc_type)})"
 
             if content_type == :protocol do
-              Logger.info(
+              Logger.debug(
                 "[DECRYPT] Protocol message (#{Map.get(payload, :enc_type)}), plaintext_size=#{byte_size(plaintext)} — skipping chat display"
               )
             else
@@ -916,7 +916,7 @@ defmodule ExWapp.MessageHandler do
                 )
               end
 
-              Logger.info(
+              Logger.debug(
                 "[DECRYPT] Success! sender_jid=#{sender_jid} enc_type=#{Map.get(payload, :enc_type)} plaintext_size=#{byte_size(plaintext)} text=#{inspect(String.slice(text || "", 0, 50))}"
               )
             end
@@ -971,7 +971,7 @@ defmodule ExWapp.MessageHandler do
 
         persist_history_sync_lid_mappings(state, lid_mappings)
 
-        Logger.info(
+        Logger.debug(
           "[HISTORY_SYNC] Applied protocol history sync from=#{normalize_jid(from)} id=#{id} sync_type=#{inspect(sync_type)} conversations=#{length(conversations)} messages=#{history_message_count} lid_mappings=#{length(lid_mappings)}"
         )
 
@@ -1018,7 +1018,9 @@ defmodule ExWapp.MessageHandler do
            find_first_ld_field(protocol_fields, 7),
          {:ok, key_share} <- SyncAction.decode_app_state_sync_key_share(key_share_bytes),
          true <- key_share.keys != [] do
-      Logger.info("[APP_STATE] Received AppStateSyncKeyShare with #{length(key_share.keys)} keys")
+      Logger.debug(
+        "[APP_STATE] Received AppStateSyncKeyShare with #{length(key_share.keys)} keys"
+      )
 
       case store_app_state_keys(state, key_share.keys) do
         {:ok, action} when action in [:updated, :unchanged] ->
@@ -1058,7 +1060,7 @@ defmodule ExWapp.MessageHandler do
           if is_binary(key_id) and is_map(key_data) and is_binary(Map.get(key_data, :key_data)) do
             key_id_hex = Base.encode16(key_id, case: :lower)
 
-            Logger.info(
+            Logger.debug(
               "[APP_STATE] Storing app state key #{key_id_hex} (ts: #{Map.get(key_data, :timestamp)})"
             )
 
@@ -1075,7 +1077,7 @@ defmodule ExWapp.MessageHandler do
 
       if updated_keys != existing_keys do
         Store.persist(store, Map.put(data, :app_state_keys, updated_keys))
-        Logger.info("[APP_STATE] Persisted #{map_size(updated_keys)} total app state keys")
+        Logger.debug("[APP_STATE] Persisted #{map_size(updated_keys)} total app state keys")
         {:ok, :updated}
       else
         {:ok, :unchanged}
@@ -1278,8 +1280,7 @@ defmodule ExWapp.MessageHandler do
     }
 
     "history-sync-" <>
-      (:erlang.term_to_binary(seed)
-       |> :crypto.hash(:sha256)
+      (:crypto.hash(:sha256, :erlang.term_to_binary(seed))
        |> Base.encode16(case: :lower)
        |> binary_part(0, 20))
   rescue
@@ -1341,19 +1342,17 @@ defmodule ExWapp.MessageHandler do
   defp encrypted_payload_candidates(message_data) when is_map(message_data) do
     candidates = Map.get(message_data, :enc_candidates, [])
 
-    cond do
-      is_list(candidates) and candidates != [] ->
-        candidates
-
-      true ->
-        [
-          %{
-            enc_type: Map.get(message_data, :enc_type, "msg"),
-            enc_version: Map.get(message_data, :enc_version),
-            ciphertext: Map.get(message_data, :ciphertext),
-            to_jid: nil
-          }
-        ]
+    if is_list(candidates) and candidates != [] do
+      candidates
+    else
+      [
+        %{
+          enc_type: Map.get(message_data, :enc_type, "msg"),
+          enc_version: Map.get(message_data, :enc_version),
+          ciphertext: Map.get(message_data, :ciphertext),
+          to_jid: nil
+        }
+      ]
     end
   end
 
@@ -1374,7 +1373,7 @@ defmodule ExWapp.MessageHandler do
   defp maybe_set_number_fallback_name(target, jid) do
     jid_str = normalize_jid(jid)
 
-    if JID.is_user?(jid_str) do
+    if JID.user?(jid_str) do
       fallback =
         case String.split(jid_str, "@", parts: 2) do
           [user, _] when user != "" -> user
@@ -1577,7 +1576,7 @@ defmodule ExWapp.MessageHandler do
   defp group_jid?(jid) do
     jid
     |> normalize_jid()
-    |> JID.is_group?()
+    |> JID.group?()
   end
 
   defp maybe_process_sender_key_distributions(state, from, sender_jid, plaintext)
@@ -1975,6 +1974,4 @@ defmodule ExWapp.MessageHandler do
   catch
     :exit, _ -> nil
   end
-
-  defp resolve_store_from_target(_), do: nil
 end

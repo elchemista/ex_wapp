@@ -180,7 +180,7 @@ defmodule ExWapp.Signal.SessionStore do
   def decrypt_message(store, jid, ciphertext, is_prekey_message, local_identity, local_prekeys) do
     jid = normalize_jid(jid)
 
-    Logger.info(
+    Logger.debug(
       "[SESSION_STORE] decrypt_message: jid=#{jid} is_prekey=#{is_prekey_message} ct_size=#{byte_size(ciphertext)} existing_session=#{has_session?(store, jid)}"
     )
 
@@ -228,7 +228,7 @@ defmodule ExWapp.Signal.SessionStore do
       :try_fresh ->
         case Signal.decrypt_prekey_message(ciphertext, local_identity, local_prekeys) do
           {:ok, plaintext, session} ->
-            Logger.info("[SESSION_STORE] PreKey decrypt succeeded (fresh) for #{jid}")
+            Logger.debug("[SESSION_STORE] PreKey decrypt succeeded (fresh) for #{jid}")
             {:ok, plaintext, put_session(store, jid, session)}
 
           {:error, reason} ->
@@ -241,15 +241,18 @@ defmodule ExWapp.Signal.SessionStore do
   defp try_existing_session_for_prekey(store, jid, ciphertext) do
     case get_session(store, jid) do
       {:ok, session} ->
-        Logger.info("[SESSION_STORE] Trying existing session ratchet for prekey msg from #{jid}")
+        Logger.debug("[SESSION_STORE] Trying existing session ratchet for prekey msg from #{jid}")
 
         case Signal.decrypt_prekey_message_with_session(session, ciphertext) do
           {:ok, plaintext, updated_session} ->
-            Logger.info("[SESSION_STORE] PreKey decrypt succeeded on existing session for #{jid}")
+            Logger.debug(
+              "[SESSION_STORE] PreKey decrypt succeeded on existing session for #{jid}"
+            )
+
             {:ok, plaintext, updated_session}
 
           {:error, reason} ->
-            Logger.info(
+            Logger.debug(
               "[SESSION_STORE] Existing session prekey decrypt failed for #{jid}, trying fresh X3DH: #{inspect(reason)}"
             )
 
@@ -303,7 +306,7 @@ defmodule ExWapp.Signal.SessionStore do
   defp create_session_from_bundle(store, jid, local_identity, remote_bundle) do
     case Signal.create_session(local_identity, remote_bundle) do
       {:ok, session, base_key} ->
-        Logger.info("[SESSION_STORE] Created session using #{Signal.get_impl()} implementation")
+        Logger.debug("[SESSION_STORE] Created session using #{Signal.get_impl()} implementation")
 
         updated_store = put_session(store, jid, session)
         {:ok, session, base_key, updated_store}

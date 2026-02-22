@@ -744,7 +744,7 @@ defmodule ExWapp.AppState.Engine do
          {:ok, response} <-
            send_collection_fetch_iq(session, collection_name, hash_state.version, snapshot?),
          {:ok, count} <- apply_collection_response(store, collection_name, response, session) do
-      Logger.info("[APP_STATE] Applied #{count} mutations for #{collection_name}")
+      Logger.debug("[APP_STATE] Applied #{count} mutations for #{collection_name}")
 
       :ok
     end
@@ -1278,8 +1278,6 @@ defmodule ExWapp.AppState.Engine do
       decrypt_external_blob_payload(ref.media_key, encrypted_payload)
     end
   end
-
-  defp download_external_blob(_session, _), do: {:error, :invalid_external_blob_reference}
 
   defp validate_external_direct_path(path) when is_binary(path) do
     trimmed = String.trim(path)

@@ -21,6 +21,9 @@ defmodule ExWapp.Noise.Handshake do
   @iv_size 12
   @tag_size 16
 
+  @doc """
+  Initializes a Noise handshake state with the provided protocol pattern and header.
+  """
   @spec new(binary(), binary()) :: t()
   def new(pattern \\ @pattern, header \\ <<>>) do
     hash =
@@ -34,11 +37,17 @@ defmodule ExWapp.Noise.Handshake do
     |> authenticate(header)
   end
 
+  @doc """
+  Mixes additional authenticated data into the running handshake hash.
+  """
   @spec authenticate(t(), binary()) :: t()
   def authenticate(%__MODULE__{} = state, data) when is_binary(data) do
     %{state | hash: sha256(state.hash <> data)}
   end
 
+  @doc """
+  Encrypts a handshake payload using the current key and updates hash/counter.
+  """
   @spec encrypt(t(), binary()) :: {t(), binary()}
   def encrypt(%__MODULE__{} = state, plaintext) when is_binary(plaintext) do
     iv = generate_iv(state.counter)
@@ -51,28 +60,33 @@ defmodule ExWapp.Noise.Handshake do
     {%{state | hash: new_hash, counter: state.counter + 1}, payload}
   end
 
+  @doc """
+  Decrypts a handshake payload and updates hash/counter on success.
+  """
   @spec decrypt(t(), binary()) :: {:ok, t(), binary()} | {:error, term()}
+  def decrypt(%__MODULE__{} = _state, ciphertext)
+      when is_binary(ciphertext) and byte_size(ciphertext) < @tag_size,
+      do: {:error, :ciphertext_too_short}
+
   def decrypt(%__MODULE__{} = state, ciphertext) when is_binary(ciphertext) do
     total = byte_size(ciphertext)
+    <<body::binary-size(total - @tag_size), tag::binary-size(@tag_size)>> = ciphertext
+    iv = generate_iv(state.counter)
 
-    if total < @tag_size do
-      {:error, :ciphertext_too_short}
-    else
-      <<body::binary-size(total - @tag_size), tag::binary-size(@tag_size)>> = ciphertext
-      iv = generate_iv(state.counter)
+    case :crypto.crypto_one_time_aead(:aes_256_gcm, state.key, iv, body, state.hash, tag, false) do
+      :error ->
+        {:error, :decrypt_failed}
 
-      case :crypto.crypto_one_time_aead(:aes_256_gcm, state.key, iv, body, state.hash, tag, false) do
-        :error ->
-          {:error, :decrypt_failed}
-
-        plaintext ->
-          new_hash = sha256(state.hash <> ciphertext)
-          new_state = %{state | hash: new_hash, counter: state.counter + 1}
-          {:ok, new_state, plaintext}
-      end
+      plaintext ->
+        new_hash = sha256(state.hash <> ciphertext)
+        new_state = %{state | hash: new_hash, counter: state.counter + 1}
+        {:ok, new_state, plaintext}
     end
   end
 
+  @doc """
+  Mixes a Curve25519 shared secret into the handshake key schedule.
+  """
   @spec mix_shared_secret(t(), binary(), binary()) :: {:ok, t()} | {:error, term()}
   def mix_shared_secret(%__MODULE__{} = state, private_key, public_key)
       when byte_size(private_key) == 32 and byte_size(public_key) == 32 do
@@ -84,24 +98,33 @@ defmodule ExWapp.Noise.Handshake do
     end
   end
 
+  @doc """
+  Derives a new handshake key/salt pair from input key material.
+  """
   @spec mix_into_key(t(), binary()) :: t()
   def mix_into_key(%__MODULE__{} = state, data) when is_binary(data) do
     <<write::binary-size(32), read::binary-size(32)>> = hkdf(state.salt, data)
     %{state | salt: write, key: read, counter: 0}
   end
 
+  @doc """
+  Derives transport write/read keys from the current handshake salt.
+  """
   @spec derive_transport_keys(t()) :: {binary(), binary()}
   def derive_transport_keys(%__MODULE__{} = state) do
     <<write::binary-size(32), read::binary-size(32)>> = hkdf(state.salt, <<>>)
     {write, read}
   end
 
+  @spec generate_iv(non_neg_integer()) :: binary()
   defp generate_iv(counter) do
     <<0::size((@iv_size - 4) * 8), counter::32>>
   end
 
+  @spec sha256(binary()) :: binary()
   defp sha256(data), do: :crypto.hash(:sha256, data)
 
+  @spec hkdf(binary(), binary()) :: binary()
   defp hkdf(salt, key_material) do
     prk = :crypto.mac(:hmac, :sha256, salt, key_material)
 

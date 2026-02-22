@@ -36,7 +36,7 @@ defmodule ExWapp.Noise.Engine do
     noise = Handshake.new(@prologue, wa_header)
     noise = Handshake.authenticate(noise, e_kp.public)
 
-    Logger.info(
+    Logger.debug(
       "[NOISE] engine init: header=#{Base.encode16(wa_header, case: :lower)} eph_pub=#{Base.encode16(e_kp.public, case: :lower)} payload_len=#{byte_size(payload)}"
     )
 
@@ -53,9 +53,8 @@ defmodule ExWapp.Noise.Engine do
   end
 
   def write_client_finish(%State{} = state, server_hello_payload) do
-    with {:ok, server_hello} <- decode_server_hello(server_hello_payload),
-         {:ok, state, client_finish} <- process_server_hello(state, server_hello) do
-      {:ok, state, client_finish}
+    with {:ok, server_hello} <- decode_server_hello(server_hello_payload) do
+      process_server_hello(state, server_hello)
     end
   end
 
@@ -87,12 +86,8 @@ defmodule ExWapp.Noise.Engine do
   end
 
   def decrypt({write_cipher, read_cipher, hash}, ciphertext, _counter) do
-    case decrypt_payload(read_cipher, hash, ciphertext) do
-      {:ok, plaintext, new_read_cipher} ->
-        {:ok, {write_cipher, new_read_cipher, hash}, plaintext}
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, plaintext, new_read_cipher} <- decrypt_payload(read_cipher, hash, ciphertext) do
+      {:ok, {write_cipher, new_read_cipher, hash}, plaintext}
     end
   end
 
@@ -118,7 +113,7 @@ defmodule ExWapp.Noise.Engine do
   end
 
   defp process_server_hello(state, %ServerHello{ephemeral: re, static: rs_ct, payload: cert_ct}) do
-    Logger.info(
+    Logger.debug(
       "process_server_hello: got server hello eph_len=#{byte_size(re)} static_len=#{byte_size(rs_ct)} cert_len=#{byte_size(cert_ct)}"
     )
 
@@ -139,7 +134,7 @@ defmodule ExWapp.Noise.Engine do
 
       new_state = %{state | noise: noise, server_static: rs, server_cert: cert}
 
-      Logger.info(
+      Logger.debug(
         "process_server_hello: decrypted static=#{Base.encode16(rs, case: :lower)} cert_len=#{byte_size(cert)} client_finish_len=#{byte_size(client_finish)}"
       )
 
@@ -147,11 +142,11 @@ defmodule ExWapp.Noise.Engine do
         "encrypted static (s_pub_ct) len=#{byte_size(s_pub_ct)}: #{Base.encode16(s_pub_ct, case: :lower)}"
       )
 
-      Logger.info("encrypted payload len=#{byte_size(payload_ct)}")
-      Logger.info("payload plaintext len=#{byte_size(state.payload)}")
-      Logger.info("client_finish total len=#{byte_size(client_finish)}")
+      Logger.debug("encrypted payload len=#{byte_size(payload_ct)}")
+      Logger.debug("payload plaintext len=#{byte_size(state.payload)}")
+      Logger.debug("client_finish total len=#{byte_size(client_finish)}")
 
-      Logger.info(
+      Logger.debug(
         "client_finish hex (first 100): #{Base.encode16(client_finish, case: :lower) |> String.slice(0, 100)}..."
       )
 

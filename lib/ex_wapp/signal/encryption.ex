@@ -21,19 +21,19 @@ defmodule ExWapp.Signal.Encryption do
   @spec encrypt_for_recipient_sync(any(), any(), String.t(), binary(), map()) ::
           {:ok, binary(), :prekey | :whisper, any()} | {:error, term()}
   def encrypt_for_recipient_sync(store, signal_sessions, jid, plaintext, remote_bundle \\ %{}) do
-    Logger.info("[ENCRYPTION] Attempting to encrypt message for #{jid} (sync)")
+    Logger.debug("[ENCRYPTION] Attempting to encrypt message for #{jid} (sync)")
 
     # Load data from store
     data = ExWapp.Store.load!(store)
     signal_data = Map.get(data, :signal, %{})
 
-    Logger.info("[ENCRYPTION] Store keys: #{inspect(Map.keys(data))}")
-    Logger.info("[ENCRYPTION] Signal data keys: #{inspect(Map.keys(signal_data))}")
+    Logger.debug("[ENCRYPTION] Store keys: #{inspect(Map.keys(data))}")
+    Logger.debug("[ENCRYPTION] Signal data keys: #{inspect(Map.keys(signal_data))}")
 
     identity = Map.get(signal_data, :identity_key)
 
     if identity do
-      Logger.info("[ENCRYPTION] Found identity key")
+      Logger.debug("[ENCRYPTION] Found identity key")
 
       signal_store = signal_sessions || SessionStore.new()
       registration_id = Map.get(signal_data, :registration_id, 0)
@@ -47,7 +47,7 @@ defmodule ExWapp.Signal.Encryption do
              remote_bundle || %{}
            ) do
         {:ok, ciphertext, type, updated_store} ->
-          Logger.info("[ENCRYPTION] Encrypted! type=#{type}, size=#{byte_size(ciphertext)}")
+          Logger.debug("[ENCRYPTION] Encrypted! type=#{type}, size=#{byte_size(ciphertext)}")
           {:ok, ciphertext, type, updated_store}
 
         {:error, reason} ->
@@ -69,16 +69,16 @@ defmodule ExWapp.Signal.Encryption do
   @spec encrypt_for_recipient(pid(), String.t(), binary()) ::
           {:ok, binary(), :prekey | :whisper} | {:error, term()}
   def encrypt_for_recipient(session, jid, plaintext) do
-    Logger.info("[ENCRYPTION] Attempting to encrypt message for #{jid}")
+    Logger.debug("[ENCRYPTION] Attempting to encrypt message for #{jid}")
 
     # Get local identity and signal sessions from session
     case get_local_keys(session) do
       {:ok, local_identity, _local_prekeys} ->
-        Logger.info("[ENCRYPTION] Got local identity key")
+        Logger.debug("[ENCRYPTION] Got local identity key")
 
         with {:ok, signal_store} <- get_or_init_session_store(session),
              {:ok, remote_bundle} <- ensure_remote_bundle(session, signal_store, jid) do
-          Logger.info("[ENCRYPTION] Got remote bundle, encrypting...")
+          Logger.debug("[ENCRYPTION] Got remote bundle, encrypting...")
 
           do_encrypt_for_recipient(
             session,
@@ -112,7 +112,7 @@ defmodule ExWapp.Signal.Encryption do
     case decrypt_from_sender_sync(store, signal_store, jid, ciphertext, enc_type) do
       {:ok, plaintext, updated_store} ->
         GenServer.call(session, {:update_signal_sessions, updated_store})
-        Logger.info("[ENCRYPTION] Decrypted message from #{jid}")
+        Logger.debug("[ENCRYPTION] Decrypted message from #{jid}")
         {:ok, plaintext}
 
       {:error, reason} ->
@@ -129,7 +129,7 @@ defmodule ExWapp.Signal.Encryption do
   def decrypt_from_sender_sync(store, signal_sessions, jid, ciphertext, enc_type) do
     is_prekey = prekey_message?(enc_type)
 
-    Logger.info(
+    Logger.debug(
       "[ENCRYPTION] decrypt_from_sender_sync: jid=#{jid} enc_type=#{inspect(enc_type)} is_prekey=#{is_prekey} ct_size=#{byte_size(ciphertext)}"
     )
 
@@ -137,7 +137,7 @@ defmodule ExWapp.Signal.Encryption do
       {:ok, local_identity, local_prekeys} ->
         signal_store = signal_sessions || SessionStore.new()
 
-        Logger.info(
+        Logger.debug(
           "[ENCRYPTION] Have identity, signed_prekeys=#{map_size(local_prekeys.signed_prekeys)} prekeys=#{map_size(local_prekeys.prekeys)}"
         )
 
@@ -150,7 +150,7 @@ defmodule ExWapp.Signal.Encryption do
                local_prekeys
              ) do
           {:ok, plaintext, updated_store} ->
-            Logger.info("[ENCRYPTION] Decrypt succeeded, plaintext_size=#{byte_size(plaintext)}")
+            Logger.debug("[ENCRYPTION] Decrypt succeeded, plaintext_size=#{byte_size(plaintext)}")
             {:ok, plaintext, updated_store}
 
           {:error, reason} ->
@@ -247,7 +247,7 @@ defmodule ExWapp.Signal.Encryption do
       {:ok, ciphertext, type, updated_store} ->
         GenServer.call(session, {:update_signal_sessions, updated_store})
 
-        Logger.info(
+        Logger.debug(
           "[ENCRYPTION] Encrypted message for #{jid}, type=#{type}, size=#{byte_size(ciphertext)}"
         )
 
@@ -280,15 +280,15 @@ defmodule ExWapp.Signal.Encryption do
     data = ExWapp.Store.load!(store)
 
     # Debug: show what keys are in the store
-    Logger.info("[ENCRYPTION] Store keys: #{inspect(Map.keys(data))}")
+    Logger.debug("[ENCRYPTION] Store keys: #{inspect(Map.keys(data))}")
 
     signal_data = Map.get(data, :signal, %{})
-    Logger.info("[ENCRYPTION] Signal data keys: #{inspect(Map.keys(signal_data))}")
+    Logger.debug("[ENCRYPTION] Signal data keys: #{inspect(Map.keys(signal_data))}")
 
     identity = Map.get(signal_data, :identity_key)
 
     if identity do
-      Logger.info(
+      Logger.debug(
         "[ENCRYPTION] Found identity key: public=#{byte_size(identity.public || <<>>)} bytes"
       )
 
@@ -324,7 +324,7 @@ defmodule ExWapp.Signal.Encryption do
       {:ok, %{}}
     else
       # Need to fetch prekeys
-      Logger.info("[ENCRYPTION] Fetching prekeys for #{jid}")
+      Logger.debug("[ENCRYPTION] Fetching prekeys for #{jid}")
       PrekeyFetcher.fetch_prekeys(session, jid)
     end
   end

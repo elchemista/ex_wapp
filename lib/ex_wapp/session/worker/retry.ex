@@ -56,7 +56,7 @@ defmodule ExWapp.Session.Worker.Retry do
     case start_worker.(state, jid, fn ->
            case send_fun.(jid, text) do
              {:ok, new_id} ->
-               Logger.info(
+               Logger.debug(
                  "[SEND] Retry for message id=#{message_id} succeeded with new id=#{new_id}"
                )
 

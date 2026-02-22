@@ -32,19 +32,28 @@ defmodule ExWapp.JID do
   def interop_server, do: @interop_server
 
   @doc "Checks if a JID string represents a group."
-  @spec is_group?(String.t() | t()) :: boolean()
-  def is_group?(%__MODULE__{server: server}), do: server == @group_server
-  def is_group?(jid) when is_binary(jid), do: String.ends_with?(jid, "@" <> @group_server)
+  @spec group?(String.t() | t()) :: boolean()
+  def group?(%__MODULE__{server: server}), do: server == @group_server
+  def group?(jid) when is_binary(jid), do: String.ends_with?(jid, "@" <> @group_server)
+  @deprecated "Use group?/1 instead."
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
+  def is_group?(jid), do: group?(jid)
 
   @doc "Checks if a JID string represents a broadcast list."
-  @spec is_broadcast?(String.t() | t()) :: boolean()
-  def is_broadcast?(%__MODULE__{server: server}), do: server == @broadcast_server
-  def is_broadcast?(jid) when is_binary(jid), do: String.ends_with?(jid, "@" <> @broadcast_server)
+  @spec broadcast?(String.t() | t()) :: boolean()
+  def broadcast?(%__MODULE__{server: server}), do: server == @broadcast_server
+  def broadcast?(jid) when is_binary(jid), do: String.ends_with?(jid, "@" <> @broadcast_server)
+  @deprecated "Use broadcast?/1 instead."
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
+  def is_broadcast?(jid), do: broadcast?(jid)
 
   @doc "Checks if a JID string represents a regular user."
-  @spec is_user?(String.t() | t()) :: boolean()
-  def is_user?(%__MODULE__{server: server}), do: server == @default_user_server
-  def is_user?(jid) when is_binary(jid), do: String.ends_with?(jid, "@" <> @default_user_server)
+  @spec user?(String.t() | t()) :: boolean()
+  def user?(%__MODULE__{server: server}), do: server == @default_user_server
+  def user?(jid) when is_binary(jid), do: String.ends_with?(jid, "@" <> @default_user_server)
+  @deprecated "Use user?/1 instead."
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
+  def is_user?(jid), do: user?(jid)
 
   @doc "Parses a JID string into a struct."
   @spec parse(String.t()) :: {:ok, t()} | {:error, :invalid_jid}
