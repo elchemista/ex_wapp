@@ -190,47 +190,51 @@ defmodule ExWapp.MessageHandler do
 
     # Always acknowledge notifications so the server keeps sending them
     # Notifications use <ack class="notification"> not <receipt>
-    ack_actions =
-      if id != "" and from != "" do
-        ack_node = build_notification_ack(from, id, participant, type)
-        [{:send_node, ack_node}]
-      else
-        []
-      end
+    ack_actions = notification_ack_actions(id, from, participant, type)
 
-    case type do
-      "encrypt" ->
-        handle_encrypt_notification(content, session, state)
-
-      "w:gp2" ->
-        handle_group_notification(attrs, content, session, state)
-
-      "account_sync" ->
-        handle_account_sync(content, session, state)
-
-      "server_sync" ->
-        handle_server_sync(content, session, state)
-
-      "w:sync:app:state" ->
-        handle_app_state_sync_notification(content, session, state)
-
-      "devices" ->
-        handle_devices_notification(content, session, state)
-
-      "privacy_token" ->
-        handle_privacy_token_notification(attrs, content, state)
-
-      "picture" ->
-        {:ok, state}
-
-      "mediaretry" ->
-        {:ok, state}
-
-      _ ->
-        Logger.debug("[NOTIFICATION] Unhandled type=#{type} from=#{from}")
-        {:ok, state}
-    end
+    handle_notification_type(type, attrs, content, session, state)
     |> append_actions(ack_actions)
+  end
+
+  defp notification_ack_actions(id, from, participant, type) do
+    if id != "" and from != "" do
+      ack_node = build_notification_ack(from, id, participant, type)
+      [{:send_node, ack_node}]
+    else
+      []
+    end
+  end
+
+  defp handle_notification_type("encrypt", _attrs, content, session, state),
+    do: handle_encrypt_notification(content, session, state)
+
+  defp handle_notification_type("w:gp2", attrs, content, session, state),
+    do: handle_group_notification(attrs, content, session, state)
+
+  defp handle_notification_type("account_sync", _attrs, content, session, state),
+    do: handle_account_sync(content, session, state)
+
+  defp handle_notification_type("server_sync", _attrs, content, session, state),
+    do: handle_server_sync(content, session, state)
+
+  defp handle_notification_type("w:sync:app:state", _attrs, content, session, state),
+    do: handle_app_state_sync_notification(content, session, state)
+
+  defp handle_notification_type("devices", _attrs, content, session, state),
+    do: handle_devices_notification(content, session, state)
+
+  defp handle_notification_type("privacy_token", attrs, content, _session, state),
+    do: handle_privacy_token_notification(attrs, content, state)
+
+  defp handle_notification_type(type, _attrs, _content, _session, state)
+       when type in ["picture", "mediaretry"] do
+    {:ok, state}
+  end
+
+  defp handle_notification_type(type, attrs, _content, _session, state) do
+    from = Map.get(attrs, "from", "")
+    Logger.debug("[NOTIFICATION] Unhandled type=#{type} from=#{from}")
+    {:ok, state}
   end
 
   defp append_actions({:ok, state}, extra_actions) do
@@ -437,37 +441,13 @@ defmodule ExWapp.MessageHandler do
     type = Map.get(attrs, "type", "delivery")
 
     retry_info = extract_retry_info(content)
-
-    case {type, retry_info} do
-      {"retry", %{count: count, error: error}} ->
-        Logger.warning(
-          "[RECEIPT] Retry requested from=#{from} id=#{id} retry_count=#{count || "?"} error=#{error || "?"}"
-        )
-
-      {"retry", _} ->
-        Logger.warning("[RECEIPT] Retry requested from=#{from} id=#{id}")
-
-      _ ->
-        Logger.debug("[RECEIPT] from=#{from} id=#{id} type=#{type}")
-    end
-
-    # Update message status
+    target = chat_target(session, state)
     status = receipt_status(type)
 
-    if target = chat_target(session, state) do
-      if from != "" do
-        Chat.update_message_status(target, from, id, status)
-      end
+    log_receipt(type, retry_info, from, id)
+    maybe_update_receipt_status(target, from, id, status)
 
-      Chat.update_message_status_by_id(target, id, status)
-    end
-
-    actions =
-      if type == "retry" and from != "" and id != "" do
-        [{:retry_outgoing_message, from, id}]
-      else
-        []
-      end
+    actions = receipt_actions(type, from, id)
 
     {:ok, state, actions}
   end
@@ -483,34 +463,10 @@ defmodule ExWapp.MessageHandler do
     from = normalize_jid(Map.get(attrs, "from", ""))
     to = normalize_jid(Map.get(attrs, "to", ""))
 
-    if class in ["message", "chat", "receipt"] or type == "error" do
-      log_fn = if type == "error", do: :warning, else: :info
-      Logger.log(log_fn, "[ACK] id=#{id} class=#{class} type=#{type} from=#{from} to=#{to}")
-    else
-      Logger.debug("ACK id=#{id} class=#{class} type=#{type}")
-    end
+    target = chat_target(session, state)
 
-    status =
-      cond do
-        type == "error" -> :failed
-        class in ["message", "chat", "receipt"] -> :sent
-        true -> :sent
-      end
-
-    if target = chat_target(session, state) do
-      jid =
-        cond do
-          to != "" -> to
-          from != "" -> from
-          true -> ""
-        end
-
-      if jid != "" do
-        Chat.update_message_status(target, jid, id, status)
-      end
-
-      Chat.update_message_status_by_id(target, id, status)
-    end
+    log_ack(class, type, id, from, to)
+    maybe_update_ack_status(target, ack_target_jid(to, from), id, ack_status(type))
 
     {:ok, state}
   end
@@ -531,6 +487,56 @@ defmodule ExWapp.MessageHandler do
   end
 
   defp extract_retry_info(_), do: nil
+
+  defp log_receipt("retry", %{count: count, error: error}, from, id) do
+    Logger.warning(
+      "[RECEIPT] Retry requested from=#{from} id=#{id} retry_count=#{count || "?"} error=#{error || "?"}"
+    )
+  end
+
+  defp log_receipt("retry", _retry_info, from, id) do
+    Logger.warning("[RECEIPT] Retry requested from=#{from} id=#{id}")
+  end
+
+  defp log_receipt(type, _retry_info, from, id) do
+    Logger.debug("[RECEIPT] from=#{from} id=#{id} type=#{type}")
+  end
+
+  defp maybe_update_receipt_status(nil, _from, _id, _status), do: :ok
+
+  defp maybe_update_receipt_status(target, from, id, status) do
+    if from != "", do: Chat.update_message_status(target, from, id, status)
+    Chat.update_message_status_by_id(target, id, status)
+  end
+
+  defp receipt_actions("retry", from, id) when from != "" and id != "" do
+    [{:retry_outgoing_message, from, id}]
+  end
+
+  defp receipt_actions(_type, _from, _id), do: []
+
+  defp log_ack(class, type, id, from, to) do
+    if class in ["message", "chat", "receipt"] or type == "error" do
+      log_fn = if type == "error", do: :warning, else: :info
+      Logger.log(log_fn, "[ACK] id=#{id} class=#{class} type=#{type} from=#{from} to=#{to}")
+    else
+      Logger.debug("ACK id=#{id} class=#{class} type=#{type}")
+    end
+  end
+
+  defp ack_status("error"), do: :failed
+  defp ack_status(_type), do: :sent
+
+  defp ack_target_jid(to, _from) when to != "", do: to
+  defp ack_target_jid(_to, from) when from != "", do: from
+  defp ack_target_jid(_to, _from), do: ""
+
+  defp maybe_update_ack_status(nil, _jid, _id, _status), do: :ok
+
+  defp maybe_update_ack_status(target, jid, id, status) do
+    if jid != "", do: Chat.update_message_status(target, jid, id, status)
+    Chat.update_message_status_by_id(target, id, status)
+  end
 
   defp receipt_status("read"), do: :read
   defp receipt_status("played"), do: :read
@@ -1602,52 +1608,61 @@ defmodule ExWapp.MessageHandler do
 
   defp build_receipt_actions(from, id, participant, attrs, message_data, state) do
     cond do
-      id in [nil, ""] ->
-        {[], state}
-
-      from == "" ->
+      invalid_receipt_target?(from, id) ->
         {[], state}
 
       needs_retry_receipt?(message_data) ->
-        retry_reason_code =
-          case Map.get(message_data, :decrypt_status) do
-            {:error,
-             {:decrypt_failed_for_payload, _, {:decrypt_failed_for_candidate, _, :invalid_mac}}} ->
-              7
-
-            {:error,
-             {:decrypt_failed_for_payload, _,
-              {:decrypt_failed_for_candidate, _, :unknown_signed_prekey}}} ->
-              3
-
-            {:error,
-             {:decrypt_failed_for_payload, _, {:decrypt_failed_for_candidate, _, :no_session}}} ->
-              1
-
-            _ ->
-              0
-          end
-
-        {retry_count, updated_state} = next_retry_count(state, from, id, participant)
-
-        retry_meta = %{
-          category: Map.get(attrs, "category"),
-          recipient: Map.get(attrs, "recipient")
-        }
-
-        {[
-           {:send_retry_receipt, from, id, participant, Map.get(attrs, "t"), retry_count,
-            retry_reason_code, retry_meta}
-         ], updated_state}
+        build_retry_receipt_actions(from, id, participant, attrs, message_data, state)
 
       true ->
-        # Peer category messages (protocol msgs) need no type attribute
-        # Regular messages use "delivery" type
-        category = Map.get(attrs, "category")
-        receipt_type = if category == "peer", do: nil, else: "delivery"
-        {[{:send_receipt, from, id, participant, receipt_type}], state}
+        build_delivery_receipt_actions(from, id, participant, attrs, state)
     end
   end
+
+  defp invalid_receipt_target?(from, id), do: from == "" or id in [nil, ""]
+
+  defp build_retry_receipt_actions(from, id, participant, attrs, message_data, state) do
+    retry_reason_code = retry_reason_code(Map.get(message_data, :decrypt_status))
+    {retry_count, updated_state} = next_retry_count(state, from, id, participant)
+
+    retry_meta = %{
+      category: Map.get(attrs, "category"),
+      recipient: Map.get(attrs, "recipient")
+    }
+
+    {[
+       {:send_retry_receipt, from, id, participant, Map.get(attrs, "t"), retry_count,
+        retry_reason_code, retry_meta}
+     ], updated_state}
+  end
+
+  defp build_delivery_receipt_actions(from, id, participant, attrs, state) do
+    # Peer category messages (protocol msgs) need no type attribute.
+    # Regular messages use "delivery" type.
+    receipt_type = if Map.get(attrs, "category") == "peer", do: nil, else: "delivery"
+    {[{:send_receipt, from, id, participant, receipt_type}], state}
+  end
+
+  defp retry_reason_code(
+         {:error,
+          {:decrypt_failed_for_payload, _, {:decrypt_failed_for_candidate, _, :invalid_mac}}}
+       ),
+       do: 7
+
+  defp retry_reason_code(
+         {:error,
+          {:decrypt_failed_for_payload, _,
+           {:decrypt_failed_for_candidate, _, :unknown_signed_prekey}}}
+       ),
+       do: 3
+
+  defp retry_reason_code(
+         {:error,
+          {:decrypt_failed_for_payload, _, {:decrypt_failed_for_candidate, _, :no_session}}}
+       ),
+       do: 1
+
+  defp retry_reason_code(_), do: 0
 
   defp needs_retry_receipt?(%{decrypt_status: {:error, _}}), do: true
   defp needs_retry_receipt?(_), do: false
