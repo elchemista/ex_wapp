@@ -130,19 +130,7 @@ defmodule ExWapp.Signal.PrekeyFetcher do
        when is_list(content) do
     case find_child(content, "list") do
       %Binary.Node{content: users} when is_list(users) ->
-        result =
-          users
-          |> Enum.filter(&match?(%Binary.Node{tag: "user"}, &1))
-          |> Enum.reduce(%{}, fn user_node, acc ->
-            jid = get_attr(user_node, "jid")
-
-            case parse_user_prekey(user_node) do
-              {:ok, bundle} -> Map.put(acc, jid, bundle)
-              _ -> acc
-            end
-          end)
-
-        {:ok, result}
+        {:ok, parse_batch_user_bundles(users)}
 
       _ ->
         {:error, :invalid_prekey_response}
@@ -150,6 +138,21 @@ defmodule ExWapp.Signal.PrekeyFetcher do
   end
 
   defp parse_batch_prekey_response(_), do: {:error, :invalid_response}
+
+  defp parse_batch_user_bundles(users) when is_list(users) do
+    Enum.reduce(users, %{}, &maybe_put_user_bundle/2)
+  end
+
+  defp maybe_put_user_bundle(%Binary.Node{tag: "user"} = user_node, acc) do
+    jid = get_attr(user_node, "jid")
+
+    case parse_user_prekey(user_node) do
+      {:ok, bundle} -> Map.put(acc, jid, bundle)
+      _ -> acc
+    end
+  end
+
+  defp maybe_put_user_bundle(_other, acc), do: acc
 
   defp parse_user_prekey(%Binary.Node{attrs: attrs, content: content}) when is_list(content) do
     jid = Map.get(attrs, "jid")

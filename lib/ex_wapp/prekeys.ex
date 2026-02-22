@@ -97,22 +97,9 @@ defmodule ExWapp.Prekeys do
   def parse_count_response(content) when is_list(content) do
     Enum.find_value(content, 0, fn
       %Node{tag: "count", attrs: attrs} ->
-        case Map.get(attrs, "value") do
-          nil ->
-            0
-
-          val when is_integer(val) ->
-            val
-
-          val when is_binary(val) ->
-            case Integer.parse(val) do
-              {n, _} -> n
-              :error -> 0
-            end
-
-          _ ->
-            0
-        end
+        attrs
+        |> Map.get("value")
+        |> parse_count_value()
 
       _ ->
         nil
@@ -120,6 +107,18 @@ defmodule ExWapp.Prekeys do
   end
 
   def parse_count_response(_), do: 0
+
+  defp parse_count_value(nil), do: 0
+  defp parse_count_value(val) when is_integer(val), do: val
+
+  defp parse_count_value(val) when is_binary(val) do
+    case Integer.parse(val) do
+      {n, _} -> n
+      :error -> 0
+    end
+  end
+
+  defp parse_count_value(_), do: 0
 
   @doc """
   Check if prekeys need to be uploaded based on server response.

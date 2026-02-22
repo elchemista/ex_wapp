@@ -137,33 +137,9 @@ defmodule ExWapp.Session.IQ do
       when is_list(content) do
     case find_child(content, "list") do
       %Binary.Node{content: users} when is_list(users) ->
-        user_nodes =
-          Enum.filter(users, &match?(%Binary.Node{tag: "user"}, &1))
-
-        bundles =
-          Enum.reduce(user_nodes, [], fn user_node, acc ->
-            case parse_user_prekey_bundle(user_node) do
-              {:ok, bundle} ->
-                device_jid =
-                  user_node
-                  |> extract_user_jid()
-                  |> JIDUtils.normalize_with_device()
-
-                Logger.debug("[PREKEY] Parsed bundle for device_jid=#{inspect(device_jid)}")
-                [Map.put(bundle, :device_jid, device_jid) | acc]
-
-              {:error, reason} ->
-                Logger.warning("[PREKEY] Skipping invalid bundle node: #{inspect(reason)}")
-                acc
-            end
-          end)
-          |> Enum.reverse()
-
-        if bundles == [] do
-          {:error, :no_valid_bundles_in_response}
-        else
-          {:ok, bundles}
-        end
+        users
+        |> parse_prekey_bundles_from_users()
+        |> prekey_bundles_result()
 
       _ ->
         {:error, :no_list_in_response}
@@ -175,6 +151,33 @@ defmodule ExWapp.Session.IQ do
   end
 
   def parse_prekey_response(_), do: {:error, :invalid_response}
+
+  defp parse_prekey_bundles_from_users(users) when is_list(users) do
+    users
+    |> Enum.filter(&match?(%Binary.Node{tag: "user"}, &1))
+    |> Enum.reduce([], &maybe_prepend_prekey_bundle/2)
+    |> Enum.reverse()
+  end
+
+  defp maybe_prepend_prekey_bundle(user_node, acc) do
+    case parse_user_prekey_bundle(user_node) do
+      {:ok, bundle} ->
+        device_jid =
+          user_node
+          |> extract_user_jid()
+          |> JIDUtils.normalize_with_device()
+
+        Logger.debug("[PREKEY] Parsed bundle for device_jid=#{inspect(device_jid)}")
+        [Map.put(bundle, :device_jid, device_jid) | acc]
+
+      {:error, reason} ->
+        Logger.warning("[PREKEY] Skipping invalid bundle node: #{inspect(reason)}")
+        acc
+    end
+  end
+
+  defp prekey_bundles_result([]), do: {:error, :no_valid_bundles_in_response}
+  defp prekey_bundles_result(bundles), do: {:ok, bundles}
 
   defp parse_user_prekey_bundle(%Binary.Node{attrs: _attrs, content: content})
        when is_list(content) do
@@ -264,22 +267,27 @@ defmodule ExWapp.Session.IQ do
     device_list_node =
       if devices_node, do: find_child(devices_node.content || [], "device-list")
 
-    if device_list_node && user_part != "" && server != "" do
-      (device_list_node.content || [])
-      |> Enum.filter(&match?(%Binary.Node{tag: "device"}, &1))
-      |> Enum.map(fn device_node ->
-        device_id = parse_device_id(device_node)
-
-        if device_id == 0 do
-          "#{user_part}@#{server}"
-        else
-          "#{user_part}:#{device_id}@#{server}"
-        end
-      end)
+    if valid_device_list?(device_list_node, user_part, server) do
+      build_device_jids(device_list_node, user_part, server)
     else
       [base_jid]
     end
   end
+
+  defp valid_device_list?(device_list_node, user_part, server) do
+    not is_nil(device_list_node) and user_part != "" and server != ""
+  end
+
+  defp build_device_jids(device_list_node, user_part, server) do
+    (device_list_node.content || [])
+    |> Enum.filter(&match?(%Binary.Node{tag: "device"}, &1))
+    |> Enum.map(fn device_node ->
+      format_device_jid(user_part, server, parse_device_id(device_node))
+    end)
+  end
+
+  defp format_device_jid(user_part, server, 0), do: "#{user_part}@#{server}"
+  defp format_device_jid(user_part, server, device_id), do: "#{user_part}:#{device_id}@#{server}"
 
   defp parse_device_id(%Binary.Node{attrs: attrs}) do
     case Map.get(attrs || %{}, "id") do
