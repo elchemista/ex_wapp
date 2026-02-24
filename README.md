@@ -173,6 +173,14 @@ ExWapp.subscribe(session)
 # Send via session_id string (fire-and-forget, no pid needed)
 ExWapp.send_message("my_session", "393XXXXXXXXX@s.whatsapp.net", "hello via pubsub")
 
+# Show typing indicator before sending
+ExWapp.send_typing(session, "393XXXXXXXXX@s.whatsapp.net")
+Process.sleep(2_000)
+ExWapp.send_message(session, "393XXXXXXXXX@s.whatsapp.net", "hello!")
+
+# Send read receipts for received messages
+ExWapp.send_read_receipt(session, "393XXXXXXXXX@s.whatsapp.net", ["MSG_ID"])
+
 # Or use the lazy stream API
 ExWapp.message_stream(session)
 |> Stream.each(fn {jid, msg} -> IO.puts("[#{jid}] #{msg.text}") end)
@@ -216,6 +224,38 @@ ExWapp.send_message(session, "1234567890@s.whatsapp.net", "Hello")
 ExWapp.list_groups(session)
 
 :ok = ExWapp.disconnect(session)
+```
+
+## Typing Indicators & Read Receipts
+
+```elixir
+# Show "typing..." to the recipient
+ExWapp.send_typing(session, "393XXXXXXXXX@s.whatsapp.net")
+
+# Stop typing indicator (without sending a message)
+ExWapp.send_typing(session, "393XXXXXXXXX@s.whatsapp.net", false)
+
+# Send read receipt for specific messages
+ExWapp.send_read_receipt(session, "393XXXXXXXXX@s.whatsapp.net", ["MSG_ID_1", "MSG_ID_2"])
+```
+
+Notes:
+
+- `send_typing/3` sends a `chatstate` node (`composing` or `paused`) to the
+  recipient. The typing indicator auto-clears when a message is sent, so you
+  don't need to explicitly send `paused` before sending.
+- `send_read_receipt/3` sends blue ticks for the given message IDs (separate
+  from the server-synced `mark_chat_as_read/2` which updates the chat's unread
+  counter across linked devices).
+
+## Session Introspection
+
+```elixir
+# Current session status (:idle, :connecting, :handshaking, :connected, :disconnected)
+ExWapp.state(session)
+
+# Session statistics (uptime, message counts, reconnects, errors)
+ExWapp.stats(session)
 ```
 
 ## Chat & Contacts API (App State Sync)
