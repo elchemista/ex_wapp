@@ -474,6 +474,7 @@ defmodule ExWapp do
 
   - `{:ex_wapp_message, jid, message}` - incoming WhatsApp message
   - `{:ex_wapp_session, :connected}` - session connected
+  - `{:ex_wapp_session, :error, reason}` - session-level error event
   - `{:ex_wapp_session, :disconnected, reason}` - session disconnected
   - `{:ex_wapp_session, :terminated, reason}` - session process stopped
   - `{:ex_wapp_health, type, metadata}` - send health/error/guard events

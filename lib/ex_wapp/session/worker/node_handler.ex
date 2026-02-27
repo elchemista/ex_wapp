@@ -133,6 +133,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     # 405 = client outdated
     case reason do
       "401" ->
+        broadcast_error_event(state, {:connection_failure, :unauthorized, location})
         Logger.error("[SESSION] Unauthorized - session invalid, stopping reconnects")
         Logger.error("[SESSION] Please clear session and re-pair")
         notify_qr(state, {:error, :unauthorized})
@@ -141,17 +142,20 @@ defmodule ExWapp.Session.Worker.NodeHandler do
         {%{state | session_invalid: true, status: :idle}, []}
 
       "403" ->
+        broadcast_error_event(state, {:connection_failure, :forbidden, location})
         Logger.error("[SESSION] Forbidden - account may be banned")
         notify_qr(state, {:error, :forbidden})
         state = Safety.record_signal(state, :forbidden)
         {%{state | session_invalid: true, status: :idle}, []}
 
       "405" ->
+        broadcast_error_event(state, {:connection_failure, :client_outdated, location})
         Logger.error("[SESSION] Client outdated")
         notify_qr(state, {:error, :client_outdated})
         {state, []}
 
       _ ->
+        broadcast_error_event(state, {:connection_failure, {:unknown, reason}, location})
         Logger.error("[SESSION] Unknown failure reason: #{reason}")
         notify_qr(state, {:error, {:failure, reason}})
         {state, []}
@@ -173,6 +177,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
     # Check for conflict type in children
     conflict_type = extract_conflict_type(children)
+    broadcast_error_event(state, {:stream_error, code, conflict_type})
 
     new_state =
       cond do
@@ -417,6 +422,12 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   defp notify_qr(state, event) do
     Subscribers.notify_qr(state, event, fn -> :ok end)
+  end
+
+  defp broadcast_error_event(state, reason) do
+    Subscribers.broadcast_error(Map.get(state, :session_id), reason)
+  rescue
+    _ -> :ok
   end
 
   defp restart_connection_now(state, reason) do

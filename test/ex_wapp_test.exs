@@ -212,6 +212,48 @@ defmodule ExWappTest do
       ExWapp.unsubscribe(session_id)
       GenServer.stop(session)
     end
+
+    test "subscribe/1 receives session error events from connection errors" do
+      session_id = "pubsub_err_conn_#{System.unique_integer([:positive])}"
+
+      {:ok, session} =
+        ExWapp.start_link(store: ExWapp.Store.Memory, session_id: session_id)
+
+      :ok = ExWapp.subscribe(session_id)
+
+      send(session, {:connection_event, {:error, :test_error}})
+
+      assert_receive {:ex_wapp_session, :error, :test_error}, 1_000
+
+      ExWapp.unsubscribe(session_id)
+      GenServer.stop(session)
+    end
+
+    test "subscribe/1 receives session error events from server failure nodes" do
+      session_id = "pubsub_err_failure_#{System.unique_integer([:positive])}"
+
+      {:ok, session} =
+        ExWapp.start_link(store: ExWapp.Store.Memory, session_id: session_id)
+
+      :ok = ExWapp.subscribe(session_id)
+
+      send(
+        session,
+        {:inbound_node,
+         %ExWapp.Binary.Node{
+           tag: "failure",
+           attrs: %{"reason" => "403", "location" => "test_location"},
+           content: nil
+         }}
+      )
+
+      assert_receive {:ex_wapp_session, :error,
+                      {:connection_failure, :forbidden, "test_location"}},
+                     1_000
+
+      ExWapp.unsubscribe(session_id)
+      GenServer.stop(session)
+    end
   end
 
   describe "Message handling persistence" do

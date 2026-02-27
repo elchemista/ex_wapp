@@ -470,6 +470,7 @@ One `subscribe/1` call subscribes to **both** topics below:
 |---|---|
 | `"ex_wapp:messages:<id>"` | `{:ex_wapp_message, jid, message}` |
 | `"ex_wapp:session:<id>"` | `{:ex_wapp_session, :connected}` |
+| | `{:ex_wapp_session, :error, reason}` |
 | | `{:ex_wapp_session, :disconnected, reason}` |
 | | `{:ex_wapp_session, :terminated, reason}` |
 

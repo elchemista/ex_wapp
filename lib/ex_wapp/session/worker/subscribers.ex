@@ -99,6 +99,17 @@ defmodule ExWapp.Session.Worker.Subscribers do
   end
 
   @doc """
+  Broadcasts a session error via lifecycle PubSub topics.
+
+  Message format:
+  - `{:ex_wapp_session, :error, reason}`
+  """
+  @spec broadcast_error(term(), term()) :: :ok
+  def broadcast_error(session_id, reason) do
+    broadcast_lifecycle(session_id, {:ex_wapp_session, :error, reason})
+  end
+
+  @doc """
   Broadcasts session health events (errors, drops, retries, guard trips).
 
   Events are sent on:

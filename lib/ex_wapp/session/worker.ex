@@ -1802,6 +1802,8 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp emit_telemetry(event, measurements, state, extra_metadata \\ %{}) do
+    maybe_broadcast_pubsub_error(event, measurements, extra_metadata, state)
+
     metadata = %{
       status: state.status,
       reconnect_attempts: state.reconnect_attempts,
@@ -1817,6 +1819,21 @@ defmodule ExWapp.Session.Worker do
     # Don't crash if telemetry fails
     _ -> :ok
   end
+
+  defp maybe_broadcast_pubsub_error(:error, measurements, extra_metadata, state) do
+    reason =
+      case {Map.get(measurements, :phase), Map.get(measurements, :reason)} do
+        {phase, reason} when not is_nil(phase) and not is_nil(reason) -> {phase, reason}
+        {_, reason} when not is_nil(reason) -> reason
+        _ -> {:error_event, measurements, extra_metadata}
+      end
+
+    Subscribers.broadcast_error(state.session_id, reason)
+  rescue
+    _ -> :ok
+  end
+
+  defp maybe_broadcast_pubsub_error(_event, _measurements, _extra_metadata, _state), do: :ok
 
   # ============================================================================
   # App State Sync
