@@ -89,7 +89,7 @@ defmodule ExWappTest do
              }}
         )
 
-      conn = spawn_link(fn -> Process.sleep(:infinity) end)
+      conn = spawn(fn -> Process.sleep(:infinity) end)
 
       :sys.replace_state(session, fn state ->
         %{state | conn: conn, status: :handshaking, app_state_initial_sync_requested: false}
@@ -252,6 +252,42 @@ defmodule ExWappTest do
                      1_000
 
       ExWapp.unsubscribe(session_id)
+      GenServer.stop(session)
+    end
+
+    test "subscribe/1 receives disconnected event on stream:error" do
+      session_id = "pubsub_stream_disc_#{System.unique_integer([:positive])}"
+
+      {:ok, session} =
+        ExWapp.start_link(
+          store: ExWapp.Store.Memory,
+          session_id: session_id,
+          reconnect: false
+        )
+
+      :ok = ExWapp.subscribe(session_id)
+
+      conn = spawn(fn -> Process.sleep(:infinity) end)
+      conn_ref = Process.monitor(conn)
+
+      :sys.replace_state(session, fn state ->
+        %{state | conn: conn, conn_ref: conn_ref, status: :connected}
+      end)
+
+      send(
+        session,
+        {:inbound_node,
+         %ExWapp.Binary.Node{tag: "stream:error", attrs: %{"code" => "515"}, content: nil}}
+      )
+
+      assert_receive {:ex_wapp_session, :disconnected,
+                      {:transport_closed, {:stream_error, "515", nil}}},
+                     1_000
+
+      assert eventually(fn -> ExWapp.state(session) == :idle end)
+
+      ExWapp.unsubscribe(session_id)
+      if Process.alive?(conn), do: Process.exit(conn, :normal)
       GenServer.stop(session)
     end
   end

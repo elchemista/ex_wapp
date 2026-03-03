@@ -1120,6 +1120,7 @@ defmodule ExWapp.Session.Worker do
     |> update_stats(:reconnects)
     |> then(fn s ->
       emit_telemetry(:disconnected, %{reason: reason}, s)
+      Subscribers.broadcast_lifecycle(s.session_id, {:ex_wapp_session, :disconnected, reason})
       notify_qr(s, {:error, {:disconnected, reason}})
       schedule_reconnect(s, reason)
     end)
@@ -1204,6 +1205,11 @@ defmodule ExWapp.Session.Worker do
 
   defp handle_connection_event({:transport, :connected}, state) do
     %{state | status: :connecting}
+  end
+
+  defp handle_connection_event({:transport, {:closed, reason}}, %{conn: nil} = state) do
+    Logger.debug("[SESSION] Ignoring stale transport close: #{inspect(reason)}")
+    state
   end
 
   defp handle_connection_event({:transport, {:closed, reason}}, state) do

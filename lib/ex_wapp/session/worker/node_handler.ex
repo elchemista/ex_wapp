@@ -178,6 +178,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     # Check for conflict type in children
     conflict_type = extract_conflict_type(children)
     broadcast_error_event(state, {:stream_error, code, conflict_type})
+    stream_error_reason = {:stream_error, code, conflict_type}
 
     new_state =
       cond do
@@ -186,16 +187,10 @@ defmodule ExWapp.Session.Worker.NodeHandler do
           Logger.error("[SESSION] Delete session file and scan QR code again.")
           notify_qr(state, {:error, :device_removed})
           state = Safety.record_signal(state, :device_removed)
-          # Stop reconnection - device is permanently invalid
-          %{state | status: :disconnected, reconnect_attempts: 999}
-
-        code == "515" ->
-          Logger.warning("[SESSION] Got 515, will reconnect...")
+          # Mark session invalid, then trigger the normal disconnect path in Worker.
           state
-
-        code == "503" ->
-          Logger.warning("[SESSION] Got 503 (service unavailable), will reconnect...")
-          state
+          |> Map.put(:session_invalid, true)
+          |> mark_transport_closed(stream_error_reason)
 
         conflict_type == "replaced" ->
           Logger.error("[SESSION] Stream replaced by another connection, restarting transport")
@@ -203,9 +198,17 @@ defmodule ExWapp.Session.Worker.NodeHandler do
           state = Safety.record_signal(state, :stream_replaced)
           restart_connection_now(state, :stream_replaced)
 
+        code == "515" ->
+          Logger.warning("[SESSION] Got 515, will reconnect...")
+          mark_transport_closed(state, stream_error_reason)
+
+        code == "503" ->
+          Logger.warning("[SESSION] Got 503 (service unavailable), will reconnect...")
+          mark_transport_closed(state, stream_error_reason)
+
         true ->
           Logger.error("[SESSION] Unknown stream error: code=#{code}, conflict=#{conflict_type}")
-          state
+          mark_transport_closed(state, stream_error_reason)
       end
 
     {new_state, []}
@@ -433,6 +436,12 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   defp restart_connection_now(state, reason) do
     # Delegate back to the worker process
     send(self(), {:restart_connection, reason})
+    state
+  end
+
+  defp mark_transport_closed(state, reason) do
+    # Route through Worker's transport-close path so disconnect events are emitted consistently.
+    send(self(), {:connection_event, {:transport, {:closed, reason}}})
     state
   end
 
