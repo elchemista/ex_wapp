@@ -9,7 +9,7 @@ defmodule ExWapp.Noise.ClientPayloadTest do
   alias WAWebProtobufsWa6.ClientPayload, as: ClientPayloadProto
   alias WAWebProtobufsWa6.ClientPayload.DevicePairingRegistrationData
 
-  @version_hash :crypto.hash(:md5, "2.3000.1029948479")
+  @version_hash :crypto.hash(:md5, "2.3000.1034187832")
   # DeviceProps with historySyncConfig matching Firefox/Linux identity
   @device_props <<
     0x0A,

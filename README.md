@@ -71,6 +71,7 @@ config :ex_wapp, :runtime,
   compliance: [strict_mode: true, require_explicit_opt_in: true],
   risk: [enabled: true, block_threshold: 75],
   protocol: [
+    client_version: "2.3000.1034187832",
     user_agent: [
       os_version: "Linux x86_64",
       manufacturer: "Mozilla",
@@ -78,6 +79,15 @@ config :ex_wapp, :runtime,
     ]
   ]
 ```
+
+You can pass `protocol.client_version` as:
+- string: `"2.3000.1034187832"`
+- tuple: `{2, 3000, 1034187832}`
+- map/keyword: `%{primary: 2, secondary: 3000, tertiary: 1034187832}`
+
+For per-session overrides, you can also pass top-level aliases:
+`ExWapp.start_link(client_version: "2.3000.1034187832")` or
+`ExWapp.start_link(wa_version: {2, 3000, 1034187832})`.
 
 Detailed implementation checklist: `SESSION_TRUST_PARITY_CHECKLIST.md`.
 

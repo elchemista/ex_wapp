@@ -12,8 +12,6 @@ defmodule ExWapp.Noise.ClientPayload do
   alias WAWebProtobufsWa6.ClientPayload.WebInfo
   alias WAWebProtobufsWa6.ClientPayload.DevicePairingRegistrationData
 
-  @default_version {2, 3000, 1_029_948_479}
-
   @spec build(Noise.t()) :: {:ok, binary()} | {:ok, binary(), map()} | {:error, term()}
   def build(%Noise{} = noise), do: build(noise, default_runtime_cfg())
   def build(_), do: {:error, :invalid_noise_state}
@@ -203,14 +201,20 @@ defmodule ExWapp.Noise.ClientPayload do
   end
 
   defp protocol_version(runtime_cfg) do
+    default_version = Config.default_client_version()
+
     primary =
-      Config.get(runtime_cfg, [:protocol, :client_version, :primary], elem(@default_version, 0))
+      Config.get(runtime_cfg, [:protocol, :client_version, :primary], default_version.primary)
 
     secondary =
-      Config.get(runtime_cfg, [:protocol, :client_version, :secondary], elem(@default_version, 1))
+      Config.get(
+        runtime_cfg,
+        [:protocol, :client_version, :secondary],
+        default_version.secondary
+      )
 
     tertiary =
-      Config.get(runtime_cfg, [:protocol, :client_version, :tertiary], elem(@default_version, 2))
+      Config.get(runtime_cfg, [:protocol, :client_version, :tertiary], default_version.tertiary)
 
     {primary, secondary, tertiary}
   end

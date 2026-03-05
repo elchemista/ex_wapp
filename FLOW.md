@@ -241,7 +241,7 @@ end
     appVersion: %AppVersion{
       primary: 2,
       secondary: 3000,
-      tertiary: 1029948479
+      tertiary: 1034187832
     },
     mcc: "000",
     mnc: "000",

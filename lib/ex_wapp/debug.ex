@@ -311,7 +311,7 @@ defmodule ExWapp.Debug do
         0x00
       >>
 
-      build_hash = :crypto.hash(:md5, "2.3000.1029948479")
+      build_hash = :crypto.hash(:md5, "2.3000.1034187832")
       e_skey_id = <<1::big-32>> |> binary_part(1, 3)
 
       payload = %ClientPayload{
@@ -319,7 +319,7 @@ defmodule ExWapp.Debug do
         pull: false,
         userAgent: %UserAgent{
           platform: :WEB,
-          appVersion: %AppVersion{primary: 2, secondary: 3000, tertiary: 1_029_948_479},
+          appVersion: %AppVersion{primary: 2, secondary: 3000, tertiary: 1_034_187_832},
           mcc: "000",
           mnc: "000",
           osVersion: "0.1",

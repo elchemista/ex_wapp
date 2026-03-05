@@ -9,6 +9,36 @@ defmodule ExWapp.RuntimeHardeningTest do
     assert get_in(cfg, [:reconnect, :enabled]) == false
   end
 
+  test "config resolve normalizes protocol client version from string" do
+    {:ok, cfg} = Config.resolve(runtime: [protocol: [client_version: "2.3000.1034187832"]])
+
+    assert get_in(cfg, [:protocol, :client_version]) == %{
+             primary: 2,
+             secondary: 3000,
+             tertiary: 1_034_187_832
+           }
+  end
+
+  test "config resolve accepts top-level client_version override tuple" do
+    {:ok, cfg} = Config.resolve(client_version: {2, 3000, 1_033_703_022})
+
+    assert get_in(cfg, [:protocol, :client_version]) == %{
+             primary: 2,
+             secondary: 3000,
+             tertiary: 1_033_703_022
+           }
+  end
+
+  test "config resolve allows wa_version alias override" do
+    {:ok, cfg} = Config.resolve(wa_version: "2.3000.1033516464")
+
+    assert get_in(cfg, [:protocol, :client_version]) == %{
+             primary: 2,
+             secondary: 3000,
+             tertiary: 1_033_516_464
+           }
+  end
+
   test "resilience gives up once max attempts is reached" do
     state = %{
       reconnect_attempts: 1,
@@ -78,6 +108,24 @@ defmodule ExWapp.RuntimeHardeningTest do
 
     status = ExWapp.policy_status(session)
     assert is_map(status.safety)
+
+    GenServer.stop(session)
+  end
+
+  test "session accepts client_version shorthand option" do
+    {:ok, session} =
+      ExWapp.start_link(
+        store: ExWapp.Store.Memory,
+        client_version: "2.3000.1034187832"
+      )
+
+    cfg = ExWapp.runtime_config(session)
+
+    assert get_in(cfg, [:protocol, :client_version]) == %{
+             primary: 2,
+             secondary: 3000,
+             tertiary: 1_034_187_832
+           }
 
     GenServer.stop(session)
   end

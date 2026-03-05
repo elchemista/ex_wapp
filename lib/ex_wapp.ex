@@ -118,6 +118,14 @@ defmodule ExWapp do
 
     * `:name` - Optional name to register the process.
 
+    * `:runtime` - Per-session runtime config overrides (same shape as
+      `config :ex_wapp, :runtime`).
+
+    * `:client_version` / `:wa_version` - Optional shorthand override for
+      `runtime.protocol.client_version`. Accepted forms:
+      `"2.3000.1034187832"`, `{2, 3000, 1034187832}`, or
+      `%{primary: 2, secondary: 3000, tertiary: 1034187832}`.
+
   ## Examples
 
       # Anonymous session with default storage

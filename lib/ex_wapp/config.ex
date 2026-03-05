@@ -3,7 +3,17 @@ defmodule ExWapp.Config do
 
   alias ExWapp.Config.Validator
 
+  @default_client_version %{primary: 2, secondary: 3000, tertiary: 1_034_187_832}
+
   @type runtime_cfg :: map()
+  @type client_version :: %{
+          required(:primary) => pos_integer(),
+          required(:secondary) => pos_integer(),
+          required(:tertiary) => pos_integer()
+        }
+
+  @spec default_client_version() :: client_version()
+  def default_client_version, do: @default_client_version
 
   @spec defaults() :: runtime_cfg()
   def defaults do
@@ -86,11 +96,7 @@ defmodule ExWapp.Config do
       },
       protocol: %{
         strict_mode: false,
-        client_version: %{
-          primary: 2,
-          secondary: 3000,
-          tertiary: 1_029_948_479
-        },
+        client_version: @default_client_version,
         user_agent: %{
           os_version: "Linux x86_64",
           manufacturer: "Mozilla",
@@ -217,6 +223,7 @@ defmodule ExWapp.Config do
       |> deep_merge(app_runtime)
       |> deep_merge(session_runtime)
       |> apply_legacy_overrides(opts)
+      |> normalize_protocol_client_version()
 
     case Validator.validate(cfg) do
       :ok -> {:ok, cfg}
@@ -256,6 +263,8 @@ defmodule ExWapp.Config do
     |> maybe_put_in([:iq, :max_pending_requests], Keyword.get(opts, :max_pending_iqs))
     |> maybe_put_in([:queue, :max_size], Keyword.get(opts, :queue_max_size))
     |> maybe_put_in([:queue, :drop_policy], Keyword.get(opts, :queue_drop_policy))
+    |> maybe_put_normalized_client_version(Keyword.get(opts, :client_version))
+    |> maybe_put_normalized_client_version(Keyword.get(opts, :wa_version))
   end
 
   defp maybe_put_in(cfg, _path, nil), do: cfg
@@ -274,6 +283,65 @@ defmodule ExWapp.Config do
   end
 
   defp deep_merge(_left, right), do: right
+
+  defp maybe_put_normalized_client_version(cfg, nil), do: cfg
+
+  defp maybe_put_normalized_client_version(cfg, version) do
+    version = normalize_container(version)
+
+    case normalize_client_version(version) do
+      {:ok, normalized} -> maybe_put_in(cfg, [:protocol, :client_version], normalized)
+      :error -> maybe_put_in(cfg, [:protocol, :client_version], version)
+    end
+  end
+
+  defp normalize_protocol_client_version(cfg) when is_map(cfg) do
+    case get(cfg, [:protocol, :client_version]) do
+      nil ->
+        cfg
+
+      version ->
+        case normalize_client_version(version) do
+          {:ok, normalized} -> maybe_put_in(cfg, [:protocol, :client_version], normalized)
+          :error -> cfg
+        end
+    end
+  end
+
+  defp normalize_protocol_client_version(cfg), do: cfg
+
+  defp normalize_client_version(%{primary: p, secondary: s, tertiary: t})
+       when is_integer(p) and is_integer(s) and is_integer(t) do
+    {:ok, %{primary: p, secondary: s, tertiary: t}}
+  end
+
+  defp normalize_client_version(%{"primary" => p, "secondary" => s, "tertiary" => t})
+       when is_integer(p) and is_integer(s) and is_integer(t) do
+    {:ok, %{primary: p, secondary: s, tertiary: t}}
+  end
+
+  defp normalize_client_version({p, s, t})
+       when is_integer(p) and is_integer(s) and is_integer(t) do
+    {:ok, %{primary: p, secondary: s, tertiary: t}}
+  end
+
+  defp normalize_client_version(version) when is_binary(version) do
+    case String.split(version, ".", parts: 3) do
+      [p, s, t] ->
+        with {primary, ""} <- Integer.parse(p),
+             {secondary, ""} <- Integer.parse(s),
+             {tertiary, ""} <- Integer.parse(t) do
+          {:ok, %{primary: primary, secondary: secondary, tertiary: tertiary}}
+        else
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp normalize_client_version(_), do: :error
 
   defp normalize_container(container) when is_list(container) do
     if Keyword.keyword?(container) do
