@@ -51,7 +51,7 @@ defmodule ExWapp.Store.Ets do
     :ok = :filelib.ensure_dir(char_path)
 
     # Always create a new public table (accessible from any process)
-    table = :ets.new(:ex_wapp_store, [:set, :public])
+    table = :ets.new(:ex_wapp_store, [:set, :public, :compressed])
 
     # Load existing data from file if available
     case :ets.file2tab(char_path) do
