@@ -233,7 +233,7 @@ defmodule ExWapp.Noise.ClientPayload do
     #   - primary: uint32 (field 1)
     #   - secondary: uint32 (field 2)
     #   - tertiary: uint32 (field 3)
-    # - platformType: enum (field 3) - FIREFOX = 2
+    # - platformType: enum (field 3) - UNKNOWN = 0
     # - requireFullSync: bool (field 4) - false
     # - historySyncConfig: message (field 5)
     #   - storageQuotaMb: uint32 (field 3) - 10240

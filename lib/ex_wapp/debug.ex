@@ -267,7 +267,7 @@ defmodule ExWapp.Debug do
       signed_prekey = ExWapp.Signal.Keys.generate_signed_prekey(identity, 1)
       reg_id = :rand.uniform(65_535)
 
-      # Build device props (Firefox/Linux identity)
+      # Build device props
       device_props = <<
         0x0A,
         0x05,
@@ -281,7 +281,7 @@ defmodule ExWapp.Debug do
         0x18,
         0x00,
         0x18,
-        0x02,
+        0x00,
         0x20,
         0x00,
         0x2A,
@@ -311,7 +311,7 @@ defmodule ExWapp.Debug do
         0x00
       >>
 
-      build_hash = :crypto.hash(:md5, "2.3000.1034187832")
+      build_hash = :crypto.hash(:md5, "2.3000.1034566421")
       e_skey_id = <<1::big-32>> |> binary_part(1, 3)
 
       payload = %ClientPayload{
@@ -319,7 +319,7 @@ defmodule ExWapp.Debug do
         pull: false,
         userAgent: %UserAgent{
           platform: :WEB,
-          appVersion: %AppVersion{primary: 2, secondary: 3000, tertiary: 1_034_187_832},
+          appVersion: %AppVersion{primary: 2, secondary: 3000, tertiary: 1_034_566_421},
           mcc: "000",
           mnc: "000",
           osVersion: "0.1",
