@@ -46,6 +46,7 @@ defmodule ExWapp.Session.Worker do
 
   alias ExWapp.AppState.Engine
   alias ExWapp.{Binary, Config, Pairing, Quota, RateLimiter, Store, Telemetry}
+  alias ExWapp.Signal.SessionStore
 
   alias ExWapp.Session.{InboundRouter, JIDUtils, OutboundQueue}
 
@@ -462,6 +463,7 @@ defmodule ExWapp.Session.Worker do
       send_worker_sup: send_worker_sup,
       session_id: session_id,
       pairing: Pairing.new(store),
+      signal_sessions: load_persisted_signal_sessions(store),
       rate_limiter: RateLimiter.new(),
       quota: Quota.new(runtime_cfg),
       safety: Safety.new()
@@ -661,6 +663,7 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_call({:update_signal_sessions, sessions}, _from, state) do
+    persist_signal_sessions_store(state.store, sessions)
     {:reply, :ok, %{state | signal_sessions: sessions}}
   end
 
@@ -943,6 +946,7 @@ defmodule ExWapp.Session.Worker do
   def handle_info({:signal_sessions_updated, sessions}, state) do
     session_count = map_size(Map.get(sessions || %{}, :sessions, %{}))
     Logger.debug("[SEND] Async signal session update received (sessions=#{session_count})")
+    persist_signal_sessions_store(state.store, sessions)
     {:noreply, %{state | signal_sessions: sessions}}
   end
 
@@ -1449,6 +1453,51 @@ defmodule ExWapp.Session.Worker do
   # ============================================================================
   # Helpers
   # ============================================================================
+
+  defp load_persisted_signal_sessions(nil), do: nil
+
+  defp load_persisted_signal_sessions(store) do
+    store
+    |> Store.load!()
+    |> Map.get(:signal_sessions)
+    |> normalize_persisted_signal_sessions()
+  rescue
+    error ->
+      Logger.warning("[SESSION] Failed to load persisted signal sessions: #{inspect(error)}")
+      nil
+  end
+
+  defp normalize_persisted_signal_sessions(nil), do: nil
+
+  defp normalize_persisted_signal_sessions(%{sessions: sessions} = persisted)
+       when is_map(sessions) do
+    SessionStore.new()
+    |> Map.merge(persisted)
+    |> Map.put(:pending_prekeys, Map.get(persisted, :pending_prekeys, %{}))
+  end
+
+  defp normalize_persisted_signal_sessions(_), do: nil
+
+  defp persist_signal_sessions_store(nil, _sessions), do: :ok
+
+  defp persist_signal_sessions_store(store, sessions) when is_map(sessions) do
+    data = Store.load!(store)
+
+    case Store.persist(store, Map.put(data, :signal_sessions, sessions)) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[SESSION] Failed to persist signal sessions: #{inspect(reason)}")
+        :ok
+    end
+  rescue
+    error ->
+      Logger.warning("[SESSION] Failed to persist signal sessions: #{inspect(error)}")
+      :ok
+  end
+
+  defp persist_signal_sessions_store(_store, _sessions), do: :ok
 
   defp restart_outbound_queue(state) do
     {:ok, outbound_queue} =

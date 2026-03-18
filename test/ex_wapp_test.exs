@@ -405,6 +405,52 @@ defmodule ExWappTest do
     end
   end
 
+  describe "Signal session persistence" do
+    test "signal sessions survive worker restart via persisted store" do
+      path =
+        Path.join(
+          System.tmp_dir!(),
+          "ex_wapp_signal_sessions_#{System.unique_integer([:positive])}.etf"
+        )
+
+      on_exit(fn -> File.rm_rf(path) end)
+
+      persisted_sessions =
+        ExWapp.Signal.SessionStore.new()
+        |> ExWapp.Signal.SessionStore.put_session("15550001111:2@s.whatsapp.net", %{
+          remote_identity_key: <<1, 2, 3, 4>>,
+          local_identity_key: %{public: <<5, 6, 7, 8>>, private: <<9, 10, 11, 12>>},
+          root_key: <<13, 14, 15, 16>>,
+          sending_chain: %{key: <<17, 18, 19, 20>>, counter: 2, message_keys: %{}},
+          receiving_chain: %{key: <<21, 22, 23, 24>>, counter: 1, message_keys: %{}},
+          previous_counter: 1,
+          ratchet_key: %{public: <<25, 26, 27, 28>>, private: <<29, 30, 31, 32>>},
+          remote_ratchet_key: <<33, 34, 35, 36>>
+        })
+
+      {:ok, session1} =
+        ExWapp.start_link(
+          store: {ExWapp.Store.Ets, path: path},
+          reconnect: false
+        )
+
+      assert :ok = GenServer.call(session1, {:update_signal_sessions, persisted_sessions})
+      assert persisted_sessions == GenServer.call(session1, :get_signal_sessions)
+
+      GenServer.stop(session1)
+
+      {:ok, session2} =
+        ExWapp.start_link(
+          store: {ExWapp.Store.Ets, path: path},
+          reconnect: false
+        )
+
+      assert persisted_sessions == GenServer.call(session2, :get_signal_sessions)
+
+      GenServer.stop(session2)
+    end
+  end
+
   describe "QR stream" do
     test "subscribes and receives events" do
       {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
