@@ -205,6 +205,15 @@ defmodule ExWapp.MessageHandler do
     end
   end
 
+  defp receipt_ack_actions(id, from, participant, recipient, type) do
+    if id != "" and from != "" do
+      ack_node = build_receipt_node_ack(from, id, participant, recipient, type)
+      [{:send_node, ack_node}]
+    else
+      []
+    end
+  end
+
   defp handle_notification_type("encrypt", _attrs, content, session, state),
     do: handle_encrypt_notification(content, session, state)
 
@@ -433,9 +442,12 @@ defmodule ExWapp.MessageHandler do
   # ============================================================================
 
   defp handle_receipt(%Node{attrs: attrs, content: content}, session, state) do
-    from = normalize_jid(Map.get(attrs, "from", ""))
+    from_raw = Map.get(attrs, "from", "")
+    from = normalize_jid(from_raw)
     id = Map.get(attrs, "id", "")
     type = Map.get(attrs, "type", "delivery")
+    participant = Map.get(attrs, "participant")
+    recipient = Map.get(attrs, "recipient")
 
     retry_info = extract_retry_info(content)
     target = chat_target(session, state)
@@ -445,8 +457,9 @@ defmodule ExWapp.MessageHandler do
     maybe_update_receipt_status(target, from, id, status)
 
     actions = receipt_actions(type, from, id)
+    ack_actions = receipt_ack_actions(id, from_raw, participant, recipient, type)
 
-    {:ok, state, actions}
+    {:ok, state, actions ++ ack_actions}
   end
 
   # ============================================================================
@@ -579,10 +592,18 @@ defmodule ExWapp.MessageHandler do
   # ============================================================================
 
   defp build_notification_ack(from, id, participant, type) do
+    build_stanza_ack("notification", from, id, participant, nil, type)
+  end
+
+  defp build_receipt_node_ack(from, id, participant, recipient, type) do
+    build_stanza_ack("receipt", from, id, participant, recipient, type)
+  end
+
+  defp build_stanza_ack(stanza_class, from, id, participant, recipient, type) do
     attrs = %{
       "id" => id,
       "to" => from,
-      "class" => "notification"
+      "class" => stanza_class
     }
 
     attrs = if type != "", do: Map.put(attrs, "type", type), else: attrs
@@ -590,6 +611,12 @@ defmodule ExWapp.MessageHandler do
     attrs =
       case participant do
         p when is_binary(p) and p != "" -> Map.put(attrs, "participant", p)
+        _ -> attrs
+      end
+
+    attrs =
+      case recipient do
+        r when is_binary(r) and r != "" -> Map.put(attrs, "recipient", r)
         _ -> attrs
       end
 
@@ -1751,10 +1778,17 @@ defmodule ExWapp.MessageHandler do
   end
 
   defp build_delivery_receipt_actions(from, id, participant, attrs, state) do
-    # Peer category messages (protocol msgs) need no type attribute.
-    # Regular messages use "delivery" type.
-    receipt_type = if Map.get(attrs, "category") == "peer", do: nil, else: "delivery"
-    {[{:send_receipt, from, id, participant, receipt_type}], state}
+    receipt_type = delivery_receipt_type(from, attrs, state)
+    receipt_meta = %{recipient: Map.get(attrs, "recipient")}
+    {[{:send_receipt, from, id, participant, receipt_type, receipt_meta}], state}
+  end
+
+  defp delivery_receipt_type(from, attrs, state) do
+    if normalize_jid(from) in local_recipient_jids(state, attrs) do
+      if Map.get(attrs, "type") == "peer_msg", do: "peer_msg", else: "sender"
+    else
+      nil
+    end
   end
 
   defp retry_reason_code(

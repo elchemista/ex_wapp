@@ -2,9 +2,16 @@ defmodule ExWapp.Pairing.ADV do
   @moduledoc """
   Helpers for parsing and validating WhatsApp ADV (Account Device Verification) payloads.
 
-  The methods verify the HMAC using the stored ADV secret, validate the
-  account signature, and prepare a device signature that can be sent back to
-  WhatsApp once the pairing flow completes.
+  Pair-success `device-identity` arrives as an `ADVSignedDeviceIdentityHMAC`
+  container in both Baileys and whatsmeow. The inner payload is an
+  `ADVSignedDeviceIdentity`.
+
+  Outbound message `device-identity` nodes and pair-success ACK payloads use the
+  direct `ADVSignedDeviceIdentity` bytes instead.
+
+  The methods below verify the pair-success HMAC using the stored ADV secret,
+  validate the server account signature, and prepare the client device
+  signature that must be echoed back to WhatsApp once pairing completes.
   """
 
   require Logger
@@ -12,9 +19,9 @@ defmodule ExWapp.Pairing.ADV do
   alias ExWapp.Signal.Keys, as: SignalKeys
   alias WAAdv.{ADVDeviceIdentity, ADVSignedDeviceIdentity, ADVSignedDeviceIdentityHMAC}
 
+  @adv_prefix_account_signature <<6, 0>>
   @adv_prefix_device_signature_generate <<6, 1>>
   @adv_hosted_prefix_device_identity_account_signature <<6, 5>>
-  @adv_hosted_prefix_device_identity_device_signature_verification <<6, 6>>
 
   @typedoc """
   Result returned by `parse_signed_device_identity/3`.
@@ -32,7 +39,6 @@ defmodule ExWapp.Pairing.ADV do
   @typep identity_keypair :: {binary(), binary()}
   @typep identity_input :: %{public: binary(), private: binary()}
   @typep adv_result :: {:ok, parsed_identity()} | {:error, term()}
-  @typep hmac_retry_decision :: :try_hmac | :skip
   @typep key_index :: non_neg_integer() | nil
   @typep relaxed_details :: struct() | %{keyIndex: key_index(), decode_error: term()}
   @typep varint_decode_result :: {:ok, non_neg_integer(), binary()} | {:error, :invalid_varint}
@@ -51,60 +57,38 @@ defmodule ExWapp.Pairing.ADV do
       when is_binary(adv_bytes) and is_binary(adv_secret) do
     with :ok <- ensure_binary_length(adv_secret, 32, :adv_secret),
          {:ok, {identity_pub, identity_priv}} <- extract_identity(identity) do
-      # Try direct ADVSignedDeviceIdentity first (most common for QR pairing)
-      case parse_direct_signed_identity(adv_bytes, identity_pub, identity_priv) do
-        {:ok, result} ->
-          maybe_retry_as_hmac(result, adv_bytes, adv_secret, identity_pub, identity_priv)
+      # Upstream clients parse pair-success as an HMAC-wrapped ADV container
+      # first. Keep a direct fallback for self-signed/raw blobs used in other
+      # contexts and for debugging malformed fixtures.
+      case parse_hmac_container(adv_bytes, adv_secret, identity_pub, identity_priv) do
+        {:ok, parsed} ->
+          {:ok, parsed}
 
-        {:error, direct_error} ->
-          fallback_to_hmac(direct_error, adv_bytes, adv_secret, identity_pub, identity_priv)
+        {:error, {:adv_container_decode, container_error}} ->
+          Logger.warning(
+            "[ADV] HMAC container decode failed: #{inspect(container_error)}, trying direct signed identity"
+          )
+
+          parse_direct_signed_identity(adv_bytes, identity_pub, identity_priv)
+
+        {:error, :adv_invalid_hmac} ->
+          Logger.warning("[ADV] HMAC wrapper missing/invalid, trying direct signed identity")
+
+          parse_direct_signed_identity(adv_bytes, identity_pub, identity_priv)
+
+        {:error, :adv_missing_details} ->
+          Logger.warning("[ADV] HMAC wrapper missing details, trying direct signed identity")
+
+          parse_direct_signed_identity(adv_bytes, identity_pub, identity_priv)
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
 
   def parse_signed_device_identity(_adv_bytes, _adv_secret, _identity),
     do: {:error, :invalid_adv_payload}
-
-  @spec maybe_retry_as_hmac(parsed_identity(), binary(), binary(), binary(), binary()) ::
-          adv_result()
-  defp maybe_retry_as_hmac(result, adv_bytes, adv_secret, identity_pub, identity_priv) do
-    case should_try_hmac_after_direct(result) do
-      :try_hmac ->
-        Logger.warning("[ADV] Direct parse looks wrapped/incomplete, retrying as HMAC container")
-        try_hmac_or_fallback(result, adv_bytes, adv_secret, identity_pub, identity_priv)
-
-      :skip ->
-        {:ok, result}
-    end
-  end
-
-  @spec try_hmac_or_fallback(parsed_identity(), binary(), binary(), binary(), binary()) ::
-          {:ok, parsed_identity()}
-  defp try_hmac_or_fallback(direct_result, adv_bytes, adv_secret, identity_pub, identity_priv) do
-    with {:ok, container} <- decode_container(adv_bytes),
-         {:ok, _details} <- ensure_details(container.details),
-         {:ok, wrapped} <- parse_hmac_wrapped(container, adv_secret, identity_pub, identity_priv) do
-      {:ok, wrapped}
-    else
-      _ ->
-        Logger.warning("[ADV] Falling back to direct parse result")
-        {:ok, direct_result}
-    end
-  end
-
-  @spec fallback_to_hmac(term(), binary(), binary(), binary(), binary()) :: adv_result()
-  defp fallback_to_hmac(direct_error, adv_bytes, adv_secret, identity_pub, identity_priv) do
-    Logger.warning("[ADV] Direct parsing failed: #{inspect(direct_error)}, trying HMAC wrapper")
-
-    case decode_container(adv_bytes) do
-      {:ok, container}
-      when is_binary(container.details) and byte_size(container.details) > 0 ->
-        parse_hmac_wrapped(container, adv_secret, identity_pub, identity_priv)
-
-      _ ->
-        {:error, direct_error}
-    end
-  end
 
   @doc """
   Encodes an `ADVSignedDeviceIdentity` payload.
@@ -134,16 +118,21 @@ defmodule ExWapp.Pairing.ADV do
 
   def encode_signed_device_identity(_, _opts), do: {:error, :invalid_signed_device_identity}
 
-  # Parse HMAC-wrapped ADV (from adv-device-identity node)
+  # Parse HMAC-wrapped ADV (from pair-success device-identity)
+  @spec parse_hmac_container(binary(), binary(), binary(), binary()) :: adv_result()
+  defp parse_hmac_container(adv_bytes, adv_secret, identity_pub, identity_priv) do
+    with {:ok, %ADVSignedDeviceIdentityHMAC{} = container} <- decode_container(adv_bytes) do
+      parse_hmac_wrapped(container, adv_secret, identity_pub, identity_priv)
+    else
+      {:error, container_error} ->
+        Logger.error("[ADV] HMAC container decode failed: #{inspect(container_error)}")
+        {:error, container_error}
+    end
+  end
+
   @spec parse_hmac_wrapped(struct(), binary(), binary(), binary()) :: adv_result()
   defp parse_hmac_wrapped(container, adv_secret, identity_pub, identity_priv) do
     hosted? = container.accountType == :HOSTED
-
-    signature_prefix =
-      case container.accountType do
-        :HOSTED -> @adv_hosted_prefix_device_identity_device_signature_verification
-        _ -> @adv_prefix_device_signature_generate
-      end
 
     hmac_prefix =
       case container.accountType do
@@ -156,33 +145,28 @@ defmodule ExWapp.Pairing.ADV do
          {:ok, signed_identity} <- decode_signed_identity(details_bin),
          {:ok, %ADVSignedDeviceIdentity{} = signed_identity} <-
            ensure_signature_fields(signed_identity),
+         :ok <- verify_account_signature(signed_identity, identity_pub),
          {:ok, device_signature} <-
-           generate_device_signature(
-             signed_identity,
-             details_bin,
-             identity_pub,
-             identity_priv,
-             signature_prefix
-           ) do
+           generate_device_signature(signed_identity, identity_pub, identity_priv) do
       signed_with_device = %{signed_identity | deviceSignature: device_signature}
       build_parsed_identity(signed_with_device, container, details_bin, hosted?, device_signature)
     end
   end
 
-  # Parse direct ADVSignedDeviceIdentity (from device-identity in pair-success)
+  # Parse direct ADVSignedDeviceIdentity.
+  #
+  # This is not the normal pair-success wire shape, but it is the raw shape used
+  # for pair-device-sign ACKs and outbound message device identities. Keeping a
+  # fallback here makes the parser more robust to legacy fixtures and local
+  # debugging helpers.
   @spec parse_direct_signed_identity(binary(), binary(), binary()) :: adv_result()
   defp parse_direct_signed_identity(adv_bytes, identity_pub, identity_priv) do
     with {:ok, signed_identity} <- decode_signed_identity(adv_bytes),
          {:ok, %ADVSignedDeviceIdentity{} = signed_identity} <-
            ensure_signature_fields(signed_identity),
+         :ok <- verify_account_signature(signed_identity, identity_pub),
          {:ok, device_signature} <-
-           generate_device_signature(
-             signed_identity,
-             signed_identity.details,
-             identity_pub,
-             identity_priv,
-             @adv_prefix_device_signature_generate
-           ) do
+           generate_device_signature(signed_identity, identity_pub, identity_priv) do
       signed_with_device = %{signed_identity | deviceSignature: device_signature}
 
       build_parsed_identity(
@@ -248,6 +232,48 @@ defmodule ExWapp.Pairing.ADV do
 
   defp verify_hmac(_details, _hmac, _secret, _prefix), do: {:error, :adv_invalid_hmac}
 
+  @spec verify_account_signature(struct(), binary()) ::
+          :ok | {:error, :adv_invalid_account_signature}
+  defp verify_account_signature(
+         %ADVSignedDeviceIdentity{
+           details: details,
+           accountSignatureKey: account_signature_key,
+           accountSignature: account_signature
+         },
+         identity_pub
+       )
+       when is_binary(details) and is_binary(account_signature_key) and
+              is_binary(account_signature) and is_binary(identity_pub) do
+    # The server proves ownership of accountSignatureKey by signing
+    # prefix <> ADVDeviceIdentity.details <> linked-device identity public key.
+    # The prefix follows the inner ADVDeviceIdentity.deviceType in upstream
+    # clients, while the outer HMAC prefix follows the container accountType.
+    message = account_signature_prefix_from_details(details) <> details <> identity_pub
+
+    # WhatsApp signs ADV account signatures with a Curve25519/DJB key and the
+    # Signal/XEdDSA scheme, not a plain Ed25519 public key. Real pair-success
+    # payloads can therefore raise curve/subgroup errors if we route them
+    # through Ed25519 verification.
+    try do
+      if SignalKeys.verify_message(account_signature_key, message, account_signature) do
+        :ok
+      else
+        Logger.error("[ADV] account signature verification failed")
+        {:error, :adv_invalid_account_signature}
+      end
+    rescue
+      exception ->
+        Logger.error(
+          "[ADV] account signature verification raised: #{Exception.message(exception)}"
+        )
+
+        {:error, :adv_invalid_account_signature}
+    end
+  end
+
+  defp verify_account_signature(_signed, _identity_pub),
+    do: {:error, :adv_invalid_account_signature}
+
   @spec decode_signed_identity(binary()) ::
           {:ok, struct()} | {:error, {:adv_signed_identity_decode, term()}}
   defp decode_signed_identity(details) do
@@ -257,21 +283,15 @@ defmodule ExWapp.Pairing.ADV do
     end
   end
 
-  # Only require accountSignatureKey - accountSignature may not be present in pair-success
+  # Pair-success must include both the account signature key and signature.
+  # Being permissive here can allow an invalid linked device to survive pairing
+  # and then get removed by the server on the first reconnect.
   @spec ensure_signature_fields(struct()) ::
           {:ok, struct()} | {:error, :adv_invalid_account_signature_fields}
   defp ensure_signature_fields(
          %ADVSignedDeviceIdentity{
            accountSignatureKey: <<_::binary-size(32)>>,
            accountSignature: <<_::binary-size(64)>>
-         } = signed
-       ),
-       do: {:ok, signed}
-
-  # Also accept if only accountSignatureKey is present (common in pair-success)
-  defp ensure_signature_fields(
-         %ADVSignedDeviceIdentity{
-           accountSignatureKey: <<_::binary-size(32)>>
          } = signed
        ),
        do: {:ok, signed}
@@ -284,21 +304,35 @@ defmodule ExWapp.Pairing.ADV do
     {:error, :adv_invalid_account_signature_fields}
   end
 
-  @spec generate_device_signature(struct(), binary(), binary(), binary(), binary()) ::
+  @spec account_signature_prefix(atom()) :: binary()
+  defp account_signature_prefix(:HOSTED), do: @adv_hosted_prefix_device_identity_account_signature
+  defp account_signature_prefix(_), do: @adv_prefix_account_signature
+
+  @spec account_signature_prefix_from_details(binary()) :: binary()
+  defp account_signature_prefix_from_details(details) when is_binary(details) do
+    case decode_details(details) do
+      {:ok, %ADVDeviceIdentity{deviceType: device_type}} ->
+        account_signature_prefix(device_type)
+
+      _ ->
+        @adv_prefix_account_signature
+    end
+  end
+
+  @spec generate_device_signature(struct(), binary(), binary()) ::
           {:ok, binary()} | {:error, :adv_device_signature_failed}
   defp generate_device_signature(
          %ADVSignedDeviceIdentity{} = signed,
-         _details,
          identity_pub,
-         identity_priv,
-         signature_prefix
+         identity_priv
        ) do
-    details_inner = signed.details
+    message =
+      @adv_prefix_device_signature_generate <>
+        signed.details <> identity_pub <> signed.accountSignatureKey
 
-    message = signature_prefix <> details_inner <> identity_pub <> signed.accountSignatureKey
-
-    # Use XEdDSA (Signal's curve25519 signature scheme) - NOT plain Ed25519!
-    # This matches whatsmeow's ecc.CalculateSignature(ecc.NewDjbECPrivateKey...)
+    # Baileys and whatsmeow both use the normal 0x06 0x01 device-signature
+    # prefix here, even for hosted device identities. Only the HMAC/account
+    # signature prefixes switch to the hosted variant.
     try do
       signature = SignalKeys.sign_message(identity_priv, message)
       {:ok, signature}
@@ -332,23 +366,6 @@ defmodule ExWapp.Pairing.ADV do
       {:ok, %{keyIndex: key_index, decode_error: reason}}
     end
   end
-
-  @spec should_try_hmac_after_direct(map()) :: hmac_retry_decision()
-  defp should_try_hmac_after_direct(%{
-         signed: %ADVSignedDeviceIdentity{} = signed,
-         details: details
-       }) do
-    details_decode_failed? = Map.has_key?(details, :decode_error)
-
-    account_signature_valid? =
-      is_binary(signed.accountSignature) and byte_size(signed.accountSignature) == 64
-
-    if details_decode_failed? and not account_signature_valid?,
-      do: :try_hmac,
-      else: :skip
-  end
-
-  defp should_try_hmac_after_direct(_), do: :skip
 
   # Minimal protobuf parser for ADVDeviceIdentity keyIndex (field 3, varint).
   # This keeps pairing resilient when the generated proto cannot parse new fields.

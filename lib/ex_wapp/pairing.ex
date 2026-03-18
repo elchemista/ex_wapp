@@ -100,14 +100,17 @@ defmodule ExWapp.Pairing do
       {:error, reason} ->
         Logger.error("failed to persist pair-success data: #{inspect(reason)}")
 
-        ack =
+        error_ack =
           if valid_from?(from) and is_binary(id) do
-            build_pair_success_ack(from, id, nil)
+            build_pair_success_error_ack(from, id, reason)
           else
             nil
           end
 
-        events = if ack, do: [{:send_node, ack}, error_event(reason)], else: [error_event(reason)]
+        events =
+          if error_ack,
+            do: [{:send_node, error_ack}, error_event(reason)],
+            else: [error_event(reason)]
 
         {state, events}
     end
@@ -221,11 +224,21 @@ defmodule ExWapp.Pairing do
   defp persist_pair_success(store, %Binary.Node{} = node) do
     data = Store.load!(store)
 
-    # NOTE: The "device-identity" node contains the ADV (Account Device Verification) payload
-    # It's NOT a separate "adv-device-identity" node - the device-identity IS the ADV data
+    # NOTE: Pair-success `device-identity` is the incoming ADV payload, but in
+    # upstream clients it is an ADVSignedDeviceIdentityHMAC container around the
+    # inner ADVSignedDeviceIdentity. That is different from the direct
+    # ADVSignedDeviceIdentity bytes we later send in pair-device-sign ACKs and
+    # outbound message device-identity nodes.
+    #
+    # Pair-success persistence is the point where we decide whether the linked
+    # device identity is trustworthy enough to survive reconnects. The ADV
+    # parser must fully validate the HMAC/account signature chain before we
+    # write pairing/signal state, otherwise the session may pair successfully
+    # once and then be removed by the server on the first real login.
 
     with {:ok, device_identity} <- fetch_child_binary(node, "device-identity"),
-         # Parse the device-identity AS the ADV identity (they're the same thing!)
+         # Parse the pair-success ADV container and persist the self-signed form
+         # returned by `ADV.parse_signed_device_identity/3` for the ACK.
          {:ok, adv_parsed} <- parse_adv_identity(data, device_identity),
          {:ok, device_attrs} <- fetch_child_attrs(node, "device"),
          {:ok, biz_attrs} <- fetch_child_attrs(node, "biz", optional: true),
@@ -404,6 +417,34 @@ defmodule ExWapp.Pairing do
   end
 
   defp build_pair_device_sign(_pairing_data), do: :error
+
+  defp build_pair_success_error_ack(from, id, reason) do
+    %Binary.Node{
+      tag: "iq",
+      attrs: %{"to" => from, "type" => "error", "id" => id},
+      content: [
+        %Binary.Node{
+          tag: "error",
+          attrs: pair_error_attrs(reason),
+          content: nil
+        }
+      ]
+    }
+  end
+
+  # whatsmeow reports signature/HMAC validation failures with 401 and uses a
+  # generic internal-error for local parse/storage problems. Mirror that here so
+  # bad pair-success payloads fail explicitly instead of receiving an empty
+  # result IQ that leaves the next disconnect ambiguous.
+  defp pair_error_attrs(:adv_hmac_mismatch), do: %{"code" => "401", "text" => "hmac-mismatch"}
+
+  defp pair_error_attrs(:adv_invalid_account_signature),
+    do: %{"code" => "401", "text" => "signature-mismatch"}
+
+  defp pair_error_attrs(:adv_invalid_account_signature_fields),
+    do: %{"code" => "401", "text" => "signature-mismatch"}
+
+  defp pair_error_attrs(_reason), do: %{"code" => "500", "text" => "internal-error"}
 
   defp extract_key_index(%{adv: %{details: details}}) when is_map(details) do
     Map.get(details, :keyIndex) || Map.get(details, "keyIndex")

@@ -9,7 +9,6 @@ defmodule ExWapp.PairingADVTest do
   @adv_prefix_account_signature <<6, 0>>
   @adv_prefix_device_signature_generate <<6, 1>>
   @adv_hosted_prefix_device_identity_account_signature <<6, 5>>
-  @adv_hosted_prefix_device_identity_device_signature_verification <<6, 6>>
 
   test "E2EE ADV blob parses, verifies and produces device signature" do
     do_adv_roundtrip(:E2EE)
@@ -19,13 +18,95 @@ defmodule ExWapp.PairingADVTest do
     do_adv_roundtrip(:HOSTED)
   end
 
+  test "direct signed identity fallback parses, verifies and produces device signature" do
+    do_direct_adv_roundtrip(:E2EE)
+  end
+
+  test "rejects pair-success identities without account signature" do
+    %{private: identity_priv, public: identity_pub} = Keys.generate_key_pair()
+    account_pub = Keys.generate_key_pair().public
+
+    details_msg = %ADVDeviceIdentity{
+      rawID: 1234,
+      timestamp: 1_725_000_000,
+      keyIndex: 7,
+      accountType: :E2EE,
+      deviceType: :E2EE
+    }
+
+    details_inner = encode_to_binary!(ADVDeviceIdentity, details_msg)
+
+    signed =
+      %ADVSignedDeviceIdentity{
+        details: details_inner,
+        accountSignatureKey: account_pub
+      }
+      |> then(&encode_to_binary!(ADVSignedDeviceIdentity, &1))
+
+    adv_secret = :crypto.strong_rand_bytes(32)
+
+    container =
+      %ADVSignedDeviceIdentityHMAC{
+        details: signed,
+        HMAC: :crypto.mac(:hmac, :sha256, adv_secret, signed),
+        accountType: :E2EE
+      }
+      |> then(&encode_to_binary!(ADVSignedDeviceIdentityHMAC, &1))
+
+    assert {:error, :adv_invalid_account_signature_fields} =
+             ADV.parse_signed_device_identity(container, adv_secret, %{
+               public: identity_pub,
+               private: identity_priv
+             })
+  end
+
+  test "rejects pair-success identities with invalid account signature" do
+    %{private: identity_priv, public: identity_pub} = Keys.generate_key_pair()
+    %{private: account_priv, public: account_pub} = Keys.generate_key_pair()
+
+    details_msg = %ADVDeviceIdentity{
+      rawID: 1234,
+      timestamp: 1_725_000_000,
+      keyIndex: 7,
+      accountType: :E2EE,
+      deviceType: :E2EE
+    }
+
+    details_inner = encode_to_binary!(ADVDeviceIdentity, details_msg)
+    wrong_identity_pub = Keys.generate_key_pair().public
+
+    signed =
+      %ADVSignedDeviceIdentity{
+        details: details_inner,
+        accountSignatureKey: account_pub,
+        accountSignature:
+          Keys.sign_message(account_priv, <<6, 0>> <> details_inner <> wrong_identity_pub)
+      }
+      |> then(&encode_to_binary!(ADVSignedDeviceIdentity, &1))
+
+    adv_secret = :crypto.strong_rand_bytes(32)
+
+    container =
+      %ADVSignedDeviceIdentityHMAC{
+        details: signed,
+        HMAC: :crypto.mac(:hmac, :sha256, adv_secret, signed),
+        accountType: :E2EE
+      }
+      |> then(&encode_to_binary!(ADVSignedDeviceIdentityHMAC, &1))
+
+    assert {:error, :adv_invalid_account_signature} =
+             ADV.parse_signed_device_identity(container, adv_secret, %{
+               public: identity_pub,
+               private: identity_priv
+             })
+  end
+
   defp do_adv_roundtrip(account_type) do
     # Identity keypair (Curve25519, same as runtime Signal identity)
     %{private: identity_priv, public: identity_pub} = Keys.generate_key_pair()
 
-    # Account signing keypair (Ed25519)
-    account_priv = :crypto.strong_rand_bytes(32)
-    account_pub = Ed25519.derive_public_key(account_priv)
+    # Account signing keypair is also a Curve25519/DJB key verified via XEdDSA.
+    %{private: account_priv, public: account_pub} = Keys.generate_key_pair()
 
     # Device identity details
     details_msg = %ADVDeviceIdentity{
@@ -33,7 +114,7 @@ defmodule ExWapp.PairingADVTest do
       timestamp: 1_725_000_000,
       keyIndex: 7,
       accountType: account_type,
-      deviceType: :E2EE
+      deviceType: account_type
     }
 
     details_inner = encode_to_binary!(ADVDeviceIdentity, details_msg)
@@ -52,7 +133,7 @@ defmodule ExWapp.PairingADVTest do
       end
 
     account_message = acc_prefix <> details_inner <> identity_pub
-    account_sig = Ed25519.signature(account_message, account_priv)
+    account_sig = Keys.sign_message(account_priv, account_message)
 
     signed = %ADVSignedDeviceIdentity{signed0 | accountSignature: account_sig}
 
@@ -97,14 +178,9 @@ defmodule ExWapp.PairingADVTest do
     assert byte_size(parsed.device_signature) == 64
 
     # Verify device signature against expected message
-    dev_prefix =
-      if account_type == :HOSTED do
-        @adv_hosted_prefix_device_identity_device_signature_verification
-      else
-        @adv_prefix_device_signature_generate
-      end
+    device_message =
+      @adv_prefix_device_signature_generate <> details_inner <> identity_pub <> account_pub
 
-    device_message = dev_prefix <> details_inner <> identity_pub <> account_pub
     assert Keys.verify_message(identity_pub, device_message, parsed.device_signature)
 
     # self_signed blob should decode to a SignedDeviceIdentity missing the account key
@@ -113,6 +189,47 @@ defmodule ExWapp.PairingADVTest do
     assert self_signed.details == details_inner
     assert self_signed.accountSignature == account_sig
     assert self_signed.deviceSignature == parsed.device_signature
+  end
+
+  defp do_direct_adv_roundtrip(account_type) do
+    %{private: identity_priv, public: identity_pub} = Keys.generate_key_pair()
+    %{private: account_priv, public: account_pub} = Keys.generate_key_pair()
+
+    details_msg = %ADVDeviceIdentity{
+      rawID: 5678,
+      timestamp: 1_725_000_000,
+      keyIndex: 9,
+      accountType: account_type,
+      deviceType: account_type
+    }
+
+    details_inner = encode_to_binary!(ADVDeviceIdentity, details_msg)
+
+    acc_prefix =
+      case account_type do
+        :HOSTED -> @adv_hosted_prefix_device_identity_account_signature
+        _ -> @adv_prefix_account_signature
+      end
+
+    account_sig = Keys.sign_message(account_priv, acc_prefix <> details_inner <> identity_pub)
+
+    signed_bytes =
+      %ADVSignedDeviceIdentity{
+        details: details_inner,
+        accountSignatureKey: account_pub,
+        accountSignature: account_sig
+      }
+      |> then(&encode_to_binary!(ADVSignedDeviceIdentity, &1))
+
+    {:ok, parsed} =
+      ADV.parse_signed_device_identity(signed_bytes, :crypto.strong_rand_bytes(32), %{
+        public: identity_pub,
+        private: identity_priv
+      })
+
+    assert parsed.signed.accountSignatureKey == account_pub
+    assert parsed.signed.accountSignature == account_sig
+    assert byte_size(parsed.device_signature) == 64
   end
 
   defp encode_to_binary!(mod, struct) do

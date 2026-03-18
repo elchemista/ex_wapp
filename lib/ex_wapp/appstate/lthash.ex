@@ -62,7 +62,8 @@ defmodule ExWapp.AppState.LTHash do
   end
 
   # Pointwise u16 little-endian addition/subtraction with wrapping
-  defp pointwise_op(base, input, op) when byte_size(base) == @hash_size and byte_size(input) == @hash_size do
+  defp pointwise_op(base, input, op)
+       when byte_size(base) == @hash_size and byte_size(input) == @hash_size do
     for i <- 0..(@hash_size - 1)//2, into: <<>> do
       <<x::little-unsigned-16>> = binary_part(base, i, 2)
       <<y::little-unsigned-16>> = binary_part(input, i, 2)

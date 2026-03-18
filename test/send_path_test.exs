@@ -330,9 +330,7 @@ defmodule ExWapp.SendPathTest do
   # ── Helpers ──
 
   defp build_signed_device_identity do
-    account_priv = :crypto.strong_rand_bytes(32)
-    account_pub = Ed25519.derive_public_key(account_priv)
-
+    account = Keys.generate_key_pair()
     identity = Keys.generate_key_pair()
 
     details_msg = %ADVDeviceIdentity{
@@ -347,19 +345,19 @@ defmodule ExWapp.SendPathTest do
     details_bin = IO.iodata_to_binary(details_io)
 
     account_message = <<6, 0>> <> details_bin <> identity.public
-    account_sig = Ed25519.signature(account_message, account_priv)
+    account_sig = Keys.sign_message(account.private, account_message)
 
-    device_message = <<6, 1>> <> details_bin <> identity.public <> account_pub
-    device_sig = Ed25519.signature(device_message, identity.private)
+    device_message = <<6, 1>> <> details_bin <> identity.public <> account.public
+    device_sig = Keys.sign_message(identity.private, device_message)
 
     signed = %ADVSignedDeviceIdentity{
       details: details_bin,
-      accountSignatureKey: account_pub,
+      accountSignatureKey: account.public,
       accountSignature: account_sig,
       deviceSignature: device_sig
     }
 
-    {signed, account_pub}
+    {signed, account.public}
   end
 
   # Delegates to the real implementation in MessageNode

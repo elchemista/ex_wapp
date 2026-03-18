@@ -68,6 +68,8 @@ defmodule ExWapp.Store do
   ```
   """
 
+  require Logger
+
   @type data :: map()
   @type t :: struct()
 
@@ -155,13 +157,27 @@ defmodule ExWapp.Store do
   @spec load!(t()) :: data()
   def load!(store) do
     case load(store) do
-      {:ok, data} -> data
-      {:error, _} -> %{}
+      {:ok, data} ->
+        data
+
+      {:error, :empty_store} ->
+        %{}
+
+      {:error, reason} ->
+        Logger.error("[STORE] load! failed store=#{inspect(store)} reason=#{inspect(reason)}")
+        raise "ExWapp.Store.load! failed: #{inspect(reason)}"
     end
   rescue
-    _ -> %{}
+    exception ->
+      Logger.error(
+        "[STORE] load! raised store=#{inspect(store)} error=#{Exception.message(exception)}"
+      )
+
+      reraise exception, __STACKTRACE__
   catch
-    :exit, _ -> %{}
+    :exit, reason ->
+      Logger.error("[STORE] load! exited store=#{inspect(store)} reason=#{inspect(reason)}")
+      raise "ExWapp.Store.load! exited: #{inspect(reason)}"
   end
 
   @doc """

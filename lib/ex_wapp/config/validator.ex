@@ -117,9 +117,13 @@ defmodule ExWapp.Config.Validator do
   defp validate_protocol(cfg) do
     run_validations([
       fn -> ensure_boolean(cfg, [:protocol, :strict_mode]) end,
+      fn -> ensure_boolean(cfg, [:protocol, :post_auth_digest_enabled]) end,
       fn -> ensure_positive_integer(cfg, [:protocol, :client_version, :primary]) end,
       fn -> ensure_positive_integer(cfg, [:protocol, :client_version, :secondary]) end,
       fn -> ensure_positive_integer(cfg, [:protocol, :client_version, :tertiary]) end,
+      fn -> ensure_binary(cfg, [:protocol, :pairing_device_props, :os]) end,
+      fn -> ensure_non_neg_integer(cfg, [:protocol, :pairing_device_props, :platform_type]) end,
+      fn -> ensure_boolean(cfg, [:protocol, :pairing_device_props, :require_full_sync]) end,
       fn -> ensure_binary(cfg, [:protocol, :user_agent, :os_version]) end,
       fn -> ensure_binary(cfg, [:protocol, :user_agent, :manufacturer]) end,
       fn -> ensure_binary(cfg, [:protocol, :user_agent, :device_name]) end,

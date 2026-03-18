@@ -4,18 +4,27 @@ defmodule ExWapp.RuntimeHardeningTest do
   alias ExWapp.{Config, Quota, RateLimiter}
   alias ExWapp.Session.Worker.{Resilience, Safety}
 
+  defmodule TestTransport do
+    def send_node(test_pid, node) when is_pid(test_pid) do
+      send(test_pid, {:transport_send, node})
+      :ok
+    end
+
+    def restart_stream(_test_pid), do: :ok
+  end
+
   test "config resolve applies legacy reconnect override" do
     {:ok, cfg} = Config.resolve(reconnect: false)
     assert get_in(cfg, [:reconnect, :enabled]) == false
   end
 
   test "config resolve normalizes protocol client version from string" do
-    {:ok, cfg} = Config.resolve(runtime: [protocol: [client_version: "2.3000.1034187832"]])
+    {:ok, cfg} = Config.resolve(runtime: [protocol: [client_version: "2.3000.1034566421"]])
 
     assert get_in(cfg, [:protocol, :client_version]) == %{
              primary: 2,
              secondary: 3000,
-             tertiary: 1_034_187_832
+             tertiary: 1_034_566_421
            }
   end
 
@@ -37,6 +46,16 @@ defmodule ExWapp.RuntimeHardeningTest do
              secondary: 3000,
              tertiary: 1_033_516_464
            }
+  end
+
+  test "config resolve exposes post-auth digest toggle" do
+    {:ok, default_cfg} = Config.resolve([])
+    assert get_in(default_cfg, [:protocol, :post_auth_digest_enabled]) == false
+
+    {:ok, overridden_cfg} =
+      Config.resolve(runtime: [protocol: [post_auth_digest_enabled: true]])
+
+    assert get_in(overridden_cfg, [:protocol, :post_auth_digest_enabled]) == true
   end
 
   test "resilience gives up once max attempts is reached" do
@@ -116,7 +135,7 @@ defmodule ExWapp.RuntimeHardeningTest do
     {:ok, session} =
       ExWapp.start_link(
         store: ExWapp.Store.Memory,
-        client_version: "2.3000.1034187832"
+        client_version: "2.3000.1034566421"
       )
 
     cfg = ExWapp.runtime_config(session)
@@ -124,10 +143,31 @@ defmodule ExWapp.RuntimeHardeningTest do
     assert get_in(cfg, [:protocol, :client_version]) == %{
              primary: 2,
              secondary: 3000,
-             tertiary: 1_034_187_832
+             tertiary: 1_034_566_421
            }
 
     GenServer.stop(session)
+  end
+
+  test "config resolve accepts pairing device props override" do
+    {:ok, cfg} =
+      Config.resolve(
+        runtime: [
+          protocol: [
+            pairing_device_props: [
+              os: "Linux",
+              platform_type: 2,
+              require_full_sync: false
+            ]
+          ]
+        ]
+      )
+
+    assert get_in(cfg, [:protocol, :pairing_device_props]) == %{
+             os: "Linux",
+             platform_type: 2,
+             require_full_sync: false
+           }
   end
 
   test "send health counters track errors and reset on success" do
@@ -211,6 +251,76 @@ defmodule ExWapp.RuntimeHardeningTest do
     eventually(fn -> assert ExWapp.health_status(session).paused == false end)
 
     GenServer.stop(session)
+  end
+
+  test "health check only sends keepalive ping" do
+    {:ok, queue} =
+      ExWapp.Session.OutboundQueue.start_link(
+        session: self(),
+        transport: TestTransport
+      )
+
+    ExWapp.Session.OutboundQueue.set_conn(queue, self())
+
+    {:ok, session} =
+      GenServer.start(ExWapp.Session.Worker,
+        store: ExWapp.Store.Memory,
+        runtime: [health: [check_interval_ms: 60_000]]
+      )
+
+    :sys.replace_state(session, fn state ->
+      %{state | status: :connected, conn: self(), outbound_queue: queue}
+    end)
+
+    send(session, :health_check)
+
+    assert_receive {:transport_send,
+                    %ExWapp.Binary.Node{
+                      tag: "iq",
+                      attrs: %{"to" => "s.whatsapp.net", "type" => "get", "xmlns" => "w:p"},
+                      content: [%ExWapp.Binary.Node{tag: "ping"}]
+                    }},
+                   1_000
+
+    refute_receive {:transport_send, %ExWapp.Binary.Node{tag: "presence"}}, 100
+
+    refute_receive {:transport_send,
+                    %ExWapp.Binary.Node{
+                      tag: "iq",
+                      attrs: %{"xmlns" => "passive"},
+                      content: [%ExWapp.Binary.Node{tag: "active"}]
+                    }},
+                   100
+
+    GenServer.stop(session)
+    GenServer.stop(queue)
+  end
+
+  test "auth ready does not emit an extra presence assertion" do
+    {:ok, queue} =
+      ExWapp.Session.OutboundQueue.start_link(
+        session: self(),
+        transport: TestTransport
+      )
+
+    ExWapp.Session.OutboundQueue.set_conn(queue, self())
+
+    {:ok, session} =
+      GenServer.start(ExWapp.Session.Worker,
+        store: ExWapp.Store.Memory,
+        runtime: [health: [check_interval_ms: 60_000]]
+      )
+
+    :sys.replace_state(session, fn state ->
+      %{state | status: :handshaking, conn: self(), outbound_queue: queue}
+    end)
+
+    send(session, {:connection_event, {:auth, :ready}})
+
+    refute_receive {:transport_send, %ExWapp.Binary.Node{tag: "presence"}}, 100
+
+    GenServer.stop(session)
+    GenServer.stop(queue)
   end
 
   defp eventually(fun, attempts \\ 25)

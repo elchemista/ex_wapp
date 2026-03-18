@@ -48,6 +48,45 @@ defmodule ExWapp.StoreTest do
       assert {:ok, ^payload} = Store.load(store)
     end
 
+    test "migrates legacy ETS files on load" do
+      path = Path.join(@tmp_dir, "legacy.etf")
+      table = :ets.new(:legacy_ex_wapp_store, [:set, :public])
+      :ets.insert(table, {:data, %{legacy: true, bytes: <<0, 255, 1>>}})
+      assert :ok = :ets.tab2file(table, String.to_charlist(path), sync: true)
+      :ets.delete(table)
+
+      store = Store.new({Store.Ets, path: path})
+
+      assert {:ok, %{legacy: true, bytes: <<0, 255, 1>>}} = Store.load(store)
+
+      assert {:ok, %{legacy: true, bytes: <<0, 255, 1>>}} =
+               path |> File.read!() |> ExWapp.Store.Codec.decode()
+    end
+
+    test "load_path/1 reads codec-backed files" do
+      path = Path.join(@tmp_dir, "codec_load_path.etf")
+
+      payload = %{
+        pairing: %{jid: "393519534944@s.whatsapp.net"},
+        signal: %{prekeys: %{1 => <<1, 2, 3>>}}
+      }
+
+      assert {:ok, blob} = ExWapp.Store.Codec.encode(payload)
+      assert :ok = File.write(path, blob)
+
+      assert {:ok, ^payload} = Store.Ets.load_path(path)
+    end
+
+    test "load_path/1 reads legacy ETS files" do
+      path = Path.join(@tmp_dir, "legacy_load_path.etf")
+      table = :ets.new(:legacy_ex_wapp_load_path_store, [:set, :public])
+      :ets.insert(table, {:data, %{legacy: true, bytes: <<0, 255, 1>>}})
+      assert :ok = :ets.tab2file(table, String.to_charlist(path), sync: true)
+      :ets.delete(table)
+
+      assert {:ok, %{legacy: true, bytes: <<0, 255, 1>>}} = Store.Ets.load_path(path)
+    end
+
     test "clears data" do
       path = Path.join(@tmp_dir, "clear_test.etf")
       store = Store.Ets.new(path: path)
@@ -112,11 +151,13 @@ defmodule ExWapp.StoreTest do
       assert %{key: "value"} = Store.load!(store)
     end
 
-    test "returns empty map on error" do
+    test "raises on error" do
       store = Store.Memory.new()
       Store.Memory.stop(store)
-      # Agent is stopped, load will fail
-      assert %{} = Store.load!(store)
+
+      assert_raise RuntimeError, ~r/ExWapp\.Store\.load! exited:/, fn ->
+        Store.load!(store)
+      end
     end
   end
 end

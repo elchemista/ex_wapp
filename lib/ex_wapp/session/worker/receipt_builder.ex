@@ -9,17 +9,23 @@ defmodule ExWapp.Session.Worker.ReceiptBuilder do
   alias ExWapp.Session.Account
   alias ExWapp.Signal.Keys
 
-  @spec build_receipt_ack(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
+  @spec build_receipt_ack(
+          String.t(),
+          String.t(),
+          String.t() | nil,
+          String.t() | nil,
+          map() | nil
+        ) ::
           Binary.Node.t()
-  def build_receipt_ack(to, id, participant, type) do
+  def build_receipt_ack(to, id, participant, type, receipt_meta) do
     attrs = %{
       "id" => id,
       "to" => to
     }
 
-    # Only add type if non-nil (peer category messages omit it)
     attrs = if type, do: Map.put(attrs, "type", type), else: attrs
     attrs = if participant, do: Map.put(attrs, "participant", participant), else: attrs
+    attrs = maybe_put_receipt_recipient(attrs, receipt_meta)
 
     %Binary.Node{
       tag: "receipt",
@@ -107,6 +113,13 @@ defmodule ExWapp.Session.Worker.ReceiptBuilder do
   end
 
   defp maybe_put_retry_error(attrs, _), do: attrs
+
+  defp maybe_put_receipt_recipient(attrs, %{recipient: recipient})
+       when is_binary(recipient) and recipient != "" do
+    Map.put(attrs, "recipient", recipient)
+  end
+
+  defp maybe_put_receipt_recipient(attrs, _), do: attrs
 
   defp maybe_put_retry_recipient(attrs, %{recipient: recipient})
        when is_binary(recipient) and recipient != "" do

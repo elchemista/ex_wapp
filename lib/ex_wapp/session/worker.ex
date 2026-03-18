@@ -107,13 +107,19 @@ defmodule ExWapp.Session.Worker do
     reconnect_attempts: 0,
     last_disconnect_reason: nil,
     connected_at: nil,
+    server_time_offset_ms: 0,
     session_invalid: false,
     pending_iqs: %{},
     signal_sessions: nil,
     retry_counters: %{},
     outbound_confirmations: %{},
     app_state_initial_sync_requested: false,
+    post_auth_phase: :idle,
     prekey_count_query_id: nil,
+    prekey_upload_iq_id: nil,
+    pending_prekey_upload: [],
+    passive_iq_id: nil,
+    digest_iq_id: nil,
     stats: %{
       messages_sent: 0,
       messages_received: 0,
@@ -147,7 +153,14 @@ defmodule ExWapp.Session.Worker do
           reconnect_attempts: non_neg_integer(),
           last_disconnect_reason: term() | nil,
           connected_at: DateTime.t() | nil,
+          server_time_offset_ms: integer(),
           app_state_initial_sync_requested: boolean(),
+          post_auth_phase: atom(),
+          prekey_count_query_id: binary() | nil,
+          prekey_upload_iq_id: binary() | nil,
+          pending_prekey_upload: list(),
+          passive_iq_id: binary() | nil,
+          digest_iq_id: binary() | nil,
           retry_counters: map(),
           outbound_confirmations: map(),
           stats: map()
@@ -774,7 +787,16 @@ defmodule ExWapp.Session.Worker do
 
   # Connection events from Conn process
   def handle_info({:connection_event, event}, state) do
+    Logger.debug(
+      "[SESSION] connection_event session_id=#{state.session_id} event=#{inspect(event, limit: 80)} status_before=#{inspect(state.status)} post_auth_phase=#{inspect(state.post_auth_phase)}"
+    )
+
     new_state = handle_connection_event(event, state)
+
+    Logger.debug(
+      "[SESSION] connection_event handled session_id=#{state.session_id} event=#{inspect(event, limit: 80)} status_after=#{inspect(new_state.status)} post_auth_phase=#{inspect(new_state.post_auth_phase)}"
+    )
+
     {:noreply, new_state}
   catch
     kind, reason ->
@@ -830,6 +852,10 @@ defmodule ExWapp.Session.Worker do
 
   # New message received - notify subscribers
   def handle_info({:new_message, jid, message}, state) do
+    Logger.info(
+      "[WORKER] New message from=#{inspect(jid)} id=#{Map.get(message, :id)} text=#{inspect(String.slice(Map.get(message, :text, "") || "", 0, 80))} session_id=#{state.session_id}"
+    )
+
     emit_telemetry(
       :message_received,
       %{message_count: 1},
@@ -847,6 +873,10 @@ defmodule ExWapp.Session.Worker do
 
   # Inbound node routed by InboundRouter process
   def handle_info({:inbound_node, %Binary.Node{} = node}, state) do
+    Logger.info(
+      "[WORKER] Inbound node tag=#{node.tag} attrs=#{inspect(Map.keys(node.attrs || %{}))}"
+    )
+
     {new_state, actions} = NodeHandler.safe_handle_node(node, state)
     Enum.each(actions, &NodeHandler.safe_handle_action(&1, new_state))
     {:noreply, new_state}
@@ -1074,7 +1104,17 @@ defmodule ExWapp.Session.Worker do
 
   defp do_disconnect(%__MODULE__{conn: nil} = state, _reason) do
     OutboundQueue.clear_conn(state.outbound_queue)
-    %{state | app_state_initial_sync_requested: false}
+
+    %{
+      state
+      | app_state_initial_sync_requested: false,
+        post_auth_phase: :idle,
+        prekey_count_query_id: nil,
+        prekey_upload_iq_id: nil,
+        pending_prekey_upload: [],
+        passive_iq_id: nil,
+        digest_iq_id: nil
+    }
   end
 
   defp do_disconnect(%__MODULE__{conn: conn, conn_ref: ref} = state, reason) do
@@ -1099,7 +1139,13 @@ defmodule ExWapp.Session.Worker do
         status: :disconnected,
         last_disconnect_reason: reason,
         connected_at: nil,
-        app_state_initial_sync_requested: false
+        app_state_initial_sync_requested: false,
+        post_auth_phase: :idle,
+        prekey_count_query_id: nil,
+        prekey_upload_iq_id: nil,
+        pending_prekey_upload: [],
+        passive_iq_id: nil,
+        digest_iq_id: nil
     }
   end
 
@@ -1115,7 +1161,13 @@ defmodule ExWapp.Session.Worker do
       status: :disconnected,
       last_disconnect_reason: reason,
       connected_at: nil,
-      app_state_initial_sync_requested: false
+      app_state_initial_sync_requested: false,
+      post_auth_phase: :idle,
+      prekey_count_query_id: nil,
+      prekey_upload_iq_id: nil,
+      pending_prekey_upload: [],
+      passive_iq_id: nil,
+      digest_iq_id: nil
     })
     |> update_stats(:reconnects)
     |> then(fn s ->
@@ -1188,6 +1240,26 @@ defmodule ExWapp.Session.Worker do
 
   defp do_health_check(%{conn: conn} = state) when is_pid(conn) do
     if Process.alive?(conn) do
+      # Keepalive is a lightweight client ping.
+      # Presence and passive-state assertions belong to the post-auth path, not
+      # to every health tick.
+      if state.status == :connected and is_pid(state.outbound_queue) do
+        ping_node = %ExWapp.Binary.Node{
+          tag: "iq",
+          attrs: %{
+            "id" => to_string(System.unique_integer([:positive])),
+            "to" => "s.whatsapp.net",
+            "type" => "get",
+            "xmlns" => "w:p"
+          },
+          content: [
+            %ExWapp.Binary.Node{tag: "ping", attrs: %{}, content: nil}
+          ]
+        }
+
+        OutboundQueue.enqueue_node(state.outbound_queue, ping_node)
+      end
+
       schedule_health_check(state)
     else
       Logger.warning("Connection process died unexpectedly")
@@ -1218,6 +1290,22 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp handle_connection_event({:noise, :handshake_completed}, state) do
+    Logger.debug("[SESSION] Noise handshake completed, waiting for post-auth success")
+
+    %{
+      state
+      | status: :handshaking,
+        app_state_initial_sync_requested: false,
+        post_auth_phase: :idle,
+        prekey_count_query_id: nil,
+        prekey_upload_iq_id: nil,
+        pending_prekey_upload: [],
+        passive_iq_id: nil,
+        digest_iq_id: nil
+    }
+  end
+
+  defp handle_connection_event({:auth, :ready}, state) do
     emit_telemetry(:connected, %{}, state)
     Subscribers.broadcast_lifecycle(state.session_id, {:ex_wapp_session, :connected})
 
@@ -1226,7 +1314,8 @@ defmodule ExWapp.Session.Worker do
         state
         | status: :connected,
           reconnect_attempts: 0,
-          connected_at: DateTime.utc_now()
+          connected_at: DateTime.utc_now(),
+          post_auth_phase: :complete
       }
 
     maybe_schedule_initial_app_state_sync(state)

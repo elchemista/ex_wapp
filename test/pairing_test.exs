@@ -5,7 +5,6 @@ defmodule ExWapp.PairingTest do
   alias ExWapp.{Binary, Pairing, Store}
   alias ExWapp.Pairing.ADV
   alias ExWapp.Signal.Keys
-  alias Ed25519
   alias WAAdv.{ADVDeviceIdentity, ADVSignedDeviceIdentity, ADVSignedDeviceIdentityHMAC}
 
   test "pair-success ack uses pair-device-sign payload" do
@@ -85,6 +84,36 @@ defmodule ExWapp.PairingTest do
     assert ref_prefix == "2@REF_ONE"
   end
 
+  test "pair-success without account signature does not report success" do
+    store = store_fixture()
+
+    {identity, adv_secret} = identity_fixture()
+    :ok = Store.persist(store, %{identity: identity, adv_secret: adv_secret})
+
+    device_identity_bytes = invalid_adv_identity_fixture(identity, adv_secret)
+    pair_success = build_pair_success_node(device_identity_bytes)
+
+    state = Pairing.new(store)
+    {_, actions} = Pairing.apply_node(state, pair_success)
+
+    refute Enum.any?(actions, &(&1 == {:status, :success}))
+
+    assert {:send_node,
+            %Binary.Node{
+              tag: "iq",
+              attrs: %{"type" => "error"},
+              content: [
+                %Binary.Node{
+                  tag: "error",
+                  attrs: %{"code" => "401", "text" => "signature-mismatch"}
+                }
+              ]
+            }} =
+             Enum.find(actions, &match?({:send_node, _}, &1))
+
+    assert Enum.any?(actions, &match?({:error, :adv_invalid_account_signature_fields}, &1))
+  end
+
   defp identity_fixture do
     %{private: priv, public: pub} = Keys.generate_key_pair()
     {%{public: pub, private: priv}, :crypto.strong_rand_bytes(32)}
@@ -93,8 +122,7 @@ defmodule ExWapp.PairingTest do
   defp adv_identity_fixture(identity, adv_secret) do
     identity_pub = identity.public
 
-    account_priv = :crypto.strong_rand_bytes(32)
-    account_pub = Ed25519.derive_public_key(account_priv)
+    %{private: account_priv, public: account_pub} = Keys.generate_key_pair()
 
     details = %ADVDeviceIdentity{
       rawID: 1234,
@@ -112,7 +140,7 @@ defmodule ExWapp.PairingTest do
     }
 
     account_message = <<6, 0>> <> details_inner <> identity_pub
-    account_sig = Ed25519.signature(account_message, account_priv)
+    account_sig = Keys.sign_message(account_priv, account_message)
     signed = %ADVSignedDeviceIdentity{signed | accountSignature: account_sig}
 
     signed_bytes = encode!(ADVSignedDeviceIdentity, signed)
@@ -131,6 +159,37 @@ defmodule ExWapp.PairingTest do
       ADV.parse_signed_device_identity(container_bytes, adv_secret, identity)
 
     {container_bytes, parsed}
+  end
+
+  defp invalid_adv_identity_fixture(_identity, adv_secret) do
+    account_pub = Keys.generate_key_pair().public
+
+    details =
+      %ADVDeviceIdentity{
+        rawID: 1234,
+        timestamp: 1_725_000_000,
+        keyIndex: 42,
+        accountType: :E2EE,
+        deviceType: :E2EE
+      }
+      |> then(&encode!(ADVDeviceIdentity, &1))
+
+    signed =
+      %ADVSignedDeviceIdentity{
+        details: details,
+        accountSignatureKey: account_pub
+      }
+      |> then(&encode!(ADVSignedDeviceIdentity, &1))
+
+    container_bytes =
+      %ADVSignedDeviceIdentityHMAC{
+        details: signed,
+        HMAC: :crypto.mac(:hmac, :sha256, adv_secret, signed),
+        accountType: :E2EE
+      }
+      |> then(&encode!(ADVSignedDeviceIdentityHMAC, &1))
+
+    container_bytes
   end
 
   defp build_pair_success_node(device_identity_bytes) do

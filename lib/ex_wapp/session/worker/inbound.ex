@@ -4,7 +4,7 @@ defmodule ExWapp.Session.Worker.Inbound do
   """
 
   @type receipt_builder ::
-          (String.t(), String.t(), String.t() | nil, String.t() | nil -> term())
+          (String.t(), String.t(), String.t() | nil, String.t() | nil, map() | nil -> term())
 
   @type retry_receipt_builder ::
           (String.t(),
@@ -36,8 +36,8 @@ defmodule ExWapp.Session.Worker.Inbound do
       {:ok, new_state, actions} ->
         converted_actions =
           Enum.map(actions, fn
-            {:send_receipt, to, id, participant, type} ->
-              {:send_node, build_receipt_ack.(to, id, participant, type)}
+            {:send_receipt, to, id, participant, type, receipt_meta} ->
+              {:send_node, build_receipt_ack.(to, id, participant, type, receipt_meta)}
 
             {:send_retry_receipt, to, id, participant, message_t, retry_count, error_code,
              retry_meta} ->

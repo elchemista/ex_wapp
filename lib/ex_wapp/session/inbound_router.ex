@@ -7,6 +7,7 @@ defmodule ExWapp.Session.InboundRouter do
   """
 
   use GenServer
+  require Logger
 
   defstruct session: nil
 
@@ -31,6 +32,10 @@ defmodule ExWapp.Session.InboundRouter do
   @impl true
   @spec handle_cast({:route, ExWapp.Binary.Node.t()}, t()) :: {:noreply, t()}
   def handle_cast({:route, node}, %{session: session} = state) do
+    Logger.debug(
+      "[INBOUND_ROUTER] routing node tag=#{node.tag} session=#{inspect(session)} attrs_keys=#{inspect(Map.keys(node.attrs || %{}))}"
+    )
+
     send(session, {:inbound_node, node})
     {:noreply, state}
   end

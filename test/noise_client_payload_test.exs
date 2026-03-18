@@ -13,6 +13,48 @@ defmodule ExWapp.Noise.ClientPayloadTest do
   # DeviceProps with historySyncConfig matching Firefox/Linux identity
   @device_props <<
     0x0A,
+    0x09,
+    "whatsmeow"::binary,
+    0x12,
+    0x06,
+    0x08,
+    0x00,
+    0x10,
+    0x01,
+    0x18,
+    0x00,
+    0x18,
+    0x00,
+    0x20,
+    0x00,
+    0x2A,
+    0x17,
+    0x18,
+    0x80,
+    0x50,
+    0x20,
+    0x01,
+    0x30,
+    0x00,
+    0x38,
+    0x01,
+    0x40,
+    0x01,
+    0x48,
+    0x01,
+    0x50,
+    0x01,
+    0x58,
+    0x01,
+    0x60,
+    0x01,
+    0x70,
+    0x01,
+    0x78,
+    0x00
+  >>
+  @firefox_device_props <<
+    0x0A,
     0x05,
     "Linux"::binary,
     0x12,
@@ -121,6 +163,20 @@ defmodule ExWapp.Noise.ClientPayloadTest do
       assert get_in(data, [:client_info, :os_build]) == "x86_64"
     end
 
+    test "supports runtime pairing device props overrides" do
+      store = store_fixture()
+      noise = %Noise{store: store}
+
+      runtime_cfg =
+        Config.defaults()
+        |> put_in([:protocol, :pairing_device_props, :os], "Linux")
+        |> put_in([:protocol, :pairing_device_props, :platform_type], 2)
+
+      assert {:ok, payload, _data} = NoiseClientPayload.build(noise, runtime_cfg)
+      assert {:ok, decoded} = ClientPayloadProto.decode(payload)
+      assert decoded.devicePairingData.deviceProps == @firefox_device_props
+    end
+
     test "normalizes client_info for login payloads" do
       store = store_fixture()
       noise = %Noise{store: store}
@@ -145,11 +201,34 @@ defmodule ExWapp.Noise.ClientPayloadTest do
       assert decoded.userAgent.manufacturer == "Mozilla"
       assert decoded.userAgent.device == "Firefox"
       assert decoded.userAgent.osBuildNumber == "Linux"
+      assert decoded.lidDbMigrated == true
 
       assert get_in(data, [:client_info, :os_version]) == "Linux"
       assert get_in(data, [:client_info, :manufacturer]) == "Mozilla"
       assert get_in(data, [:client_info, :device_name]) == "Firefox"
       assert get_in(data, [:client_info, :os_build]) == "Linux"
+    end
+
+    test "builds login payload from client_info jid when pairing data is missing" do
+      store = store_fixture()
+      noise = %Noise{store: store}
+
+      :ok =
+        Store.persist(store, %{
+          client_info: %{jid: "15550001111@s.whatsapp.net"},
+          signal: %{device_id: 40}
+        })
+
+      assert {:ok, payload, data} = NoiseClientPayload.build(noise)
+      assert {:ok, decoded} = ClientPayloadProto.decode(payload)
+
+      assert decoded.passive
+      assert decoded.pull
+      assert decoded.lidDbMigrated == true
+      assert decoded.username == 15_550_001_111
+      assert decoded.device == 40
+      assert data[:client_info][:jid] == %ExWapp.JID{user: "15550001111", device: 40}
+      assert is_nil(decoded.devicePairingData)
     end
   end
 

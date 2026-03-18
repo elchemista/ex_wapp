@@ -20,14 +20,22 @@ defmodule ExWapp.Noise.ClientPayload do
   def build(%Noise{store: store}, runtime_cfg) when is_map(runtime_cfg) do
     data = Store.load!(store)
 
-    # Check if we're already paired (have a JID stored)
-    case MapPath.get(data, ["pairing", "device", "jid"]) do
+    Logger.info(
+      "[ClientPayload] Store loaded: keys=#{inspect(Map.keys(data))} has_pairing=#{is_map(Map.get(data, :pairing))} has_signal=#{is_map(Map.get(data, :signal))}"
+    )
+
+    case resolve_login_jid(data) do
       %ExWapp.JID{} = jid ->
         # Already paired - use login payload
+        Logger.info("[ClientPayload] Building LOGIN payload for #{inspect(jid)}")
         build_login_payload(data, jid, runtime_cfg)
 
-      _ ->
+      other ->
         # Not paired - use registration payload
+        Logger.warning(
+          "[ClientPayload] Building REGISTRATION payload — no JID found (got #{inspect(other)})"
+        )
+
         build_registration_payload(data, runtime_cfg)
     end
   end
@@ -35,9 +43,10 @@ defmodule ExWapp.Noise.ClientPayload do
   def build(_, _), do: {:error, :invalid_noise_state}
 
   defp build_login_payload(data, jid, runtime_cfg) do
-    Logger.debug("[ClientPayload] Building LOGIN payload for #{inspect(jid)}")
-
-    info = resolve_client_info(data, runtime_cfg)
+    info =
+      data
+      |> resolve_client_info(runtime_cfg)
+      |> Map.put(:jid, jid)
 
     # Match Go's getLoginPayload() - must include lidDbMigrated!
     payload = %ClientPayload{
@@ -97,6 +106,44 @@ defmodule ExWapp.Noise.ClientPayload do
   end
 
   defp jid_to_username(_), do: 0
+
+  defp resolve_login_jid(data) do
+    data
+    |> MapPath.first([
+      ["pairing", "device", "jid"],
+      ["client_info", "jid"]
+    ])
+    |> normalize_login_jid(MapPath.get(data, ["signal", "device_id"]))
+  end
+
+  defp normalize_login_jid(%ExWapp.JID{} = jid, device_id) do
+    maybe_apply_device_id(jid, device_id)
+  end
+
+  defp normalize_login_jid(jid, device_id) when is_binary(jid) do
+    jid
+    |> normalize_jid_string()
+    |> ExWapp.JID.parse()
+    |> case do
+      {:ok, parsed_jid} -> maybe_apply_device_id(parsed_jid, device_id)
+      _ -> nil
+    end
+  end
+
+  defp normalize_login_jid(_, _device_id), do: nil
+
+  defp maybe_apply_device_id(%ExWapp.JID{device: 0} = jid, device_id)
+       when is_integer(device_id) and device_id > 0 do
+    ExWapp.JID.with_device(jid, device_id)
+  end
+
+  defp maybe_apply_device_id(%ExWapp.JID{} = jid, _device_id), do: jid
+
+  defp normalize_jid_string(jid) when is_binary(jid) do
+    jid
+    |> String.trim()
+    |> String.replace("@whatsapp.net", "@s.whatsapp.net")
+  end
 
   defp build_user_agent(_phone_id, info, runtime_cfg) do
     {primary, secondary, tertiary} = protocol_version(runtime_cfg)
@@ -176,7 +223,7 @@ defmodule ExWapp.Noise.ClientPayload do
       eSkeyVal: signed_pub,
       eSkeySig: signed_sig,
       buildHash: version_hash(runtime_cfg),
-      deviceProps: device_props()
+      deviceProps: device_props(runtime_cfg)
     }
   end
 
@@ -226,7 +273,7 @@ defmodule ExWapp.Noise.ClientPayload do
 
   # Encoded WACompanionReg.DeviceProps payload
   # This must match what whatsmeow sends - it's critical for pairing
-  defp device_props do
+  defp device_props(runtime_cfg) do
     # DeviceProps proto (from WACompanionReg.proto):
     # - os: string (field 1)
     # - version: AppVersion (field 2)
@@ -291,7 +338,12 @@ defmodule ExWapp.Noise.ClientPayload do
       >>
 
     # Build DeviceProps message
-    os_name = "Linux"
+    os_name = Config.get(runtime_cfg, [:protocol, :pairing_device_props, :os], "whatsmeow")
+    platform_type = Config.get(runtime_cfg, [:protocol, :pairing_device_props, :platform_type], 0)
+
+    require_full_sync =
+      Config.get(runtime_cfg, [:protocol, :pairing_device_props, :require_full_sync], false)
+
     os_len = byte_size(os_name)
     version_len = byte_size(version)
     history_len = byte_size(history_sync_config)
@@ -305,12 +357,12 @@ defmodule ExWapp.Noise.ClientPayload do
       0x12,
       version_len::8,
       version::binary,
-      # platformType = FIREFOX (2) (field 3, wire type 0)
+      # platformType = UNKNOWN (0) (field 3, wire type 0)
       0x18,
-      0x02,
+      platform_type::8,
       # requireFullSync = false (field 4, wire type 0)
       0x20,
-      0x00,
+      if(require_full_sync, do: 0x01, else: 0x00),
       # historySyncConfig (field 5, wire type 2)
       0x2A,
       history_len::8,

@@ -55,7 +55,7 @@ defmodule ExWappTest do
              }}
         )
 
-      send(session, {:connection_event, {:noise, :handshake_completed}})
+      send(session, {:connection_event, {:auth, :ready}})
       assert eventually(fn -> ExWapp.state(session) == :connected end)
 
       assert {:error, _reason} = ExWapp.unarchive_chat(session, "120363424063038804@g.us")
@@ -95,7 +95,7 @@ defmodule ExWappTest do
         %{state | conn: conn, status: :handshaking, app_state_initial_sync_requested: false}
       end)
 
-      send(session, {:connection_event, {:noise, :handshake_completed}})
+      send(session, {:connection_event, {:auth, :ready}})
 
       assert eventually(fn ->
                state = :sys.get_state(session)
@@ -105,7 +105,7 @@ defmodule ExWappTest do
 
       first_pending_count = map_size(:sys.get_state(session).pending_iqs)
 
-      send(session, {:connection_event, {:noise, :handshake_completed}})
+      send(session, {:connection_event, {:auth, :ready}})
       Process.sleep(50)
 
       state_after_duplicate = :sys.get_state(session)
@@ -125,7 +125,7 @@ defmodule ExWappTest do
         %{state | conn: conn, status: :handshaking}
       end)
 
-      send(session, {:connection_event, {:noise, :handshake_completed}})
+      send(session, {:connection_event, {:auth, :ready}})
 
       assert eventually(fn ->
                state = :sys.get_state(session)
@@ -315,6 +315,68 @@ defmodule ExWappTest do
       assert hd(chats).jid == "15550001111@s.whatsapp.net"
 
       GenServer.stop(session)
+    end
+
+    test "incoming message receipt preserves recipient and omits forced delivery type" do
+      node = %ExWapp.Binary.Node{
+        tag: "message",
+        attrs: %{
+          "from" => "15550001111@s.whatsapp.net",
+          "recipient" => "15550002222@s.whatsapp.net",
+          "id" => "MSG_RECEIPT_1",
+          "type" => "text",
+          "t" => "1730000000"
+        },
+        content: [%ExWapp.Binary.Node{tag: "body", attrs: %{}, content: "hello"}]
+      }
+
+      {_new_state, actions} =
+        ExWapp.Session.Worker.Inbound.handle_message_node(
+          node,
+          %{stats: %{messages_received: 0}},
+          &ExWapp.Session.Worker.ReceiptBuilder.build_receipt_ack/5,
+          fn _, _, _, _, _, _, _ ->
+            flunk("unexpected retry receipt")
+          end
+        )
+
+      assert [
+               {:send_node,
+                %ExWapp.Binary.Node{tag: "receipt", attrs: attrs, content: nil}}
+             ] = actions
+
+      assert attrs["id"] == "MSG_RECEIPT_1"
+      assert attrs["to"] == "15550001111@s.whatsapp.net"
+      assert attrs["recipient"] == "15550002222@s.whatsapp.net"
+      refute Map.has_key?(attrs, "type")
+    end
+
+    test "incoming receipt stanza is acknowledged" do
+      node = %ExWapp.Binary.Node{
+        tag: "receipt",
+        attrs: %{
+          "from" => "15550001111@s.whatsapp.net",
+          "participant" => "15550003333@s.whatsapp.net",
+          "recipient" => "15550002222@s.whatsapp.net",
+          "id" => "RCPT_1",
+          "type" => "read"
+        },
+        content: nil
+      }
+
+      assert {:ok, _state, actions} = ExWapp.MessageHandler.handle_node(node, :session, %{})
+
+      assert [
+               {:send_node,
+                %ExWapp.Binary.Node{tag: "ack", attrs: attrs, content: nil}}
+             ] = actions
+
+      assert attrs["class"] == "receipt"
+      assert attrs["id"] == "RCPT_1"
+      assert attrs["to"] == "15550001111@s.whatsapp.net"
+      assert attrs["type"] == "read"
+      assert attrs["participant"] == "15550003333@s.whatsapp.net"
+      assert attrs["recipient"] == "15550002222@s.whatsapp.net"
     end
 
     test "connection_event message persists when handled inside Session process" do

@@ -15,7 +15,14 @@ defmodule ExWapp.AppState.CryptoTest do
       assert byte_size(keys.patch_mac) == 32
 
       # All keys should be different
-      all_keys = [keys.index, keys.value_encryption, keys.value_mac, keys.snapshot_mac, keys.patch_mac]
+      all_keys = [
+        keys.index,
+        keys.value_encryption,
+        keys.value_mac,
+        keys.snapshot_mac,
+        keys.patch_mac
+      ]
+
       assert length(Enum.uniq(all_keys)) == 5
     end
 

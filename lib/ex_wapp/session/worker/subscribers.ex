@@ -3,6 +3,8 @@ defmodule ExWapp.Session.Worker.Subscribers do
   Subscriber bookkeeping for QR and message streams.
   """
 
+  require Logger
+
   @spec notify_qr(map(), term(), (-> any())) :: :ok
   def notify_qr(state, event, emit_telemetry_fun) when is_function(emit_telemetry_fun, 0) do
     emit_telemetry_fun.()
@@ -42,6 +44,10 @@ defmodule ExWapp.Session.Worker.Subscribers do
 
   @spec notify_message_subscribers(map(), String.t(), map()) :: :ok
   def notify_message_subscribers(state, jid, message) do
+    Logger.info(
+      "[ExWapp.Subscribers] notify_message_subscribers jid=#{inspect(jid)} session_id=#{inspect(Map.get(state, :session_id))} direct_subscribers=#{map_size(Map.get(state, :message_subscribers, %{}))} text=#{inspect(String.slice(Map.get(message, :text, "") || "", 0, 60))}"
+    )
+
     # Direct-send to legacy subscribers (backwards compatible)
     Enum.each(state.message_subscribers, fn {ref, {pid, _mon}} ->
       send(pid, {:ex_wapp_message, ref, jid, message})
@@ -54,6 +60,11 @@ defmodule ExWapp.Session.Worker.Subscribers do
   defp broadcast_via_pubsub(session_id, jid, message) do
     # Per-session topic (uses session_id when available, pid as fallback)
     topic_key = session_id || self()
+    message_id = Map.get(message, :id) || Map.get(message, "id")
+
+    Logger.debug(
+      "[ExWapp.Subscribers] broadcasting topic=ex_wapp:messages:#{topic_key} global_topic=ex_wapp:messages jid=#{inspect(jid)} message_id=#{inspect(message_id)}"
+    )
 
     Phoenix.PubSub.broadcast(
       ExWapp.PubSub,

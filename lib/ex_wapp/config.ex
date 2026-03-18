@@ -97,6 +97,12 @@ defmodule ExWapp.Config do
       protocol: %{
         strict_mode: false,
         client_version: @default_client_version,
+        post_auth_digest_enabled: false,
+        pairing_device_props: %{
+          os: "whatsmeow",
+          platform_type: 0,
+          require_full_sync: false
+        },
         user_agent: %{
           os_version: "Linux x86_64",
           manufacturer: "Mozilla",

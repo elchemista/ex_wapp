@@ -29,7 +29,17 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   """
   @spec safe_handle_node(Binary.Node.t(), map()) :: {map(), list()}
   def safe_handle_node(node, state) do
-    handle_connection_node(node, state)
+    Logger.debug(
+      "[NODE_HANDLER] handling node session_id=#{inspect(Map.get(state, :session_id))} tag=#{node.tag} attrs=#{inspect(loggable_attrs(node.attrs || %{}), limit: 50)}"
+    )
+
+    {next_state, actions} = handle_connection_node(node, state)
+
+    Logger.debug(
+      "[NODE_HANDLER] handled node session_id=#{inspect(Map.get(next_state, :session_id))} tag=#{node.tag} actions=#{length(actions)} status=#{inspect(Map.get(next_state, :status))} post_auth_phase=#{inspect(Map.get(next_state, :post_auth_phase))}"
+    )
+
+    {next_state, actions}
   rescue
     e ->
       Logger.error("Error handling node: #{inspect(e)}")
@@ -45,6 +55,10 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   """
   @spec safe_handle_action(term(), map()) :: :ok
   def safe_handle_action(action, state) do
+    Logger.debug(
+      "[NODE_HANDLER] executing action session_id=#{inspect(Map.get(state, :session_id))} action=#{inspect(compact_action(action), limit: 80)}"
+    )
+
     handle_pairing_action(action, state)
   rescue
     e ->
@@ -63,10 +77,18 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     iq_type = Map.get(attrs, "type", "")
     iq_id = Map.get(attrs, "id")
 
+    Logger.debug(
+      "[NODE_HANDLER] iq received session_id=#{inspect(Map.get(state, :session_id))} id=#{inspect(iq_id)} type=#{inspect(iq_type)} xmlns=#{inspect(xmlns)} pending_iqs=#{map_size(Map.get(state, :pending_iqs, %{}))} post_auth_ids=#{inspect(%{prekey_count_query_id: Map.get(state, :prekey_count_query_id), prekey_upload_iq_id: Map.get(state, :prekey_upload_iq_id), passive_iq_id: Map.get(state, :passive_iq_id), digest_iq_id: Map.get(state, :digest_iq_id)})}"
+    )
+
     state = forward_iq_to_workers(state, iq_type, iq_id, node)
     {state, pending_handled} = resolve_pending_iq(state, iq_type, iq_id, node)
 
     if pending_handled do
+      Logger.debug(
+        "[NODE_HANDLER] iq handled by pending request session_id=#{inspect(Map.get(state, :session_id))} id=#{inspect(iq_id)}"
+      )
+
       {state, []}
     else
       dispatch_iq(state, node, attrs, xmlns, iq_type, iq_id)
@@ -74,41 +96,19 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   end
 
   defp handle_connection_node(%Binary.Node{tag: "success", attrs: attrs}, state) do
-    Logger.debug("[SESSION] Received success node - login successful!")
+    Logger.info(
+      "[SESSION] Received <success> node - login successful! attrs=#{inspect(Map.keys(attrs))}"
+    )
 
     # Persist LID if present (Baileys: CB:success -> creds.update me.lid)
     lid = Map.get(attrs, "lid")
-    state = PostAuth.persist_lid_and_mapping(state, lid)
 
-    # Reference: Baileys socket.ts CB:success handler
-    # 1. Query server prekey count (count-driven upload, not unconditional)
-    # 2. Send SetPassive(false)
-    # 3. digestKeyBundle (optional, skip for now)
-    prekey_count_query = ExWapp.Prekeys.build_prekey_count_query()
-    query_id = Map.get(prekey_count_query.attrs, "id")
+    state =
+      state
+      |> PostAuth.persist_lid_and_mapping(lid)
+      |> update_server_time_offset(attrs)
 
-    passive_iq = build_set_passive_iq(false)
-
-    state = %{state | prekey_count_query_id: query_id}
-
-    # Send presence available to show as online (Baileys: sendPresenceUpdate)
-    presence_node = %Binary.Node{
-      tag: "presence",
-      attrs: %{"type" => "available"},
-      content: nil
-    }
-
-    actions = [
-      {:send_node, prekey_count_query},
-      {:send_node, passive_iq},
-      {:send_node, presence_node}
-    ]
-
-    Logger.debug(
-      "[SESSION] Sending prekey count query (id=#{query_id}) + passive IQ + presence available"
-    )
-
-    {state, actions}
+    PostAuth.start(state, &build_set_passive_iq/0)
   end
 
   # Handle ib (initialization) node - server sends this after successful login
@@ -163,6 +163,16 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   end
 
   defp handle_connection_node(%Binary.Node{tag: "stream:features"}, state) do
+    Logger.debug(
+      "[NODE_HANDLER] stream features received session_id=#{inspect(Map.get(state, :session_id))}"
+    )
+
+    {state, []}
+  end
+
+  defp handle_connection_node(%Binary.Node{tag: "xmlstreamend"}, state) do
+    Logger.warning("[SESSION] Received xmlstreamend, closing transport")
+    send(self(), {:connection_event, {:transport, {:closed, :xmlstreamend}}})
     {state, []}
   end
 
@@ -173,7 +183,19 @@ defmodule ExWapp.Session.Worker.NodeHandler do
          state
        ) do
     code = Map.get(attrs, "code", "unknown")
+    first_child_tag = first_stream_error_child_tag(children)
+    children_summary = summarize_stream_error_children(children)
+
     Logger.error("[SESSION] Stream error: code=#{code}")
+    Logger.error("[SESSION] Stream error attrs: #{inspect(attrs, limit: :infinity)}")
+
+    Logger.error(
+      "[SESSION] Stream error children summary: #{inspect(children_summary, limit: :infinity)}"
+    )
+
+    Logger.error(
+      "[SESSION] Stream error raw children: #{inspect(children, limit: :infinity, printable_limit: 8_000)}"
+    )
 
     # Check for conflict type in children
     conflict_type = extract_conflict_type(children)
@@ -207,7 +229,10 @@ defmodule ExWapp.Session.Worker.NodeHandler do
           mark_transport_closed(state, stream_error_reason)
 
         true ->
-          Logger.error("[SESSION] Unknown stream error: code=#{code}, conflict=#{conflict_type}")
+          Logger.error(
+            "[SESSION] Unknown stream error: code=#{code}, conflict=#{conflict_type}, first_child=#{inspect(first_child_tag)}"
+          )
+
           mark_transport_closed(state, stream_error_reason)
       end
 
@@ -217,10 +242,14 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   # Handle incoming messages and notifications via MessageHandler
   defp handle_connection_node(%Binary.Node{tag: tag} = node, state)
        when tag in ["message", "notification", "receipt", "ack", "call", "presence", "chatstate"] do
+    Logger.debug(
+      "[NODE_HANDLER] routing inbound content node session_id=#{inspect(Map.get(state, :session_id))} tag=#{tag} attrs=#{inspect(loggable_attrs(node.attrs || %{}), limit: 60)}"
+    )
+
     Inbound.handle_message_node(
       node,
       state,
-      &ReceiptBuilder.build_receipt_ack/4,
+      &ReceiptBuilder.build_receipt_ack/5,
       fn to, id, participant, message_t, retry_count, error_code, retry_meta ->
         ReceiptBuilder.build_retry_receipt_ack(
           state.store,
@@ -237,7 +266,10 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   end
 
   defp handle_connection_node(node, state) do
-    Logger.debug("Unhandled node: #{inspect(node.tag)}")
+    Logger.debug(
+      "[NODE_HANDLER] unhandled node session_id=#{inspect(Map.get(state, :session_id))} tag=#{inspect(node.tag)} attrs=#{inspect(loggable_attrs(node.attrs || %{}), limit: 60)}"
+    )
+
     {update_stats(state, :messages_received), []}
   end
 
@@ -253,6 +285,8 @@ defmodule ExWapp.Session.Worker.NodeHandler do
       Logger.debug("[SESSION] Forwarding IQ #{iq_id} to #{map_size(workers)} workers")
       msg_tag = if iq_type == "result", do: :prekey_response, else: :prekey_error
       broadcast_iq_to_workers(workers, msg_tag, iq_id, node)
+    else
+      Logger.debug("[NODE_HANDLER] no send workers waiting for IQ id=#{inspect(iq_id)}")
     end
 
     state
@@ -264,12 +298,18 @@ defmodule ExWapp.Session.Worker.NodeHandler do
        when iq_type in ["result", "error"] and iq_id != nil do
     case Map.pop(state.pending_iqs, iq_id) do
       {nil, _} ->
+        Logger.debug("[NODE_HANDLER] no pending IQ match for id=#{inspect(iq_id)}")
         {state, false}
 
       {%{from: from, timer: timer}, pending_iqs} ->
         Process.cancel_timer(timer)
         reply = if iq_type == "result", do: {:ok, node}, else: {:error, node}
         GenServer.reply(from, reply)
+
+        Logger.debug(
+          "[NODE_HANDLER] resolved pending IQ id=#{inspect(iq_id)} reply_type=#{iq_type}"
+        )
+
         {%{state | pending_iqs: pending_iqs}, true}
     end
   end
@@ -306,6 +346,32 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   defp extract_conflict_type(_children), do: nil
 
+  defp first_stream_error_child_tag([%Binary.Node{tag: tag} | _]) when is_binary(tag), do: tag
+  defp first_stream_error_child_tag(_children), do: nil
+
+  defp summarize_stream_error_children(children) when is_list(children) do
+    Enum.map(children, fn
+      %Binary.Node{tag: tag, attrs: attrs, content: content} ->
+        %{
+          tag: tag,
+          attrs: attrs,
+          child_count: child_count(content),
+          binary_bytes: binary_bytes(content)
+        }
+
+      other ->
+        %{unexpected: inspect(other, limit: 20, printable_limit: 500)}
+    end)
+  end
+
+  defp summarize_stream_error_children(_children), do: []
+
+  defp child_count(content) when is_list(content), do: length(content)
+  defp child_count(_content), do: 0
+
+  defp binary_bytes(content) when is_binary(content), do: byte_size(content)
+  defp binary_bytes(_content), do: 0
+
   defp broadcast_iq_to_workers(workers, msg_tag, iq_id, node) when is_map(workers) do
     Enum.each(workers, fn {worker_pid, _jid} ->
       send_iq_to_worker(worker_pid, msg_tag, iq_id, node)
@@ -323,12 +389,17 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     {state, [{:send_node, build_iq_result(attrs)}]}
   end
 
-  defp dispatch_iq(state, node, _attrs, _xmlns, "result", iq_id)
-       when state.prekey_count_query_id != nil and iq_id == state.prekey_count_query_id do
-    PostAuth.handle_prekey_count_response(node, state)
+  defp dispatch_iq(state, node, attrs, xmlns, iq_type, iq_id) do
+    case maybe_handle_post_auth_iq(state, node, iq_type, iq_id) do
+      {:handled, next_state, actions} ->
+        {next_state, actions}
+
+      :unhandled ->
+        dispatch_iq_default(state, node, attrs, xmlns, iq_type, iq_id)
+    end
   end
 
-  defp dispatch_iq(state, node, attrs, xmlns, iq_type, iq_id) do
+  defp dispatch_iq_default(state, node, attrs, xmlns, iq_type, iq_id) do
     {pairing, actions} = Pairing.apply_node(state.pairing, node)
 
     pairing =
@@ -350,6 +421,60 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
     {%{state | pairing: pairing}, actions}
   end
+
+  defp maybe_handle_post_auth_iq(state, node, "result", iq_id)
+       when is_binary(iq_id) and state.prekey_count_query_id != nil and
+              iq_id == state.prekey_count_query_id do
+    Logger.debug("[NODE_HANDLER] matched post-auth prekey count IQ id=#{iq_id}")
+
+    {next_state, actions} =
+      PostAuth.handle_prekey_count_response(node, state, &build_set_passive_iq/0)
+
+    {:handled, next_state, actions}
+  end
+
+  defp maybe_handle_post_auth_iq(state, node, iq_type, iq_id)
+       when iq_type in ["result", "error"] and is_binary(iq_id) and
+              state.prekey_upload_iq_id != nil and iq_id == state.prekey_upload_iq_id do
+    Logger.debug("[NODE_HANDLER] matched post-auth prekey upload IQ id=#{iq_id} type=#{iq_type}")
+
+    {next_state, actions} =
+      PostAuth.handle_prekey_upload_response(node, iq_type, state, &build_set_passive_iq/0)
+
+    {:handled, next_state, actions}
+  end
+
+  defp maybe_handle_post_auth_iq(state, node, iq_type, iq_id)
+       when iq_type in ["result", "error"] and is_binary(iq_id) and
+              state.passive_iq_id != nil and iq_id == state.passive_iq_id do
+    Logger.debug("[NODE_HANDLER] matched post-auth passive IQ id=#{iq_id} type=#{iq_type}")
+
+    {next_state, actions} =
+      PostAuth.handle_passive_response(
+        node,
+        iq_type,
+        state,
+        &build_digest_query/0,
+        fn -> build_unified_session_node(state) end
+      )
+
+    {:handled, next_state, actions}
+  end
+
+  defp maybe_handle_post_auth_iq(state, node, iq_type, iq_id)
+       when iq_type in ["result", "error"] and is_binary(iq_id) and
+              state.digest_iq_id != nil and iq_id == state.digest_iq_id do
+    Logger.debug("[NODE_HANDLER] matched post-auth digest IQ id=#{iq_id} type=#{iq_type}")
+
+    {next_state, actions} =
+      PostAuth.handle_digest_response(node, iq_type, state, fn ->
+        build_unified_session_node(state)
+      end)
+
+    {:handled, next_state, actions}
+  end
+
+  defp maybe_handle_post_auth_iq(_state, _node, _iq_type, _iq_id), do: :unhandled
 
   # ============================================================================
   # Node builders
@@ -375,7 +500,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   # Build SetPassive IQ - tells server whether we're passive (not receiving messages) or active
   # Reference: whatsmeow/connectionevents.go SetPassive()
-  defp build_set_passive_iq(passive) do
+  defp build_set_passive_iq(passive \\ false) do
     tag = if passive, do: "passive", else: "active"
     request_id = generate_request_id()
 
@@ -391,8 +516,45 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     }
   end
 
+  defp build_digest_query do
+    %Binary.Node{
+      tag: "iq",
+      attrs: %{
+        "id" => generate_request_id(),
+        "xmlns" => "encrypt",
+        "type" => "get",
+        "to" => "s.whatsapp.net"
+      },
+      content: [%Binary.Node{tag: "digest", attrs: %{}, content: nil}]
+    }
+  end
+
+  defp build_unified_session_node(state) do
+    %Binary.Node{
+      tag: "ib",
+      attrs: %{},
+      content: [
+        %Binary.Node{
+          tag: "unified_session",
+          attrs: %{"id" => unified_session_id(state)},
+          content: nil
+        }
+      ]
+    }
+  end
+
   defp generate_request_id do
     :crypto.strong_rand_bytes(16) |> Base.encode64() |> String.slice(0, 16)
+  end
+
+  defp unified_session_id(state) do
+    offset_ms = Map.get(state, :server_time_offset_ms, 0)
+
+    rem(
+      System.system_time(:millisecond) + offset_ms + 3 * 24 * 60 * 60 * 1000,
+      7 * 24 * 60 * 60 * 1000
+    )
+    |> Integer.to_string()
   end
 
   # ============================================================================
@@ -401,11 +563,30 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   defp handle_pairing_action({:send_node, node}, %{outbound_queue: outbound_queue})
        when is_pid(outbound_queue) do
+    Logger.debug(
+      "[NODE_HANDLER] enqueueing outbound node action tag=#{node.tag} attrs=#{inspect(loggable_attrs(node.attrs || %{}), limit: 60)}"
+    )
+
     OutboundQueue.enqueue_node(outbound_queue, node)
   end
 
   defp handle_pairing_action({:qr, code}, state), do: notify_qr(state, {:code, code})
+
+  defp handle_pairing_action({:status, :success}, %{outbound_queue: outbound_queue} = state)
+       when is_pid(outbound_queue) do
+    OutboundQueue.enqueue_node(outbound_queue, build_unified_session_node(state))
+    notify_qr(state, :success)
+  end
+
   defp handle_pairing_action({:status, :success}, state), do: notify_qr(state, :success)
+
+  defp handle_pairing_action(:mark_authenticated, _state),
+    do:
+      (
+        Logger.debug("[NODE_HANDLER] dispatching auth ready event")
+        send(self(), {:connection_event, {:auth, :ready}})
+      )
+
   defp handle_pairing_action({:error, reason}, state), do: notify_qr(state, {:error, reason})
 
   defp handle_pairing_action(:restart_stream, %{outbound_queue: outbound_queue})
@@ -445,6 +626,26 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     state
   end
 
+  defp update_server_time_offset(state, attrs) when is_map(attrs) do
+    case Map.get(attrs, "t") do
+      value when is_binary(value) ->
+        case Integer.parse(value) do
+          {unix_seconds, ""} when unix_seconds > 0 ->
+            local_ms = System.system_time(:millisecond)
+            offset_ms = unix_seconds * 1000 - local_ms
+            Map.put(state, :server_time_offset_ms, offset_ms)
+
+          _ ->
+            state
+        end
+
+      _ ->
+        state
+    end
+  end
+
+  defp update_server_time_offset(state, _attrs), do: state
+
   defp maybe_reset_pairing(actions, pairing) do
     if Enum.any?(actions, &match?({:status, :success}, &1)) do
       {:ok, Pairing.new(pairing.store)}
@@ -456,4 +657,33 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   defp update_stats(state, key) do
     update_in(state.stats[key], &((&1 || 0) + 1))
   end
+
+  defp loggable_attrs(attrs) when is_map(attrs) do
+    attrs
+    |> Enum.map(fn {key, value} -> {key, loggable_attr_value(value)} end)
+    |> Enum.into(%{})
+  end
+
+  defp loggable_attrs(value), do: value
+
+  defp loggable_attr_value(%{__struct__: module} = value) do
+    %{struct: inspect(module), value: inspect(value, limit: 20)}
+  end
+
+  defp loggable_attr_value(value) when is_binary(value) and byte_size(value) > 120 do
+    String.slice(value, 0, 120)
+  end
+
+  defp loggable_attr_value(value), do: value
+
+  defp compact_action({:send_node, %Binary.Node{} = node}) do
+    {:send_node,
+     %{
+       tag: node.tag,
+       attrs: loggable_attrs(node.attrs || %{}),
+       child_count: if(is_list(node.content), do: length(node.content), else: 0)
+     }}
+  end
+
+  defp compact_action(other), do: other
 end

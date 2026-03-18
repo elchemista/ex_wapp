@@ -305,7 +305,7 @@ defmodule ExWapp.SignalSenderKeyTest do
              MessageHandler.handle_node(distribution_node, self(), initial_state)
 
     assert [] == ExWapp.Chat.messages(bob_store, group_jid, limit: 1)
-    assert Enum.any?(distribution_actions, fn {action, _, _, _, _} -> action == :send_receipt end)
+    assert Enum.any?(distribution_actions, fn {action, _, _, _, _, _} -> action == :send_receipt end)
 
     {:ok, text_payload} =
       ExWapp.Messages.build_text_proto("group message works", [])
