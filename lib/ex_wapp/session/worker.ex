@@ -83,6 +83,8 @@ defmodule ExWapp.Session.Worker do
     drops_window_ms: []
   }
 
+  @max_outgoing_retry_payloads 512
+
   defstruct [
     :store,
     :transport_mod,
@@ -113,6 +115,7 @@ defmodule ExWapp.Session.Worker do
     pending_iqs: %{},
     signal_sessions: nil,
     retry_counters: %{},
+    outgoing_retry_payloads: %{},
     outbound_confirmations: %{},
     app_state_initial_sync_requested: false,
     post_auth_phase: :idle,
@@ -163,6 +166,7 @@ defmodule ExWapp.Session.Worker do
           passive_iq_id: binary() | nil,
           digest_iq_id: binary() | nil,
           retry_counters: map(),
+          outgoing_retry_payloads: map(),
           outbound_confirmations: map(),
           stats: map()
         }
@@ -955,17 +959,16 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_info({:send_result, jid, text, {:ok, message_id}, strategy, attempt}, state) do
-    state = clear_consecutive_send_errors(state)
+    state =
+      state
+      |> remember_outgoing_retry_payload(jid, text, message_id)
+      |> clear_consecutive_send_errors()
+
     {:noreply, schedule_outbound_confirmation(state, jid, text, message_id, strategy, attempt)}
   end
 
   def handle_info({:send_result, jid, _text, {:error, reason}, strategy, attempt}, state) do
-    state =
-      register_send_error(state, {:send_failed, reason}, %{
-        jid: jid,
-        strategy: strategy,
-        attempt: attempt
-      })
+    state = register_send_error(state, {:send_failed, reason}, %{jid: jid, strategy: strategy, attempt: attempt})
 
     case maybe_apply_send_error_guard(state, {:send_failed, reason}) do
       {:continue, new_state} -> {:noreply, new_state}
@@ -1354,6 +1357,7 @@ defmodule ExWapp.Session.Worker do
         max_attempts: max_attempts,
         normalize_jid: &JIDUtils.normalize_for_signal/1,
         start_worker: &start_send_worker/3,
+        outgoing_payloads: Map.get(state, :outgoing_retry_payloads, %{}),
         send_fun: fn normalized_jid, text ->
           do_send_text_worker(session_pid, state, normalized_jid, text)
         end
@@ -1409,6 +1413,40 @@ defmodule ExWapp.Session.Worker do
 
   defp schedule_outbound_confirmation(state, _jid, _text, _message_id, _strategy, _attempt),
     do: state
+
+  defp remember_outgoing_retry_payload(state, jid, text, message_id)
+       when is_binary(jid) and is_binary(message_id) do
+    normalized_text = normalize_outbound_text(text)
+
+    if normalized_text == "" do
+      state
+    else
+      payloads = Map.get(state, :outgoing_retry_payloads, %{})
+
+      updated_payloads =
+        payloads
+        |> Map.put(message_id, %{
+          jid: JIDUtils.normalize_for_signal(jid),
+          text: normalized_text,
+          inserted_at_ms: System.monotonic_time(:millisecond)
+        })
+        |> trim_outgoing_retry_payloads()
+
+      %{state | outgoing_retry_payloads: updated_payloads}
+    end
+  end
+
+  defp remember_outgoing_retry_payload(state, _jid, _text, _message_id), do: state
+
+  defp trim_outgoing_retry_payloads(payloads)
+       when is_map(payloads) and map_size(payloads) > @max_outgoing_retry_payloads do
+    payloads
+    |> Enum.sort_by(fn {_message_id, payload} -> Map.get(payload, :inserted_at_ms, 0) end, :desc)
+    |> Enum.take(@max_outgoing_retry_payloads)
+    |> Map.new()
+  end
+
+  defp trim_outgoing_retry_payloads(payloads), do: payloads
 
   defp register_send_worker(state, worker, mon, jid) do
     state

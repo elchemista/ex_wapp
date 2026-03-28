@@ -199,8 +199,7 @@ defmodule ExWapp.Noise do
          {:ok, secrets} <- complete_handshake(state, handshake_ref),
          {:ok, cipher_ref} <- build_transport_cipher(state, secrets),
          :ok <- verify_certificate_callback(state, secrets),
-         :ok <- persist_pending_data(state),
-         :ok <- persist_handshake_metadata(state, secrets),
+         :ok <- persist_handshake_data(state, secrets),
          new_state <- promote_to_transport(state, secrets, cipher_ref) do
       Logger.debug(
         "Handshake client finish (#{byte_size(client_finish)} bytes): #{hex(client_finish)}"
@@ -240,23 +239,14 @@ defmodule ExWapp.Noise do
 
   defp verify_certificate_callback(_state, _secrets), do: {:error, :invalid_certificate_verifier}
 
-  defp persist_pending_data(%__MODULE__{store: nil}), do: :ok
-  defp persist_pending_data(%__MODULE__{pending_store_data: nil}), do: :ok
+  defp persist_handshake_data(%__MODULE__{store: nil}, %Secrets{}), do: :ok
 
-  defp persist_pending_data(%__MODULE__{store: store, pending_store_data: pending}) do
-    # MERGE pending data with existing store data to preserve noise static keys
-    current = Store.load!(store)
-    merged = Map.merge(current, pending)
+  defp persist_handshake_data(%__MODULE__{store: store, pending_store_data: pending}, %Secrets{} = secrets) do
+    data =
+      store
+      |> Store.load!()
+      |> Map.merge(pending || %{})
 
-    Logger.debug("[NOISE] persist_pending_data: merging keys")
-
-    Store.persist(store, merged)
-  end
-
-  defp persist_handshake_metadata(%__MODULE__{store: nil}, %Secrets{}), do: :ok
-
-  defp persist_handshake_metadata(%__MODULE__{store: store}, %Secrets{} = secrets) do
-    data = Store.load!(store)
     noise = Map.get(data, :noise, %{})
 
     updated_noise =
@@ -266,7 +256,7 @@ defmodule ExWapp.Noise do
       |> Map.put(:server_static, secrets.server_static)
       |> Map.put(:server_certificate, secrets.server_certificate)
 
-    Logger.debug("[NOISE] persist_handshake_metadata completed")
+    Logger.debug("[NOISE] persist_handshake_data completed")
 
     case Store.persist(store, Map.put(data, :noise, updated_noise)) do
       :ok -> :ok

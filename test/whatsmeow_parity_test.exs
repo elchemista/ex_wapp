@@ -127,6 +127,43 @@ defmodule ExWapp.WhatsmeowParityTest do
     assert previous.id == "PARITY_1"
   end
 
+  test "marks self messages as from_me when the sender matches the local identity" do
+    own_jid = "180178928033960@lid"
+
+    store =
+      ExWapp.Store.Memory.new(
+        initial_data: %{
+          client_info: %{jid: own_jid, wid: own_jid, lid: own_jid},
+          chats: %{}
+        }
+      )
+
+    node = %Node{
+      tag: "message",
+      attrs: %{
+        "from" => own_jid,
+        "id" => "SELF_1",
+        "type" => "text",
+        "t" => "1730000002"
+      },
+      content: [%Node{tag: "body", attrs: %{}, content: "sent from my linked device"}]
+    }
+
+    initial_state = %{
+      store: store,
+      signal_sessions: SessionStore.new(),
+      stats: %{messages_received: 0}
+    }
+
+    assert {:ok, _state_after, _actions} = MessageHandler.handle_node(node, self(), initial_state)
+
+    [message | _] = ExWapp.Chat.messages(store, own_jid, limit: 1)
+    assert message.id == "SELF_1"
+    assert message.from_me == true
+    assert message.status == :sent
+    assert get_in(message, [:raw, :from_me]) == true
+  end
+
   test "handler tries multiple enc candidates and decrypts the first valid one" do
     alice_identity = Keys.generate_key_pair()
     bob_identity = Keys.generate_key_pair()

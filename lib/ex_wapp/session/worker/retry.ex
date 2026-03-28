@@ -18,6 +18,7 @@ defmodule ExWapp.Session.Worker.Retry do
     start_worker = Keyword.fetch!(opts, :start_worker)
     send_fun = Keyword.fetch!(opts, :send_fun)
     max_attempts = Keyword.fetch!(opts, :max_attempts)
+    outgoing_payloads = Keyword.get(opts, :outgoing_payloads, %{})
 
     normalized_jid = normalize_jid.(jid)
     counter_key = outbound_retry_counter_key(normalized_jid, message_id)
@@ -30,12 +31,30 @@ defmodule ExWapp.Session.Worker.Retry do
 
       state
     else
-      do_retry(state, normalized_jid, message_id, attempts, max_attempts, start_worker, send_fun)
+      do_retry(
+        state,
+        normalized_jid,
+        message_id,
+        attempts,
+        max_attempts,
+        start_worker,
+        send_fun,
+        outgoing_payloads
+      )
     end
   end
 
-  defp do_retry(state, jid, message_id, attempts, max_attempts, start_worker, send_fun) do
-    case find_outgoing_message_text(state.store, jid, message_id) do
+  defp do_retry(
+         state,
+         jid,
+         message_id,
+         attempts,
+         max_attempts,
+         start_worker,
+         send_fun,
+         outgoing_payloads
+       ) do
+    case find_outgoing_message_text(state.store, jid, message_id, outgoing_payloads) do
       {:ok, text} ->
         Logger.warning(
           "[SEND] Retrying outbound message id=#{message_id} to=#{jid} (attempt #{attempts + 1}/#{max_attempts})"
@@ -87,9 +106,19 @@ defmodule ExWapp.Session.Worker.Retry do
     "outbound_retry|#{jid}|#{message_id}"
   end
 
-  defp find_outgoing_message_text(nil, _jid, _message_id), do: {:error, :missing_store}
+  defp find_outgoing_message_text(store, jid, message_id, outgoing_payloads) do
+    case find_outgoing_message_text_in_cache(outgoing_payloads, jid, message_id) do
+      {:ok, _text} = ok ->
+        ok
 
-  defp find_outgoing_message_text(store, jid, message_id) do
+      :error ->
+        find_outgoing_message_text_in_store(store, jid, message_id)
+    end
+  end
+
+  defp find_outgoing_message_text_in_store(nil, _jid, _message_id), do: {:error, :missing_store}
+
+  defp find_outgoing_message_text_in_store(store, jid, message_id) do
     case find_outgoing_message_text_in_chat(store, jid, message_id) do
       {:ok, _text} = ok ->
         ok
@@ -101,6 +130,25 @@ defmodule ExWapp.Session.Worker.Retry do
     error ->
       {:error, {:lookup_failed, error}}
   end
+
+  defp find_outgoing_message_text_in_cache(outgoing_payloads, jid, message_id)
+       when is_map(outgoing_payloads) and is_binary(message_id) do
+    case Map.get(outgoing_payloads, message_id) do
+      %{text: text} = payload when is_binary(text) and text != "" ->
+        cached_jid = Map.get(payload, :jid, "")
+
+        if cached_jid in ["", jid] do
+          {:ok, text}
+        else
+          :error
+        end
+
+      _payload ->
+        :error
+    end
+  end
+
+  defp find_outgoing_message_text_in_cache(_outgoing_payloads, _jid, _message_id), do: :error
 
   defp find_outgoing_message_text_in_chat(store, jid, message_id) do
     store

@@ -39,6 +39,8 @@ defmodule ExWapp.AppState.Engine do
   @appstate_media_mms_type "md-app-state"
   @default_media_hosts ["mmg.whatsapp.net", "mmg-fallback.whatsapp.net"]
   @media_hmac_length 10
+  @media_conn_cache_ttl_ms :timer.minutes(5)
+  @media_conn_cache_table :ex_wapp_media_conn_cache
 
   # ============================================================================
   # Collection names (matching whatsmeow appstate/keys.go)
@@ -1306,14 +1308,75 @@ defmodule ExWapp.AppState.Engine do
 
   defp media_download_hosts(session) do
     queried_hosts =
-      case query_media_conn_hosts(session) do
-        {:ok, hosts} when is_list(hosts) -> hosts
-        _ -> []
+      case cached_media_conn_hosts(session) do
+        {:ok, hosts} when is_list(hosts) ->
+          hosts
+
+        :miss ->
+          case query_media_conn_hosts(session) do
+            {:ok, hosts} when is_list(hosts) ->
+              cache_media_conn_hosts(session, hosts)
+              hosts
+
+            _ ->
+              []
+          end
       end
 
     (queried_hosts ++ @default_media_hosts)
     |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
     |> Enum.uniq()
+  end
+
+  defp cached_media_conn_hosts(session) when is_pid(session) do
+    table = ensure_media_conn_cache_table()
+
+    case :ets.lookup(table, session) do
+      [{^session, %{hosts: hosts, expires_at: expires_at}}]
+      when is_list(hosts) and is_integer(expires_at) ->
+        if Process.alive?(session) and System.monotonic_time(:millisecond) < expires_at do
+          {:ok, hosts}
+        else
+          :ets.delete(table, session)
+          :miss
+        end
+
+      _ ->
+        :miss
+    end
+  end
+
+  defp cached_media_conn_hosts(_session), do: :miss
+
+  defp cache_media_conn_hosts(session, hosts) when is_pid(session) and is_list(hosts) do
+    table = ensure_media_conn_cache_table()
+
+    :ets.insert(table, {
+      session,
+      %{
+        hosts: hosts,
+        expires_at: System.monotonic_time(:millisecond) + @media_conn_cache_ttl_ms
+      }
+    })
+
+    :ok
+  end
+
+  defp cache_media_conn_hosts(_session, _hosts), do: :ok
+
+  defp ensure_media_conn_cache_table do
+    case :ets.whereis(@media_conn_cache_table) do
+      :undefined ->
+        try do
+          :ets.new(@media_conn_cache_table, [:named_table, :public, :set, read_concurrency: true])
+          @media_conn_cache_table
+        rescue
+          ArgumentError -> @media_conn_cache_table
+        end
+
+      _tid ->
+        @media_conn_cache_table
+    end
   end
 
   defp query_media_conn_hosts(session) when is_pid(session) do

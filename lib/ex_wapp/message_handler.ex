@@ -94,19 +94,21 @@ defmodule ExWapp.MessageHandler do
     {message_data, state} = maybe_decrypt_message(message_data, state, from, participant, attrs)
     state = maybe_ingest_history_sync(message_data, session, state, from, id)
     state = maybe_ingest_app_state_keys(message_data, session, state)
+    from_me = inbound_from_me?(attrs, from, state, message_data)
 
     # Build message struct
     message = %{
       id: id,
-      from_me: false,
+      from_me: from_me,
       timestamp: timestamp,
       text: message_data[:text],
-      status: :received,
+      status: if(from_me, do: :sent, else: :received),
       participant: participant,
       raw: %{
         type: type,
         attrs: attrs,
-        media: message_data[:media]
+        media: message_data[:media],
+        from_me: from_me
       }
     }
 
@@ -1040,18 +1042,47 @@ defmodule ExWapp.MessageHandler do
     |> Map.put(:decrypt_status, :ok)
     |> Map.put(:message_content_type, :protocol)
     |> Map.put(:protocol_payload, plaintext)
+    |> Map.put(:from_me, device_sent_message_payload?(plaintext))
   end
 
-  defp build_decoded_message_data(message_data, text, content_type, _plaintext) do
+  defp build_decoded_message_data(message_data, text, content_type, plaintext) do
     message_data
     |> Map.put(:text, text)
     |> Map.put(:decrypt_status, :ok)
     |> Map.put(:message_content_type, content_type)
+    |> Map.put(:from_me, device_sent_message_payload?(plaintext))
   end
 
   defp decrypt_error_result(message_data, state, reason) do
     {Map.put(message_data, :decrypt_status, {:error, reason}), state}
   end
+
+  defp inbound_from_me?(attrs, from, state, message_data)
+       when is_map(attrs) and is_map(message_data) do
+    explicit_from_me?(Map.get(attrs, "from_me")) or
+      Map.get(message_data, :from_me, false) == true or
+      from_matches_local_identity?(from, state, attrs)
+  end
+
+  defp inbound_from_me?(_attrs, _from, _state, _message_data), do: false
+
+  defp explicit_from_me?(value) when value in [true, 1, "1", "true"], do: true
+  defp explicit_from_me?(_value), do: false
+
+  defp from_matches_local_identity?(from, state, attrs) do
+    normalized_from_with_device = normalize_jid_with_device(from)
+    normalized_from = normalize_jid(from)
+    local_jids = local_recipient_jids(state, attrs)
+
+    normalized_from_with_device != "" and
+      (normalized_from_with_device in local_jids or normalized_from in local_jids)
+  end
+
+  defp device_sent_message_payload?(payload) when is_binary(payload) do
+    match?({:ok, _wrapped}, find_length_delimited_field(payload, 31))
+  end
+
+  defp device_sent_message_payload?(_payload), do: false
 
   defp maybe_ingest_history_sync(
          %{message_content_type: :protocol, protocol_payload: payload},
