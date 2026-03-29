@@ -134,6 +134,45 @@ defmodule ExWapp.Session.JIDUtils do
     end
   end
 
+  @spec related_bases(term(), map() | nil) :: [String.t()]
+  def related_bases(base_jid, lid_mapping) do
+    base_jid =
+      base_jid
+      |> normalize_with_device()
+      |> strip_device()
+
+    [
+      base_jid,
+      Map.get(lid_mapping || %{}, {:pn_to_lid, base_jid}, ""),
+      Map.get(lid_mapping || %{}, {:lid_to_pn, base_jid}, "")
+    ]
+    |> normalize_target_list()
+  end
+
+  @spec map_to_preferred_family(term(), term(), map() | nil) :: String.t()
+  def map_to_preferred_family(target_jid, preferred_base_jid, lid_mapping) do
+    preferred_base_jid =
+      preferred_base_jid
+      |> normalize_with_device()
+      |> strip_device()
+
+    target_jid = normalize_with_device(target_jid)
+
+    cond do
+      target_jid == "" ->
+        ""
+
+      preferred_base_jid == "" ->
+        target_jid
+
+      lid_jid?(preferred_base_jid) ->
+        resolve_signal_encryption_jid(target_jid, lid_mapping)
+
+      true ->
+        map_target_to_pn_family(target_jid, lid_mapping)
+    end
+  end
+
   @spec normalize_target_list(term()) :: [String.t()]
   def normalize_target_list(targets) when is_list(targets) do
     targets
@@ -231,6 +270,25 @@ defmodule ExWapp.Session.JIDUtils do
 
   defp maybe_prepend_order(order, kinds, jid) do
     if Map.has_key?(kinds, jid), do: order, else: [jid | order]
+  end
+
+  defp map_target_to_pn_family(target_jid, lid_mapping) do
+    base_target_jid =
+      target_jid
+      |> normalize_with_device()
+      |> strip_device()
+
+    mapped_pn =
+      lid_mapping
+      |> Map.get({:lid_to_pn, base_target_jid}, "")
+      |> normalize_with_device()
+      |> strip_device()
+
+    if mapped_pn == "" do
+      target_jid
+    else
+      maybe_apply_device_to_mapped_jid(target_jid, mapped_pn)
+    end
   end
 
   defp merge_payload_kind(:own, _new_kind), do: :own

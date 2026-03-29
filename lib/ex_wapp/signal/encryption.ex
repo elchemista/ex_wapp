@@ -154,12 +154,12 @@ defmodule ExWapp.Signal.Encryption do
             {:ok, plaintext, updated_store}
 
           {:error, reason} ->
-            Logger.warning("[ENCRYPTION] Decrypt failed: #{inspect(reason)}")
+            Logger.error("[ENCRYPTION] Decrypt failed: #{inspect(reason)}")
             {:error, reason}
         end
 
       {:error, reason} ->
-        Logger.warning("[ENCRYPTION] get_local_keys failed: #{inspect(reason)}")
+        Logger.error("[ENCRYPTION] get_local_keys failed: #{inspect(reason)}")
         {:error, reason}
     end
   end

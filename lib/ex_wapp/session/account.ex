@@ -72,9 +72,7 @@ defmodule ExWapp.Session.Account do
   def load_lid_mapping(nil), do: %{}
 
   def load_lid_mapping(store) do
-    store
-    |> Store.load!()
-    |> Map.get(:lid_mapping, %{})
+    Store.get(store, :lid_mapping, %{})
   rescue
     e ->
       Logger.warning("[ACCOUNT] load_lid_mapping failed: #{inspect(e)}")

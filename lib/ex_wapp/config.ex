@@ -94,6 +94,10 @@ defmodule ExWapp.Config do
         min_threshold: 5,
         upload_cooldown_ms: 120_000
       },
+      signal: %{
+        session_max_age_ms: :timer.hours(12),
+        device_cache_max_age_ms: :timer.hours(24 * 14)
+      },
       protocol: %{
         strict_mode: false,
         client_version: @default_client_version,

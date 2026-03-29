@@ -9,6 +9,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   alias ExWapp.Session.{
     Account,
+    DeviceCache,
     IQ,
     JIDUtils,
     MessageNode,
@@ -19,25 +20,62 @@ defmodule ExWapp.Session.Worker.Outbound do
           {:ok, String.t()} | {:error, term()}
   def send_text_worker(session_pid, state, jid, text, opts \\ []) do
     normalized_jid = normalize_jid_with_device(jid)
+    recipient_fanout_retry? = Keyword.get(opts, :recipient_fanout_retry, false)
 
     if JID.group?(normalized_jid) do
-      do_send_group_worker(session_pid, state, normalized_jid, text)
+      do_send_group_worker(session_pid, state, normalized_jid, text, opts)
     else
       jid = normalize_jid_for_signal(normalized_jid)
 
       case ensure_signal_session_worker(state, jid) do
         {:ok, updated_sessions, prekey_bundles, target_hints} ->
           # Now send with encryption
-          do_send_encrypted(
-            session_pid,
-            state,
-            updated_sessions,
-            jid,
-            text,
-            prekey_bundles,
-            target_hints,
-            opts
-          )
+          case do_send_encrypted(
+                 session_pid,
+                 state,
+                 updated_sessions,
+                 jid,
+                 text,
+                 prekey_bundles,
+                 target_hints,
+                 opts
+               ) do
+            {:error, {:fanout_incomplete, missing_targets}}
+            when not recipient_fanout_retry? ->
+	              Logger.warning(
+	                "[SEND] Fanout incomplete for #{jid}, clearing cached sessions and retrying once: #{inspect(missing_targets)}"
+	              )
+
+	              retry_state = %{
+	                state
+	                | signal_sessions:
+	                    clear_cached_signal_sessions_for_targets(
+	                      updated_sessions,
+	                      missing_targets,
+	                      state.store
+	                    )
+	              }
+
+              case ensure_signal_session_worker(retry_state, jid) do
+                {:ok, retried_sessions, retried_prekey_bundles, retried_target_hints} ->
+                  do_send_encrypted(
+                    session_pid,
+                    retry_state,
+                    retried_sessions,
+                    jid,
+                    text,
+                    retried_prekey_bundles,
+                    retried_target_hints,
+                    Keyword.put(opts, :recipient_fanout_retry, true)
+                  )
+
+                {:error, reason} ->
+                  {:error, {:session_failed, reason}}
+              end
+
+            result ->
+              result
+          end
 
         {:error, reason} ->
           {:error, {:session_failed, reason}}
@@ -49,10 +87,12 @@ defmodule ExWapp.Session.Worker.Outbound do
          session_pid,
          %{conn: conn, store: store} = state,
          group_jid,
-         text
+         text,
+         opts
        )
        when is_pid(conn) do
     group_jid = strip_device_from_jid(normalize_jid_with_device(group_jid))
+    group_fanout_retry? = Keyword.get(opts, :group_fanout_retry, false)
     own_jid = Account.local_account_base_jid(store)
     message_id = Messages.generate_id(own_jid)
     timestamp = System.system_time(:second)
@@ -79,49 +119,82 @@ defmodule ExWapp.Session.Worker.Outbound do
              %{recipient: distribution_payload},
              prekey_bundles || %{}
            ) do
-      persist_signal_sessions(session_pid, persisted_sessions, state)
+      case missing_expected_targets(distribution_target_specs, participant_nodes) do
+        [] ->
+          persist_signal_sessions(session_pid, persisted_sessions, state)
 
-      pending_message = %{
-        id: message_id,
-        from_me: true,
-        timestamp: timestamp,
-        text: text,
-        status: :pending,
-        participant: nil,
-        raw: nil
-      }
+          pending_message = %{
+            id: message_id,
+            from_me: true,
+            timestamp: timestamp,
+            text: text,
+            status: :pending,
+            participant: nil,
+            raw: nil
+          }
 
-      Chat.add_message(store, group_jid, pending_message)
+          Chat.add_message(store, group_jid, pending_message)
 
-      node =
-        build_group_encrypted_message_node(
-          group_jid,
-          message_id,
-          participant_nodes,
-          skmsg_payload,
-          group_info.addressing_mode,
-          store,
-          include_identity
-        )
+          node =
+            build_group_encrypted_message_node(
+              group_jid,
+              message_id,
+              participant_nodes,
+              skmsg_payload,
+              group_info.addressing_mode,
+              store,
+              include_identity
+            )
 
-      case send_transport_node(state, conn, node) do
-        :ok ->
-          Logger.debug(
-            "[SEND] Sent group encrypted message to #{group_jid} (distribution_targets=#{length(participant_nodes)})"
+          case send_transport_node(state, conn, node) do
+            :ok ->
+              Logger.debug(
+                "[SEND] Sent group encrypted message to #{group_jid} (distribution_targets=#{length(participant_nodes)})"
+              )
+
+              emit_telemetry(
+                :message_sent,
+                %{message_count: 1, payload_bytes: byte_size(payload)},
+                state,
+                %{jid: group_jid, message_id: message_id, encryption: :group_sender_key}
+              )
+
+              {:ok, message_id}
+
+            error ->
+              Chat.update_message_status(store, group_jid, message_id, :failed)
+              error
+          end
+
+        missing_targets when not group_fanout_retry? ->
+	          Logger.warning(
+	            "[SEND] Group distribution incomplete for #{group_jid}, clearing cached sessions and retrying once: #{inspect(missing_targets)}"
+	          )
+
+	          retry_state = %{
+	            state
+	            | signal_sessions:
+	                clear_cached_signal_sessions_for_targets(
+	                  persisted_sessions,
+	                  missing_targets,
+	                  state.store
+	                )
+	          }
+
+          do_send_group_worker(
+            session_pid,
+            retry_state,
+            group_jid,
+            text,
+            Keyword.put(opts, :group_fanout_retry, true)
           )
 
-          emit_telemetry(
-            :message_sent,
-            %{message_count: 1, payload_bytes: byte_size(payload)},
-            state,
-            %{jid: group_jid, message_id: message_id, encryption: :group_sender_key}
+        missing_targets ->
+          Logger.error(
+            "[SEND] Aborting group send to #{group_jid}: missing encrypted targets #{inspect(missing_targets)}"
           )
 
-          {:ok, message_id}
-
-        error ->
-          Chat.update_message_status(store, group_jid, message_id, :failed)
-          error
+          {:error, {:group_distribution_incomplete, missing_targets}}
       end
     else
       {:error, reason} ->
@@ -130,7 +203,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
-  defp do_send_group_worker(_session_pid, %{status: status}, _group_jid, _text),
+  defp do_send_group_worker(_session_pid, %{status: status}, _group_jid, _text, _opts),
     do: {:error, {:not_connected, status}}
 
   defp build_group_sender_key_payloads(store, group_jid, message_payload) do
@@ -182,18 +255,20 @@ defmodule ExWapp.Session.Worker.Outbound do
     query_jids = build_group_query_jids(participant_jids, own_jids_for_query)
     device_map = fetch_group_device_map(state, group_jid, query_jids)
 
-    distribution_targets =
+    {live_distribution_targets, cached_distribution_targets} =
       build_group_distribution_targets(
         query_jids,
         device_map,
         addressing_mode,
         own_device_id,
         own_base_jid,
-        own_lid_jid
+        own_lid_jid,
+        state.store,
+        state.runtime_cfg
       )
 
     Logger.debug(
-      "[SEND] Group sender-key distribution targets for #{group_jid}: #{inspect(distribution_targets)}"
+      "[SEND] Group sender-key distribution targets for #{group_jid}: live=#{inspect(live_distribution_targets)} cached=#{inspect(cached_distribution_targets)}"
     )
 
     own_identity_set = group_own_identity_set(own_base_jid, own_lid_jid)
@@ -201,7 +276,8 @@ defmodule ExWapp.Session.Worker.Outbound do
 
     devices_needing_prekeys =
       find_group_devices_needing_prekeys(
-        distribution_targets,
+        JIDUtils.normalize_target_list(live_distribution_targets ++ cached_distribution_targets),
+        state.runtime_cfg,
         signal_sessions,
         lid_mapping,
         own_identity_set
@@ -210,7 +286,17 @@ defmodule ExWapp.Session.Worker.Outbound do
     {updated_sessions, prekey_bundles} =
       fetch_group_prekeys(state, devices_needing_prekeys, signal_sessions, "group")
 
-    finalize_group_sessions_result(updated_sessions, prekey_bundles, distribution_targets)
+    finalize_group_sessions_result(
+      updated_sessions,
+      prekey_bundles,
+      finalize_soft_targets(
+        state.store,
+        updated_sessions,
+        prekey_bundles,
+        live_distribution_targets,
+        cached_distribution_targets
+      )
+    )
   end
 
   # Only add the own JID variant that matches the group's addressing_mode.
@@ -243,87 +329,48 @@ defmodule ExWapp.Session.Worker.Outbound do
          addressing_mode,
          own_device_id,
          own_base_jid,
-         own_lid_jid
+         own_lid_jid,
+         store,
+         runtime_cfg
        ) do
-    query_jids
-    |> expand_group_distribution_targets(device_map)
-    |> JIDUtils.normalize_target_list()
-    |> filter_group_targets_for_addressing_mode(addressing_mode)
-    |> Enum.reject(&group_current_device_target?(&1, own_device_id, [own_base_jid, own_lid_jid]))
-    |> Enum.uniq()
+    {live_targets, cached_targets} =
+      expand_group_distribution_targets(query_jids, device_map, store, runtime_cfg)
+
+    live_targets =
+      live_targets
+      |> JIDUtils.normalize_target_list()
+      |> filter_group_targets_for_addressing_mode(addressing_mode)
+      |> Enum.reject(&group_current_device_target?(&1, own_device_id, [own_base_jid, own_lid_jid]))
+      |> Enum.uniq()
+
+    cached_targets =
+      cached_targets
+      |> JIDUtils.normalize_target_list()
+      |> filter_group_targets_for_addressing_mode(addressing_mode)
+      |> Enum.reject(&group_current_device_target?(&1, own_device_id, [own_base_jid, own_lid_jid]))
+      |> Enum.reject(&(&1 in live_targets))
+      |> Enum.uniq()
+
+    {live_targets, cached_targets}
   end
 
-  defp expand_group_distribution_targets(query_jids, device_map) when is_list(query_jids) do
-    Enum.flat_map(query_jids, fn participant ->
+  defp expand_group_distribution_targets(query_jids, device_map, store, runtime_cfg)
+       when is_list(query_jids) do
+    lid_mapping = Account.load_lid_mapping(store)
+
+    Enum.reduce(query_jids, {[], []}, fn participant, {live_acc, cached_acc} ->
       base_participant = strip_device_from_jid(participant)
 
-      case Map.get(device_map, base_participant, []) do
-        [] -> [base_participant]
-        devices -> devices
-      end
+      live_targets =
+        [base_participant | resolve_usync_devices_for_identity(device_map, base_participant, lid_mapping)]
+        |> JIDUtils.normalize_target_list()
+
+      cached_targets =
+        DeviceCache.resolve_recent_devices(store, base_participant, runtime_cfg)
+        |> Enum.reject(&(&1 in live_targets))
+
+      {live_acc ++ live_targets, cached_acc ++ cached_targets}
     end)
-  end
-
-  defp group_own_identity_set(own_base_jid, own_lid_jid) do
-    [own_base_jid, own_lid_jid]
-    |> Enum.map(&JIDUtils.identity/1)
-    |> Enum.reject(fn {user, server} -> user == "" or server == "" end)
-    |> MapSet.new()
-  end
-
-  defp find_group_devices_needing_prekeys(
-         distribution_targets,
-         signal_sessions,
-         lid_mapping,
-         own_identity_set
-       ) do
-    Enum.filter(distribution_targets, fn device_jid ->
-      group_target_needs_prekey?(device_jid, signal_sessions, lid_mapping, own_identity_set)
-    end)
-  end
-
-  defp group_target_needs_prekey?(device_jid, signal_sessions, lid_mapping, own_identity_set) do
-    device_jid = normalize_jid_with_device(device_jid)
-    signal_jid = JIDUtils.resolve_signal_encryption_jid(device_jid, lid_mapping)
-    target_identity = JIDUtils.identity(device_jid)
-
-    # Pragmatic sync fix: always refresh our own targets so distribution fanout
-    # to phone/other linked devices starts with a clean pkmsg bootstrap.
-    MapSet.member?(own_identity_set, target_identity) or
-      not (SessionStore.has_session?(signal_sessions, signal_jid) or
-             SessionStore.has_session?(signal_sessions, device_jid))
-  end
-
-  defp fetch_group_prekeys(_state, [], signal_sessions, _context), do: {signal_sessions, %{}}
-
-  defp fetch_group_prekeys(state, devices_needing_prekeys, signal_sessions, context) do
-    Logger.debug(
-      "[SEND] Fetching group prekeys for #{length(devices_needing_prekeys)} devices: #{inspect(devices_needing_prekeys)}"
-    )
-
-    {updated_sessions, prekey_bundles} =
-      case fetch_prekeys_batch_worker(state, devices_needing_prekeys, signal_sessions) do
-        {:ok, sessions, bundles} ->
-          {sessions, bundles}
-
-        {:error, reason} ->
-          Logger.warning(
-            "[SEND] Group batch prekey fetch failed: #{inspect(reason)}, retrying individually"
-          )
-
-          case fetch_prekeys_individually_worker(state, devices_needing_prekeys, signal_sessions) do
-            {:ok, sessions, bundles} -> {sessions, bundles}
-            {:error, fallback_reason} -> {{:error, fallback_reason}, %{}}
-          end
-      end
-
-    retry_missing_prekeys_worker(
-      state,
-      devices_needing_prekeys,
-      updated_sessions,
-      prekey_bundles,
-      context
-    )
   end
 
   defp finalize_group_sessions_result({:error, reason}, _prekey_bundles, _distribution_targets),
@@ -364,6 +411,94 @@ defmodule ExWapp.Session.Worker.Outbound do
   end
 
   defp filter_group_targets_for_addressing_mode(targets, _), do: targets
+
+  defp group_own_identity_set(own_base_jid, own_lid_jid) do
+    [own_base_jid, own_lid_jid]
+    |> Enum.map(&JIDUtils.identity/1)
+    |> Enum.reject(fn {user, server} -> user == "" or server == "" end)
+    |> MapSet.new()
+  end
+
+  defp find_group_devices_needing_prekeys(
+         distribution_targets,
+         runtime_cfg,
+         signal_sessions,
+         lid_mapping,
+         own_identity_set
+       ) do
+    Enum.filter(distribution_targets, fn device_jid ->
+      group_target_needs_prekey?(
+        device_jid,
+        runtime_cfg,
+        signal_sessions,
+        lid_mapping,
+        own_identity_set
+      )
+    end)
+  end
+
+  defp group_target_needs_prekey?(
+         device_jid,
+         runtime_cfg,
+         signal_sessions,
+         lid_mapping,
+         own_identity_set
+       ) do
+    device_jid = normalize_jid_with_device(device_jid)
+    signal_jid = JIDUtils.resolve_signal_encryption_jid(device_jid, lid_mapping)
+    target_identity = JIDUtils.identity(device_jid)
+    now_ms = System.system_time(:millisecond)
+
+    session_max_age_ms =
+      Config.get(
+        runtime_cfg || %{},
+        [:signal, :session_max_age_ms],
+        :timer.hours(12)
+      )
+
+    # Pragmatic sync fix: always refresh our own targets so distribution fanout
+    # to phone/other linked devices starts with a clean pkmsg bootstrap.
+    MapSet.member?(own_identity_set, target_identity) or
+      not (SessionStore.has_session?(signal_sessions, signal_jid) or
+             SessionStore.has_session?(signal_sessions, device_jid)) or
+      SessionStore.stale_or_missing?(
+        signal_sessions,
+        [signal_jid, device_jid],
+        session_max_age_ms,
+        now_ms
+      )
+  end
+  defp fetch_group_prekeys(_state, [], signal_sessions, _context), do: {signal_sessions, %{}}
+
+  defp fetch_group_prekeys(state, devices_needing_prekeys, signal_sessions, context) do
+    Logger.debug(
+      "[SEND] Fetching group prekeys for #{length(devices_needing_prekeys)} devices: #{inspect(devices_needing_prekeys)}"
+    )
+
+    {updated_sessions, prekey_bundles} =
+      case fetch_prekeys_batch_worker(state, devices_needing_prekeys, signal_sessions) do
+        {:ok, sessions, bundles} ->
+          {sessions, bundles}
+
+        {:error, reason} ->
+          Logger.warning(
+            "[SEND] Group batch prekey fetch failed: #{inspect(reason)}, retrying individually"
+          )
+
+          case fetch_prekeys_individually_worker(state, devices_needing_prekeys, signal_sessions) do
+            {:ok, sessions, bundles} -> {sessions, bundles}
+            {:error, fallback_reason} -> {{:error, fallback_reason}, %{}}
+          end
+      end
+
+    retry_missing_prekeys_worker(
+      state,
+      devices_needing_prekeys,
+      updated_sessions,
+      prekey_bundles,
+      context
+    )
+  end
 
   defp build_group_encrypted_message_node(
          group_jid,
@@ -536,7 +671,8 @@ defmodule ExWapp.Session.Worker.Outbound do
     own_device_id = Account.local_account_device_id(state.store)
     recipient_base_jid = strip_device_from_jid(normalize_jid_with_device(jid))
 
-    {recipient_devices, own_devices, all_usync_devices, all_device_jids} =
+    {recipient_devices, recipient_cached_devices, own_devices, own_cached_devices, all_usync_devices,
+     all_device_jids} =
       discover_devices(state, recipient_base_jid, own_sender_jid, own_device_id)
 
     # For self-chat, force fresh prekey-based sessions for all targets.
@@ -552,8 +688,33 @@ defmodule ExWapp.Session.Worker.Outbound do
         signal_sessions
       end
 
+    own_target_candidates =
+      Targets.resolve_own_device_targets(
+        signal_sessions,
+        own_sender_jid,
+        own_device_id,
+        own_devices
+      )
+
+    all_target_device_jids =
+      JIDUtils.normalize_target_list(
+        recipient_devices ++ recipient_cached_devices ++ own_target_candidates ++ own_cached_devices
+      )
+      |> Enum.reject(&current_device_target?(&1, own_device_id))
+
+    all_participant_devices =
+      JIDUtils.normalize_target_list(
+        all_usync_devices ++ recipient_cached_devices ++ own_target_candidates
+      )
+
     devices_needing_prekeys =
-      find_devices_needing_prekeys(state.store, signal_sessions, all_device_jids)
+      find_devices_needing_prekeys(
+        state.runtime_cfg,
+        state.store,
+        signal_sessions,
+        all_target_device_jids,
+        own_target_candidates ++ own_cached_devices
+      )
 
     {updated_sessions, prekey_bundles} =
       fetch_needed_prekeys(state, devices_needing_prekeys, signal_sessions, recipient_base_jid)
@@ -575,9 +736,11 @@ defmodule ExWapp.Session.Worker.Outbound do
         {:ok, sessions, prekey_bundles,
          %{
            recipient_devices: recipient_devices,
-           own_devices: own_devices,
+           recipient_cached_devices: recipient_cached_devices,
+           own_devices: own_target_candidates,
+           own_cached_devices: own_cached_devices,
            own_identity_jid: own_sender_jid,
-           all_usync_devices: all_usync_devices
+           all_usync_devices: all_participant_devices
          }}
     end
   end
@@ -602,12 +765,16 @@ defmodule ExWapp.Session.Worker.Outbound do
   end
 
   defp discover_devices(state, recipient_base_jid, own_sender_jid, own_device_id) do
+    lid_mapping = Account.load_lid_mapping(state.store)
+
     query_jids =
       if own_sender_jid != "" and own_sender_jid != recipient_base_jid do
-        [recipient_base_jid, own_sender_jid]
+        related_query_bases(recipient_base_jid, lid_mapping) ++
+          related_query_bases(own_sender_jid, lid_mapping)
       else
-        [recipient_base_jid]
+        related_query_bases(recipient_base_jid, lid_mapping)
       end
+      |> JIDUtils.normalize_target_list()
 
     device_map =
       case query_device_list_worker(state, query_jids) do
@@ -624,14 +791,24 @@ defmodule ExWapp.Session.Worker.Outbound do
       end
 
     recipient_devices =
-      case Map.get(device_map, recipient_base_jid, []) do
-        [] -> [recipient_base_jid]
-        devices -> devices
-      end
+      [recipient_base_jid |
+       resolve_usync_devices_for_identity(device_map, recipient_base_jid, lid_mapping)]
       |> JIDUtils.normalize_target_list()
 
-    own_devices_all = Map.get(device_map, own_sender_jid, []) |> JIDUtils.normalize_target_list()
+    recipient_cached_devices =
+      DeviceCache.resolve_recent_devices(state.store, recipient_base_jid, state.runtime_cfg)
+      |> Enum.reject(&(&1 in recipient_devices))
+
+    own_devices_all =
+      resolve_usync_devices_for_identity(device_map, own_sender_jid, lid_mapping)
+      |> JIDUtils.normalize_target_list()
+
+    own_cached_devices =
+      DeviceCache.resolve_recent_devices(state.store, own_sender_jid, state.runtime_cfg)
+      |> Enum.reject(&(&1 in own_devices_all))
+
     own_devices = Enum.reject(own_devices_all, &current_device_target?(&1, own_device_id))
+    own_cached_devices = Enum.reject(own_cached_devices, &current_device_target?(&1, own_device_id))
 
     # All usync devices INCLUDING current device — needed for phash (whatsmeow parity)
     all_usync_devices = JIDUtils.normalize_target_list(recipient_devices ++ own_devices_all)
@@ -639,26 +816,83 @@ defmodule ExWapp.Session.Worker.Outbound do
     # Exclude current device from send targets.  For self-chat the recipient IS us,
     # so device 40 appears in recipient_devices — must be filtered here.
     all_device_jids =
-      JIDUtils.normalize_target_list(recipient_devices ++ own_devices)
+      JIDUtils.normalize_target_list(
+        recipient_devices ++ recipient_cached_devices ++ own_devices ++ own_cached_devices
+      )
       |> Enum.reject(&current_device_target?(&1, own_device_id))
 
     Logger.debug("[SEND] Discovered recipient devices: #{inspect(recipient_devices)}")
+    Logger.debug("[SEND] Cached recipient devices: #{inspect(recipient_cached_devices)}")
     Logger.debug("[SEND] Discovered own devices (excl. self): #{inspect(own_devices)}")
+    Logger.debug("[SEND] Cached own devices (excl. self): #{inspect(own_cached_devices)}")
 
-    {recipient_devices, own_devices, all_usync_devices, all_device_jids}
+    {recipient_devices, recipient_cached_devices, own_devices, own_cached_devices,
+     all_usync_devices, all_device_jids}
+  end
+
+  defp related_query_bases(base_jid, lid_mapping) do
+    JIDUtils.related_bases(base_jid, lid_mapping)
+  end
+
+  defp resolve_usync_devices_for_identity(device_map, base_jid, lid_mapping) do
+    aliases = related_query_bases(base_jid, lid_mapping)
+    prefer_lid? = JIDUtils.lid_jid?(base_jid)
+
+    preferred_devices =
+      aliases
+      |> Enum.filter(&(JIDUtils.lid_jid?(&1) == prefer_lid?))
+      |> Enum.flat_map(&Map.get(device_map, &1, []))
+
+    fallback_devices =
+      aliases
+      |> Enum.reject(&(JIDUtils.lid_jid?(&1) == prefer_lid?))
+      |> Enum.flat_map(&Map.get(device_map, &1, []))
+
+    (preferred_devices ++ fallback_devices)
+    |> Enum.map(&JIDUtils.map_to_preferred_family(&1, base_jid, lid_mapping))
+    |> JIDUtils.normalize_target_list()
   end
 
   # Match whatsmeow: check existing sessions by BOTH wire JID and LID-mapped JID,
   # but fetch prekeys using the ORIGINAL wire JIDs (PN), not the LID-mapped ones.
-  defp find_devices_needing_prekeys(store, signal_sessions, all_device_jids) do
+  defp find_devices_needing_prekeys(
+         runtime_cfg,
+         store,
+         signal_sessions,
+         all_device_jids,
+         own_device_jids
+       ) do
     lid_mapping = Account.load_lid_mapping(store)
+    now_ms = System.system_time(:millisecond)
+    own_identity_set =
+      own_device_jids
+      |> Enum.map(&JIDUtils.identity/1)
+      |> Enum.reject(fn {user, server} -> user == "" or server == "" end)
+      |> MapSet.new()
+
+    session_max_age_ms =
+      Config.get(
+        runtime_cfg || %{},
+        [:signal, :session_max_age_ms],
+        :timer.hours(12)
+      )
 
     Enum.filter(all_device_jids, fn device_jid ->
       device_jid = normalize_jid_with_device(device_jid)
       signal_jid = JIDUtils.resolve_signal_encryption_jid(device_jid, lid_mapping)
+      target_identity = JIDUtils.identity(device_jid)
+      has_session =
+        SessionStore.has_session?(signal_sessions, signal_jid) or
+          SessionStore.has_session?(signal_sessions, device_jid)
 
-      not (SessionStore.has_session?(signal_sessions, signal_jid) or
-             SessionStore.has_session?(signal_sessions, device_jid))
+      MapSet.member?(own_identity_set, target_identity) or
+        not has_session or
+        SessionStore.stale_or_missing?(
+          signal_sessions,
+          [signal_jid, device_jid],
+          session_max_age_ms,
+          now_ms
+        )
     end)
     |> JIDUtils.normalize_target_list()
   end
@@ -773,54 +1007,48 @@ defmodule ExWapp.Session.Worker.Outbound do
          sessions,
          prekey_bundles,
          context
-       )
-       when is_map(sessions) do
+       ) do
     prekey_bundles = prekey_bundles || %{}
 
-    requested =
-      requested_device_jids
-      |> JIDUtils.normalize_target_list()
-      |> MapSet.new()
+    if SessionStore.store?(sessions) do
+      requested =
+        requested_device_jids
+        |> JIDUtils.normalize_target_list()
+        |> MapSet.new()
 
-    returned =
-      prekey_bundles
-      |> Map.keys()
-      |> JIDUtils.normalize_target_list()
-      |> MapSet.new()
+      returned =
+        prekey_bundles
+        |> Map.keys()
+        |> JIDUtils.normalize_target_list()
+        |> MapSet.new()
 
-    missing =
-      requested
-      |> MapSet.difference(returned)
-      |> MapSet.to_list()
-      |> Enum.sort()
+      missing =
+        requested
+        |> MapSet.difference(returned)
+        |> MapSet.to_list()
+        |> Enum.sort()
 
-    if missing == [] do
-      {sessions, prekey_bundles}
-    else
-      Logger.warning(
-        "[SEND] Missing #{context} prekey bundles for #{length(missing)} device(s), retrying individually: #{inspect(missing)}"
-      )
+      if missing == [] do
+        {sessions, prekey_bundles}
+      else
+        Logger.warning(
+          "[SEND] Missing #{context} prekey bundles for #{length(missing)} device(s), retrying individually: #{inspect(missing)}"
+        )
 
-      case fetch_prekeys_individually_worker(state, missing, sessions) do
-        {:ok, retried_sessions, retried_bundles} ->
-          {retried_sessions, Map.merge(prekey_bundles, retried_bundles)}
+        case fetch_prekeys_individually_worker(state, missing, sessions) do
+          {:ok, retried_sessions, retried_bundles} ->
+            {retried_sessions, Map.merge(prekey_bundles, retried_bundles)}
 
-        {:error, reason} ->
-          Logger.warning("[SEND] Individual #{context} prekey retry failed: #{inspect(reason)}")
+          {:error, reason} ->
+            Logger.warning("[SEND] Individual #{context} prekey retry failed: #{inspect(reason)}")
 
-          {sessions, prekey_bundles}
+            {sessions, prekey_bundles}
+        end
       end
+    else
+      {sessions, prekey_bundles}
     end
   end
-
-  defp retry_missing_prekeys_worker(
-         _state,
-         _requested_device_jids,
-         sessions,
-         prekey_bundles,
-         _context
-       ),
-       do: {sessions, prekey_bundles || %{}}
 
   defp process_prekey_response(store, response_node, requested_jid, signal_sessions) do
     case IQ.parse_prekey_response(response_node) do
@@ -866,11 +1094,8 @@ defmodule ExWapp.Session.Worker.Outbound do
     message_id = Messages.generate_id(own_jid)
     timestamp = System.system_time(:second)
 
-    with {target_specs, all_usync_devices} <-
+    with {target_specs, _all_usync_devices} <-
            resolve_send_targets(store, signal_sessions, jid, prekey_bundles, target_hints, opts),
-         # Keep participant hash computation for diagnostics/parity checks, but do not
-         # include it in DM message attrs or DeviceSentMessage payloads.
-         _participant_hash <- compute_participant_hash_for_send(all_usync_devices, target_specs),
          {:ok, payloads} <- build_send_payloads(jid, text),
          {:ok, participant_nodes, updated_sessions, include_identity} <-
            encrypt_for_targets(
@@ -880,28 +1105,38 @@ defmodule ExWapp.Session.Worker.Outbound do
              payloads,
              prekey_bundles || %{}
            ) do
-      persist_signal_sessions(session_pid, updated_sessions, state)
+      case missing_expected_targets(target_specs, participant_nodes) do
+        [] ->
+          persist_signal_sessions(session_pid, updated_sessions, state)
 
-      Chat.add_message(store, jid, %{
-        id: message_id,
-        from_me: true,
-        timestamp: timestamp,
-        text: text,
-        status: :pending,
-        participant: nil,
-        raw: nil
-      })
+          Chat.add_message(store, jid, %{
+            id: message_id,
+            from_me: true,
+            timestamp: timestamp,
+            text: text,
+            status: :pending,
+            participant: nil,
+            raw: nil
+          })
 
-      node =
-        build_multi_device_encrypted_message_node(
-          jid,
-          message_id,
-          participant_nodes,
-          store,
-          include_identity
-        )
+          node =
+            build_multi_device_encrypted_message_node(
+              jid,
+              message_id,
+              participant_nodes,
+              store,
+              include_identity
+            )
 
-      send_encrypted_node(state, conn, store, jid, message_id, node, payloads)
+          send_encrypted_node(state, conn, store, jid, message_id, node, payloads)
+
+        missing ->
+          Logger.warning(
+            "[SEND] Aborting DM send to #{jid}: missing encrypted targets #{inspect(missing)}"
+          )
+
+          {:error, {:fanout_incomplete, missing}}
+      end
     else
       {:error, reason} ->
         Logger.error("[SEND] Encrypted send failed for #{jid}: #{inspect(reason)}")
@@ -933,23 +1168,18 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
-  defp compute_participant_hash_for_send(all_usync_devices, _target_specs)
-       when is_list(all_usync_devices) and all_usync_devices != [] do
-    MessageNode.generate_participant_hash_v2(all_usync_devices)
-  end
-
-  defp compute_participant_hash_for_send(_all_usync_devices, target_specs)
-       when is_list(target_specs) do
-    target_specs
-    |> Enum.map(&Map.get(&1, :jid, ""))
-    |> JIDUtils.normalize_target_list()
-    |> MessageNode.generate_participant_hash_v2()
-  end
-
   defp resolve_send_targets(store, signal_sessions, jid, prekey_bundles, target_hints, opts) do
     all_prekey_bundles = prekey_bundles
     hints = target_hints
     self_chat_mode = Keyword.get(opts, :self_chat_mode, :dsm_all_non_current)
+    recipient_targets_hint =
+      finalize_soft_targets(
+        store,
+        signal_sessions,
+        all_prekey_bundles,
+        Map.get(hints, :recipient_devices, []),
+        Map.get(hints, :recipient_cached_devices, [])
+      )
 
     recipient_prekey_bundles = filter_prekey_bundles_for_identity(all_prekey_bundles, jid)
 
@@ -958,20 +1188,28 @@ defmodule ExWapp.Session.Worker.Outbound do
         signal_sessions,
         jid,
         recipient_prekey_bundles,
-        Map.get(hints, :recipient_devices, [])
+        recipient_targets_hint
       )
 
     own_base_jid = Account.local_account_base_jid(store)
     own_sender_jid = Map.get(hints, :own_identity_jid, own_base_jid)
     own_device_id = Account.local_account_device_id(store)
     all_usync_devices = Map.get(hints, :all_usync_devices, [])
+    own_targets_hint =
+      finalize_soft_targets(
+        store,
+        signal_sessions,
+        all_prekey_bundles,
+        Map.get(hints, :own_devices, []),
+        Map.get(hints, :own_cached_devices, [])
+      )
 
     own_targets =
       Targets.resolve_own_device_targets(
         signal_sessions,
         own_sender_jid,
         own_device_id,
-        Map.get(hints, :own_devices, [])
+        own_targets_hint
       )
 
     self_chat? = self_chat_destination?(store, jid, own_sender_jid)
@@ -1009,6 +1247,37 @@ defmodule ExWapp.Session.Worker.Outbound do
     Logger.debug("[SEND] Final fanout targets: #{inspect(target_specs)}")
 
     {target_specs, all_usync_devices}
+  end
+
+  defp finalize_soft_targets(store, signal_sessions, prekey_bundles, live_targets, cached_targets) do
+    if not SessionStore.store?(signal_sessions) do
+      JIDUtils.normalize_target_list(live_targets)
+    else
+      live_targets = JIDUtils.normalize_target_list(live_targets)
+      cached_targets = JIDUtils.normalize_target_list(cached_targets)
+
+      {reachable_cached_targets, unreachable_cached_targets} =
+        cached_targets
+        |> Enum.reject(&(&1 in live_targets))
+        |> split_reachable_cached_targets(store, prekey_bundles)
+
+      if unreachable_cached_targets != [] do
+        DeviceCache.evict_devices(store, unreachable_cached_targets)
+      end
+
+      JIDUtils.normalize_target_list(live_targets ++ reachable_cached_targets)
+    end
+  end
+
+  defp split_reachable_cached_targets(targets, store, prekey_bundles) do
+    lid_mapping = Account.load_lid_mapping(store)
+
+    Enum.split_with(targets, fn target_jid ->
+      signal_jid = JIDUtils.resolve_signal_encryption_jid(target_jid, lid_mapping)
+
+      Map.has_key?(prekey_bundles || %{}, target_jid) or
+        Map.has_key?(prekey_bundles || %{}, signal_jid)
+    end)
   end
 
   defp self_chat_destination?(store, jid, own_sender_jid) do
@@ -1439,7 +1708,15 @@ defmodule ExWapp.Session.Worker.Outbound do
         receive do
           {:prekey_response, ^message_id, response_node} ->
             Logger.debug("[USYNC] Got device list response")
-            IQ.parse_usync_device_response(response_node)
+
+            case IQ.parse_usync_device_response(response_node) do
+              {:ok, device_map} = ok ->
+                DeviceCache.persist_usync_map(state.store, device_map)
+                ok
+
+              other ->
+                other
+            end
 
           {:prekey_error, ^message_id, error} ->
             Logger.warning("[USYNC] Device list query error: #{inspect(error)}")
@@ -1512,6 +1789,36 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   defp group_info_timeout_ms(state),
     do: Config.get(state.runtime_cfg || %{}, [:iq, :group_info_timeout_ms], 15_000)
+
+  defp clear_cached_signal_sessions_for_targets(signal_sessions, targets, store) do
+    if SessionStore.store?(signal_sessions) do
+      lid_mapping = Account.load_lid_mapping(store)
+
+      targets
+      |> Enum.map(fn
+        %{jid: jid} -> jid
+        jid when is_binary(jid) -> jid
+        _ -> ""
+      end)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.reduce(signal_sessions, &SessionStore.delete_sessions_for_user(&2, &1, lid_mapping))
+    else
+      signal_sessions
+    end
+  end
+
+  defp missing_expected_targets(target_specs, participant_nodes) do
+    encrypted_targets =
+      participant_nodes
+      |> MessageNode.extract_participant_jids()
+      |> MapSet.new()
+
+    target_specs
+    |> Enum.map(fn spec ->
+      %{jid: normalize_jid_with_device(Map.get(spec, :jid, "")), payload_kind: Map.get(spec, :payload_kind)}
+    end)
+    |> Enum.reject(fn %{jid: jid} -> jid == "" or MapSet.member?(encrypted_targets, jid) end)
+  end
 
   defp emit_telemetry(event, measurements, state, extra_metadata) do
     metadata =

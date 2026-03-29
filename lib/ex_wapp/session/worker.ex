@@ -880,9 +880,7 @@ defmodule ExWapp.Session.Worker do
 
   # Inbound node routed by InboundRouter process
   def handle_info({:inbound_node, %Binary.Node{} = node}, state) do
-    Logger.info(
-      "[WORKER] Inbound node tag=#{node.tag} attrs=#{inspect(Map.keys(node.attrs || %{}))}"
-    )
+    maybe_log_inbound_node(node)
 
     {new_state, actions} = NodeHandler.safe_handle_node(node, state)
     Enum.each(actions, &NodeHandler.safe_handle_action(&1, new_state))
@@ -948,7 +946,7 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_info({:signal_sessions_updated, sessions}, state) do
-    session_count = map_size(Map.get(sessions || %{}, :sessions, %{}))
+    session_count = sessions |> SessionStore.list_sessions() |> length()
     Logger.debug("[SEND] Async signal session update received (sessions=#{session_count})")
     persist_signal_sessions_store(state.store, sessions)
     {:noreply, %{state | signal_sessions: sessions}}
@@ -1243,6 +1241,17 @@ defmodule ExWapp.Session.Worker do
     %{state | health_timer: nil}
   end
 
+  defp clear_signal_sessions_for_jid_in_memory(%{signal_sessions: nil} = state, _jid), do: state
+
+  defp clear_signal_sessions_for_jid_in_memory(state, jid) do
+    %{state | signal_sessions: clear_signal_sessions_in_store(state.signal_sessions, jid, state.store)}
+  end
+
+  defp clear_signal_sessions_in_store(signal_sessions, jid, store) do
+    lid_mapping = ExWapp.Session.Account.load_lid_mapping(store)
+    SessionStore.delete_sessions_for_user(signal_sessions, jid, lid_mapping)
+  end
+
   defp do_health_check(%{conn: nil} = state), do: state
 
   defp do_health_check(%{conn: conn} = state) when is_pid(conn) do
@@ -1359,7 +1368,8 @@ defmodule ExWapp.Session.Worker do
         start_worker: &start_send_worker/3,
         outgoing_payloads: Map.get(state, :outgoing_retry_payloads, %{}),
         send_fun: fn normalized_jid, text ->
-          do_send_text_worker(session_pid, state, normalized_jid, text)
+          retry_state = clear_signal_sessions_for_jid_in_memory(state, normalized_jid)
+          do_send_text_worker(session_pid, retry_state, normalized_jid, text)
         end
       )
 
@@ -1496,8 +1506,7 @@ defmodule ExWapp.Session.Worker do
 
   defp load_persisted_signal_sessions(store) do
     store
-    |> Store.load!()
-    |> Map.get(:signal_sessions)
+    |> Store.load_signal_sessions()
     |> normalize_persisted_signal_sessions()
   rescue
     error ->
@@ -1506,36 +1515,38 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp normalize_persisted_signal_sessions(nil), do: nil
+  defp normalize_persisted_signal_sessions(%SessionStore.Ref{} = persisted), do: persisted
 
   defp normalize_persisted_signal_sessions(%{sessions: sessions} = persisted)
        when is_map(sessions) do
     SessionStore.new()
     |> Map.merge(persisted)
     |> Map.put(:pending_prekeys, Map.get(persisted, :pending_prekeys, %{}))
+    |> Map.put(:session_touched_at_ms, Map.get(persisted, :session_touched_at_ms, %{}))
   end
 
   defp normalize_persisted_signal_sessions(_), do: nil
 
   defp persist_signal_sessions_store(nil, _sessions), do: :ok
 
-  defp persist_signal_sessions_store(store, sessions) when is_map(sessions) do
-    data = Store.load!(store)
+  defp persist_signal_sessions_store(store, sessions) do
+    if SessionStore.store?(sessions) do
+      case Store.persist_signal_sessions(store, sessions) do
+        :ok ->
+          :ok
 
-    case Store.persist(store, Map.put(data, :signal_sessions, sessions)) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("[SESSION] Failed to persist signal sessions: #{inspect(reason)}")
-        :ok
+        {:error, reason} ->
+          Logger.warning("[SESSION] Failed to persist signal sessions: #{inspect(reason)}")
+          :ok
+      end
+    else
+      :ok
     end
   rescue
     error ->
       Logger.warning("[SESSION] Failed to persist signal sessions: #{inspect(error)}")
       :ok
   end
-
-  defp persist_signal_sessions_store(_store, _sessions), do: :ok
 
   defp restart_outbound_queue(state) do
     {:ok, outbound_queue} =
@@ -1602,6 +1613,14 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp cleanup_dead_send_worker(state, _mon), do: state
+
+  defp maybe_log_inbound_node(%Binary.Node{tag: tag}) when tag in ["iq", "chatstate"], do: :ok
+
+  defp maybe_log_inbound_node(%Binary.Node{} = node) do
+    Logger.info(
+      "[WORKER] Inbound node tag=#{node.tag} attrs=#{inspect(Map.keys(node.attrs || %{}))}"
+    )
+  end
 
   defp clear_pending_requests(state, reason) do
     Enum.each(state.pending_iqs, fn {_message_id, pending} ->

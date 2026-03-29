@@ -69,6 +69,7 @@ defmodule ExWapp.Store do
   """
 
   require Logger
+  alias ExWapp.Signal.SessionStore
 
   @type data :: map()
   @type t :: struct()
@@ -149,6 +150,27 @@ defmodule ExWapp.Store do
   def load(store), do: store.__struct__.load(store)
 
   @doc """
+  Reads a single top-level key from the store.
+
+  Adapters may override this with a more efficient implementation that avoids
+  loading and merging the entire persisted store.
+  """
+  @spec get(t(), atom(), term()) :: term()
+  def get(store, key, default \\ nil) when is_atom(key) do
+    if function_exported?(store.__struct__, :get, 3) do
+      case store.__struct__.get(store, key, default) do
+        {:ok, value} -> value
+        {:error, _reason} -> default
+        value -> value
+      end
+    else
+      store
+      |> load!()
+      |> Map.get(key, default)
+    end
+  end
+
+  @doc """
   Loads data from store, returning empty map on error.
 
   This is a convenience function that never fails. Use `load/1` if you
@@ -193,6 +215,58 @@ defmodule ExWapp.Store do
   """
   @spec persist(t(), data()) :: :ok | {:error, term()}
   def persist(store, data), do: store.__struct__.persist(store, data)
+
+  @doc """
+  Loads Signal session state from the store.
+
+  ETS-backed adapters may return a lightweight session-store reference instead
+  of a plain map so callers can avoid keeping large session state on process
+  heaps.
+  """
+  @spec load_signal_sessions(t()) :: term()
+  def load_signal_sessions(store) do
+    if function_exported?(store.__struct__, :load_signal_sessions, 1) do
+      store.__struct__.load_signal_sessions(store)
+    else
+      get(store, :signal_sessions)
+    end
+  end
+
+  @doc """
+  Persists Signal session state back to the store.
+  """
+  @spec persist_signal_sessions(t(), term()) :: :ok | {:error, term()}
+  def persist_signal_sessions(store, sessions) do
+    if function_exported?(store.__struct__, :persist_signal_sessions, 2) do
+      store.__struct__.persist_signal_sessions(store, sessions)
+    else
+      persist(store, Map.put(load!(store), :signal_sessions, SessionStore.snapshot(sessions)))
+    end
+  end
+
+  @doc """
+  Loads the recent device cache snapshot.
+  """
+  @spec load_device_cache(t()) :: map()
+  def load_device_cache(store) do
+    if function_exported?(store.__struct__, :load_device_cache, 1) do
+      store.__struct__.load_device_cache(store)
+    else
+      get(store, :device_cache, %{})
+    end
+  end
+
+  @doc """
+  Persists the recent device cache snapshot.
+  """
+  @spec persist_device_cache(t(), map()) :: :ok | {:error, term()}
+  def persist_device_cache(store, cache) when is_map(cache) do
+    if function_exported?(store.__struct__, :persist_device_cache, 2) do
+      store.__struct__.persist_device_cache(store, cache)
+    else
+      persist(store, Map.put(load!(store), :device_cache, cache))
+    end
+  end
 
   @doc """
   Clears all data from the store.

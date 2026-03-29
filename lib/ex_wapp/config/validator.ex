@@ -8,6 +8,7 @@ defmodule ExWapp.Config.Validator do
       fn -> validate_health(cfg) end,
       fn -> validate_iq(cfg) end,
       fn -> validate_send(cfg) end,
+      fn -> validate_signal(cfg) end,
       fn -> validate_send_error_guard(cfg) end,
       fn -> validate_queue(cfg) end,
       fn -> validate_throttle(cfg) end,
@@ -59,6 +60,13 @@ defmodule ExWapp.Config.Validator do
       fn -> ensure_positive_integer(cfg, [:send, :confirm_timeout_ms]) end,
       fn -> ensure_non_neg_integer(cfg, [:send, :max_silent_drop_fallback_attempts]) end,
       fn -> ensure_list_of_positive_integers(cfg, [:send, :retry_backoff_ms]) end
+    ])
+  end
+
+  defp validate_signal(cfg) do
+    run_validations([
+      fn -> ensure_positive_integer(cfg, [:signal, :session_max_age_ms]) end,
+      fn -> ensure_positive_integer(cfg, [:signal, :device_cache_max_age_ms]) end
     ])
   end
 

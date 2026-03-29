@@ -598,6 +598,12 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     send(self(), {:retry_outgoing_message, jid, message_id})
   end
 
+  defp handle_pairing_action({:signal_sessions_updated, sessions}, _state) do
+    if ExWapp.Signal.SessionStore.store?(sessions) do
+      send(self(), {:signal_sessions_updated, sessions})
+    end
+  end
+
   defp handle_pairing_action(_action, _state), do: :ok
 
   # ============================================================================

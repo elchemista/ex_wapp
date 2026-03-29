@@ -4,14 +4,14 @@ defmodule ExWapp.Session.Targets do
   """
 
   alias ExWapp.Session.JIDUtils
+  alias ExWapp.Signal.SessionStore
 
-  @spec list_session_targets_for_jid(map() | nil, String.t()) :: [String.t()]
+  @spec list_session_targets_for_jid(term() | nil, String.t()) :: [String.t()]
   def list_session_targets_for_jid(signal_sessions, jid) do
     target_identity = JIDUtils.identity(jid)
-    sessions = Map.get(signal_sessions || %{}, :sessions, %{})
 
-    sessions
-    |> Map.keys()
+    signal_sessions
+    |> SessionStore.list_sessions()
     |> Enum.filter(fn candidate -> JIDUtils.identity(candidate) == target_identity end)
   end
 
@@ -26,7 +26,7 @@ defmodule ExWapp.Session.Targets do
 
   def drop_base_alias_targets(_), do: []
 
-  @spec resolve_encryption_targets(map() | nil, String.t(), map(), list() | nil) ::
+  @spec resolve_encryption_targets(term() | nil, String.t(), map(), list() | nil) ::
           [String.t()]
   def resolve_encryption_targets(signal_sessions, jid, prekey_bundles, hinted_targets) do
     targets =
@@ -69,7 +69,7 @@ defmodule ExWapp.Session.Targets do
 
   def filter_prekey_bundles_for_identity(_prekey_bundles, _jid), do: %{}
 
-  @spec resolve_own_device_targets(map() | nil, String.t(), integer(), list() | nil) ::
+  @spec resolve_own_device_targets(term() | nil, String.t(), integer(), list() | nil) ::
           [String.t()]
   def resolve_own_device_targets(signal_sessions, own_base_jid, own_device_id, hinted_targets) do
     if own_base_jid == "" do

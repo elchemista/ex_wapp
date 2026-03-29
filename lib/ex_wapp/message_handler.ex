@@ -24,7 +24,8 @@ defmodule ExWapp.MessageHandler do
   alias ExWapp.AppState.Engine
   alias ExWapp.{Binary, Chat, JID, MapPath, Store}
   alias ExWapp.Proto.{HistorySync, SyncAction}
-  alias ExWapp.Signal.{Encryption, SenderKey}
+  alias ExWapp.Signal.{Encryption, SenderKey, SessionStore}
+  alias ExWapp.Session.{Account, DeviceCache, JIDUtils}
   alias ExWapp.Binary.Node
 
   @type chat_target :: pid() | struct()
@@ -88,6 +89,8 @@ defmodule ExWapp.MessageHandler do
     participant = Map.get(attrs, "participant")
 
     Logger.debug("Received message from=#{from} id=#{id} type=#{type}")
+    state = persist_envelope_lid_mappings(state, attrs, from, participant)
+    persist_observed_devices(state, attrs, from, participant)
 
     # Extract message content
     message_data = extract_message_content(content, type)
@@ -114,8 +117,9 @@ defmodule ExWapp.MessageHandler do
 
     # Only store user-visible messages in chat (skip protocol messages like history sync)
     is_protocol = message_data[:message_content_type] == :protocol
+    suppress_message? = transient_encrypted_placeholder?(message_data)
 
-    if not is_protocol do
+    if not is_protocol and not suppress_message? do
       if target = chat_target(session, state) do
         maybe_update_chat_name(target, from, attrs)
         Chat.add_message(target, from, message)
@@ -125,6 +129,8 @@ defmodule ExWapp.MessageHandler do
       if is_pid(session) do
         send(session, {:new_message, from, message})
       end
+    else
+      maybe_log_suppressed_message(is_protocol, suppress_message?, from, id, message_data)
     end
 
     {actions, state} = build_receipt_actions(from, id, participant, attrs, message_data, state)
@@ -318,6 +324,8 @@ defmodule ExWapp.MessageHandler do
       end)
     end
 
+    persist_notification_devices(state, content)
+
     {:ok, state}
   end
 
@@ -471,13 +479,14 @@ defmodule ExWapp.MessageHandler do
   defp handle_ack(%Node{attrs: attrs}, session, state) do
     id = Map.get(attrs, "id", "")
     class = Map.get(attrs, "class", "")
-    type = Map.get(attrs, "type", "")
+    error = Map.get(attrs, "error", "")
+    type = effective_ack_type(Map.get(attrs, "type", ""), error)
     from = normalize_jid(Map.get(attrs, "from", ""))
     to = normalize_jid(Map.get(attrs, "to", ""))
 
     target = chat_target(session, state)
 
-    log_ack(class, type, id, from, to)
+    log_ack(class, type, id, from, to, error)
     maybe_update_ack_status(target, ack_target_jid(to, from), id, ack_status(type))
 
     {:ok, state}
@@ -527,10 +536,23 @@ defmodule ExWapp.MessageHandler do
 
   defp receipt_actions(_type, _from, _id), do: []
 
-  defp log_ack(class, type, id, from, to) do
+  defp effective_ack_type(type, error) when type in [nil, ""] and error not in [nil, ""],
+    do: "error"
+
+  defp effective_ack_type(type, _error), do: type || ""
+
+  defp log_ack(class, type, id, from, to, error) do
     if class in ["message", "chat", "receipt"] or type == "error" do
       log_fn = if type == "error", do: :warning, else: :info
-      Logger.log(log_fn, "[ACK] id=#{id} class=#{class} type=#{type} from=#{from} to=#{to}")
+
+      suffix =
+        if error in [nil, ""] do
+          ""
+        else
+          " error=#{error}"
+        end
+
+      Logger.log(log_fn, "[ACK] id=#{id} class=#{class} type=#{type} from=#{from} to=#{to}#{suffix}")
     else
       Logger.debug("ACK id=#{id} class=#{class} type=#{type}")
     end
@@ -964,9 +986,43 @@ defmodule ExWapp.MessageHandler do
         )
 
       {:error, reason} ->
-        Logger.warning("[DECRYPT] Failed to decrypt message: #{inspect(reason)}")
-        decrypt_error_result(message_data, state, reason)
+        log_decrypt_failure(state, from, enc_type, reason, decrypt_ctx)
+        decrypt_error_result(message_data, state, reason, decrypt_ctx.sender_candidates)
     end
+  end
+
+  defp log_decrypt_failure(state, from, enc_type, reason, decrypt_ctx) do
+    signal_sessions = Map.get(state, :signal_sessions)
+    sender_candidates = Map.get(decrypt_ctx, :sender_candidates, [])
+    payloads = Map.get(decrypt_ctx, :decryptable_payloads, [])
+    lid_mapping = Account.load_lid_mapping(Map.get(state, :store))
+
+    candidate_identities =
+      sender_candidates
+      |> Enum.map(&JIDUtils.identity/1)
+      |> MapSet.new()
+
+    stored_session_targets =
+      signal_sessions
+      |> SessionStore.list_sessions()
+      |> Enum.filter(&(MapSet.member?(candidate_identities, JIDUtils.identity(&1))))
+      |> Enum.sort()
+      |> Enum.take(12)
+
+    related_bases =
+      sender_candidates
+      |> Enum.flat_map(&JIDUtils.related_bases(&1, lid_mapping))
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    Logger.error(
+      "[DECRYPT] Failed to decrypt message: enc_type=#{inspect(enc_type)} from=#{normalize_jid_with_device(from)} reason=#{inspect(reason)} sender_candidates=#{inspect(sender_candidates)} related_bases=#{inspect(related_bases)} payload_count=#{length(payloads)} payload_types=#{inspect(Enum.map(payloads, &Map.get(&1, :enc_type)))} stored_session_targets=#{inspect(stored_session_targets)}"
+    )
+  rescue
+    error ->
+      Logger.error(
+        "[DECRYPT] Failed to decrypt message and diagnostics logging raised: reason=#{inspect(reason)} logging_error=#{inspect(error)}"
+      )
   end
 
   defp decode_decrypted_message(
@@ -1053,8 +1109,84 @@ defmodule ExWapp.MessageHandler do
     |> Map.put(:from_me, device_sent_message_payload?(plaintext))
   end
 
-  defp decrypt_error_result(message_data, state, reason) do
-    {Map.put(message_data, :decrypt_status, {:error, reason}), state}
+  defp decrypt_error_result(message_data, state, reason, sender_candidates \\ []) do
+    {updated_state, maybe_updated_sessions} =
+      maybe_reset_signal_sessions_for_decrypt_failure(state, reason, sender_candidates)
+
+    updated_message_data =
+      message_data
+      |> Map.put(:decrypt_status, {:error, reason})
+      |> maybe_put_signal_sessions_update(maybe_updated_sessions)
+
+    {updated_message_data, updated_state}
+  end
+
+  defp transient_encrypted_placeholder?(%{encrypted: true, decrypt_status: {:error, _}}), do: true
+  defp transient_encrypted_placeholder?(_message_data), do: false
+
+  defp maybe_log_suppressed_message(true, _suppress_message?, _from, _id, _message_data), do: :ok
+
+  defp maybe_log_suppressed_message(_is_protocol, true, from, id, message_data) do
+    Logger.debug(
+      "[DECRYPT] Suppressing undecryptable encrypted placeholder from=#{normalize_jid_with_device(from)} id=#{id} reason=#{inspect(Map.get(message_data, :decrypt_status))}"
+    )
+  end
+
+  defp maybe_log_suppressed_message(_is_protocol, _suppress_message?, _from, _id, _message_data),
+    do: :ok
+
+  defp maybe_put_signal_sessions_update(message_data, nil), do: message_data
+
+  defp maybe_put_signal_sessions_update(message_data, sessions) do
+    if SessionStore.store?(sessions) do
+      Map.put(message_data, :signal_sessions_update, sessions)
+    else
+      message_data
+    end
+  end
+
+  defp maybe_reset_signal_sessions_for_decrypt_failure(state, reason, sender_candidates) do
+    reset_candidates = decrypt_failure_session_reset_candidates(reason, sender_candidates)
+
+    case clear_signal_sessions_for_candidates(Map.get(state, :signal_sessions), state, reset_candidates) do
+      nil ->
+        {state, nil}
+
+      updated_sessions ->
+        {%{state | signal_sessions: updated_sessions}, updated_sessions}
+    end
+  end
+
+  defp decrypt_failure_session_reset_candidates(
+         {:decrypt_failed_for_payload, _, {:decrypt_failed_for_candidate, _candidate, reason}},
+         sender_candidates
+       )
+       when reason in [:invalid_mac, :no_session, :unknown_signed_prekey] do
+    sender_candidates
+    |> Enum.map(&normalize_jid_with_device/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp decrypt_failure_session_reset_candidates(_reason, _sender_candidates), do: []
+
+  defp clear_signal_sessions_for_candidates(_signal_sessions, _state, []), do: nil
+  defp clear_signal_sessions_for_candidates(nil, _state, _candidates), do: nil
+
+  defp clear_signal_sessions_for_candidates(signal_sessions, state, candidates) do
+    if SessionStore.store?(signal_sessions) do
+      lid_mapping = ExWapp.Session.Account.load_lid_mapping(Map.get(state, :store))
+
+      Enum.reduce(candidates, signal_sessions, fn candidate, sessions ->
+        SessionStore.delete_sessions_for_user(sessions, candidate, lid_mapping)
+      end)
+    else
+      nil
+    end
+  rescue
+    error ->
+      Logger.warning("[DECRYPT] Failed clearing stale signal sessions: #{inspect(error)}")
+      nil
   end
 
   defp inbound_from_me?(attrs, from, state, message_data)
@@ -1493,6 +1625,114 @@ defmodule ExWapp.MessageHandler do
 
   defp persist_history_sync_lid_mappings(_state, _lid_mappings), do: :ok
 
+  defp persist_envelope_lid_mappings(state, attrs, from, participant)
+       when is_map(state) and is_map(attrs) do
+    case {Map.get(state, :store), normalize_envelope_lid_mappings(attrs, from, participant)} do
+      {nil, _} ->
+        state
+
+      {_store, []} ->
+        state
+
+      {store, normalized_mappings} ->
+        data = Store.load!(store)
+        existing_mappings = Map.get(data, :lid_mapping, %{})
+
+        updated_mappings =
+          Enum.reduce(normalized_mappings, existing_mappings, fn {lid, pn}, acc ->
+            acc
+            |> Map.put({:pn_to_lid, pn}, lid)
+            |> Map.put({:lid_to_pn, lid}, pn)
+          end)
+
+        if updated_mappings != existing_mappings do
+          Store.persist(store, Map.put(data, :lid_mapping, updated_mappings))
+        end
+
+        state
+    end
+  rescue
+    error ->
+      Logger.warning("[DECRYPT] Failed storing envelope LID mappings: #{inspect(error)}")
+      state
+  end
+
+  defp persist_envelope_lid_mappings(state, _attrs, _from, _participant), do: state
+
+  defp persist_observed_devices(state, attrs, from, participant) when is_map(state) and is_map(attrs) do
+    store = Map.get(state, :store)
+
+    [from, participant, Map.get(attrs, "sender_lid"), Map.get(attrs, "sender_pn"),
+     Map.get(attrs, "participant_lid"), Map.get(attrs, "participant_pn")]
+    |> Enum.map(&normalize_jid_with_device/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+    |> Enum.each(&DeviceCache.persist_observed_device(store, &1))
+
+    :ok
+  end
+
+  defp persist_observed_devices(_state, _attrs, _from, _participant), do: :ok
+
+  defp persist_notification_devices(state, content) when is_map(state) and is_list(content) do
+    store = Map.get(state, :store)
+
+    content
+    |> Enum.flat_map(fn
+      %Node{attrs: attrs} when is_map(attrs) ->
+        attrs
+        |> Map.values()
+        |> Enum.map(&normalize_jid_with_device/1)
+        |> Enum.filter(&String.contains?(&1, "@"))
+
+      _ ->
+        []
+    end)
+    |> Enum.uniq()
+    |> Enum.each(&DeviceCache.persist_observed_device(store, &1))
+
+    :ok
+  end
+
+  defp persist_notification_devices(_state, _content), do: :ok
+
+  defp normalize_envelope_lid_mappings(attrs, from, participant) when is_map(attrs) do
+    [
+      {from, Map.get(attrs, "sender_pn")},
+      {Map.get(attrs, "sender_lid"), Map.get(attrs, "sender_pn")},
+      {participant, Map.get(attrs, "participant_pn")},
+      {Map.get(attrs, "participant_lid"), Map.get(attrs, "participant_pn")}
+    ]
+    |> Enum.reduce([], fn {left, right}, acc ->
+      case normalize_lid_mapping_pair(left, right) do
+        nil -> acc
+        mapping -> [mapping | acc]
+      end
+    end)
+    |> Enum.uniq()
+  end
+
+  defp normalize_envelope_lid_mappings(_attrs, _from, _participant), do: []
+
+  defp normalize_lid_mapping_pair(left, right) do
+    left = normalize_jid(left)
+    right = normalize_jid(right)
+
+    cond do
+      left == "" or right == "" ->
+        nil
+
+      lid_jid?(left) and not lid_jid?(right) ->
+        {left, right}
+
+      lid_jid?(right) and not lid_jid?(left) ->
+        {right, left}
+
+      true ->
+        nil
+    end
+  end
+
   defp normalize_lid_mappings(lid_mappings) when is_list(lid_mappings) do
     lid_mappings
     |> Enum.reduce([], fn
@@ -1579,13 +1819,15 @@ defmodule ExWapp.MessageHandler do
       |> Enum.map(&normalize_jid_with_device/1)
       |> Enum.reject(&(&1 == ""))
 
+    cross_family_device_aliases = synthesize_cross_family_device_candidates(with_device)
+
     without_device =
-      with_device
+      (with_device ++ cross_family_device_aliases)
       |> Enum.map(&strip_device_from_jid/1)
       |> Enum.reject(&(&1 == ""))
 
     base_candidates =
-      (with_device ++ without_device)
+      (with_device ++ cross_family_device_aliases ++ without_device)
       |> Enum.uniq()
 
     # Expand candidates via PN<->LID mapping (Baileys: getDecryptionJid)
@@ -1594,6 +1836,44 @@ defmodule ExWapp.MessageHandler do
     (base_candidates ++ mapped_candidates)
     |> Enum.uniq()
   end
+
+  defp synthesize_cross_family_device_candidates(candidates) do
+    explicit_device_candidates = Enum.filter(candidates, &JIDUtils.has_explicit_device?/1)
+    base_candidates = Enum.reject(candidates, &JIDUtils.has_explicit_device?/1)
+
+    Enum.flat_map(explicit_device_candidates, fn explicit_jid ->
+      case JIDUtils.device_id(explicit_jid) do
+        nil ->
+          []
+
+        device_id ->
+          Enum.flat_map(base_candidates, fn base_jid ->
+            cond do
+              JIDUtils.lid_jid?(explicit_jid) and not JIDUtils.lid_jid?(base_jid) ->
+                [apply_device_to_base_jid(base_jid, device_id)]
+
+              not JIDUtils.lid_jid?(explicit_jid) and JIDUtils.lid_jid?(base_jid) ->
+                [apply_device_to_base_jid(base_jid, device_id)]
+
+              true ->
+                []
+            end
+          end)
+      end
+    end)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp apply_device_to_base_jid(base_jid, device_id)
+       when is_binary(base_jid) and is_integer(device_id) and device_id > 0 do
+    case String.split(strip_device_from_jid(base_jid), "@", parts: 2) do
+      [user, server] when user != "" and server != "" -> "#{user}:#{device_id}@#{server}"
+      _ -> ""
+    end
+  end
+
+  defp apply_device_to_base_jid(_base_jid, _device_id), do: ""
 
   defp resolve_lid_mapping_candidates(candidates, state) do
     store = Map.get(state, :store)
@@ -1802,10 +2082,14 @@ defmodule ExWapp.MessageHandler do
       recipient: Map.get(attrs, "recipient")
     }
 
-    {[
-       {:send_retry_receipt, from, id, participant, Map.get(attrs, "t"), retry_count,
-        retry_reason_code, retry_meta}
-     ], updated_state}
+    actions =
+      signal_sessions_update_actions(message_data) ++
+        [
+          {:send_retry_receipt, from, id, participant, Map.get(attrs, "t"), retry_count,
+           retry_reason_code, retry_meta}
+        ]
+
+    {actions, updated_state}
   end
 
   defp build_delivery_receipt_actions(from, id, participant, attrs, state) do
@@ -1845,6 +2129,12 @@ defmodule ExWapp.MessageHandler do
 
   defp needs_retry_receipt?(%{decrypt_status: {:error, _}}), do: true
   defp needs_retry_receipt?(_), do: false
+
+  defp signal_sessions_update_actions(%{signal_sessions_update: sessions}) do
+    if SessionStore.store?(sessions), do: [{:signal_sessions_updated, sessions}], else: []
+  end
+
+  defp signal_sessions_update_actions(_message_data), do: []
 
   defp next_retry_count(state, from, id, participant) when is_map(state) do
     key = retry_counter_key(from, id, participant)
@@ -1960,6 +2250,12 @@ defmodule ExWapp.MessageHandler do
   end
 
   defp normalize_jid(_), do: ""
+
+  defp lid_jid?(jid) when is_binary(jid) do
+    String.ends_with?(jid, "@lid") or String.ends_with?(jid, "@hosted.lid")
+  end
+
+  defp lid_jid?(_), do: false
 
   @max_message_decode_depth 6
 

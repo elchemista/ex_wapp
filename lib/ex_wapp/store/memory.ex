@@ -57,10 +57,33 @@ defmodule ExWapp.Store.Memory do
     {:ok, data}
   end
 
+  @spec get(t(), atom(), term()) :: term()
+  def get(%__MODULE__{agent: agent}, key, default \\ nil) when is_atom(key) do
+    Agent.get(agent, &Map.get(&1, key, default))
+  end
+
   @impl true
   @spec persist(t(), ExWapp.Store.data()) :: :ok
   def persist(%__MODULE__{agent: agent}, data) when is_map(data) do
     Agent.update(agent, fn _ -> data end)
+    :ok
+  end
+
+  @spec load_signal_sessions(t()) :: term()
+  def load_signal_sessions(%__MODULE__{} = store), do: get(store, :signal_sessions)
+
+  @spec persist_signal_sessions(t(), term()) :: :ok
+  def persist_signal_sessions(%__MODULE__{agent: agent}, sessions) do
+    Agent.update(agent, &Map.put(&1, :signal_sessions, ExWapp.Signal.SessionStore.snapshot(sessions)))
+    :ok
+  end
+
+  @spec load_device_cache(t()) :: map()
+  def load_device_cache(%__MODULE__{} = store), do: get(store, :device_cache, %{})
+
+  @spec persist_device_cache(t(), map()) :: :ok
+  def persist_device_cache(%__MODULE__{agent: agent}, cache) when is_map(cache) do
+    Agent.update(agent, &Map.put(&1, :device_cache, cache))
     :ok
   end
 
