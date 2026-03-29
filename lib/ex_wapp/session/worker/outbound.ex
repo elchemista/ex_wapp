@@ -1091,7 +1091,7 @@ defmodule ExWapp.Session.Worker.Outbound do
          opts
        ) do
     own_jid = Account.local_account_base_jid(store)
-    message_id = Messages.generate_id(own_jid)
+    message_id = outbound_message_id(opts, own_jid)
     timestamp = System.system_time(:second)
 
     with {target_specs, _all_usync_devices} <-
@@ -1108,16 +1108,7 @@ defmodule ExWapp.Session.Worker.Outbound do
       case missing_expected_targets(target_specs, participant_nodes) do
         [] ->
           persist_signal_sessions(session_pid, updated_sessions, state)
-
-          Chat.add_message(store, jid, %{
-            id: message_id,
-            from_me: true,
-            timestamp: timestamp,
-            text: text,
-            status: :pending,
-            participant: nil,
-            raw: nil
-          })
+          maybe_record_outgoing_message(store, jid, message_id, timestamp, text, opts)
 
           node =
             build_multi_device_encrypted_message_node(
@@ -1763,6 +1754,29 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   defp generate_request_id do
     :crypto.strong_rand_bytes(16) |> Base.encode64() |> String.slice(0, 16)
+  end
+
+  defp outbound_message_id(opts, own_jid) do
+    case Keyword.get(opts, :retry_message_id) do
+      message_id when is_binary(message_id) and message_id != "" -> message_id
+      _ -> Messages.generate_id(own_jid)
+    end
+  end
+
+  defp maybe_record_outgoing_message(store, jid, message_id, timestamp, text, opts) do
+    if Keyword.get(opts, :suppress_outgoing_chat_add, false) do
+      Chat.update_message_status(store, jid, message_id, :pending)
+    else
+      Chat.add_message(store, jid, %{
+        id: message_id,
+        from_me: true,
+        timestamp: timestamp,
+        text: text,
+        status: :pending,
+        participant: nil,
+        raw: nil
+      })
+    end
   end
 
   defp send_transport_node(%{transport_mod: transport_mod}, conn, node) when is_pid(conn) do

@@ -552,7 +552,10 @@ defmodule ExWapp.MessageHandler do
           " error=#{error}"
         end
 
-      Logger.log(log_fn, "[ACK] id=#{id} class=#{class} type=#{type} from=#{from} to=#{to}#{suffix}")
+      Logger.log(
+        log_fn,
+        "[ACK] id=#{id} class=#{class} type=#{type} from=#{from} to=#{to}#{suffix}"
+      )
     else
       Logger.debug("ACK id=#{id} class=#{class} type=#{type}")
     end
@@ -1005,7 +1008,7 @@ defmodule ExWapp.MessageHandler do
     stored_session_targets =
       signal_sessions
       |> SessionStore.list_sessions()
-      |> Enum.filter(&(MapSet.member?(candidate_identities, JIDUtils.identity(&1))))
+      |> Enum.filter(&MapSet.member?(candidate_identities, JIDUtils.identity(&1)))
       |> Enum.sort()
       |> Enum.take(12)
 
@@ -1052,7 +1055,11 @@ defmodule ExWapp.MessageHandler do
     log_decrypted_message(content_type, decoded_text, sender_jid, payload, plaintext, text)
 
     updated_state = Map.put(state, :signal_sessions, updated_sessions)
-    decoded_message_data = build_decoded_message_data(message_data, text, content_type, plaintext)
+
+    decoded_message_data =
+      message_data
+      |> build_decoded_message_data(text, content_type, plaintext)
+      |> maybe_put_signal_sessions_update(updated_sessions)
 
     {decoded_message_data, updated_state}
   end
@@ -1148,7 +1155,11 @@ defmodule ExWapp.MessageHandler do
   defp maybe_reset_signal_sessions_for_decrypt_failure(state, reason, sender_candidates) do
     reset_candidates = decrypt_failure_session_reset_candidates(reason, sender_candidates)
 
-    case clear_signal_sessions_for_candidates(Map.get(state, :signal_sessions), state, reset_candidates) do
+    case clear_signal_sessions_for_candidates(
+           Map.get(state, :signal_sessions),
+           state,
+           reset_candidates
+         ) do
       nil ->
         {state, nil}
 
@@ -1659,11 +1670,18 @@ defmodule ExWapp.MessageHandler do
 
   defp persist_envelope_lid_mappings(state, _attrs, _from, _participant), do: state
 
-  defp persist_observed_devices(state, attrs, from, participant) when is_map(state) and is_map(attrs) do
+  defp persist_observed_devices(state, attrs, from, participant)
+       when is_map(state) and is_map(attrs) do
     store = Map.get(state, :store)
 
-    [from, participant, Map.get(attrs, "sender_lid"), Map.get(attrs, "sender_pn"),
-     Map.get(attrs, "participant_lid"), Map.get(attrs, "participant_pn")]
+    [
+      from,
+      participant,
+      Map.get(attrs, "sender_lid"),
+      Map.get(attrs, "sender_pn"),
+      Map.get(attrs, "participant_lid"),
+      Map.get(attrs, "participant_pn")
+    ]
     |> Enum.map(&normalize_jid_with_device/1)
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
@@ -1833,8 +1851,51 @@ defmodule ExWapp.MessageHandler do
     # Expand candidates via PN<->LID mapping (Baileys: getDecryptionJid)
     mapped_candidates = resolve_lid_mapping_candidates(base_candidates, state)
 
-    (base_candidates ++ mapped_candidates)
+    stored_session_candidates =
+      resolve_stored_session_candidates(base_candidates ++ mapped_candidates, state)
+
+    (base_candidates ++ mapped_candidates ++ stored_session_candidates)
     |> Enum.uniq()
+  end
+
+  defp resolve_stored_session_candidates(candidates, state) do
+    signal_sessions = Map.get(state, :signal_sessions)
+
+    if not SessionStore.store?(signal_sessions) do
+      []
+    else
+      lid_mapping = Account.load_lid_mapping(Map.get(state, :store))
+
+      related_bases =
+        candidates
+        |> Enum.flat_map(&JIDUtils.related_bases(&1, lid_mapping))
+        |> Enum.reject(&(&1 == ""))
+        |> MapSet.new()
+
+      signal_sessions
+      |> SessionStore.list_sessions()
+      |> Enum.filter(fn session_jid ->
+        JIDUtils.has_explicit_device?(session_jid) and
+          MapSet.member?(related_bases, JIDUtils.strip_device(session_jid))
+      end)
+      |> Enum.sort_by(fn session_jid ->
+        {explicit_candidate_rank(session_jid, candidates),
+         -(SessionStore.session_touched_at(signal_sessions, session_jid) || 0)}
+      end)
+    end
+  rescue
+    _ -> []
+  end
+
+  defp explicit_candidate_rank(session_jid, candidates) do
+    session_base = JIDUtils.strip_device(session_jid)
+
+    Enum.find_index(candidates, fn candidate ->
+      normalized_candidate = normalize_jid_with_device(candidate)
+
+      normalized_candidate == session_jid or
+        strip_device_from_jid(normalized_candidate) == session_base
+    end) || length(candidates)
   end
 
   defp synthesize_cross_family_device_candidates(candidates) do
@@ -2067,7 +2128,7 @@ defmodule ExWapp.MessageHandler do
         build_retry_receipt_actions(from, id, participant, attrs, message_data, state)
 
       true ->
-        build_delivery_receipt_actions(from, id, participant, attrs, state)
+        build_delivery_receipt_actions(from, id, participant, attrs, message_data, state)
     end
   end
 
@@ -2092,10 +2153,15 @@ defmodule ExWapp.MessageHandler do
     {actions, updated_state}
   end
 
-  defp build_delivery_receipt_actions(from, id, participant, attrs, state) do
+  defp build_delivery_receipt_actions(from, id, participant, attrs, message_data, state) do
     receipt_type = delivery_receipt_type(from, attrs, state)
     receipt_meta = %{recipient: Map.get(attrs, "recipient")}
-    {[{:send_receipt, from, id, participant, receipt_type, receipt_meta}], state}
+
+    actions =
+      signal_sessions_update_actions(message_data) ++
+        [{:send_receipt, from, id, participant, receipt_type, receipt_meta}]
+
+    {actions, state}
   end
 
   defp delivery_receipt_type(from, attrs, state) do

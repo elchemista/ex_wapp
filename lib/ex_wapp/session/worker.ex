@@ -966,7 +966,12 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_info({:send_result, jid, _text, {:error, reason}, strategy, attempt}, state) do
-    state = register_send_error(state, {:send_failed, reason}, %{jid: jid, strategy: strategy, attempt: attempt})
+    state =
+      register_send_error(state, {:send_failed, reason}, %{
+        jid: jid,
+        strategy: strategy,
+        attempt: attempt
+      })
 
     case maybe_apply_send_error_guard(state, {:send_failed, reason}) do
       {:continue, new_state} -> {:noreply, new_state}
@@ -1044,6 +1049,7 @@ defmodule ExWapp.Session.Worker do
       end
     end
 
+    flush_store(state.store)
     do_disconnect(state, reason)
     :ok
   end
@@ -1244,7 +1250,10 @@ defmodule ExWapp.Session.Worker do
   defp clear_signal_sessions_for_jid_in_memory(%{signal_sessions: nil} = state, _jid), do: state
 
   defp clear_signal_sessions_for_jid_in_memory(state, jid) do
-    %{state | signal_sessions: clear_signal_sessions_in_store(state.signal_sessions, jid, state.store)}
+    %{
+      state
+      | signal_sessions: clear_signal_sessions_in_store(state.signal_sessions, jid, state.store)
+    }
   end
 
   defp clear_signal_sessions_in_store(signal_sessions, jid, store) do
@@ -1369,7 +1378,10 @@ defmodule ExWapp.Session.Worker do
         outgoing_payloads: Map.get(state, :outgoing_retry_payloads, %{}),
         send_fun: fn normalized_jid, text ->
           retry_state = clear_signal_sessions_for_jid_in_memory(state, normalized_jid)
-          do_send_text_worker(session_pid, retry_state, normalized_jid, text)
+          do_send_text_worker(session_pid, retry_state, normalized_jid, text,
+            retry_message_id: message_id,
+            suppress_outgoing_chat_add: true
+          )
         end
       )
 
@@ -1533,6 +1545,7 @@ defmodule ExWapp.Session.Worker do
     if SessionStore.store?(sessions) do
       case Store.persist_signal_sessions(store, sessions) do
         :ok ->
+          flush_store(store)
           :ok
 
         {:error, reason} ->
@@ -1545,6 +1558,23 @@ defmodule ExWapp.Session.Worker do
   rescue
     error ->
       Logger.warning("[SESSION] Failed to persist signal sessions: #{inspect(error)}")
+      :ok
+  end
+
+  defp flush_store(nil), do: :ok
+
+  defp flush_store(store) do
+    if function_exported?(store.__struct__, :flush, 1) do
+      case store.__struct__.flush(store) do
+        :ok -> :ok
+        {:error, reason} -> Logger.warning("[SESSION] Failed flushing store: #{inspect(reason)}")
+      end
+    else
+      :ok
+    end
+  rescue
+    error ->
+      Logger.warning("[SESSION] Failed flushing store: #{inspect(error)}")
       :ok
   end
 
