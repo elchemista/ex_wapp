@@ -1378,6 +1378,7 @@ defmodule ExWapp.Session.Worker do
         outgoing_payloads: Map.get(state, :outgoing_retry_payloads, %{}),
         send_fun: fn normalized_jid, text ->
           retry_state = clear_signal_sessions_for_jid_in_memory(state, normalized_jid)
+
           do_send_text_worker(session_pid, retry_state, normalized_jid, text,
             retry_message_id: message_id,
             suppress_outgoing_chat_add: true
@@ -1647,7 +1648,7 @@ defmodule ExWapp.Session.Worker do
   defp maybe_log_inbound_node(%Binary.Node{tag: tag}) when tag in ["iq", "chatstate"], do: :ok
 
   defp maybe_log_inbound_node(%Binary.Node{} = node) do
-    Logger.info(
+    Logger.debug(
       "[WORKER] Inbound node tag=#{node.tag} attrs=#{inspect(Map.keys(node.attrs || %{}))}"
     )
   end

@@ -20,14 +20,14 @@ defmodule ExWapp.Noise.ClientPayload do
   def build(%Noise{store: store}, runtime_cfg) when is_map(runtime_cfg) do
     data = Store.load!(store)
 
-    Logger.info(
+    Logger.debug(
       "[ClientPayload] Store loaded: keys=#{inspect(Map.keys(data))} has_pairing=#{is_map(Map.get(data, :pairing))} has_signal=#{is_map(Map.get(data, :signal))}"
     )
 
     case resolve_login_jid(data) do
       %ExWapp.JID{} = jid ->
         # Already paired - use login payload
-        Logger.info("[ClientPayload] Building LOGIN payload for #{inspect(jid)}")
+        Logger.debug("[ClientPayload] Building LOGIN payload for #{inspect(jid)}")
         build_login_payload(data, jid, runtime_cfg)
 
       other ->
