@@ -101,8 +101,6 @@ defmodule ExWapp.Noise do
             "Noise init: client hello #{byte_size(client_hello)} bytes, header=#{Base.encode16(handshake_header, case: :lower)}"
           )
 
-          Logger.debug("Handshake client hello hex: #{hex(client_hello)}")
-
           {:ok, client_hello, state}
         end
 
@@ -139,17 +137,9 @@ defmodule ExWapp.Noise do
     if is_nil(cipher) do
       {:error, :invalid_state}
     else
-      Logger.debug(
-        "Noise plaintext (counter=#{state.tx_counter}, #{byte_size(plaintext)} bytes): #{hex(plaintext)}"
-      )
-
       case NoiseEngine.encrypt(cipher, plaintext, state.tx_counter) do
         {:ok, new_cipher, payload} when is_binary(payload) or is_list(payload) ->
           payload = ensure_binary(payload)
-
-          Logger.debug(
-            "Noise ciphertext (counter=#{state.tx_counter}, #{byte_size(payload)} bytes): #{hex(payload)}"
-          )
 
           new_state = %{state | cipher_ref: new_cipher, tx_counter: state.tx_counter + 1}
           {:ok, payload, new_state}
@@ -171,20 +161,12 @@ defmodule ExWapp.Noise do
     if is_nil(cipher) do
       {:error, :invalid_state}
     else
-      Logger.debug(
-        "Noise ciphertext (counter=#{state.rx_counter}, #{byte_size(payload)} bytes): #{hex(payload)}"
-      )
-
       case NoiseEngine.decrypt(cipher, payload, state.rx_counter) do
         {:error, reason} ->
           {:error, {:decrypt_failed, reason}}
 
         {:ok, new_cipher, plaintext} when is_binary(plaintext) or is_list(plaintext) ->
           plaintext = ensure_binary(plaintext)
-
-          Logger.debug(
-            "Noise plaintext (counter=#{state.rx_counter}, #{byte_size(plaintext)} bytes): #{hex(plaintext)}"
-          )
 
           new_state = %{state | cipher_ref: new_cipher, rx_counter: state.rx_counter + 1}
           {:ok, plaintext, new_state}
@@ -200,13 +182,8 @@ defmodule ExWapp.Noise do
          {:ok, cipher_ref} <- build_transport_cipher(state, secrets),
          :ok <- verify_certificate_callback(state, secrets),
          :ok <- persist_handshake_data(state, secrets),
-         new_state <- promote_to_transport(state, secrets, cipher_ref) do
-      Logger.debug(
-        "Handshake client finish (#{byte_size(client_finish)} bytes): #{hex(client_finish)}"
-      )
-
-      {:ok, new_state, client_finish}
-    end
+         new_state <- promote_to_transport(state, secrets, cipher_ref),
+         do: {:ok, new_state, client_finish}
   end
 
   defp build_client_finish(%__MODULE__{handshake_ref: handshake_ref}, payload)
@@ -241,7 +218,10 @@ defmodule ExWapp.Noise do
 
   defp persist_handshake_data(%__MODULE__{store: nil}, %Secrets{}), do: :ok
 
-  defp persist_handshake_data(%__MODULE__{store: store, pending_store_data: pending}, %Secrets{} = secrets) do
+  defp persist_handshake_data(
+         %__MODULE__{store: store, pending_store_data: pending},
+         %Secrets{} = secrets
+       ) do
     data =
       store
       |> Store.load!()
@@ -357,10 +337,6 @@ defmodule ExWapp.Noise do
   defp ensure_binary(value) when is_binary(value), do: value
   defp ensure_binary(value) when is_list(value), do: :erlang.list_to_binary(value)
   defp ensure_binary(value), do: value
-
-  defp hex(data) do
-    Base.encode16(data, case: :lower)
-  end
 
   @doc false
   def new, do: {:error, :deprecated_interface}

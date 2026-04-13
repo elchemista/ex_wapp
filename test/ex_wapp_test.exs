@@ -12,6 +12,27 @@ defmodule ExWappTest do
     def send_node(_conn, _node), do: :ok
   end
 
+  defmodule FailingTransport do
+    def start_link(_opts), do: {:error, :boom}
+    def send_node(_conn, _node), do: :ok
+  end
+
+  defmodule TrackingTransport do
+    def start_link(_opts) do
+      {:ok, spawn_link(fn -> Process.sleep(:infinity) end)}
+    end
+
+    def send_node(conn, node) do
+      send(conn, {:transport_send, node})
+      :ok
+    end
+
+    def restart_stream(conn) do
+      send(conn, :transport_restart_stream)
+      :ok
+    end
+  end
+
   describe "Session lifecycle" do
     test "starts in idle state" do
       {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
@@ -39,6 +60,19 @@ defmodule ExWappTest do
   end
 
   describe "App state sync stability" do
+    test "send_text returns not_connected when session is disconnected" do
+      {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
+
+      :sys.replace_state(session, fn state ->
+        %{state | status: :disconnected, conn: nil}
+      end)
+
+      assert {:error, {:not_connected, :disconnected}} =
+               ExWapp.send_text(session, "15550001111@s.whatsapp.net", "hello")
+
+      GenServer.stop(session)
+    end
+
     test "app-state mutation request on connected session does not crash" do
       key_id_hex = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
       key_data = :crypto.strong_rand_bytes(32)
@@ -136,6 +170,83 @@ defmodule ExWappTest do
 
       GenServer.stop(session)
       Process.exit(conn, :kill)
+    end
+
+    test "auth ready without app-state keys does not broadcast initial sync completed" do
+      if Process.whereis(ExWapp.PubSub) == nil do
+        start_supervised!({Phoenix.PubSub, name: ExWapp.PubSub})
+      end
+
+      session_id = "session-no-keys"
+
+      Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
+
+      {:ok, session} =
+        ExWapp.start_link(
+          reconnect: false,
+          transport: FakeTransport,
+          store: ExWapp.Store.Memory,
+          session_id: session_id
+        )
+
+      conn = spawn(fn -> Process.sleep(:infinity) end)
+
+      :sys.replace_state(session, fn state ->
+        %{state | conn: conn, status: :handshaking, app_state_initial_sync_requested: false}
+      end)
+
+      send(session, {:connection_event, {:auth, :ready}})
+
+      assert_receive {:ex_wapp_session, :post_auth_ready, _payload}, 1_000
+      refute_receive {:ex_wapp_session, :initial_sync, :completed, _payload}, 200
+
+      state = :sys.get_state(session)
+      assert state.status == :connected
+      assert state.app_state_initial_sync_requested == false
+
+      GenServer.stop(session)
+      Process.exit(conn, :kill)
+    end
+
+    test "outbound queue stays detached until Noise handshake completes" do
+      {:ok, session} =
+        GenServer.start(ExWapp.Session.Worker,
+          store: ExWapp.Store.Memory,
+          transport: TrackingTransport,
+          runtime: [health: [check_interval_ms: 60_000]]
+        )
+
+      conn = self()
+
+      :sys.replace_state(session, fn state ->
+        %{state | conn: conn, status: :connecting, transport_ready?: false}
+      end)
+
+      queue = :sys.get_state(session).outbound_queue
+
+      node = %ExWapp.Binary.Node{
+        tag: "presence",
+        attrs: %{"type" => "available"},
+        content: nil
+      }
+
+      ExWapp.Session.OutboundQueue.enqueue_node(queue, node)
+
+      refute_receive {:transport_send, ^node}, 100
+      assert :sys.get_state(queue).conn == nil
+
+      send(session, {:connection_event, {:noise, :handshake_started}})
+      Process.sleep(50)
+
+      refute_receive {:transport_send, ^node}, 100
+      assert :sys.get_state(queue).conn == nil
+
+      send(session, {:connection_event, {:noise, :handshake_completed}})
+
+      assert_receive {:transport_send, ^node}, 1_000
+      assert :sys.get_state(queue).conn == conn
+
+      GenServer.stop(session)
     end
   end
 
@@ -281,13 +392,46 @@ defmodule ExWappTest do
       )
 
       assert_receive {:ex_wapp_session, :disconnected,
-                      {:transport_closed, {:stream_error, "515", nil}}},
+                      {:transport_closed, {:stream_error, "515", nil}}, payload},
                      1_000
+
+      assert payload.status == :disconnected
+      assert payload.transport_ready? == false
 
       assert eventually(fn -> ExWapp.state(session) == :idle end)
 
       ExWapp.unsubscribe(session_id)
       if Process.alive?(conn), do: Process.exit(conn, :normal)
+      GenServer.stop(session)
+    end
+
+    test "vext-managed sessions surface connect failures and do not auto-reconnect" do
+      session_id = "pubsub_vext_managed_connect_#{System.unique_integer([:positive])}"
+
+      {:ok, session} =
+        ExWapp.start_link(
+          store: ExWapp.Store.Memory,
+          session_id: session_id,
+          transport: FailingTransport,
+          runtime: [
+            ownership: [vext_managed: true],
+            reconnect: [enabled: true, max_attempts: 3, initial_backoff_ms: 10, jitter_ms: 0]
+          ]
+        )
+
+      :ok = ExWapp.subscribe(session_id)
+
+      ExWapp.connect(session)
+
+      assert_receive {:ex_wapp_session, :disconnected, {:connect_failed, :boom}, payload}, 1_000
+      assert payload.status == :idle
+
+      Process.sleep(50)
+      state = :sys.get_state(session)
+      assert state.status == :disconnected
+      assert state.reconnect_attempts == 0
+
+      ExWapp.unsubscribe(session_id)
       GenServer.stop(session)
     end
   end
@@ -341,8 +485,7 @@ defmodule ExWappTest do
         )
 
       assert [
-               {:send_node,
-                %ExWapp.Binary.Node{tag: "receipt", attrs: attrs, content: nil}}
+               {:send_node, %ExWapp.Binary.Node{tag: "receipt", attrs: attrs, content: nil}}
              ] = actions
 
       assert attrs["id"] == "MSG_RECEIPT_1"
@@ -367,8 +510,7 @@ defmodule ExWappTest do
       assert {:ok, _state, actions} = ExWapp.MessageHandler.handle_node(node, :session, %{})
 
       assert [
-               {:send_node,
-                %ExWapp.Binary.Node{tag: "ack", attrs: attrs, content: nil}}
+               {:send_node, %ExWapp.Binary.Node{tag: "ack", attrs: attrs, content: nil}}
              ] = actions
 
       assert attrs["class"] == "receipt"
@@ -435,7 +577,9 @@ defmodule ExWappTest do
         )
 
       assert :ok = GenServer.call(session1, {:update_signal_sessions, persisted_sessions})
-      assert persisted_sessions == GenServer.call(session1, :get_signal_sessions)
+
+      assert ExWapp.Signal.SessionStore.snapshot(persisted_sessions) ==
+               ExWapp.Signal.SessionStore.snapshot(GenServer.call(session1, :get_signal_sessions))
 
       GenServer.stop(session1)
 
@@ -445,7 +589,8 @@ defmodule ExWappTest do
           reconnect: false
         )
 
-      assert persisted_sessions == GenServer.call(session2, :get_signal_sessions)
+      assert ExWapp.Signal.SessionStore.snapshot(persisted_sessions) ==
+               ExWapp.Signal.SessionStore.snapshot(GenServer.call(session2, :get_signal_sessions))
 
       GenServer.stop(session2)
     end

@@ -18,7 +18,19 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   @spec send_text_worker(pid(), map(), String.t(), iodata(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
-  def send_text_worker(session_pid, state, jid, text, opts \\ []) do
+  def send_text_worker(session_pid, state, jid, text, opts \\ [])
+
+  def send_text_worker(_session_pid, %{status: status}, _jid, _text, _opts)
+      when status != :connected do
+    {:error, {:not_connected, status}}
+  end
+
+  def send_text_worker(_session_pid, %{status: status, conn: conn}, _jid, _text, _opts)
+      when not is_pid(conn) do
+    {:error, {:not_connected, status}}
+  end
+
+  def send_text_worker(session_pid, state, jid, text, opts) do
     normalized_jid = normalize_jid_with_device(jid)
     recipient_fanout_retry? = Keyword.get(opts, :recipient_fanout_retry, false)
 
@@ -42,19 +54,19 @@ defmodule ExWapp.Session.Worker.Outbound do
                ) do
             {:error, {:fanout_incomplete, missing_targets}}
             when not recipient_fanout_retry? ->
-	              Logger.warning(
-	                "[SEND] Fanout incomplete for #{jid}, clearing cached sessions and retrying once: #{inspect(missing_targets)}"
-	              )
+              Logger.warning(
+                "[SEND] Fanout incomplete for #{jid}, clearing cached sessions and retrying once: #{inspect(missing_targets)}"
+              )
 
-	              retry_state = %{
-	                state
-	                | signal_sessions:
-	                    clear_cached_signal_sessions_for_targets(
-	                      updated_sessions,
-	                      missing_targets,
-	                      state.store
-	                    )
-	              }
+              retry_state = %{
+                state
+                | signal_sessions:
+                    clear_cached_signal_sessions_for_targets(
+                      updated_sessions,
+                      missing_targets,
+                      state.store
+                    )
+              }
 
               case ensure_signal_session_worker(retry_state, jid) do
                 {:ok, retried_sessions, retried_prekey_bundles, retried_target_hints} ->
@@ -167,19 +179,19 @@ defmodule ExWapp.Session.Worker.Outbound do
           end
 
         missing_targets when not group_fanout_retry? ->
-	          Logger.warning(
-	            "[SEND] Group distribution incomplete for #{group_jid}, clearing cached sessions and retrying once: #{inspect(missing_targets)}"
-	          )
+          Logger.warning(
+            "[SEND] Group distribution incomplete for #{group_jid}, clearing cached sessions and retrying once: #{inspect(missing_targets)}"
+          )
 
-	          retry_state = %{
-	            state
-	            | signal_sessions:
-	                clear_cached_signal_sessions_for_targets(
-	                  persisted_sessions,
-	                  missing_targets,
-	                  state.store
-	                )
-	          }
+          retry_state = %{
+            state
+            | signal_sessions:
+                clear_cached_signal_sessions_for_targets(
+                  persisted_sessions,
+                  missing_targets,
+                  state.store
+                )
+          }
 
           do_send_group_worker(
             session_pid,
@@ -340,14 +352,18 @@ defmodule ExWapp.Session.Worker.Outbound do
       live_targets
       |> JIDUtils.normalize_target_list()
       |> filter_group_targets_for_addressing_mode(addressing_mode)
-      |> Enum.reject(&group_current_device_target?(&1, own_device_id, [own_base_jid, own_lid_jid]))
+      |> Enum.reject(
+        &group_current_device_target?(&1, own_device_id, [own_base_jid, own_lid_jid])
+      )
       |> Enum.uniq()
 
     cached_targets =
       cached_targets
       |> JIDUtils.normalize_target_list()
       |> filter_group_targets_for_addressing_mode(addressing_mode)
-      |> Enum.reject(&group_current_device_target?(&1, own_device_id, [own_base_jid, own_lid_jid]))
+      |> Enum.reject(
+        &group_current_device_target?(&1, own_device_id, [own_base_jid, own_lid_jid])
+      )
       |> Enum.reject(&(&1 in live_targets))
       |> Enum.uniq()
 
@@ -362,7 +378,10 @@ defmodule ExWapp.Session.Worker.Outbound do
       base_participant = strip_device_from_jid(participant)
 
       live_targets =
-        [base_participant | resolve_usync_devices_for_identity(device_map, base_participant, lid_mapping)]
+        [
+          base_participant
+          | resolve_usync_devices_for_identity(device_map, base_participant, lid_mapping)
+        ]
         |> JIDUtils.normalize_target_list()
 
       cached_targets =
@@ -468,6 +487,7 @@ defmodule ExWapp.Session.Worker.Outbound do
         now_ms
       )
   end
+
   defp fetch_group_prekeys(_state, [], signal_sessions, _context), do: {signal_sessions, %{}}
 
   defp fetch_group_prekeys(state, devices_needing_prekeys, signal_sessions, context) do
@@ -671,8 +691,8 @@ defmodule ExWapp.Session.Worker.Outbound do
     own_device_id = Account.local_account_device_id(state.store)
     recipient_base_jid = strip_device_from_jid(normalize_jid_with_device(jid))
 
-    {recipient_devices, recipient_cached_devices, own_devices, own_cached_devices, all_usync_devices,
-     all_device_jids} =
+    {recipient_devices, recipient_cached_devices, own_devices, own_cached_devices,
+     all_usync_devices, all_device_jids} =
       discover_devices(state, recipient_base_jid, own_sender_jid, own_device_id)
 
     # For self-chat, force fresh prekey-based sessions for all targets.
@@ -698,7 +718,8 @@ defmodule ExWapp.Session.Worker.Outbound do
 
     all_target_device_jids =
       JIDUtils.normalize_target_list(
-        recipient_devices ++ recipient_cached_devices ++ own_target_candidates ++ own_cached_devices
+        recipient_devices ++
+          recipient_cached_devices ++ own_target_candidates ++ own_cached_devices
       )
       |> Enum.reject(&current_device_target?(&1, own_device_id))
 
@@ -715,6 +736,13 @@ defmodule ExWapp.Session.Worker.Outbound do
         all_target_device_jids,
         own_target_candidates ++ own_cached_devices
       )
+
+    devices_needing_prekeys =
+      if self_chat? do
+        devices_needing_prekeys
+      else
+        expand_recipient_identity_prekey_targets(devices_needing_prekeys, recipient_devices)
+      end
 
     {updated_sessions, prekey_bundles} =
       fetch_needed_prekeys(state, devices_needing_prekeys, signal_sessions, recipient_base_jid)
@@ -791,8 +819,10 @@ defmodule ExWapp.Session.Worker.Outbound do
       end
 
     recipient_devices =
-      [recipient_base_jid |
-       resolve_usync_devices_for_identity(device_map, recipient_base_jid, lid_mapping)]
+      [
+        recipient_base_jid
+        | resolve_usync_devices_for_identity(device_map, recipient_base_jid, lid_mapping)
+      ]
       |> JIDUtils.normalize_target_list()
 
     recipient_cached_devices =
@@ -808,7 +838,9 @@ defmodule ExWapp.Session.Worker.Outbound do
       |> Enum.reject(&(&1 in own_devices_all))
 
     own_devices = Enum.reject(own_devices_all, &current_device_target?(&1, own_device_id))
-    own_cached_devices = Enum.reject(own_cached_devices, &current_device_target?(&1, own_device_id))
+
+    own_cached_devices =
+      Enum.reject(own_cached_devices, &current_device_target?(&1, own_device_id))
 
     # All usync devices INCLUDING current device — needed for phash (whatsmeow parity)
     all_usync_devices = JIDUtils.normalize_target_list(recipient_devices ++ own_devices_all)
@@ -864,6 +896,7 @@ defmodule ExWapp.Session.Worker.Outbound do
        ) do
     lid_mapping = Account.load_lid_mapping(store)
     now_ms = System.system_time(:millisecond)
+
     own_identity_set =
       own_device_jids
       |> Enum.map(&JIDUtils.identity/1)
@@ -881,6 +914,7 @@ defmodule ExWapp.Session.Worker.Outbound do
       device_jid = normalize_jid_with_device(device_jid)
       signal_jid = JIDUtils.resolve_signal_encryption_jid(device_jid, lid_mapping)
       target_identity = JIDUtils.identity(device_jid)
+
       has_session =
         SessionStore.has_session?(signal_sessions, signal_jid) or
           SessionStore.has_session?(signal_sessions, device_jid)
@@ -917,6 +951,26 @@ defmodule ExWapp.Session.Worker.Outbound do
           {:ok, sessions, bundles} -> {sessions, bundles}
           {:error, reason2} -> {:error, reason2}
         end
+    end
+  end
+
+  defp expand_recipient_identity_prekey_targets(devices_needing_prekeys, recipient_devices) do
+    devices_needing_prekeys = JIDUtils.normalize_target_list(devices_needing_prekeys)
+    recipient_devices = JIDUtils.normalize_target_list(recipient_devices)
+
+    recipient_identities =
+      recipient_devices
+      |> Enum.map(&JIDUtils.identity/1)
+      |> Enum.reject(fn {user, server} -> user == "" or server == "" end)
+      |> MapSet.new()
+
+    if recipient_devices != [] and
+         Enum.any?(devices_needing_prekeys, fn device_jid ->
+           MapSet.member?(recipient_identities, JIDUtils.identity(device_jid))
+         end) do
+      JIDUtils.normalize_target_list(recipient_devices ++ devices_needing_prekeys)
+    else
+      devices_needing_prekeys
     end
   end
 
@@ -1163,6 +1217,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     all_prekey_bundles = prekey_bundles
     hints = target_hints
     self_chat_mode = Keyword.get(opts, :self_chat_mode, :dsm_all_non_current)
+
     recipient_targets_hint =
       finalize_soft_targets(
         store,
@@ -1186,6 +1241,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     own_sender_jid = Map.get(hints, :own_identity_jid, own_base_jid)
     own_device_id = Account.local_account_device_id(store)
     all_usync_devices = Map.get(hints, :all_usync_devices, [])
+
     own_targets_hint =
       finalize_soft_targets(
         store,
@@ -1783,6 +1839,10 @@ defmodule ExWapp.Session.Worker.Outbound do
     transport_mod.send_node(conn, node)
   end
 
+  defp send_transport_node(%{status: status}, _conn, _node) do
+    {:error, {:not_connected, status}}
+  end
+
   defp persist_signal_sessions(session_pid, sessions, state) do
     GenServer.call(session_pid, {:update_signal_sessions, sessions}, iq_timeout_ms(state))
     :ok
@@ -1829,7 +1889,10 @@ defmodule ExWapp.Session.Worker.Outbound do
 
     target_specs
     |> Enum.map(fn spec ->
-      %{jid: normalize_jid_with_device(Map.get(spec, :jid, "")), payload_kind: Map.get(spec, :payload_kind)}
+      %{
+        jid: normalize_jid_with_device(Map.get(spec, :jid, "")),
+        payload_kind: Map.get(spec, :payload_kind)
+      }
     end)
     |> Enum.reject(fn %{jid: jid} -> jid == "" or MapSet.member?(encrypted_targets, jid) end)
   end

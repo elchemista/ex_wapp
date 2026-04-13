@@ -305,11 +305,7 @@ defmodule ExWapp.Conn do
   defp handle_decrypted_payload(state, plaintext) do
     with {:ok, unpacked} <- Binary.unpack(plaintext),
          {:ok, node} <- Binary.decode(unpacked) do
-      Logger.debug("[CONN] Received node: <#{node.tag}> attrs=#{inspect(node.attrs)}")
-
-      if node.content do
-        Logger.debug("[CONN] Node content: #{inspect(node.content)}")
-      end
+      Logger.debug("[CONN] Received node: <#{node.tag}>")
 
       notify_session(state.session, {:connection_message, node})
       {:ok, state, []}
@@ -336,8 +332,6 @@ defmodule ExWapp.Conn do
       "sending frame include_header=#{include_header} header_hex=#{header_hex} payload=#{byte_size(payload)} bytes frame=#{byte_size(frame)} bytes"
     )
 
-    Logger.debug("Frame payload hex: #{hex(payload)}")
-    Logger.debug("Websocket frame hex: #{hex(frame)}")
     {%{state | header_sent?: true}, {:binary, frame}}
   end
 
@@ -390,10 +384,6 @@ defmodule ExWapp.Conn do
     )
 
     {:ok, state, []}
-  end
-
-  defp hex(data) do
-    Base.encode16(data, case: :lower)
   end
 
   defp log_outgoing_node(node, encoded) do

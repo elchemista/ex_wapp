@@ -132,6 +132,111 @@ defmodule ExWapp.Config.Validator do
       fn -> ensure_binary(cfg, [:protocol, :pairing_device_props, :os]) end,
       fn -> ensure_non_neg_integer(cfg, [:protocol, :pairing_device_props, :platform_type]) end,
       fn -> ensure_boolean(cfg, [:protocol, :pairing_device_props, :require_full_sync]) end,
+      fn ->
+        ensure_non_neg_integer(cfg, [:protocol, :pairing_device_props, :version, :primary])
+      end,
+      fn ->
+        ensure_non_neg_integer(cfg, [:protocol, :pairing_device_props, :version, :secondary])
+      end,
+      fn ->
+        ensure_non_neg_integer(cfg, [:protocol, :pairing_device_props, :version, :tertiary])
+      end,
+      fn ->
+        ensure_non_neg_integer(
+          cfg,
+          [:protocol, :pairing_device_props, :history_sync_config, :storage_quota_mb]
+        )
+      end,
+      fn ->
+        ensure_boolean(
+          cfg,
+          [
+            :protocol,
+            :pairing_device_props,
+            :history_sync_config,
+            :inline_initial_payload_in_e2ee_msg
+          ]
+        )
+      end,
+      fn ->
+        ensure_boolean(
+          cfg,
+          [:protocol, :pairing_device_props, :history_sync_config, :support_call_log_history]
+        )
+      end,
+      fn ->
+        ensure_boolean(
+          cfg,
+          [
+            :protocol,
+            :pairing_device_props,
+            :history_sync_config,
+            :support_bot_user_agent_chat_history
+          ]
+        )
+      end,
+      fn ->
+        ensure_boolean(
+          cfg,
+          [
+            :protocol,
+            :pairing_device_props,
+            :history_sync_config,
+            :support_cag_reactions_and_polls
+          ]
+        )
+      end,
+      fn ->
+        ensure_boolean(
+          cfg,
+          [:protocol, :pairing_device_props, :history_sync_config, :support_biz_hosted_msg]
+        )
+      end,
+      fn ->
+        ensure_boolean(
+          cfg,
+          [
+            :protocol,
+            :pairing_device_props,
+            :history_sync_config,
+            :support_recent_sync_chunk_message_count_tuning
+          ]
+        )
+      end,
+      fn ->
+        ensure_boolean(
+          cfg,
+          [:protocol, :pairing_device_props, :history_sync_config, :support_hosted_group_msg]
+        )
+      end,
+      fn ->
+        ensure_boolean(
+          cfg,
+          [
+            :protocol,
+            :pairing_device_props,
+            :history_sync_config,
+            :support_fbid_bot_chat_history
+          ]
+        )
+      end,
+      fn ->
+        ensure_boolean(
+          cfg,
+          [
+            :protocol,
+            :pairing_device_props,
+            :history_sync_config,
+            :support_message_association
+          ]
+        )
+      end,
+      fn ->
+        ensure_boolean(
+          cfg,
+          [:protocol, :pairing_device_props, :history_sync_config, :support_group_history]
+        )
+      end,
       fn -> ensure_binary(cfg, [:protocol, :user_agent, :os_version]) end,
       fn -> ensure_binary(cfg, [:protocol, :user_agent, :manufacturer]) end,
       fn -> ensure_binary(cfg, [:protocol, :user_agent, :device_name]) end,

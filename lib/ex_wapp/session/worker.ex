@@ -2,6 +2,10 @@ defmodule ExWapp.Session.Worker do
   @moduledoc """
   Coordinates the lifecycle of a WhatsApp Web connection.
 
+  When started with `runtime.ownership.vext_managed: true`, the worker behaves
+  as a transport engine only: it still emits raw lifecycle facts, but leaves
+  reconnect and product-level stop policy to the external owner.
+
   This GenServer is designed for long-running production use with:
   - Automatic reconnection with exponential backoff
   - Connection health monitoring
@@ -110,6 +114,7 @@ defmodule ExWapp.Session.Worker do
     reconnect_attempts: 0,
     last_disconnect_reason: nil,
     connected_at: nil,
+    transport_ready?: false,
     server_time_offset_ms: 0,
     session_invalid: false,
     pending_iqs: %{},
@@ -157,6 +162,7 @@ defmodule ExWapp.Session.Worker do
           reconnect_attempts: non_neg_integer(),
           last_disconnect_reason: term() | nil,
           connected_at: DateTime.t() | nil,
+          transport_ready?: boolean(),
           server_time_offset_ms: integer(),
           app_state_initial_sync_requested: boolean(),
           post_auth_phase: atom(),
@@ -503,6 +509,16 @@ defmodule ExWapp.Session.Worker do
     mon = Process.monitor(pid)
     new_state = put_in(state.qr_subscribers[ref], {pid, mon})
     {:reply, {:ok, ref}, new_state}
+  end
+
+  def handle_call({:send_text, _jid, _text}, _from, %{status: status} = state)
+      when status != :connected do
+    {:reply, {:error, {:not_connected, status}}, state}
+  end
+
+  def handle_call({:send_text, _jid, _text}, _from, %{conn: conn} = state)
+      when not is_pid(conn) do
+    {:reply, {:error, {:not_connected, state.status}}, state}
   end
 
   def handle_call({:send_text, jid, text}, from, state) do
@@ -899,27 +915,25 @@ defmodule ExWapp.Session.Worker do
   def handle_info(
         {:app_state_initial_sync, _collection_names},
         %{status: :connected, app_state_initial_sync_requested: true} = state
-      ) do
-    Logger.debug("[APP_STATE] Initial sync already requested for this connection, skipping")
-    {:noreply, state}
-  end
+      ),
+      do: {:noreply, state}
 
   def handle_info({:app_state_initial_sync, collection_names}, %{status: :connected} = state)
       when is_list(collection_names) do
-    refresh_app_state_collections(self(), state.store, collection_names, :initial)
+    refresh_app_state_collections(
+      self(),
+      state.store,
+      collection_names,
+      :initial,
+      state.session_id
+    )
 
     {:noreply, %{state | app_state_initial_sync_requested: true}}
   end
 
-  def handle_info({:app_state_sync_collections, _}, state) do
-    Logger.debug("[APP_STATE] Ignoring sync notification — not connected")
-    {:noreply, state}
-  end
+  def handle_info({:app_state_sync_collections, _}, state), do: {:noreply, state}
 
-  def handle_info({:app_state_initial_sync, _}, state) do
-    Logger.debug("[APP_STATE] Ignoring initial sync request — not connected")
-    {:noreply, state}
-  end
+  def handle_info({:app_state_initial_sync, _}, state), do: {:noreply, state}
 
   def handle_info({:outbound_error, _item, reason}, state) do
     Logger.warning("[SESSION] outbound queue error: #{inspect(reason)}")
@@ -1039,7 +1053,11 @@ defmodule ExWapp.Session.Worker do
   def terminate(reason, state) do
     Logger.debug("Session terminating: #{inspect(reason)}")
     emit_telemetry(:terminate, %{reason: reason}, state)
-    Subscribers.broadcast_lifecycle(state.session_id, {:ex_wapp_session, :terminated, reason})
+
+    Subscribers.broadcast_lifecycle(
+      state.session_id,
+      {:ex_wapp_session, :terminated, reason, lifecycle_event_meta(state)}
+    )
 
     if state.session_id do
       try do
@@ -1073,17 +1091,37 @@ defmodule ExWapp.Session.Worker do
       {:ok, conn_pid} ->
         Logger.debug("[SESSION] ✓ Connection started: #{inspect(conn_pid)}")
         conn_ref = Process.monitor(conn_pid)
-        OutboundQueue.set_conn(state.outbound_queue, conn_pid)
 
-        %{state | conn: conn_pid, conn_ref: conn_ref, status: :connecting}
+        %{
+          state
+          | conn: conn_pid,
+            conn_ref: conn_ref,
+            status: :connecting,
+            transport_ready?: false
+        }
         |> schedule_health_check()
 
       {:error, reason} ->
         Logger.debug("[SESSION] ✗ Connection FAILED: #{inspect(reason)}")
         Logger.error("Failed to start connection: #{inspect(reason)}")
         emit_telemetry(:error, %{reason: reason, phase: :connect}, state)
-        notify_qr(state, {:error, reason})
-        schedule_reconnect(state, reason)
+
+        if vext_managed_runtime?(state) do
+          disconnect_reason = {:connect_failed, reason}
+
+          Subscribers.broadcast_lifecycle(
+            state.session_id,
+            {:ex_wapp_session, :disconnected, disconnect_reason, lifecycle_event_meta(state)}
+          )
+
+          state
+          |> update_stats(:errors)
+          |> Map.put(:status, :disconnected)
+          |> Map.put(:last_disconnect_reason, disconnect_reason)
+        else
+          notify_qr(state, {:error, reason})
+          schedule_reconnect(state, reason)
+        end
     end
   end
 
@@ -1119,6 +1157,7 @@ defmodule ExWapp.Session.Worker do
     %{
       state
       | app_state_initial_sync_requested: false,
+        transport_ready?: false,
         post_auth_phase: :idle,
         prekey_count_query_id: nil,
         prekey_upload_iq_id: nil,
@@ -1141,7 +1180,11 @@ defmodule ExWapp.Session.Worker do
     end
 
     emit_telemetry(:disconnected, %{reason: reason}, state)
-    Subscribers.broadcast_lifecycle(state.session_id, {:ex_wapp_session, :disconnected, reason})
+
+    Subscribers.broadcast_lifecycle(
+      state.session_id,
+      {:ex_wapp_session, :disconnected, reason, lifecycle_event_meta(state)}
+    )
 
     %{
       state
@@ -1150,6 +1193,7 @@ defmodule ExWapp.Session.Worker do
         status: :disconnected,
         last_disconnect_reason: reason,
         connected_at: nil,
+        transport_ready?: false,
         app_state_initial_sync_requested: false,
         post_auth_phase: :idle,
         prekey_count_query_id: nil,
@@ -1163,30 +1207,40 @@ defmodule ExWapp.Session.Worker do
   defp handle_connection_exit(state, reason) do
     OutboundQueue.clear_conn(state.outbound_queue)
 
-    state
-    |> clear_pending_requests(reason)
-    |> cancel_health_check()
-    |> Map.merge(%{
-      conn: nil,
-      conn_ref: nil,
-      status: :disconnected,
-      last_disconnect_reason: reason,
-      connected_at: nil,
-      app_state_initial_sync_requested: false,
-      post_auth_phase: :idle,
-      prekey_count_query_id: nil,
-      prekey_upload_iq_id: nil,
-      pending_prekey_upload: [],
-      passive_iq_id: nil,
-      digest_iq_id: nil
-    })
-    |> update_stats(:reconnects)
-    |> then(fn s ->
-      emit_telemetry(:disconnected, %{reason: reason}, s)
-      Subscribers.broadcast_lifecycle(s.session_id, {:ex_wapp_session, :disconnected, reason})
-      notify_qr(s, {:error, {:disconnected, reason}})
-      schedule_reconnect(s, reason)
-    end)
+    next_state =
+      state
+      |> clear_pending_requests(reason)
+      |> cancel_health_check()
+      |> Map.merge(%{
+        conn: nil,
+        conn_ref: nil,
+        status: :disconnected,
+        last_disconnect_reason: reason,
+        connected_at: nil,
+        transport_ready?: false,
+        app_state_initial_sync_requested: false,
+        post_auth_phase: :idle,
+        prekey_count_query_id: nil,
+        prekey_upload_iq_id: nil,
+        pending_prekey_upload: [],
+        passive_iq_id: nil,
+        digest_iq_id: nil
+      })
+      |> update_stats(:reconnects)
+
+    emit_telemetry(:disconnected, %{reason: reason}, next_state)
+
+    Subscribers.broadcast_lifecycle(
+      next_state.session_id,
+      {:ex_wapp_session, :disconnected, reason, lifecycle_event_meta(next_state)}
+    )
+
+    if vext_managed_runtime?(next_state) do
+      next_state
+    else
+      notify_qr(next_state, {:error, {:disconnected, reason}})
+      schedule_reconnect(next_state, reason)
+    end
   end
 
   # ============================================================================
@@ -1201,32 +1255,50 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp restart_connection_now(state, reason) do
-    state
-    |> do_disconnect(reason)
-    |> Map.put(:reconnect_attempts, 0)
-    |> schedule_connect(0)
+    reconnect_cfg = Config.get(state, [:runtime_cfg, :reconnect], %{})
+
+    if Resilience.reconnect_enabled?(state, reconnect_cfg) do
+      state
+      |> do_disconnect(reason)
+      |> Map.put(:reconnect_attempts, 0)
+      |> schedule_connect(0)
+    else
+      Logger.error(
+        "[SESSION] Immediate reconnect suppressed: reconnect disabled, reason=#{inspect(reason)}"
+      )
+
+      state
+      |> do_disconnect(reason)
+      |> Map.put(:reconnect_attempts, 0)
+      |> Map.put(:status, :idle)
+    end
   end
 
   defp schedule_reconnect(state, _reason) do
-    case Resilience.reconnect_decision(state) do
-      :session_invalid ->
-        Logger.warning(
-          "[SESSION] Session invalid (401), not reconnecting. Clear session to re-pair."
-        )
+    if vext_managed_runtime?(state) do
+      Logger.debug("[SESSION] Reconnect delegated to Vext runtime owner")
+      %{state | status: :disconnected}
+    else
+      case Resilience.reconnect_decision(state) do
+        :session_invalid ->
+          Logger.error(
+            "[SESSION] Session invalid (401), not reconnecting. Clear session to re-pair."
+          )
 
-        notify_qr(state, {:error, :session_invalid})
-        %{state | status: :idle}
+          notify_qr(state, {:error, :session_invalid})
+          %{state | status: :idle}
 
-      {:reconnect, attempt, delay} ->
-        Logger.debug("Scheduling reconnect attempt #{attempt} in #{delay}ms")
-        Process.send_after(self(), {:reconnect, attempt}, delay)
+        {:reconnect, attempt, delay} ->
+          Logger.debug("Scheduling reconnect attempt #{attempt} in #{delay}ms")
+          Process.send_after(self(), {:reconnect, attempt}, delay)
 
-        %{state | status: :disconnected}
+          %{state | status: :disconnected}
 
-      :give_up ->
-        Logger.warning("Max reconnect attempts reached, giving up")
-        notify_qr(state, {:error, :max_reconnect_attempts})
-        %{state | status: :idle}
+        :give_up ->
+          Logger.error("Reconnect disabled or max reconnect attempts reached, giving up")
+          notify_qr(state, {:error, :max_reconnect_attempts})
+          %{state | status: :idle}
+      end
     end
   end
 
@@ -1297,11 +1369,16 @@ defmodule ExWapp.Session.Worker do
   # ============================================================================
 
   defp handle_connection_event({:noise, :handshake_started}, state) do
-    %{state | status: :handshaking, app_state_initial_sync_requested: false}
+    %{
+      state
+      | status: :handshaking,
+        app_state_initial_sync_requested: false,
+        transport_ready?: false
+    }
   end
 
   defp handle_connection_event({:transport, :connected}, state) do
-    %{state | status: :connecting}
+    %{state | status: :connecting, transport_ready?: false}
   end
 
   defp handle_connection_event({:transport, {:closed, reason}}, %{conn: nil} = state) do
@@ -1317,22 +1394,46 @@ defmodule ExWapp.Session.Worker do
   defp handle_connection_event({:noise, :handshake_completed}, state) do
     Logger.debug("[SESSION] Noise handshake completed, waiting for post-auth success")
 
-    %{
-      state
-      | status: :handshaking,
-        app_state_initial_sync_requested: false,
-        post_auth_phase: :idle,
-        prekey_count_query_id: nil,
-        prekey_upload_iq_id: nil,
-        pending_prekey_upload: [],
-        passive_iq_id: nil,
-        digest_iq_id: nil
-    }
+    state =
+      %{
+        state
+        | status: :handshaking,
+          transport_ready?: true,
+          app_state_initial_sync_requested: false,
+          post_auth_phase: :idle,
+          prekey_count_query_id: nil,
+          prekey_upload_iq_id: nil,
+          pending_prekey_upload: [],
+          passive_iq_id: nil,
+          digest_iq_id: nil
+      }
+
+    maybe_set_conn(state.outbound_queue, state)
+
+    Subscribers.broadcast_lifecycle(
+      state.session_id,
+      {:ex_wapp_session, :transport_ready, lifecycle_event_meta(state)}
+    )
+
+    state
+  end
+
+  defp handle_connection_event({:auth, :success_received}, state) do
+    Subscribers.broadcast_lifecycle(
+      state.session_id,
+      {:ex_wapp_session, :connected, lifecycle_event_meta(state)}
+    )
+
+    state
   end
 
   defp handle_connection_event({:auth, :ready}, state) do
     emit_telemetry(:connected, %{}, state)
-    Subscribers.broadcast_lifecycle(state.session_id, {:ex_wapp_session, :connected})
+
+    Subscribers.broadcast_lifecycle(
+      state.session_id,
+      {:ex_wapp_session, :post_auth_ready, lifecycle_event_meta(state)}
+    )
 
     state =
       %{
@@ -1356,8 +1457,15 @@ defmodule ExWapp.Session.Worker do
   defp handle_connection_event({:error, reason}, state) do
     Logger.warning("Connection error: #{inspect(reason)}")
     emit_telemetry(:error, %{reason: reason}, state)
-    notify_qr(state, {:error, reason})
-    update_stats(state, :errors)
+    state = update_stats(state, :errors)
+
+    if vext_managed_runtime?(state) do
+      Subscribers.broadcast_error(state.session_id, reason)
+      state
+    else
+      notify_qr(state, {:error, reason})
+      state
+    end
   end
 
   defp handle_connection_event(event, state) do
@@ -1501,6 +1609,12 @@ defmodule ExWapp.Session.Worker do
   defp cleanup_dead_subscriber(state, dead_mon),
     do: Subscribers.cleanup_dead_subscriber(state, dead_mon)
 
+  defp vext_managed_runtime?(%{runtime_cfg: runtime_cfg}) when is_map(runtime_cfg) do
+    Config.get(runtime_cfg, [:ownership, :vext_managed], false)
+  end
+
+  defp vext_managed_runtime?(_state), do: false
+
   # ============================================================================
   # Message Subscriber Management
   # ============================================================================
@@ -1590,7 +1704,7 @@ defmodule ExWapp.Session.Worker do
         flush_tick_ms: Config.get(state.runtime_cfg, [:queue, :flush_tick_ms], 10)
       )
 
-    maybe_set_conn(outbound_queue, state.conn)
+    maybe_set_conn(outbound_queue, state)
     %{state | outbound_queue: outbound_queue}
   end
 
@@ -1599,10 +1713,37 @@ defmodule ExWapp.Session.Worker do
     %{state | inbound_router: inbound_router}
   end
 
-  defp maybe_set_conn(_outbound_queue, nil), do: :ok
+  defp maybe_set_conn(_outbound_queue, %{transport_ready?: false}), do: :ok
 
-  defp maybe_set_conn(outbound_queue, conn) when is_pid(conn),
-    do: OutboundQueue.set_conn(outbound_queue, conn)
+  defp maybe_set_conn(_outbound_queue, %{conn: nil}), do: :ok
+
+  defp maybe_set_conn(outbound_queue, %{transport_ready?: true, conn: conn})
+       when is_pid(outbound_queue) and is_pid(conn) do
+    OutboundQueue.set_conn(outbound_queue, conn)
+  end
+
+  defp maybe_set_conn(_outbound_queue, _state), do: :ok
+
+  defp lifecycle_event_meta(state, extra \\ %{}) do
+    extra
+    |> Map.new()
+    |> Map.merge(%{
+      runtime_ref: self(),
+      session_id: state.session_id,
+      status: state.status,
+      transport_ready?: state.transport_ready?,
+      post_auth_phase: state.post_auth_phase
+    })
+  end
+
+  defp initial_sync_event_payload(session_id, runtime_ref, payload) do
+    payload
+    |> Map.new()
+    |> Map.merge(%{
+      runtime_ref: runtime_ref,
+      session_id: session_id
+    })
+  end
 
   defp start_send_worker(state, jid, fun) do
     start_send_worker(state, jid, fun, nil)
@@ -2073,11 +2214,11 @@ defmodule ExWapp.Session.Worker do
 
   defp maybe_schedule_initial_app_state_sync(state) do
     if has_app_state_keys?(state.store) do
-      Logger.debug(
-        "[APP_STATE] Existing keys found on connect, scheduling initial collection fetch"
-      )
-
       send(self(), {:app_state_initial_sync, Engine.all_collections()})
+    else
+      Logger.debug(
+        "[APP_STATE] Deferring initial sync until app-state keys are available session_id=#{inspect(state.session_id)}"
+      )
     end
 
     state
@@ -2093,22 +2234,112 @@ defmodule ExWapp.Session.Worker do
     _ -> false
   end
 
-  defp refresh_app_state_collections(session_pid, store, collection_names, source) do
+  defp refresh_app_state_collections(
+         session_pid,
+         store,
+         collection_names,
+         source,
+         session_id \\ nil
+       ) do
     names =
       collection_names
       |> Enum.filter(&is_binary/1)
       |> Enum.uniq()
 
-    Logger.debug(
-      "[APP_STATE] Fetching #{length(names)} collections from #{source}: #{inspect(names)}"
-    )
-
     spawn(fn ->
-      Enum.each(names, fn collection_name ->
-        fetch_app_state_collection(session_pid, store, collection_name)
-      end)
+      run_app_state_collection_refresh(session_pid, store, names, source, session_id)
     end)
   end
+
+  defp run_app_state_collection_refresh(session_pid, store, names, :initial, session_id) do
+    Subscribers.broadcast_lifecycle(
+      session_id,
+      {:ex_wapp_session, :initial_sync, :started,
+       initial_sync_event_payload(session_id, session_pid, %{collection_names: names})}
+    )
+
+    :ok = begin_store_batch(store, :initial_app_state_sync)
+
+    {success_count, failures} =
+      Enum.reduce(names, {0, []}, fn collection_name, {successes, failures} ->
+        case fetch_app_state_collection(session_pid, store, collection_name) do
+          :ok ->
+            {successes + 1, failures}
+
+          {:error, reason} ->
+            {successes, [%{collection: collection_name, reason: reason} | failures]}
+        end
+      end)
+
+    flush_result = finish_store_batch(store, :initial_app_state_sync)
+    failures = Enum.reverse(failures)
+
+    case {failures, flush_result} do
+      {[], :ok} ->
+        Subscribers.broadcast_lifecycle(
+          session_id,
+          {:ex_wapp_session, :initial_sync, :completed,
+           initial_sync_event_payload(session_id, session_pid, %{
+             collection_names: names,
+             success_count: success_count,
+             skipped: false
+           })}
+        )
+
+      {failures, :ok} ->
+        reason = {:collection_fetch_failed, failures}
+
+        Subscribers.broadcast_lifecycle(
+          session_id,
+          {:ex_wapp_session, :initial_sync, :failed, reason,
+           initial_sync_event_payload(session_id, session_pid, %{
+             collection_names: names,
+             success_count: success_count,
+             failures: failures
+           })}
+        )
+
+      {failures, {:error, flush_reason}} ->
+        reason = {:final_store_flush_failed, flush_reason}
+
+        Subscribers.broadcast_lifecycle(
+          session_id,
+          {:ex_wapp_session, :initial_sync, :failed, reason,
+           initial_sync_event_payload(session_id, session_pid, %{
+             collection_names: names,
+             success_count: success_count,
+             failures: failures,
+             flush_reason: flush_reason
+           })}
+        )
+    end
+  end
+
+  defp run_app_state_collection_refresh(session_pid, store, names, _source, _session_id) do
+    Enum.each(names, fn collection_name ->
+      _ = fetch_app_state_collection(session_pid, store, collection_name)
+    end)
+  end
+
+  defp begin_store_batch(%module{} = store, reason) when is_atom(reason) do
+    if function_exported?(module, :begin_batch, 2) do
+      apply(module, :begin_batch, [store, reason])
+    else
+      :ok
+    end
+  end
+
+  defp begin_store_batch(_store, _reason), do: :ok
+
+  defp finish_store_batch(%module{} = store, reason) when is_atom(reason) do
+    if function_exported?(module, :finish_batch, 2) do
+      apply(module, :finish_batch, [store, reason])
+    else
+      :ok
+    end
+  end
+
+  defp finish_store_batch(_store, _reason), do: :ok
 
   defp fetch_app_state_collection(session_pid, store, collection_name) do
     case ExWapp.AppState.Engine.fetch_collection(session_pid, store, collection_name) do

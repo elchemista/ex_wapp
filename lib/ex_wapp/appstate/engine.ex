@@ -745,11 +745,8 @@ defmodule ExWapp.AppState.Engine do
          snapshot? <- want_snapshot and hash_state.version == 0,
          {:ok, response} <-
            send_collection_fetch_iq(session, collection_name, hash_state.version, snapshot?),
-         {:ok, count} <- apply_collection_response(store, collection_name, response, session) do
-      Logger.debug("[APP_STATE] Applied #{count} mutations for #{collection_name}")
-
-      :ok
-    end
+         {:ok, _count} <- apply_collection_response(store, collection_name, response, session),
+         do: :ok
   end
 
   @doc """
@@ -776,9 +773,8 @@ defmodule ExWapp.AppState.Engine do
              key_store,
              hash_state,
              mutation_macs
-           ),
-         {:ok, hash_state, mutation_macs, patch_count} <-
-           apply_patches(
+           ) do
+      case apply_patches(
              store,
              session,
              collection_name,
@@ -787,8 +783,22 @@ defmodule ExWapp.AppState.Engine do
              hash_state,
              mutation_macs
            ) do
-      persist_collection_state(store, collection_name, hash_state, mutation_macs)
-      {:ok, snapshot_count + patch_count}
+        {:ok, hash_state, mutation_macs, patch_count} ->
+          persist_collection_state(store, collection_name, hash_state, mutation_macs)
+          {:ok, snapshot_count + patch_count}
+
+        {:error, {:apply_patch_failed, reason}} = error ->
+          maybe_accept_snapshot_only(
+            store,
+            collection_name,
+            collection_data,
+            hash_state,
+            mutation_macs,
+            snapshot_count,
+            reason,
+            error
+          )
+      end
     end
   end
 
@@ -1162,6 +1172,39 @@ defmodule ExWapp.AppState.Engine do
       {:error, reason} ->
         {:error, {:apply_snapshot_failed, reason}}
     end
+  end
+
+  defp maybe_accept_snapshot_only(
+         store,
+         collection_name,
+         %{snapshot: snapshot_binary},
+         hash_state,
+         mutation_macs,
+         snapshot_count,
+         reason,
+         _error
+       )
+       when is_binary(snapshot_binary) and snapshot_count > 0 and
+              reason in [:mismatching_snapshot_mac, :mismatching_patch_mac] do
+    Logger.warning(
+      "[APP_STATE] Ignoring trailing patch chain for #{collection_name} after valid snapshot: #{inspect(reason)}"
+    )
+
+    persist_collection_state(store, collection_name, hash_state, mutation_macs)
+    {:ok, snapshot_count}
+  end
+
+  defp maybe_accept_snapshot_only(
+         _store,
+         _collection_name,
+         _collection_data,
+         _hash_state,
+         _mutation_macs,
+         _snapshot_count,
+         _reason,
+         error
+       ) do
+    error
   end
 
   defp decode_snapshot_mutations(snapshot, key_store) do

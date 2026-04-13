@@ -5,6 +5,7 @@ defmodule ExWapp.Noise.ClientPayloadTest do
   alias ExWapp.Config
   alias ExWapp.Noise
   alias ExWapp.Noise.ClientPayload, as: NoiseClientPayload
+  alias ExWapp.Proto.CompanionReg.DeviceProps
   alias ExWapp.Store
   alias WAWebProtobufsWa6.ClientPayload, as: ClientPayloadProto
   alias WAWebProtobufsWa6.ClientPayload.DevicePairingRegistrationData
@@ -113,6 +114,16 @@ defmodule ExWapp.Noise.ClientPayloadTest do
       assert byte_size(pairing.eSkeySig) == 64
       assert pairing.buildHash == @version_hash
       assert pairing.deviceProps == @device_props
+      assert %DeviceProps{} = device_props = DeviceProps.decode!(pairing.deviceProps)
+      assert device_props.os == "whatsmeow"
+      assert device_props.platform_type == 0
+      assert device_props.require_full_sync == false
+      assert device_props.version.primary == 0
+      assert device_props.version.secondary == 1
+      assert device_props.version.tertiary == 0
+      assert device_props.history_sync_config.storage_quota_mb == 10_240
+      assert device_props.history_sync_config.inline_initial_payload_in_e2ee_msg == true
+      assert device_props.history_sync_config.support_message_association == true
 
       assert %{registration_id: reg_id} = data[:signal]
       assert reg_id in 1..65_535
@@ -175,6 +186,49 @@ defmodule ExWapp.Noise.ClientPayloadTest do
       assert {:ok, payload, _data} = NoiseClientPayload.build(noise, runtime_cfg)
       assert {:ok, decoded} = ClientPayloadProto.decode(payload)
       assert decoded.devicePairingData.deviceProps == @firefox_device_props
+
+      assert %DeviceProps{} =
+               device_props = DeviceProps.decode!(decoded.devicePairingData.deviceProps)
+
+      assert device_props.os == "Linux"
+      assert device_props.platform_type == 2
+    end
+
+    test "supports structured pairing device props overrides" do
+      store = store_fixture()
+      noise = %Noise{store: store}
+
+      runtime_cfg =
+        Config.defaults()
+        |> put_in([:protocol, :pairing_device_props, :os], "Mac OS")
+        |> put_in([:protocol, :pairing_device_props, :platform_type], 1)
+        |> put_in([:protocol, :pairing_device_props, :version], %{
+          primary: 10,
+          secondary: 15,
+          tertiary: 7
+        })
+        |> put_in(
+          [:protocol, :pairing_device_props, :history_sync_config, :storage_quota_mb],
+          2048
+        )
+        |> put_in(
+          [:protocol, :pairing_device_props, :history_sync_config, :support_group_history],
+          true
+        )
+
+      assert {:ok, payload, _data} = NoiseClientPayload.build(noise, runtime_cfg)
+      assert {:ok, decoded} = ClientPayloadProto.decode(payload)
+
+      assert %DeviceProps{} =
+               device_props = DeviceProps.decode!(decoded.devicePairingData.deviceProps)
+
+      assert device_props.os == "Mac OS"
+      assert device_props.platform_type == 1
+      assert device_props.version.primary == 10
+      assert device_props.version.secondary == 15
+      assert device_props.version.tertiary == 7
+      assert device_props.history_sync_config.storage_quota_mb == 2048
+      assert device_props.history_sync_config.support_group_history == true
     end
 
     test "normalizes client_info for login payloads" do

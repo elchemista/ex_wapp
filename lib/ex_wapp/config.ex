@@ -105,7 +105,25 @@ defmodule ExWapp.Config do
         pairing_device_props: %{
           os: "whatsmeow",
           platform_type: 0,
-          require_full_sync: false
+          require_full_sync: false,
+          version: %{
+            primary: 0,
+            secondary: 1,
+            tertiary: 0
+          },
+          history_sync_config: %{
+            storage_quota_mb: 10_240,
+            inline_initial_payload_in_e2ee_msg: true,
+            support_call_log_history: false,
+            support_bot_user_agent_chat_history: true,
+            support_cag_reactions_and_polls: true,
+            support_biz_hosted_msg: true,
+            support_recent_sync_chunk_message_count_tuning: true,
+            support_hosted_group_msg: true,
+            support_fbid_bot_chat_history: true,
+            support_message_association: true,
+            support_group_history: false
+          }
         },
         user_agent: %{
           os_version: "Linux x86_64",

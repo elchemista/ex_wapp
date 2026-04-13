@@ -58,6 +58,18 @@ defmodule ExWapp.RuntimeHardeningTest do
     assert get_in(overridden_cfg, [:protocol, :post_auth_digest_enabled]) == true
   end
 
+  test "config resolve keeps the vendor default but allows app/runtime overrides" do
+    assert get_in(Config.defaults(), [:signal, :session_max_age_ms]) == :timer.hours(12)
+
+    {:ok, app_cfg} = Config.resolve([])
+    assert get_in(app_cfg, [:signal, :session_max_age_ms]) == :timer.hours(3)
+
+    {:ok, overridden_cfg} =
+      Config.resolve(runtime: [signal: [session_max_age_ms: :timer.hours(3)]])
+
+    assert get_in(overridden_cfg, [:signal, :session_max_age_ms]) == :timer.hours(3)
+  end
+
   test "resilience gives up once max attempts is reached" do
     state = %{
       reconnect_attempts: 1,

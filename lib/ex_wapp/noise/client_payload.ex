@@ -4,6 +4,9 @@ defmodule ExWapp.Noise.ClientPayload do
   require Logger
 
   alias ExWapp.{Config, MapPath, Noise}
+  alias ExWapp.Proto.CompanionReg.AppVersion, as: CompanionAppVersion
+  alias ExWapp.Proto.CompanionReg.DeviceProps, as: CompanionDeviceProps
+  alias ExWapp.Proto.CompanionReg.HistorySyncConfig
   alias ExWapp.Signal
   alias ExWapp.Store
   alias WAWebProtobufsWa6.ClientPayload
@@ -274,102 +277,50 @@ defmodule ExWapp.Noise.ClientPayload do
   # Encoded WACompanionReg.DeviceProps payload
   # This must match what whatsmeow sends - it's critical for pairing
   defp device_props(runtime_cfg) do
-    # DeviceProps proto (from WACompanionReg.proto):
-    # - os: string (field 1)
-    # - version: AppVersion (field 2)
-    #   - primary: uint32 (field 1)
-    #   - secondary: uint32 (field 2)
-    #   - tertiary: uint32 (field 3)
-    # - platformType: enum (field 3) - UNKNOWN = 0
-    # - requireFullSync: bool (field 4) - false
-    # - historySyncConfig: message (field 5)
-    #   - storageQuotaMb: uint32 (field 3) - 10240
-    #   - inlineInitialPayloadInE2EeMsg: bool (field 4) - true
-    #   - supportCallLogHistory: bool (field 6) - false
-    #   - supportBotUserAgentChatHistory: bool (field 7) - true
-    #   - supportCagReactionsAndPolls: bool (field 8) - true
-    #   - supportBizHostedMsg: bool (field 9) - true
-    #   - supportRecentSyncChunkMessageCountTuning: bool (field 10) - true
-    #   - supportHostedGroupMsg: bool (field 11) - true
-    #   - supportFbidBotChatHistory: bool (field 12) - true
-    #   - supportMessageAssociation: bool (field 14) - true
-    #   - supportGroupHistory: bool (field 15) - false
+    device_props = Config.get(runtime_cfg, [:protocol, :pairing_device_props], %{})
 
-    # Build version submessage: {primary: 0, secondary: 1, tertiary: 0}
-    version = <<0x08, 0x00, 0x10, 0x01, 0x18, 0x00>>
-
-    # Build historySyncConfig submessage
-    history_sync_config =
-      <<
-        # storageQuotaMb = 10240 (field 3)
-        0x18,
-        0x80,
-        0x50,
-        # inlineInitialPayloadInE2EeMsg = true (field 4)
-        0x20,
-        0x01,
-        # supportCallLogHistory = false (field 6)
-        0x30,
-        0x00,
-        # supportBotUserAgentChatHistory = true (field 7)
-        0x38,
-        0x01,
-        # supportCagReactionsAndPolls = true (field 8)
-        0x40,
-        0x01,
-        # supportBizHostedMsg = true (field 9)
-        0x48,
-        0x01,
-        # supportRecentSyncChunkMessageCountTuning = true (field 10)
-        0x50,
-        0x01,
-        # supportHostedGroupMsg = true (field 11)
-        0x58,
-        0x01,
-        # supportFbidBotChatHistory = true (field 12)
-        0x60,
-        0x01,
-        # supportMessageAssociation = true (field 14)
-        0x70,
-        0x01,
-        # supportGroupHistory = false (field 15)
-        0x78,
-        0x00
-      >>
-
-    # Build DeviceProps message
-    os_name = Config.get(runtime_cfg, [:protocol, :pairing_device_props, :os], "whatsmeow")
-    platform_type = Config.get(runtime_cfg, [:protocol, :pairing_device_props, :platform_type], 0)
-
-    require_full_sync =
-      Config.get(runtime_cfg, [:protocol, :pairing_device_props, :require_full_sync], false)
-
-    os_len = byte_size(os_name)
-    version_len = byte_size(version)
-    history_len = byte_size(history_sync_config)
-
-    <<
-      # os = "Linux" (field 1, wire type 2)
-      0x0A,
-      os_len::8,
-      os_name::binary,
-      # version (field 2, wire type 2)
-      0x12,
-      version_len::8,
-      version::binary,
-      # platformType = UNKNOWN (0) (field 3, wire type 0)
-      0x18,
-      platform_type::8,
-      # requireFullSync = false (field 4, wire type 0)
-      0x20,
-      if(require_full_sync, do: 0x01, else: 0x00),
-      # historySyncConfig (field 5, wire type 2)
-      0x2A,
-      history_len::8,
-      history_sync_config::binary
-    >>
+    %CompanionDeviceProps{
+      os: Map.get(device_props, :os, "whatsmeow"),
+      version: build_device_props_version(device_props),
+      platform_type: Map.get(device_props, :platform_type, 0),
+      require_full_sync: Map.get(device_props, :require_full_sync, false),
+      history_sync_config: build_history_sync_config(device_props)
+    }
+    |> CompanionDeviceProps.encode!()
+    |> IO.iodata_to_binary()
   end
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp build_device_props_version(device_props) do
+    version = Map.get(device_props, :version, %{})
+
+    %CompanionAppVersion{
+      primary: Map.get(version, :primary, 0),
+      secondary: Map.get(version, :secondary, 1),
+      tertiary: Map.get(version, :tertiary, 0)
+    }
+  end
+
+  defp build_history_sync_config(device_props) do
+    config = Map.get(device_props, :history_sync_config, %{})
+
+    %HistorySyncConfig{
+      storage_quota_mb: Map.get(config, :storage_quota_mb, 10_240),
+      inline_initial_payload_in_e2ee_msg:
+        Map.get(config, :inline_initial_payload_in_e2ee_msg, true),
+      support_call_log_history: Map.get(config, :support_call_log_history, false),
+      support_bot_user_agent_chat_history:
+        Map.get(config, :support_bot_user_agent_chat_history, true),
+      support_cag_reactions_and_polls: Map.get(config, :support_cag_reactions_and_polls, true),
+      support_biz_hosted_msg: Map.get(config, :support_biz_hosted_msg, true),
+      support_recent_sync_chunk_message_count_tuning:
+        Map.get(config, :support_recent_sync_chunk_message_count_tuning, true),
+      support_hosted_group_msg: Map.get(config, :support_hosted_group_msg, true),
+      support_fbid_bot_chat_history: Map.get(config, :support_fbid_bot_chat_history, true),
+      support_message_association: Map.get(config, :support_message_association, true),
+      support_group_history: Map.get(config, :support_group_history, false)
+    }
+  end
 end

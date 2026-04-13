@@ -8,7 +8,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   require Logger
 
-  alias ExWapp.{Binary, Pairing}
+  alias ExWapp.{Binary, Config, Pairing}
 
   alias ExWapp.Session.OutboundQueue
 
@@ -108,7 +108,8 @@ defmodule ExWapp.Session.Worker.NodeHandler do
       |> PostAuth.persist_lid_and_mapping(lid)
       |> update_server_time_offset(attrs)
 
-    PostAuth.start(state, &build_set_passive_iq/0)
+    {next_state, actions} = PostAuth.start(state, &build_set_passive_iq/0)
+    {next_state, [:mark_auth_connected | actions]}
   end
 
   # Handle ib (initialization) node - server sends this after successful login
@@ -136,7 +137,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
         broadcast_error_event(state, {:connection_failure, :unauthorized, location})
         Logger.error("[SESSION] Unauthorized - session invalid, stopping reconnects")
         Logger.error("[SESSION] Please clear session and re-pair")
-        notify_qr(state, {:error, :unauthorized})
+        maybe_notify_qr_error(state, :unauthorized)
         state = Safety.record_signal(state, :unauthorized)
         # Mark session as invalid to stop reconnection attempts
         {%{state | session_invalid: true, status: :idle}, []}
@@ -144,20 +145,20 @@ defmodule ExWapp.Session.Worker.NodeHandler do
       "403" ->
         broadcast_error_event(state, {:connection_failure, :forbidden, location})
         Logger.error("[SESSION] Forbidden - account may be banned")
-        notify_qr(state, {:error, :forbidden})
+        maybe_notify_qr_error(state, :forbidden)
         state = Safety.record_signal(state, :forbidden)
         {%{state | session_invalid: true, status: :idle}, []}
 
       "405" ->
         broadcast_error_event(state, {:connection_failure, :client_outdated, location})
         Logger.error("[SESSION] Client outdated")
-        notify_qr(state, {:error, :client_outdated})
+        maybe_notify_qr_error(state, :client_outdated)
         {state, []}
 
       _ ->
         broadcast_error_event(state, {:connection_failure, {:unknown, reason}, location})
         Logger.error("[SESSION] Unknown failure reason: #{reason}")
-        notify_qr(state, {:error, {:failure, reason}})
+        maybe_notify_qr_error(state, {:failure, reason})
         {state, []}
     end
   end
@@ -207,7 +208,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
         code == "401" ->
           Logger.error("[SESSION] Device was removed (401)! Need to re-pair from scratch.")
           Logger.error("[SESSION] Delete session file and scan QR code again.")
-          notify_qr(state, {:error, :device_removed})
+          maybe_notify_qr_error(state, :device_removed)
           state = Safety.record_signal(state, :device_removed)
           # Mark session invalid, then trigger the normal disconnect path in Worker.
           state
@@ -216,7 +217,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
         conflict_type == "replaced" ->
           Logger.error("[SESSION] Stream replaced by another connection, restarting transport")
-          notify_qr(state, {:error, :stream_replaced})
+          maybe_notify_qr_error(state, :stream_replaced)
           state = Safety.record_signal(state, :stream_replaced)
           restart_connection_now(state, :stream_replaced)
 
@@ -587,6 +588,13 @@ defmodule ExWapp.Session.Worker.NodeHandler do
         send(self(), {:connection_event, {:auth, :ready}})
       )
 
+  defp handle_pairing_action(:mark_auth_connected, _state),
+    do:
+      (
+        Logger.debug("[NODE_HANDLER] dispatching auth connected event")
+        send(self(), {:connection_event, {:auth, :success_received}})
+      )
+
   defp handle_pairing_action({:error, reason}, state), do: notify_qr(state, {:error, reason})
 
   defp handle_pairing_action(:restart_stream, %{outbound_queue: outbound_queue})
@@ -663,6 +671,20 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   defp update_stats(state, key) do
     update_in(state.stats[key], &((&1 || 0) + 1))
   end
+
+  defp maybe_notify_qr_error(state, reason) do
+    if vext_managed_runtime?(state) do
+      :ok
+    else
+      notify_qr(state, {:error, reason})
+    end
+  end
+
+  defp vext_managed_runtime?(%{runtime_cfg: runtime_cfg}) when is_map(runtime_cfg) do
+    Config.get(runtime_cfg, [:ownership, :vext_managed], false)
+  end
+
+  defp vext_managed_runtime?(_state), do: false
 
   defp loggable_attrs(attrs) when is_map(attrs) do
     attrs

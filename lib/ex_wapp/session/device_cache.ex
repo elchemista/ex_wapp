@@ -12,6 +12,7 @@ defmodule ExWapp.Session.DeviceCache do
   alias ExWapp.Session.JIDUtils
 
   @default_max_age_ms :timer.hours(24 * 14)
+  @default_touch_throttle_ms :timer.minutes(1)
 
   @spec persist_usync_map(term(), map()) :: :ok
   def persist_usync_map(nil, _device_map), do: :ok
@@ -21,10 +22,11 @@ defmodule ExWapp.Session.DeviceCache do
     now_ms = System.system_time(:millisecond)
     lid_mapping = Account.load_lid_mapping(store)
     cache = Store.load_device_cache(store)
+    touch_throttle_ms = @default_touch_throttle_ms
 
     updated_cache =
       Enum.reduce(device_map, cache, fn {base_jid, devices}, acc ->
-        put_devices(acc, base_jid, devices, lid_mapping, now_ms)
+        put_devices(acc, base_jid, devices, lid_mapping, now_ms, touch_throttle_ms)
       end)
 
     persist_if_changed(store, cache, updated_cache)
@@ -45,7 +47,9 @@ defmodule ExWapp.Session.DeviceCache do
       lid_mapping = Account.load_lid_mapping(store)
       cache = Store.load_device_cache(store)
       base_jid = JIDUtils.strip_device(normalized_jid)
-      updated_cache = put_devices(cache, base_jid, [normalized_jid], lid_mapping, now_ms)
+      updated_cache =
+        put_devices(cache, base_jid, [normalized_jid], lid_mapping, now_ms, @default_touch_throttle_ms)
+
       persist_if_changed(store, cache, updated_cache)
     end
   rescue
@@ -109,7 +113,7 @@ defmodule ExWapp.Session.DeviceCache do
     _ -> :ok
   end
 
-  defp put_devices(cache, base_jid, devices, lid_mapping, now_ms) do
+  defp put_devices(cache, base_jid, devices, lid_mapping, now_ms, touch_throttle_ms) do
     base_jid = JIDUtils.normalize_with_device(base_jid) |> JIDUtils.strip_device()
 
     devices =
@@ -120,19 +124,35 @@ defmodule ExWapp.Session.DeviceCache do
     related_bases = JIDUtils.related_bases(base_jid, lid_mapping)
 
     Enum.reduce(related_bases, cache, fn related_base, acc ->
-      existing_devices =
-        acc
-        |> Map.get(related_base, %{})
-        |> Map.get(:devices, %{})
+      existing_entry = Map.get(acc, related_base, %{})
+      existing_devices = Map.get(existing_entry, :devices, %{})
 
       updated_devices =
         Enum.reduce(devices, existing_devices, fn device_jid, device_acc ->
-          Map.put(device_acc, JIDUtils.map_to_preferred_family(device_jid, related_base, lid_mapping), now_ms)
+          preferred_jid = JIDUtils.map_to_preferred_family(device_jid, related_base, lid_mapping)
+          maybe_touch_device(device_acc, preferred_jid, now_ms, touch_throttle_ms)
         end)
 
-      Map.put(acc, related_base, %{devices: updated_devices, updated_at_ms: now_ms})
+      if updated_devices == existing_devices do
+        acc
+      else
+        Map.put(acc, related_base, %{existing_entry | devices: updated_devices, updated_at_ms: now_ms})
+      end
     end)
   end
+
+  defp maybe_touch_device(device_acc, device_jid, now_ms, touch_throttle_ms)
+       when is_binary(device_jid) and device_jid != "" do
+    case Map.get(device_acc, device_jid) do
+      seen_at_ms when is_integer(seen_at_ms) and now_ms - seen_at_ms < touch_throttle_ms ->
+        device_acc
+
+      _ ->
+        Map.put(device_acc, device_jid, now_ms)
+    end
+  end
+
+  defp maybe_touch_device(device_acc, _device_jid, _now_ms, _touch_throttle_ms), do: device_acc
 
   defp persist_if_changed(_store, cache, cache), do: :ok
 

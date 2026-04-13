@@ -362,10 +362,6 @@ defmodule ExWapp.MessageHandler do
     collection_names = extract_app_state_collection_names(content)
 
     if collection_names != [] do
-      Logger.debug(
-        "[APP_STATE] Received sync notification for collections: #{inspect(collection_names)}"
-      )
-
       session_pid = resolve_session_pid(session, state)
 
       if is_pid(session_pid) and Process.alive?(session_pid) do
@@ -1297,10 +1293,6 @@ defmodule ExWapp.MessageHandler do
            find_first_ld_field(protocol_fields, 7),
          {:ok, key_share} <- SyncAction.decode_app_state_sync_key_share(key_share_bytes),
          true <- key_share.keys != [] do
-      Logger.debug(
-        "[APP_STATE] Received AppStateSyncKeyShare with #{length(key_share.keys)} keys"
-      )
-
       case store_app_state_keys(state, key_share.keys) do
         {:ok, action} when action in [:updated, :unchanged] ->
           maybe_trigger_initial_app_state_sync(session)
@@ -1336,7 +1328,6 @@ defmodule ExWapp.MessageHandler do
 
       if updated_keys != existing_keys do
         Store.persist(store, Map.put(data, :app_state_keys, updated_keys))
-        Logger.debug("[APP_STATE] Persisted #{map_size(updated_keys)} total app state keys")
         {:ok, :updated}
       else
         {:ok, :unchanged}
@@ -1352,10 +1343,6 @@ defmodule ExWapp.MessageHandler do
     case extract_app_state_key_data(key) do
       {:ok, key_id, key_data_bin, timestamp, fingerprint} ->
         key_id_hex = Base.encode16(key_id, case: :lower)
-
-        Logger.debug(
-          "[APP_STATE] Storing app state key #{key_id_hex} (ts: #{inspect(timestamp)})"
-        )
 
         Map.put(acc, key_id_hex, %{
           data: key_data_bin,

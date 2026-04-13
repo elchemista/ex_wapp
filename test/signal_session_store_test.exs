@@ -174,6 +174,18 @@ defmodule ExWapp.SignalSessionStoreTest do
     assert {:ok, %{id: 2}} = SessionStore.get_session(store, "111222333:2@s.whatsapp.net")
   end
 
+  test "replace accepts an ETS-backed snapshot source" do
+    source =
+      SessionStore.new_ets()
+      |> SessionStore.put_session("111222333:1@s.whatsapp.net", %{id: 1})
+
+    map_target = SessionStore.replace(SessionStore.new(), source)
+    ref_target = SessionStore.replace(SessionStore.new_ets(), source)
+
+    assert SessionStore.snapshot(map_target) == SessionStore.snapshot(source)
+    assert SessionStore.snapshot(ref_target) == SessionStore.snapshot(source)
+  end
+
   test "repeated prekey wrappers reuse existing session and keep reply decryptable" do
     alice_identity = Keys.generate_key_pair()
     bob_identity = Keys.generate_key_pair()
