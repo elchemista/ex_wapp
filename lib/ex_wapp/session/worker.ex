@@ -1,6 +1,10 @@
 defmodule ExWapp.Session.Worker do
   @moduledoc """
-  Coordinates the lifecycle of a WhatsApp Web connection.
+  Internal GenServer implementation for `ExWapp.Session`.
+
+  Application code should use `ExWapp.Session` or
+  `ExWapp.Session.Supervisor`. This module coordinates the lifecycle of a
+  WhatsApp Web connection and owns the runtime state/callbacks.
 
   When started with `runtime.ownership.vext_managed: true`, the worker behaves
   as a transport engine only: it still emits raw lifecycle facts, but leaves
@@ -176,274 +180,6 @@ defmodule ExWapp.Session.Worker do
           outbound_confirmations: map(),
           stats: map()
         }
-
-  # ============================================================================
-  # Public API
-  # ============================================================================
-
-  @doc """
-  Starts the session process.
-
-  ## Options
-
-    * `:name` - Register the process under a given name
-    * `:store` - Storage adapter (see `ExWapp.Store`)
-    * `:supervisor` - Parent supervisor PID (set automatically by Supervisor)
-    * `:auto_connect` - Connect automatically on start (default: false)
-    * `:reconnect` - Enable automatic reconnection (default: true)
-    * `:runtime` - Runtime hardening settings override (deep-merged)
-  """
-  @spec start_link(keyword()) :: GenServer.on_start()
-  def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
-  end
-
-  @doc """
-  Initiates connection to WhatsApp servers.
-
-  Returns immediately. Use `qr_stream/1` to receive connection events.
-  """
-  @spec connect(GenServer.server()) :: :ok
-  def connect(server), do: GenServer.cast(server, :connect)
-
-  @doc """
-  Gracefully disconnects from WhatsApp servers.
-
-  Stops reconnection attempts and closes the connection cleanly.
-  """
-  @spec disconnect(GenServer.server()) :: :ok
-  def disconnect(server), do: GenServer.cast(server, :disconnect)
-
-  @doc """
-  Returns the current session state for inspection.
-  """
-  @spec state(GenServer.server()) :: status()
-  def state(server), do: GenServer.call(server, :get_status)
-
-  @doc """
-  Returns session statistics.
-  """
-  @spec stats(GenServer.server()) :: map()
-  def stats(server), do: GenServer.call(server, :get_stats)
-
-  @doc """
-  Returns the session_id for this worker (set at start_link via `:session_id` option).
-
-  Returns `nil` when no explicit session_id was provided.
-  """
-  @spec get_session_id(GenServer.server()) :: term() | nil
-  def get_session_id(server), do: GenServer.call(server, :get_session_id)
-
-  @doc "Returns the resolved runtime configuration for this session."
-  @spec get_runtime_config(GenServer.server()) :: map()
-  def get_runtime_config(server), do: GenServer.call(server, :get_runtime_config)
-
-  @doc "Returns current policy status (safety, quota, rate limiter snapshots)."
-  @spec get_policy_status(GenServer.server()) :: map()
-  def get_policy_status(server), do: GenServer.call(server, :get_policy_status)
-
-  @doc "Returns current send health counters/guard state."
-  @spec get_health_status(GenServer.server()) :: map()
-  def get_health_status(server), do: GenServer.call(server, :get_health_status)
-
-  @doc "Pause outbound sends for this session."
-  @spec pause_sends(GenServer.server()) :: :ok
-  def pause_sends(server), do: GenServer.cast(server, :pause_sends)
-
-  @doc "Resume outbound sends for this session."
-  @spec resume_sends(GenServer.server()) :: :ok
-  def resume_sends(server), do: GenServer.cast(server, :resume_sends)
-
-  @doc "Stops the session worker immediately."
-  @spec stop_worker(GenServer.server()) :: :ok
-  def stop_worker(server), do: GenServer.cast(server, :stop_worker)
-
-  @doc """
-  Subscribes to QR code events.
-  """
-  @spec subscribe_qr(GenServer.server()) :: {:ok, reference()}
-  def subscribe_qr(server), do: GenServer.call(server, {:subscribe_qr, self()})
-
-  @doc """
-  Unsubscribes from QR code events.
-  """
-  @spec unsubscribe_qr(GenServer.server(), reference()) :: :ok
-  def unsubscribe_qr(server, ref), do: GenServer.cast(server, {:unsubscribe_qr, ref})
-
-  @doc """
-  Queues a plain text message for sending.
-  """
-  @spec send_text(GenServer.server(), binary(), iodata()) :: {:ok, String.t()} | {:error, term()}
-  def send_text(server, jid, text) do
-    GenServer.call(server, {:send_text, jid, IO.iodata_to_binary(text)})
-  end
-
-  @doc """
-  Queues an image message for sending.
-  """
-  @spec send_image(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
-          {:ok, String.t()} | {:error, term()}
-  def send_image(server, jid, source, opts \\ []) do
-    GenServer.call(server, {:send_media, :image, jid, source, opts})
-  end
-
-  @doc """
-  Queues an audio message for sending.
-  """
-  @spec send_audio(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
-          {:ok, String.t()} | {:error, term()}
-  def send_audio(server, jid, source, opts \\ []) do
-    GenServer.call(server, {:send_media, :audio, jid, source, opts})
-  end
-
-  @doc """
-  Downloads and decrypts a media reference.
-  """
-  @spec download_media(GenServer.server(), ExWapp.Media.Ref.t(), keyword()) ::
-          {:ok, ExWapp.Media.Download.t()} | {:error, term()}
-  def download_media(server, ref, opts \\ []) do
-    GenServer.call(server, {:download_media, ref, opts}, 60_000)
-  end
-
-  @doc "Send an app state mutation (server-synced)."
-  @spec send_app_state(GenServer.server(), map()) :: {:ok, map(), map()} | {:error, term()}
-  def send_app_state(server, patch_info) do
-    GenServer.call(server, {:app_state_mutation, patch_info}, 30_000)
-  end
-
-  @doc "Archive a chat (server-synced)."
-  @spec archive_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
-  def archive_chat(server, jid) do
-    patch = ExWapp.AppState.Engine.build_archive(jid, true)
-
-    case send_app_state(server, patch) do
-      {:ok, _, _} -> :ok
-      error -> error
-    end
-  end
-
-  @doc "Unarchive a chat (server-synced)."
-  @spec unarchive_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
-  def unarchive_chat(server, jid) do
-    patch = ExWapp.AppState.Engine.build_archive(jid, false)
-
-    case send_app_state(server, patch) do
-      {:ok, _, _} -> :ok
-      error -> error
-    end
-  end
-
-  @doc "Delete a chat (server-synced)."
-  @spec delete_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
-  def delete_chat(server, jid) do
-    patch = ExWapp.AppState.Engine.build_delete_chat(jid)
-
-    case send_app_state(server, patch) do
-      {:ok, _, _} -> :ok
-      error -> error
-    end
-  end
-
-  @doc "Create or update a contact (server-synced)."
-  @spec create_contact(GenServer.server(), String.t(), String.t()) :: :ok | {:error, term()}
-  def create_contact(server, jid, name) do
-    patch = ExWapp.AppState.Engine.build_contact(jid, name)
-
-    case send_app_state(server, patch) do
-      {:ok, _, _} -> :ok
-      error -> error
-    end
-  end
-
-  @doc "Delete a contact (server-synced)."
-  @spec delete_contact(GenServer.server(), String.t()) :: :ok | {:error, term()}
-  def delete_contact(server, jid) do
-    patch = ExWapp.AppState.Engine.build_delete_contact(jid)
-
-    case send_app_state(server, patch) do
-      {:ok, _, _} -> :ok
-      error -> error
-    end
-  end
-
-  @doc "Fetch and apply the contact app-state collection (`critical_unblock_low`)."
-  @spec sync_contacts(GenServer.server()) :: :ok | {:error, term()}
-  def sync_contacts(server), do: GenServer.call(server, :sync_contacts, 30_000)
-
-  @doc "List all contacts."
-  @spec list_contacts(GenServer.server()) :: [ExWapp.Contact.t()]
-  def list_contacts(server), do: GenServer.call(server, :list_contacts)
-
-  @doc "Get a specific contact by JID."
-  @spec get_contact(GenServer.server(), String.t()) :: ExWapp.Contact.t() | nil
-  def get_contact(server, jid), do: GenServer.call(server, {:get_contact, jid})
-
-  @doc "Get chat info (metadata) for a JID."
-  @spec get_chat_info(GenServer.server(), String.t()) ::
-          {:ok, ExWapp.Chat.chat()} | {:error, :not_found}
-  def get_chat_info(server, jid), do: GenServer.call(server, {:get_chat_info, jid})
-
-  @doc """
-  Builds a lazy stream of QR pairing events.
-
-  The stream yields events until pairing succeeds, fails, or is cancelled.
-  """
-  @spec qr_stream(GenServer.server()) :: Enumerable.t()
-  def qr_stream(server) do
-    Stream.resource(
-      fn -> subscribe_qr(server) end,
-      fn {:ok, ref} = subscription ->
-        receive do
-          {:ex_wapp_qr, ^ref, event} -> {[event], subscription}
-          {:ex_wapp_qr_closed, ^ref} -> {:halt, subscription}
-        after
-          60_000 -> {[{:error, :timeout}], subscription}
-        end
-      end,
-      fn {:ok, ref} -> unsubscribe_qr(server, ref) end
-    )
-  end
-
-  @doc """
-  Subscribe to incoming messages.
-
-  Returns a reference that will be included in message notifications.
-  Messages arrive as `{:ex_wapp_message, ref, jid, message}`.
-  """
-  @spec subscribe_messages(GenServer.server()) :: {:ok, reference()}
-  def subscribe_messages(server) do
-    GenServer.call(server, {:subscribe_messages, self()})
-  end
-
-  @doc """
-  Unsubscribe from messages.
-  """
-  @spec unsubscribe_messages(GenServer.server(), reference()) :: :ok
-  def unsubscribe_messages(server, ref) do
-    GenServer.cast(server, {:unsubscribe_messages, ref})
-  end
-
-  @doc """
-  Builds a lazy stream of incoming messages.
-
-  Each element is a tuple of `{jid, message}`.
-  """
-  @spec message_stream(GenServer.server()) :: Enumerable.t()
-  def message_stream(server) do
-    Stream.resource(
-      fn -> subscribe_messages(server) end,
-      fn {:ok, ref} = subscription ->
-        receive do
-          {:ex_wapp_message, ^ref, jid, message} -> {[{jid, message}], subscription}
-          {:ex_wapp_messages_closed, ^ref} -> {:halt, subscription}
-        after
-          # 5 min timeout, continue waiting
-          300_000 -> {[], subscription}
-        end
-      end,
-      fn {:ok, ref} -> unsubscribe_messages(server, ref) end
-    )
-  end
 
   # ============================================================================
   # GenServer Callbacks
@@ -627,6 +363,50 @@ defmodule ExWapp.Session.Worker do
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
+  end
+
+  def handle_call({:send_typing, _jid, _composing}, _from, %{status: status} = state)
+      when status != :connected do
+    {:reply, {:error, {:not_connected, status}}, state}
+  end
+
+  def handle_call({:send_typing, _jid, _composing}, _from, %{conn: conn} = state)
+      when not is_pid(conn) do
+    {:reply, {:error, {:not_connected, state.status}}, state}
+  end
+
+  def handle_call({:send_typing, jid, composing}, _from, state)
+      when is_binary(jid) and is_boolean(composing) do
+    node = ExWapp.Messages.build_typing(jid, composing)
+    {:reply, state.transport_mod.send_node(state.conn, node), state}
+  end
+
+  def handle_call({:send_typing, _jid, _composing}, _from, state) do
+    {:reply, {:error, :invalid_typing_request}, state}
+  end
+
+  def handle_call(:flush_store, _from, state) do
+    {:reply, do_flush_store(state.store), state}
+  end
+
+  def handle_call(:export_snapshot, _from, state) do
+    reply =
+      with :ok <- do_flush_store(state.store),
+           store when not is_nil(store) <- state.store,
+           {:ok, data} <- Store.load(store),
+           {:ok, blob} <- ExWapp.Store.Codec.encode(data) do
+        {:ok,
+         %{
+           data: data,
+           blob: blob,
+           checksum: store_blob_checksum(blob)
+         }}
+      else
+        nil -> {:error, :missing_store}
+        {:error, _reason} = error -> error
+      end
+
+    {:reply, reply, state}
   end
 
   def handle_call(:get_store, _from, state) do
@@ -1148,7 +928,7 @@ defmodule ExWapp.Session.Worker do
       end
     end
 
-    flush_store(state.store)
+    flush_store_best_effort(state.store)
     do_disconnect(state, reason)
     :ok
   end
@@ -1468,7 +1248,11 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp handle_connection_event({:transport, {:closed, reason}}, state) do
-    Logger.warning("[SESSION] Transport closed: #{inspect(reason)}")
+    Logger.log(
+      transport_closed_log_level(reason),
+      "[SESSION] Transport closed: #{inspect(reason)}"
+    )
+
     handle_connection_exit(state, {:transport_closed, reason})
   end
 
@@ -1553,6 +1337,12 @@ defmodule ExWapp.Session.Worker do
     Logger.debug("Unhandled connection event: #{inspect(event)}")
     state
   end
+
+  defp transport_closed_log_level({:stream_error, code, _})
+       when code in ["503", "504", "505", "515"],
+       do: :debug
+
+  defp transport_closed_log_level(_reason), do: :warning
 
   defp maybe_retry_outgoing_message(state, jid, message_id) do
     session_pid = self()
@@ -1751,7 +1541,7 @@ defmodule ExWapp.Session.Worker do
     if SessionStore.store?(sessions) do
       case Store.persist_signal_sessions(store, sessions) do
         :ok ->
-          flush_store(store)
+          flush_store_best_effort(store)
           :ok
 
         {:error, reason} ->
@@ -1767,21 +1557,40 @@ defmodule ExWapp.Session.Worker do
       :ok
   end
 
-  defp flush_store(nil), do: :ok
+  defp flush_store_best_effort(nil), do: :ok
 
-  defp flush_store(store) do
-    if function_exported?(store.__struct__, :flush, 1) do
-      case store.__struct__.flush(store) do
-        :ok -> :ok
-        {:error, reason} -> Logger.warning("[SESSION] Failed flushing store: #{inspect(reason)}")
-      end
-    else
-      :ok
+  defp flush_store_best_effort(store) do
+    case do_flush_store(store) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[SESSION] Failed flushing store: #{inspect(reason)}")
+        :ok
     end
   rescue
     error ->
       Logger.warning("[SESSION] Failed flushing store: #{inspect(error)}")
       :ok
+  end
+
+  defp do_flush_store(nil), do: :ok
+
+  defp do_flush_store(store) do
+    if function_exported?(store.__struct__, :flush, 1) do
+      store.__struct__.flush(store)
+    else
+      :ok
+    end
+  rescue
+    error -> {:error, error}
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  defp store_blob_checksum(blob) when is_binary(blob) do
+    :crypto.hash(:sha256, blob)
+    |> Base.encode16(case: :lower)
   end
 
   defp restart_outbound_queue(state) do

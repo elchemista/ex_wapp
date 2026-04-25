@@ -187,14 +187,33 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     first_child_tag = first_stream_error_child_tag(children)
     children_summary = summarize_stream_error_children(children)
 
-    Logger.error("[SESSION] Stream error: code=#{code}")
-    Logger.error("[SESSION] Stream error attrs: #{inspect(attrs, limit: :infinity)}")
+    # 515 ("restart required" after pair-success) and 503/504/505 ("service unavailable")
+    # are expected transient signals that the session auto-recovers from via
+    # reconnect. Log their details at debug to avoid alarming error noise; all
+    # other codes are treated as real errors below.
+    log_level =
+      case code do
+        "515" -> :debug
+        "503" -> :debug
+        "504" -> :debug
+        "505" -> :debug
+        _ -> :error
+      end
 
-    Logger.error(
+    Logger.log(log_level, "[SESSION] Stream error: code=#{code}")
+
+    Logger.log(
+      log_level,
+      "[SESSION] Stream error attrs: #{inspect(attrs, limit: :infinity)}"
+    )
+
+    Logger.log(
+      log_level,
       "[SESSION] Stream error children summary: #{inspect(children_summary, limit: :infinity)}"
     )
 
-    Logger.error(
+    Logger.log(
+      log_level,
       "[SESSION] Stream error raw children: #{inspect(children, limit: :infinity, printable_limit: 8_000)}"
     )
 
@@ -222,11 +241,11 @@ defmodule ExWapp.Session.Worker.NodeHandler do
           restart_connection_now(state, :stream_replaced)
 
         code == "515" ->
-          Logger.warning("[SESSION] Got 515, will reconnect...")
+          Logger.debug("[SESSION] Got 515, will reconnect...")
           mark_transport_closed(state, stream_error_reason)
 
-        code == "503" ->
-          Logger.warning("[SESSION] Got 503 (service unavailable), will reconnect...")
+        code in ["503", "504", "505"] ->
+          Logger.debug("[SESSION] Got #{code} (service unavailable), will reconnect...")
           mark_transport_closed(state, stream_error_reason)
 
         true ->
@@ -429,7 +448,13 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     Logger.debug("[NODE_HANDLER] matched post-auth prekey count IQ id=#{iq_id}")
 
     {next_state, actions} =
-      PostAuth.handle_prekey_count_response(node, state, &build_set_passive_iq/0)
+      PostAuth.handle_prekey_count_response(
+        node,
+        state,
+        &build_set_passive_iq/0,
+        &build_digest_query/0,
+        fn -> build_unified_session_node(state) end
+      )
 
     {:handled, next_state, actions}
   end
@@ -440,7 +465,14 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     Logger.debug("[NODE_HANDLER] matched post-auth prekey upload IQ id=#{iq_id} type=#{iq_type}")
 
     {next_state, actions} =
-      PostAuth.handle_prekey_upload_response(node, iq_type, state, &build_set_passive_iq/0)
+      PostAuth.handle_prekey_upload_response(
+        node,
+        iq_type,
+        state,
+        &build_set_passive_iq/0,
+        &build_digest_query/0,
+        fn -> build_unified_session_node(state) end
+      )
 
     {:handled, next_state, actions}
   end

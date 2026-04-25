@@ -68,13 +68,6 @@ defmodule ExWapp.ClientApiTest do
     end
   end
 
-  defmodule WrappedClient do
-    use ExWapp.Client,
-      store: ExWapp.Store.Memory,
-      transport: FakeTransport,
-      events: TestEvents
-  end
-
   test "new/1 builds a runtime-neutral high-level client" do
     client =
       ExWapp.new(
@@ -89,6 +82,10 @@ defmodule ExWapp.ClientApiTest do
     assert client.session_id == "acc_1"
     assert client.status == :new
     assert client.transport == FakeTransport
+  end
+
+  test "client module stays data-only and does not generate wrapper modules" do
+    refute function_exported?(ExWapp.Client, :__using__, 1)
   end
 
   test "connect and pair use adapters and emit high-level events" do
@@ -181,21 +178,6 @@ defmodule ExWapp.ClientApiTest do
 
     assert_receive {:adapter_send_message,
                     %ExWapp.Message{id: ^audio_id, type: :audio, body: {:bytes, "aud"}}}
-  end
-
-  test "use ExWapp.Client generates wrapper helpers without owning OTP" do
-    client = WrappedClient.new(session_id: "wrapped", metadata: %{test_pid: self()})
-
-    assert {:ok, connected} = WrappedClient.connect(client)
-    assert connected.status == :connected
-
-    assert {:ok, _client, message_id} =
-             WrappedClient.send_message(connected,
-               to: "15550001111@s.whatsapp.net",
-               text: "from wrapper"
-             )
-
-    assert_receive {:adapter_send_message, %ExWapp.Message{id: ^message_id}}
   end
 
   test "adapter failures return structured client errors" do

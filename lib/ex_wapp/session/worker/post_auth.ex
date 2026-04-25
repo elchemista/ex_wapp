@@ -120,9 +120,38 @@ defmodule ExWapp.Session.Worker.PostAuth do
   """
   @spec handle_prekey_count_response(Binary.Node.t(), map(), (-> Binary.Node.t())) ::
           {map(), list()}
-  def handle_prekey_count_response(%Binary.Node{content: content}, state, build_passive_iq_fun)
+  def handle_prekey_count_response(node, state, build_passive_iq_fun)
       when is_function(build_passive_iq_fun, 0) do
-    state = Map.put(state, :prekey_count_query_id, nil)
+    handle_prekey_count_response(
+      node,
+      state,
+      build_passive_iq_fun,
+      &build_fallback_digest_query/0,
+      &build_fallback_unified_session/0
+    )
+  end
+
+  @spec handle_prekey_count_response(
+          Binary.Node.t(),
+          map(),
+          (-> Binary.Node.t()),
+          (-> Binary.Node.t()),
+          (-> Binary.Node.t())
+        ) ::
+          {map(), list()}
+  def handle_prekey_count_response(
+        %Binary.Node{content: content},
+        state,
+        build_passive_iq_fun,
+        build_digest_query_fun,
+        build_unified_session_fun
+      )
+      when is_function(build_passive_iq_fun, 0) and is_function(build_digest_query_fun, 0) and
+             is_function(build_unified_session_fun, 0) do
+    state =
+      state
+      |> Map.put(:prekey_count_query_id, nil)
+      |> Map.put(:prekey_count_completed?, true)
 
     server_count = ExWapp.Prekeys.parse_count_response(content)
     Logger.info("[SESSION] Server prekey count: #{server_count}")
@@ -143,11 +172,24 @@ defmodule ExWapp.Session.Worker.PostAuth do
           "[SESSION] No prekeys on server, uploading initial batch (local=#{local_count})"
         )
 
-        do_prekey_upload(state, build_passive_iq_fun, initial: true)
+        do_prekey_upload(
+          state,
+          build_passive_iq_fun,
+          build_digest_query_fun,
+          build_unified_session_fun,
+          initial: true
+        )
 
       server_count <= min_prekey_threshold(state) ->
         Logger.debug("[SESSION] Server prekeys low (#{server_count}), uploading refill batch")
-        do_prekey_upload(state, build_passive_iq_fun, initial: false)
+
+        do_prekey_upload(
+          state,
+          build_passive_iq_fun,
+          build_digest_query_fun,
+          build_unified_session_fun,
+          initial: false
+        )
 
       true ->
         Logger.debug(
@@ -155,8 +197,14 @@ defmodule ExWapp.Session.Worker.PostAuth do
         )
 
         state
+        |> Map.put(:prekey_upload_required?, false)
+        |> Map.put(:prekey_upload_completed?, true)
         |> sync_post_auth_phase_after_prekey_step()
-        |> maybe_send_passive_iq(build_passive_iq_fun)
+        |> continue_post_auth(
+          build_passive_iq_fun,
+          build_digest_query_fun,
+          build_unified_session_fun
+        )
     end
   end
 
@@ -165,8 +213,37 @@ defmodule ExWapp.Session.Worker.PostAuth do
   """
   @spec handle_prekey_upload_response(Binary.Node.t(), String.t(), map(), (-> Binary.Node.t())) ::
           {map(), list()}
-  def handle_prekey_upload_response(_node, "result", state, build_passive_iq_fun)
+  def handle_prekey_upload_response(node, iq_type, state, build_passive_iq_fun)
       when is_function(build_passive_iq_fun, 0) do
+    handle_prekey_upload_response(
+      node,
+      iq_type,
+      state,
+      build_passive_iq_fun,
+      &build_fallback_digest_query/0,
+      &build_fallback_unified_session/0
+    )
+  end
+
+  @spec handle_prekey_upload_response(
+          Binary.Node.t(),
+          String.t(),
+          map(),
+          (-> Binary.Node.t()),
+          (-> Binary.Node.t()),
+          (-> Binary.Node.t())
+        ) ::
+          {map(), list()}
+  def handle_prekey_upload_response(
+        _node,
+        "result",
+        state,
+        build_passive_iq_fun,
+        build_digest_query_fun,
+        build_unified_session_fun
+      )
+      when is_function(build_passive_iq_fun, 0) and is_function(build_digest_query_fun, 0) and
+             is_function(build_unified_session_fun, 0) do
     pending_prekeys = Map.get(state, :pending_prekey_upload, [])
     persist_uploaded_prekeys(state.store, pending_prekeys)
 
@@ -174,6 +251,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
       state
       |> Map.put(:prekey_upload_iq_id, nil)
       |> Map.put(:pending_prekey_upload, [])
+      |> Map.put(:prekey_upload_completed?, true)
       |> sync_post_auth_phase_after_prekey_step()
 
     Logger.info(
@@ -181,24 +259,44 @@ defmodule ExWapp.Session.Worker.PostAuth do
     )
 
     Logger.debug("[SESSION] Prekey upload acknowledged, continuing post-auth")
-    maybe_send_passive_iq(state, build_passive_iq_fun)
+
+    continue_post_auth(
+      state,
+      build_passive_iq_fun,
+      build_digest_query_fun,
+      build_unified_session_fun
+    )
   end
 
-  def handle_prekey_upload_response(node, "error", state, build_passive_iq_fun)
-      when is_function(build_passive_iq_fun, 0) do
+  def handle_prekey_upload_response(
+        node,
+        "error",
+        state,
+        build_passive_iq_fun,
+        build_digest_query_fun,
+        build_unified_session_fun
+      )
+      when is_function(build_passive_iq_fun, 0) and is_function(build_digest_query_fun, 0) and
+             is_function(build_unified_session_fun, 0) do
     Logger.warning("[SESSION] Prekey upload failed: #{inspect(node.attrs || %{})}")
 
     state =
       state
       |> Map.put(:prekey_upload_iq_id, nil)
       |> Map.put(:pending_prekey_upload, [])
+      |> Map.put(:prekey_upload_completed?, true)
       |> sync_post_auth_phase_after_prekey_step()
 
     Logger.warning(
       "[POST_AUTH] prekey upload returned error session_id=#{inspect(Map.get(state, :session_id))} attrs=#{inspect(node.attrs || %{}, limit: 50)}"
     )
 
-    maybe_send_passive_iq(state, build_passive_iq_fun)
+    continue_post_auth(
+      state,
+      build_passive_iq_fun,
+      build_digest_query_fun,
+      build_unified_session_fun
+    )
   end
 
   @doc """
@@ -234,27 +332,9 @@ defmodule ExWapp.Session.Worker.PostAuth do
       state
       |> Map.put(:passive_iq_id, nil)
       |> Map.put(:digest_iq_id, nil)
+      |> Map.put(:passive_ack_received?, true)
 
-    if digest_enabled?(state) do
-      digest_query = build_digest_query_fun.()
-      digest_iq_id = Map.get(digest_query.attrs, "id")
-
-      next_state =
-        state
-        |> Map.put(:digest_iq_id, digest_iq_id)
-        |> Map.put(:post_auth_phase, :awaiting_digest)
-
-      Logger.debug("[SESSION] Sending digest query (id=#{digest_iq_id})")
-      {next_state, [{:send_node, digest_query}]}
-    else
-      Logger.debug("[SESSION] Skipping digest query, proceeding directly to unified_session")
-
-      next_state =
-        state
-        |> Map.put(:post_auth_phase, :complete)
-
-      {next_state, [{:send_node, build_unified_session_fun.()}, :mark_authenticated]}
-    end
+    continue_post_auth(state, nil, build_digest_query_fun, build_unified_session_fun)
   end
 
   @doc """
@@ -290,14 +370,20 @@ defmodule ExWapp.Session.Worker.PostAuth do
     next_state =
       state
       |> Map.put(:digest_iq_id, nil)
-      |> Map.put(:post_auth_phase, :complete)
+      |> Map.put(:digest_completed?, true)
 
-    {next_state, [{:send_node, build_unified_session_fun.()}, :mark_authenticated]}
+    continue_post_auth(next_state, nil, nil, build_unified_session_fun)
   end
 
   # -- Internal helpers -------------------------------------------------------
 
-  defp do_prekey_upload(state, build_passive_iq_fun, opts) do
+  defp do_prekey_upload(
+         state,
+         build_passive_iq_fun,
+         build_digest_query_fun,
+         build_unified_session_fun,
+         opts
+       ) do
     case ExWapp.Prekeys.build_prekey_upload(
            state.store,
            Keyword.put(opts, :runtime_cfg, state.runtime_cfg || %{})
@@ -319,12 +405,22 @@ defmodule ExWapp.Session.Worker.PostAuth do
           |> Map.put(:post_auth_phase, :awaiting_prekey_upload)
           |> Map.put(:prekey_upload_iq_id, request_id)
           |> Map.put(:pending_prekey_upload, prekeys)
+          |> Map.put(:prekey_upload_required?, true)
+          |> Map.put(:prekey_upload_completed?, false)
 
         {next_state, [{:send_node, prekey_node}]}
 
       {:error, reason} ->
         Logger.warning("[SESSION] Cannot upload prekeys: #{inspect(reason)}")
-        maybe_send_passive_iq(state, build_passive_iq_fun)
+
+        state
+        |> Map.put(:prekey_upload_required?, false)
+        |> Map.put(:prekey_upload_completed?, true)
+        |> continue_post_auth(
+          build_passive_iq_fun,
+          build_digest_query_fun,
+          build_unified_session_fun
+        )
     end
   end
 
@@ -347,6 +443,97 @@ defmodule ExWapp.Session.Worker.PostAuth do
 
   defp maybe_send_passive_iq(state, build_passive_iq_fun),
     do: send_passive_iq(state, build_passive_iq_fun)
+
+  defp continue_post_auth(
+         state,
+         build_passive_iq_fun,
+         build_digest_query_fun,
+         build_unified_session_fun
+       ) do
+    cond do
+      post_auth_completed?(state) ->
+        {state, []}
+
+      not Map.get(state, :prekey_count_completed?, false) ->
+        {Map.put(state, :post_auth_phase, :awaiting_prekey_count), []}
+
+      not prekey_upload_complete?(state) ->
+        {Map.put(state, :post_auth_phase, :awaiting_prekey_upload), []}
+
+      not Map.get(state, :passive_ack_received?, false) ->
+        maybe_send_passive_iq(state, build_passive_iq_fun)
+
+      digest_waiting?(state) ->
+        {Map.put(state, :post_auth_phase, :awaiting_digest), []}
+
+      digest_needed?(state) ->
+        send_digest_query(state, build_digest_query_fun)
+
+      true ->
+        finalize_post_auth(state, build_unified_session_fun)
+    end
+  end
+
+  defp prekey_upload_complete?(state) do
+    not Map.get(state, :prekey_upload_required?, false) or
+      Map.get(state, :prekey_upload_completed?, false)
+  end
+
+  defp digest_waiting?(state), do: is_binary(Map.get(state, :digest_iq_id))
+
+  defp digest_needed?(state) do
+    digest_enabled?(state) and not Map.get(state, :digest_completed?, false)
+  end
+
+  defp send_digest_query(state, build_digest_query_fun)
+       when is_function(build_digest_query_fun, 0) do
+    digest_query = build_digest_query_fun.()
+    digest_iq_id = Map.get(digest_query.attrs, "id")
+
+    next_state =
+      state
+      |> Map.put(:digest_iq_id, digest_iq_id)
+      |> Map.put(:post_auth_phase, :awaiting_digest)
+
+    Logger.debug("[SESSION] Sending digest query (id=#{digest_iq_id})")
+    {next_state, [{:send_node, digest_query}]}
+  end
+
+  defp finalize_post_auth(state, build_unified_session_fun)
+       when is_function(build_unified_session_fun, 0) do
+    if digest_enabled?(state) do
+      Logger.debug("[SESSION] Digest complete, proceeding to unified_session")
+    else
+      Logger.debug("[SESSION] Skipping digest query, proceeding directly to unified_session")
+    end
+
+    next_state =
+      state
+      |> Map.put(:post_auth_phase, :complete)
+      |> Map.put(:post_auth_completed?, true)
+
+    {next_state, [{:send_node, build_unified_session_fun.()}, :mark_authenticated]}
+  end
+
+  defp post_auth_completed?(state) do
+    Map.get(state, :post_auth_completed?, false) or Map.get(state, :post_auth_phase) == :complete
+  end
+
+  defp build_fallback_digest_query do
+    %Binary.Node{
+      tag: "iq",
+      attrs: %{"id" => "digest", "xmlns" => "encrypt", "type" => "get"},
+      content: [%Binary.Node{tag: "digest", attrs: %{}, content: nil}]
+    }
+  end
+
+  defp build_fallback_unified_session do
+    %Binary.Node{
+      tag: "ib",
+      attrs: %{},
+      content: [%Binary.Node{tag: "unified_session", attrs: %{"id" => "0"}, content: nil}]
+    }
+  end
 
   defp send_passive_iq(state, build_passive_iq_fun) when is_function(build_passive_iq_fun, 0) do
     passive_iq = build_passive_iq_fun.()
@@ -383,6 +570,12 @@ defmodule ExWapp.Session.Worker.PostAuth do
     |> Map.put(:pending_prekey_upload, [])
     |> Map.put(:passive_iq_id, nil)
     |> Map.put(:digest_iq_id, nil)
+    |> Map.put(:prekey_count_completed?, false)
+    |> Map.put(:prekey_upload_required?, false)
+    |> Map.put(:prekey_upload_completed?, false)
+    |> Map.put(:passive_ack_received?, false)
+    |> Map.put(:digest_completed?, false)
+    |> Map.put(:post_auth_completed?, false)
   end
 
   defp normalize_jid_string(jid) when is_binary(jid) do
