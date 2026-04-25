@@ -82,6 +82,63 @@ Pairing returns the first QR event when one is available:
 If you only want protocol helpers and no built-in runtime, configure your own
 transport adapter.
 
+## Which API To Use
+
+ExWapp exposes three practical layers:
+
+- `ExWapp`: runtime-neutral client facade. Use this when your application owns
+  the runtime and you want a stable, adapter-based API.
+- `ExWapp.Session`: direct GenServer API for the built-in session worker. Use
+  this when you want to work with the built-in runtime directly.
+- lower-level protocol modules like `ExWapp.Messages`, `ExWapp.Signal`,
+  `ExWapp.Noise`, and `ExWapp.AppState.Engine`: use these when you are building
+  your own transport/runtime or debugging protocol internals.
+
+For most applications, start with `ExWapp.new/1`, `connect/1`, `pair/1`,
+`send_message/2`, and `download_media/3`.
+
+## High-Level Client API
+
+`ExWapp` is the main public facade. It wraps the configured transport and keeps
+the public API consistent whether you use the built-in session worker or a
+custom runtime.
+
+Common functions:
+
+- connection lifecycle: `new/1`, `connect/1`, `pair/1`, `disconnect/1`
+- sending: `send_message/2`, `send_image/4`, `send_audio/4`
+- inbound processing: `receive_message/3`
+- media download: `download_media/3`
+- local data access: `list_contacts/1`, `get_contact/2`, `sync_contacts/1`,
+  `create_contact/3`, `delete_contact/2`, `list_chats/1`, `list_groups/1`,
+  `get_chat/2`
+- diagnostics: `status/1`, `last_error/1`, `diagnostics/1`
+
+Example:
+
+```elixir
+client =
+  ExWapp.new(
+    session_id: "account_1",
+    store: {ExWapp.Store.Ets, path: "/tmp/ex_wapp/account_1.etf"},
+    transport: ExWapp.Client.Transport.Session,
+    events: ExWapp.Events.Telemetry
+  )
+
+{:ok, client} = ExWapp.connect(client)
+{:ok, client, {:code, qr}} = ExWapp.pair(client)
+
+{:ok, client, message_id} =
+  ExWapp.send_message(client,
+    to: "393XXXXXXXXX@s.whatsapp.net",
+    text: "hello from ExWapp"
+  )
+
+{:ok, chats} = ExWapp.list_chats(client)
+status = ExWapp.status(client)
+diag = ExWapp.diagnostics(client)
+```
+
 ## Built-In Session Transport
 
 `ExWapp.Client.Transport.Session` wraps the full session engine. This is the
@@ -104,6 +161,46 @@ for {jid, message} <- ExWapp.Session.message_stream(session) do
   IO.inspect({jid, message})
 end
 ```
+
+## Direct Session API
+
+If you want to call the built-in worker directly instead of going through the
+runtime-neutral client facade, use `ExWapp.Session`.
+
+```elixir
+{:ok, session} =
+  ExWapp.Session.start_link(
+    session_id: "account_1",
+    store: ExWapp.Store.new({ExWapp.Store.Ets, path: "/tmp/ex_wapp/account_1.etf"})
+  )
+
+:ok = ExWapp.Session.connect(session)
+{:ok, _ref} = ExWapp.Session.subscribe_messages(session)
+
+{:ok, message_id} =
+  ExWapp.Session.send_text(session, "393XXXXXXXXX@s.whatsapp.net", "hello")
+
+{:ok, image_id} =
+  ExWapp.Session.send_image(session, "393XXXXXXXXX@s.whatsapp.net", {:path, "photo.jpg"},
+    mimetype: "image/jpeg",
+    caption: "a photo"
+  )
+
+{:ok, audio_id} =
+  ExWapp.Session.send_audio(session, "393XXXXXXXXX@s.whatsapp.net", {:path, "voice.ogg"},
+    mimetype: "audio/ogg; codecs=opus",
+    ptt: true
+  )
+```
+
+`ExWapp.Session` also exposes:
+
+- streams and subscriptions: `subscribe_qr/1`, `subscribe_messages/1`,
+  `qr_stream/1`, `message_stream/1`
+- status and runtime info: `state/1`, `stats/1`, `runtime_config/1`,
+  `policy_status/1`, `health_status/1`
+- server-synced operations: `archive_chat/2`, `unarchive_chat/2`,
+  `delete_chat/2`, `create_contact/3`, `delete_contact/2`, `sync_contacts/1`
 
 ## Transport Adapter
 
@@ -299,6 +396,19 @@ ExWapp.send_audio(client, jid, {:path, "voice.ogg"},
 )
 ```
 
+`ExWapp.Message` is the user-facing message builder module. It returns a small
+runtime-neutral struct that adapters and transports can send later:
+
+- `ExWapp.Message.text/3`
+- `ExWapp.Message.typing/3`
+- `ExWapp.Message.read_receipt/3`
+- `ExWapp.Message.image/3`
+- `ExWapp.Message.audio/3`
+
+`ExWapp.Messages` is a lower-level helper used by the session worker. It builds
+protobuf payloads, message IDs, context info, resend requests, and binary nodes.
+Use it when you are writing your own transport or debugging the wire format.
+
 Group JIDs use the same API. When the target ends in `@g.us`, the session
 transport uses the group sender-key path:
 
@@ -306,6 +416,43 @@ transport uses the group sender-key path:
 ExWapp.send_message(client, to: "123456789@g.us", text: "team update")
 ExWapp.send_image(client, "123456789@g.us", {:bytes, image_bytes}, mimetype: "image/png")
 ```
+
+## Media
+
+Media sending and receiving is split into a small public API plus focused
+implementation modules.
+
+Most applications only need:
+
+- `ExWapp.send_image/4`
+- `ExWapp.send_audio/4`
+- `ExWapp.download_media/3`
+- `ExWapp.Media.read_source/1`
+- `ExWapp.Media.ref_from_upload/2`
+
+Media source forms accepted by the public API:
+
+- `{:path, "/path/to/file"}`
+- `{:bytes, binary}`
+- `%ExWapp.Media.Upload{}` when you already have uploaded media metadata
+
+Downloading inbound media:
+
+```elixir
+{:ok, client, download} =
+  ExWapp.download_media(client, media_ref)
+
+File.write!("/tmp/out.bin", download.bytes)
+```
+
+Media modules:
+
+- `ExWapp.Media`: public entry point
+- `ExWapp.Media.HTTP`: upload/download transport helpers
+- `ExWapp.Media.Crypto`: WhatsApp media encryption and decryption
+- `ExWapp.Media.Ref`: reusable reference for inbound/outbound media
+- `ExWapp.Media.Upload`: uploaded media metadata returned by the upload flow
+- `ExWapp.Media.Download`: decrypted media payload returned by downloads
 
 ## Contacts and Chats
 
@@ -315,11 +462,47 @@ Contacts and chats are exposed through the runtime-neutral client facade:
 {:ok, contacts} = ExWapp.list_contacts(client)
 {:ok, contact} = ExWapp.get_contact(client, "15550001111@s.whatsapp.net")
 {:ok, client} = ExWapp.sync_contacts(client)
+{:ok, client} = ExWapp.create_contact(client, "15550001111@s.whatsapp.net", "Alice")
+{:ok, client} = ExWapp.delete_contact(client, "15550001111@s.whatsapp.net")
 
 {:ok, chats} = ExWapp.list_chats(client)
 {:ok, groups} = ExWapp.list_groups(client)
 {:ok, group} = ExWapp.get_chat(client, "123456789@g.us")
 ```
+
+Implementation notes:
+
+- `ExWapp.Contact` is the public contact struct plus CRUD helpers
+- `ExWapp.Chat` is the public chat/message store API
+- contacts are updated from app-state sync, history sync, and inbound push-name metadata
+- chats are updated from outbound sends, inbound messages, receipts, and app-state mutations
+
+When you use the built-in session transport, these modules read and write the
+configured store directly, so they are useful both at runtime and in tests.
+
+## How It Works
+
+At a high level, the built-in session flow looks like this:
+
+1. `ExWapp.connect/1` or `ExWapp.Session.connect/1` opens the WebSocket and runs
+   the Noise handshake.
+2. `pair/1` starts QR/device-link flow when the account is not yet registered.
+3. outbound messages are built as `%ExWapp.Message{}` values, translated into
+   protobufs by `ExWapp.Messages`, and then encrypted per target device.
+4. the session worker resolves device fanout with USync and prekey fetches,
+   then sends WhatsApp binary nodes over the encrypted transport.
+5. inbound nodes are routed through `ExWapp.MessageHandler`, which delegates to
+   focused handler modules for messages, receipts, notifications, status, and
+   low-level wire parsing.
+6. contacts, chats, Signal sessions, app-state versions, and related metadata
+   are persisted through the configured `ExWapp.Store`.
+7. events and telemetry are emitted so the application can react without being
+   tightly coupled to the internal worker implementation.
+
+Relevant flow documents in this repository:
+
+- `FLOW.md` for the WebSocket/Noise/session flow
+- `SPEC.md` for protocol and addressing rules
 
 ## Protocol Modules
 
@@ -336,6 +519,64 @@ Advanced users and adapters can use lower-level modules directly:
 
 These modules are building blocks. The public entry point remains the high-level
 client API.
+
+## Module Guide
+
+Use this section as a map of the current codebase.
+
+Core public entry points:
+
+- `ExWapp`: runtime-neutral client facade
+- `ExWapp.Client`: client struct and `use ExWapp.Client` wrapper macro
+- `ExWapp.Session`: direct built-in session API
+- `ExWapp.Message`: user-facing outbound message builders
+- `ExWapp.Media`: user-facing media helpers
+- `ExWapp.Contact`: public contact struct and repository facade
+- `ExWapp.Chat`: public chat/message store API
+- `ExWapp.Event`, `ExWapp.Events`, `ExWapp.Telemetry`: events and observability
+
+Built-in transport/runtime:
+
+- `ExWapp.Client.Transport.Session`: full WhatsApp session transport
+- `ExWapp.Client.Transport.WebSocket`: lower-level transport adapter
+- `ExWapp.Session.Worker`: main GenServer implementation
+- `ExWapp.Session.Worker.Outbound`: outgoing send path
+- `ExWapp.Session.Worker.Inbound`: incoming message/event helpers
+- `ExWapp.Session.InboundRouter`, `ExWapp.Session.IQ`, `ExWapp.Session.MessageNode`,
+  `ExWapp.Session.Targets`: focused helpers used by the worker
+
+Message parsing and routing:
+
+- `ExWapp.MessageHandler`: high-level inbound router
+- `ExWapp.Message.Handler.Inbound`: incoming message decode and persistence
+- `ExWapp.Message.Handler.Receipt`: delivery/read receipt handling
+- `ExWapp.Message.Handler.Notification`: notification and sync events
+- `ExWapp.Message.Handler.Status`: presence and chat-state handling
+- `ExWapp.Message.Handler.Wire`: low-level protobuf wire decoding helpers
+- `ExWapp.Message.Handler.Ack`, `ExWapp.Message.Handler.Common`: shared handler utilities
+
+Protocol internals:
+
+- `ExWapp.Noise`, `ExWapp.Noise.Handshake`, `ExWapp.Noise.Engine`: Noise handshake and transport crypto
+- `ExWapp.Signal`, `ExWapp.Signal.Encryption`, `ExWapp.Signal.SessionStore`,
+  `ExWapp.Signal.SenderKey`, `ExWapp.Signal.WireFormat`: Signal/Session/SenderKey logic
+- `ExWapp.Pairing`, `ExWapp.Pairing.ADV`: QR registration and ADV payload handling
+- `ExWapp.Binary`, `ExWapp.Transport.Frame`, `ExWapp.Transport.WebSocket`: binary node and frame encoding
+
+Server-synced app state:
+
+- `ExWapp.AppState.Engine`: public app-state facade
+- `ExWapp.AppState.Engine.Builders`: build outgoing patch descriptions
+- `ExWapp.AppState.Engine.Codec`: encode/decode and hash-chain validation
+- `ExWapp.AppState.Engine.Sync`: fetch/apply collections and external blobs
+- `ExWapp.AppState.Engine.Dispatch`: apply decoded mutations to contacts/chats
+- `ExWapp.AppState.Engine.State`: persist app-state versions and mutation MACs
+
+Storage:
+
+- `ExWapp.Store`: store behaviour and adapter entry point
+- `ExWapp.Store.Ets`, `ExWapp.Store.Memory`: built-in stores
+- `ExWapp.Store.Codec`: on-disk codec helpers for persisted store data
 
 ## Diagnostics
 
