@@ -658,8 +658,6 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     end
   end
 
-  defp update_server_time_offset(state, _attrs), do: state
-
   defp maybe_reset_pairing(actions, pairing) do
     if Enum.any?(actions, &match?({:status, :success}, &1)) do
       {:ok, Pairing.new(pairing.store)}

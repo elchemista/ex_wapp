@@ -203,7 +203,8 @@ defmodule ExWapp.Client.Transport.Session do
   end
 
   @impl true
-  @spec send_message(Client.t(), Message.t()) :: {:ok, Client.t(), String.t()} | {:error, term()}
+  @spec send_message(Client.t(), Message.t()) ::
+          {:ok, Client.t(), String.t()} | {:error, Client.t(), term()} | {:error, term()}
   def send_message(%Client{} = client, %Message{type: :text, to: to, body: text}) do
     case ensure_session(client) do
       {:ok, client, session} ->

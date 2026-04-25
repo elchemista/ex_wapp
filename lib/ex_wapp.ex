@@ -84,10 +84,12 @@ defmodule ExWapp do
 
   def send_message(%Client{} = client, opts) when is_list(opts) do
     run_client_operation(client, :send_message, fn ->
-      with {:ok, message} <- build_message_from_opts(opts) do
-        do_send_message(client, message)
-      else
-        {:error, reason} -> fail_client(client, :send_message, :build_message, reason)
+      case build_message_from_opts(opts) do
+        {:ok, message} ->
+          do_send_message(client, message)
+
+        {:error, reason} ->
+          fail_client(client, :send_message, :build_message, reason)
       end
     end)
   end

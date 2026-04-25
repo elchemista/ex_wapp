@@ -24,7 +24,7 @@ defmodule ExWapp.Signal.SessionStore do
             pending_prekeys: %{String.t() => map()},
             session_touched_at_ms: %{String.t() => integer()}
           }
-          | %Ref{table: :ets.tid()}
+          | %Ref{table: atom() | reference()}
 
   @doc """
   Creates a new empty session store.
@@ -59,14 +59,14 @@ defmodule ExWapp.Signal.SessionStore do
   @doc """
   Attaches to an existing ETS-backed session store table.
   """
-  @spec attach(:ets.tid()) :: t()
-  def attach(table) when is_reference(table), do: %Ref{table: table}
+  @spec attach(atom() | reference()) :: t()
+  def attach(table) when is_reference(table) or is_atom(table), do: %Ref{table: table}
 
   @doc """
   Returns true when the given value is a valid session-store backend.
   """
   @spec store?(term()) :: boolean()
-  def store?(%Ref{table: table}) when is_reference(table), do: true
+  def store?(%Ref{table: table}) when is_reference(table) or is_atom(table), do: true
 
   def store?(%{
         sessions: sessions,

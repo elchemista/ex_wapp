@@ -40,7 +40,8 @@ defmodule ExWapp.Telemetry do
     [:ex_wapp, :session, :terminate]
   ]
 
-  @type event_name :: [atom()]
+  @type event_name :: [atom()] | atom()
+  @type metadata :: map() | keyword()
 
   @doc """
   Returns all canonical telemetry events.
@@ -51,8 +52,8 @@ defmodule ExWapp.Telemetry do
   @doc """
   Emits a telemetry event.
   """
-  @spec execute(event_name(), map(), map()) :: :ok
-  def execute(event, measurements, metadata \\ [])
+  @spec execute(event_name(), map(), metadata()) :: :ok
+  def execute(event, measurements, metadata \\ %{})
 
   def execute(event, measurements, metadata)
       when is_list(event) and is_map(measurements) do

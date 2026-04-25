@@ -37,9 +37,9 @@ defmodule ExWapp.Store.Ets do
 
   @type t :: %__MODULE__{
           path: Path.t(),
-          table: :ets.tid(),
-          signal_table: :ets.tid(),
-          device_cache_table: :ets.tid()
+          table: atom() | reference(),
+          signal_table: atom() | reference(),
+          device_cache_table: atom() | reference()
         }
 
   @default_path_segments [".cache", "ex_wapp", "session.etf"]

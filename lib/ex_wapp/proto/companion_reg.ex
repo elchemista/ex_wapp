@@ -57,12 +57,28 @@ defmodule ExWapp.Proto.CompanionReg.AppVersion do
   defp encode_uint32_field(acc, _tag, nil), do: acc
 
   defp encode_uint32_field(acc, tag, value) do
-    [acc, Protox.Encode.make_key_bytes(tag, :uint32), Protox.Encode.encode_uint32(value)]
+    [acc, Protox.Varint.encode(tag * 8), Protox.Encode.encode_uint32(value)]
   end
 end
 
 defmodule ExWapp.Proto.CompanionReg.HistorySyncConfig do
   @moduledoc false
+
+  import Bitwise
+
+  @history_sync_fields %{
+    3 => {:uint32, :storage_quota_mb},
+    4 => {:bool, :inline_initial_payload_in_e2ee_msg},
+    6 => {:bool, :support_call_log_history},
+    7 => {:bool, :support_bot_user_agent_chat_history},
+    8 => {:bool, :support_cag_reactions_and_polls},
+    9 => {:bool, :support_biz_hosted_msg},
+    10 => {:bool, :support_recent_sync_chunk_message_count_tuning},
+    11 => {:bool, :support_hosted_group_msg},
+    12 => {:bool, :support_fbid_bot_chat_history},
+    14 => {:bool, :support_message_association},
+    15 => {:bool, :support_group_history}
+  }
 
   defstruct storage_quota_mb: nil,
             inline_initial_payload_in_e2ee_msg: nil,
@@ -119,75 +135,61 @@ defmodule ExWapp.Proto.CompanionReg.HistorySyncConfig do
   defp parse_key_value(<<>>, msg), do: msg
 
   defp parse_key_value(bytes, msg) do
-    {field, rest} =
-      case Protox.Decode.parse_key(bytes) do
-        {3, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_uint32(bytes)
-          {[storage_quota_mb: value], rest}
-
-        {4, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[inline_initial_payload_in_e2ee_msg: value], rest}
-
-        {6, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_call_log_history: value], rest}
-
-        {7, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_bot_user_agent_chat_history: value], rest}
-
-        {8, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_cag_reactions_and_polls: value], rest}
-
-        {9, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_biz_hosted_msg: value], rest}
-
-        {10, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_recent_sync_chunk_message_count_tuning: value], rest}
-
-        {11, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_hosted_group_msg: value], rest}
-
-        {12, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_fbid_bot_chat_history: value], rest}
-
-        {14, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_message_association: value], rest}
-
-        {15, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_group_history: value], rest}
-
-        {tag, wire_type, rest} ->
-          {_value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
-          {[], rest}
-      end
+    {field, rest} = parse_history_sync_field(bytes)
 
     parse_key_value(rest, struct(msg, field))
   end
 
+  defp parse_history_sync_field(bytes) do
+    case Protox.Decode.parse_key(bytes) do
+      {tag, _, bytes} when is_map_key(@history_sync_fields, tag) ->
+        parse_known_history_sync_field(bytes, Map.fetch!(@history_sync_fields, tag))
+
+      {tag, wire_type, rest} ->
+        parse_unknown_field(tag, wire_type, rest)
+    end
+  end
+
+  defp parse_known_history_sync_field(bytes, {:uint32, field_name}),
+    do: parse_uint32_field(bytes, field_name)
+
+  defp parse_known_history_sync_field(bytes, {:bool, field_name}),
+    do: parse_bool_field(bytes, field_name)
+
   defp encode_uint32_field(acc, _tag, nil), do: acc
 
   defp encode_uint32_field(acc, tag, value) do
-    [acc, Protox.Encode.make_key_bytes(tag, :uint32), Protox.Encode.encode_uint32(value)]
+    [acc, encode_key(tag, 0), Protox.Encode.encode_uint32(value)]
   end
 
   defp encode_bool_field(acc, _tag, nil), do: acc
 
   defp encode_bool_field(acc, tag, value) do
-    [acc, Protox.Encode.make_key_bytes(tag, :bool), Protox.Encode.encode_bool(value)]
+    [acc, encode_key(tag, 0), Protox.Encode.encode_bool(value)]
   end
+
+  defp parse_uint32_field(bytes, field_name) do
+    {value, rest} = Protox.Decode.parse_uint32(bytes)
+    {[{field_name, value}], rest}
+  end
+
+  defp parse_bool_field(bytes, field_name) do
+    {value, rest} = Protox.Decode.parse_bool(bytes)
+    {[{field_name, value}], rest}
+  end
+
+  defp parse_unknown_field(tag, wire_type, rest) do
+    {_value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
+    {[], rest}
+  end
+
+  defp encode_key(tag, wire_type), do: Protox.Varint.encode(bsl(tag, 3) + wire_type)
 end
 
 defmodule ExWapp.Proto.CompanionReg.DeviceProps do
   @moduledoc false
+
+  import Bitwise
 
   alias ExWapp.Proto.CompanionReg.AppVersion
   alias ExWapp.Proto.CompanionReg.HistorySyncConfig
@@ -265,19 +267,19 @@ defmodule ExWapp.Proto.CompanionReg.DeviceProps do
   defp encode_string_field(acc, _tag, nil), do: acc
 
   defp encode_string_field(acc, tag, value) do
-    [acc, Protox.Encode.make_key_bytes(tag, :string), Protox.Encode.encode_string(value)]
+    [acc, encode_key(tag, 2), Protox.Encode.encode_string(value)]
   end
 
   defp encode_uint32_field(acc, _tag, nil), do: acc
 
   defp encode_uint32_field(acc, tag, value) do
-    [acc, Protox.Encode.make_key_bytes(tag, :uint32), Protox.Encode.encode_uint32(value)]
+    [acc, encode_key(tag, 0), Protox.Encode.encode_uint32(value)]
   end
 
   defp encode_bool_field(acc, _tag, nil), do: acc
 
   defp encode_bool_field(acc, tag, value) do
-    [acc, Protox.Encode.make_key_bytes(tag, :bool), Protox.Encode.encode_bool(value)]
+    [acc, encode_key(tag, 0), Protox.Encode.encode_bool(value)]
   end
 
   defp encode_message_field(acc, _tag, nil, _encoder), do: acc
@@ -288,6 +290,8 @@ defmodule ExWapp.Proto.CompanionReg.DeviceProps do
       |> encoder.()
       |> IO.iodata_to_binary()
 
-    [acc, Protox.Encode.make_key_bytes(tag, :bytes), Protox.Encode.encode_bytes(encoded)]
+    [acc, encode_key(tag, 2), Protox.Encode.encode_bytes(encoded)]
   end
+
+  defp encode_key(tag, wire_type), do: Protox.Varint.encode(bsl(tag, 3) + wire_type)
 end

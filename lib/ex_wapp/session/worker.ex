@@ -273,7 +273,7 @@ defmodule ExWapp.Session.Worker do
   @doc """
   Queues a plain text message for sending.
   """
-  @spec send_text(GenServer.server(), binary(), iodata()) :: :ok | {:error, term()}
+  @spec send_text(GenServer.server(), binary(), iodata()) :: {:ok, String.t()} | {:error, term()}
   def send_text(server, jid, text) do
     GenServer.call(server, {:send_text, jid, IO.iodata_to_binary(text)})
   end
@@ -1629,8 +1629,6 @@ defmodule ExWapp.Session.Worker do
   # Helpers
   # ============================================================================
 
-  defp load_persisted_signal_sessions(nil), do: nil
-
   defp load_persisted_signal_sessions(store) do
     store
     |> Store.load_signal_sessions()
@@ -2348,6 +2346,7 @@ defmodule ExWapp.Session.Worker do
 
       {:error, reason} ->
         Logger.warning("[APP_STATE] Failed to fetch #{collection_name}: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 end

@@ -166,7 +166,6 @@ defmodule ExWapp.Messages do
   defp normalize_optional_jid(_), do: ""
 
   defp strip_device(jid) when is_binary(jid), do: String.replace(jid, ~r/:(\d+)@/, "@")
-  defp strip_device(_), do: ""
 
   @doc """
   Builds the binary XML node for a message.

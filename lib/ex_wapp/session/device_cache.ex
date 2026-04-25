@@ -82,18 +82,19 @@ defmodule ExWapp.Session.DeviceCache do
       cache
       |> Map.get(alias_base, %{})
       |> Map.get(:devices, %{})
-      |> Enum.flat_map(fn {device_jid, seen_at_ms} ->
-        if is_integer(seen_at_ms) and now_ms - seen_at_ms < max_age_ms do
-          [JIDUtils.map_to_preferred_family(device_jid, base_jid, lid_mapping)]
-        else
-          []
-        end
-      end)
+      |> Enum.flat_map(&recent_device_entry(&1, now_ms, max_age_ms, base_jid, lid_mapping))
     end)
     |> JIDUtils.normalize_target_list()
   rescue
     _ -> []
   end
+
+  defp recent_device_entry({device_jid, seen_at_ms}, now_ms, max_age_ms, base_jid, lid_mapping)
+       when is_integer(seen_at_ms) and now_ms - seen_at_ms < max_age_ms do
+    [JIDUtils.map_to_preferred_family(device_jid, base_jid, lid_mapping)]
+  end
+
+  defp recent_device_entry(_entry, _now_ms, _max_age_ms, _base_jid, _lid_mapping), do: []
 
   @spec evict_devices(term(), [term()]) :: :ok
   def evict_devices(nil, _target_jids), do: :ok

@@ -57,7 +57,7 @@ defmodule ExWapp.Session do
   @spec unsubscribe_messages(GenServer.server(), reference()) :: :ok
   defdelegate unsubscribe_messages(server, ref), to: Worker
 
-  @spec send_text(GenServer.server(), binary(), iodata()) :: :ok | {:error, term()}
+  @spec send_text(GenServer.server(), binary(), iodata()) :: {:ok, String.t()} | {:error, term()}
   defdelegate send_text(server, jid, text), to: Worker
 
   @spec pause_sends(GenServer.server()) :: :ok

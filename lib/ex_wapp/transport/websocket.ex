@@ -132,9 +132,8 @@ defmodule ExWapp.Transport.WebSocket do
   @spec encode_node(State.t(), Binary.binary_node() | tuple()) ::
           {:ok, State.t(), binary()} | {:error, term()}
   def encode_node(%State{} = state, node) do
-    with {:ok, encoded} <- Binary.encode(node),
-         {:ok, state, payload} <- encode_payload(state, encoded) do
-      {:ok, state, payload}
+    with {:ok, encoded} <- Binary.encode(node) do
+      encode_payload(state, encoded)
     end
   end
 
@@ -142,7 +141,7 @@ defmodule ExWapp.Transport.WebSocket do
   Encrypts and frames a plaintext transport payload.
   """
   @spec encode_payload(State.t(), binary()) :: {:ok, State.t(), binary()} | {:error, term()}
-  def encode_payload(%State{noise: %Noise{} = noise} = state, plaintext) do
+  def encode_payload(%State{noise: %Noise{phase: :transport} = noise} = state, plaintext) do
     with {:ok, ciphertext, noise} <- Noise.encrypt(noise, plaintext) do
       next_state = %{state | noise: noise, header_sent?: true}
       payload = Frame.encode(ciphertext, include_header: not state.header_sent?)
@@ -155,6 +154,7 @@ defmodule ExWapp.Transport.WebSocket do
     end
   end
 
+  def encode_payload(%State{noise: %Noise{}}, _plaintext), do: {:error, :not_connected}
   def encode_payload(_state, _plaintext), do: {:error, :not_connected}
 
   @doc """
@@ -166,19 +166,25 @@ defmodule ExWapp.Transport.WebSocket do
     {buffer, header_seen?, proceed?} = consume_header(state.buffer <> bytes, state.header_seen?)
     state = %{state | buffer: buffer, header_seen?: header_seen?}
 
-    if proceed? do
-      {frames, rest} = Frame.decode(buffer)
-      state = %{state | buffer: rest}
+    case proceed? do
+      true ->
+        process_decoded_frames(state, buffer)
 
-      Enum.reduce_while(frames, {:ok, state, []}, fn frame, {:ok, acc_state, events} ->
-        case process_frame(acc_state, frame) do
-          {:ok, next_state, frame_events} -> {:cont, {:ok, next_state, events ++ frame_events}}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
-      end)
-    else
-      {:ok, state, []}
+      false ->
+        {:ok, state, []}
     end
+  end
+
+  defp process_decoded_frames(state, buffer) do
+    {frames, rest} = Frame.decode(buffer)
+    state = %{state | buffer: rest}
+
+    Enum.reduce_while(frames, {:ok, state, []}, fn frame, {:ok, acc_state, events} ->
+      case process_frame(acc_state, frame) do
+        {:ok, next_state, frame_events} -> {:cont, {:ok, next_state, events ++ frame_events}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
   end
 
   @impl true

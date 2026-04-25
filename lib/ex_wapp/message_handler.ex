@@ -157,44 +157,51 @@ defmodule ExWapp.MessageHandler do
   defp extract_message_content(content, _type) when is_list(content) do
     enc_candidates = extract_enc_candidates(content)
 
-    case enc_candidates do
-      [%{enc_type: enc_type, enc_version: enc_version, ciphertext: ciphertext} | _] ->
-        %{
-          text: "(encrypted: #{enc_type})",
-          media: nil,
-          encrypted: true,
-          enc_type: enc_type,
-          enc_version: enc_version,
-          ciphertext: ciphertext,
-          enc_candidates: enc_candidates
-        }
-
-      [] ->
-        unavailable_node = find_child_node(content, "unavailable")
-
-        if unavailable_node do
-          %{
-            text: nil,
-            media: nil,
-            placeholder_unavailable: true,
-            unavailable_type: node_attr(unavailable_node, "type")
-          }
-        else
-          # Try to find plaintext body
-          body_node = find_child_node(content, "body")
-
-          case body_node do
-            %Node{content: body} when is_binary(body) ->
-              %{text: body, media: nil}
-
-            _ ->
-              %{text: nil, media: nil}
-          end
-        end
-    end
+    extract_list_message_content(content, enc_candidates)
   end
 
   defp extract_message_content(_, _), do: %{text: nil, media: nil}
+
+  defp extract_list_message_content(
+         _content,
+         [%{enc_type: enc_type, enc_version: enc_version, ciphertext: ciphertext} | _] =
+           enc_candidates
+       ) do
+    %{
+      text: "(encrypted: #{enc_type})",
+      media: nil,
+      encrypted: true,
+      enc_type: enc_type,
+      enc_version: enc_version,
+      ciphertext: ciphertext,
+      enc_candidates: enc_candidates
+    }
+  end
+
+  defp extract_list_message_content(content, []) do
+    case find_child_node(content, "unavailable") do
+      %Node{} = unavailable_node ->
+        %{
+          text: nil,
+          media: nil,
+          placeholder_unavailable: true,
+          unavailable_type: node_attr(unavailable_node, "type")
+        }
+
+      _ ->
+        extract_plain_body_content(content)
+    end
+  end
+
+  defp extract_plain_body_content(content) do
+    case find_child_node(content, "body") do
+      %Node{content: body} when is_binary(body) ->
+        %{text: body, media: nil}
+
+      _ ->
+        %{text: nil, media: nil}
+    end
+  end
 
   # ============================================================================
   # Notification Handling (History Sync, etc.)
@@ -1234,8 +1241,6 @@ defmodule ExWapp.MessageHandler do
     match?({:ok, _wrapped}, find_length_delimited_field(payload, 31))
   end
 
-  defp device_sent_message_payload?(_payload), do: false
-
   defp maybe_ingest_history_sync(
          %{message_content_type: :protocol, protocol_payload: payload},
          session,
@@ -1896,8 +1901,6 @@ defmodule ExWapp.MessageHandler do
     |> Enum.uniq()
   end
 
-  defp normalize_envelope_lid_mappings(_attrs, _from, _participant), do: []
-
   defp normalize_lid_mapping_pair(left, right) do
     left = normalize_jid(left)
     right = normalize_jid(right)
@@ -2027,9 +2030,7 @@ defmodule ExWapp.MessageHandler do
   defp resolve_stored_session_candidates(candidates, state) do
     signal_sessions = Map.get(state, :signal_sessions)
 
-    if not SessionStore.store?(signal_sessions) do
-      []
-    else
+    if SessionStore.store?(signal_sessions) do
       lid_mapping = Account.load_lid_mapping(Map.get(state, :store))
 
       related_bases =
@@ -2048,6 +2049,8 @@ defmodule ExWapp.MessageHandler do
         {explicit_candidate_rank(session_jid, candidates),
          -(SessionStore.session_touched_at(signal_sessions, session_jid) || 0)}
       end)
+    else
+      []
     end
   rescue
     _ -> []
@@ -2509,8 +2512,6 @@ defmodule ExWapp.MessageHandler do
   defp lid_jid?(jid) when is_binary(jid) do
     String.ends_with?(jid, "@lid") or String.ends_with?(jid, "@hosted.lid")
   end
-
-  defp lid_jid?(_), do: false
 
   @max_message_decode_depth 6
 
