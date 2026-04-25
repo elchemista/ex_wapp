@@ -970,6 +970,23 @@ defmodule ExWapp.Session.Worker do
     {:noreply, maybe_retry_outgoing_message(state, jid, message_id)}
   end
 
+  def handle_info({:request_placeholder_resend, chat_jid, sender_jid, message_id}, state) do
+    case Outbound.send_placeholder_resend_request_worker(
+           self(),
+           state,
+           chat_jid,
+           sender_jid,
+           message_id
+         ) do
+      {:ok, _request_id, sessions} when not is_nil(sessions) ->
+        persist_signal_sessions_store(state.store, sessions)
+        {:noreply, %{state | signal_sessions: sessions}}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
   def handle_info({:send_result, jid, text, {:ok, message_id}, strategy, attempt}, state) do
     state =
       state

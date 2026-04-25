@@ -97,6 +97,7 @@ defmodule ExWapp.MessageHandler do
     {message_data, state} = maybe_decrypt_message(message_data, state, from, participant, attrs)
     state = maybe_ingest_history_sync(message_data, session, state, from, id)
     state = maybe_ingest_app_state_keys(message_data, session, state)
+    state = maybe_ingest_placeholder_resend_response(message_data, session, state)
     from_me = inbound_from_me?(attrs, from, state, message_data)
 
     # Build message struct
@@ -169,15 +170,26 @@ defmodule ExWapp.MessageHandler do
         }
 
       [] ->
-        # Try to find plaintext body
-        body_node = find_child_node(content, "body")
+        unavailable_node = find_child_node(content, "unavailable")
 
-        case body_node do
-          %Node{content: body} when is_binary(body) ->
-            %{text: body, media: nil}
+        if unavailable_node do
+          %{
+            text: nil,
+            media: nil,
+            placeholder_unavailable: true,
+            unavailable_type: node_attr(unavailable_node, "type")
+          }
+        else
+          # Try to find plaintext body
+          body_node = find_child_node(content, "body")
 
-          _ ->
-            %{text: nil, media: nil}
+          case body_node do
+            %Node{content: body} when is_binary(body) ->
+              %{text: body, media: nil}
+
+            _ ->
+              %{text: nil, media: nil}
+          end
         end
     end
   end
@@ -1125,6 +1137,7 @@ defmodule ExWapp.MessageHandler do
   end
 
   defp transient_encrypted_placeholder?(%{encrypted: true, decrypt_status: {:error, _}}), do: true
+  defp transient_encrypted_placeholder?(%{placeholder_unavailable: true}), do: true
   defp transient_encrypted_placeholder?(_message_data), do: false
 
   defp maybe_log_suppressed_message(true, _suppress_message?, _from, _id, _message_data), do: :ok
@@ -1313,6 +1326,158 @@ defmodule ExWapp.MessageHandler do
 
   defp maybe_ingest_app_state_keys(_message_data, _session, state), do: state
 
+  defp maybe_ingest_placeholder_resend_response(
+         %{message_content_type: :protocol, protocol_payload: payload},
+         session,
+         state
+       )
+       when is_binary(payload) do
+    case extract_placeholder_resend_response(payload) do
+      {:ok, %{request_id: request_id, messages: recovered_messages}} ->
+        target = chat_target(session, state)
+
+        count =
+          recovered_messages
+          |> Enum.map(&ingest_recovered_placeholder_message(&1, target, session))
+          |> Enum.count(&(&1 == :ok))
+
+        if count > 0 do
+          Logger.debug(
+            "[PLACEHOLDER] Applied #{count} recovered message(s) from request=#{request_id}"
+          )
+        end
+
+        state
+
+      :not_placeholder_resend_response ->
+        state
+
+      {:error, reason} ->
+        Logger.warning("[PLACEHOLDER] Failed to parse resend response: #{inspect(reason)}")
+        state
+    end
+  rescue
+    error ->
+      Logger.warning("[PLACEHOLDER] Failed to ingest resend response: #{inspect(error)}")
+      state
+  end
+
+  defp maybe_ingest_placeholder_resend_response(_message_data, _session, state), do: state
+
+  defp extract_placeholder_resend_response(message_payload) do
+    with {:ok, message_fields} <- decode_wire_fields_safe(message_payload),
+         protocol_message when is_binary(protocol_message) <-
+           find_first_ld_field(message_fields, 12),
+         {:ok, protocol_fields} <- decode_wire_fields_safe(protocol_message),
+         17 <- find_first_varint_field(protocol_fields, 2),
+         peer_response when is_binary(peer_response) <- find_first_ld_field(protocol_fields, 17),
+         {:ok, response_fields} <- decode_wire_fields_safe(peer_response),
+         4 <- find_first_varint_field(response_fields, 1) do
+      request_id = find_first_ld_field(response_fields, 2) || ""
+
+      messages =
+        response_fields
+        |> find_all_ld_fields(3)
+        |> Enum.flat_map(&extract_placeholder_result_messages/1)
+
+      {:ok, %{request_id: request_id, messages: messages}}
+    else
+      nil -> :not_placeholder_resend_response
+      value when is_integer(value) -> :not_placeholder_resend_response
+      {:error, reason} -> {:error, reason}
+      _ -> :not_placeholder_resend_response
+    end
+  end
+
+  defp extract_placeholder_result_messages(result_payload) do
+    with {:ok, result_fields} <- decode_wire_fields_safe(result_payload),
+         placeholder_response when is_binary(placeholder_response) <-
+           find_first_ld_field(result_fields, 4),
+         {:ok, placeholder_fields} <- decode_wire_fields_safe(placeholder_response),
+         web_message_info when is_binary(web_message_info) <-
+           find_first_ld_field(placeholder_fields, 1),
+         {:ok, recovered} <- decode_recovered_web_message_info(web_message_info) do
+      [recovered]
+    else
+      _ -> []
+    end
+  end
+
+  defp decode_recovered_web_message_info(web_message_info) do
+    with {:ok, fields} <- decode_wire_fields_safe(web_message_info),
+         key_payload when is_binary(key_payload) <- find_first_ld_field(fields, 1),
+         message_payload when is_binary(message_payload) <- find_first_ld_field(fields, 2),
+         {:ok, key} <- decode_message_key_payload(key_payload) do
+      timestamp = find_first_varint_field(fields, 3)
+      participant = find_first_ld_field(fields, 5) || Map.get(key, :participant)
+      push_name = find_first_ld_field(fields, 19)
+
+      {:ok,
+       %{
+         key: key,
+         message_payload: message_payload,
+         timestamp: timestamp,
+         participant: participant,
+         push_name: push_name
+       }}
+    else
+      _ -> {:error, :invalid_web_message_info}
+    end
+  end
+
+  defp decode_message_key_payload(key_payload) do
+    with {:ok, fields} <- decode_wire_fields_safe(key_payload) do
+      {:ok,
+       %{
+         remote_jid: find_first_ld_field(fields, 1) || "",
+         from_me: find_first_varint_field(fields, 2) == 1,
+         id: find_first_ld_field(fields, 3) || "",
+         participant: find_first_ld_field(fields, 4)
+       }}
+    end
+  end
+
+  defp ingest_recovered_placeholder_message(
+         %{key: %{remote_jid: chat_jid, id: id} = key, message_payload: payload} = recovered,
+         target,
+         session
+       )
+       when is_binary(chat_jid) and chat_jid != "" and is_binary(id) and id != "" do
+    {content_type, decoded_text} = classify_decrypted_content(payload, 0)
+
+    if content_type == :protocol do
+      :skip
+    else
+      message = %{
+        id: id,
+        from_me: Map.get(key, :from_me, false),
+        timestamp: Map.get(recovered, :timestamp) || System.system_time(:second),
+        text: decoded_text,
+        status: if(Map.get(key, :from_me, false), do: :sent, else: :received),
+        participant: Map.get(recovered, :participant),
+        raw: %{
+          type: :placeholder_resend,
+          from_me: Map.get(key, :from_me, false),
+          media: nil,
+          push_name: Map.get(recovered, :push_name)
+        }
+      }
+
+      if target do
+        maybe_update_chat_name(target, chat_jid, %{"notify" => Map.get(recovered, :push_name)})
+        Chat.add_message(target, chat_jid, message)
+      end
+
+      if is_pid(session) do
+        send(session, {:new_message, chat_jid, message})
+      end
+
+      :ok
+    end
+  end
+
+  defp ingest_recovered_placeholder_message(_recovered, _target, _session), do: :skip
+
   defp store_app_state_keys(state, keys) when is_list(keys) do
     store = Map.get(state, :store)
 
@@ -1456,6 +1621,20 @@ defmodule ExWapp.MessageHandler do
   defp find_first_ld_field(fields, field_num) when is_list(fields) do
     Enum.find_value(fields, fn
       {^field_num, 2, value} when is_binary(value) -> value
+      _ -> nil
+    end)
+  end
+
+  defp find_all_ld_fields(fields, field_num) when is_list(fields) do
+    Enum.flat_map(fields, fn
+      {^field_num, 2, value} when is_binary(value) -> [value]
+      _ -> []
+    end)
+  end
+
+  defp find_first_varint_field(fields, field_num) when is_list(fields) do
+    Enum.find_value(fields, fn
+      {^field_num, 0, value} when is_integer(value) -> value
       _ -> nil
     end)
   end
@@ -2132,6 +2311,7 @@ defmodule ExWapp.MessageHandler do
 
     actions =
       signal_sessions_update_actions(message_data) ++
+        placeholder_resend_actions(from, id, participant, retry_count, message_data) ++
         [
           {:send_retry_receipt, from, id, participant, Map.get(attrs, "t"), retry_count,
            retry_reason_code, retry_meta}
@@ -2146,9 +2326,19 @@ defmodule ExWapp.MessageHandler do
 
     actions =
       signal_sessions_update_actions(message_data) ++
+        placeholder_resend_actions(from, id, participant, 1, message_data) ++
         [{:send_receipt, from, id, participant, receipt_type, receipt_meta}]
 
     {actions, state}
+  end
+
+  defp placeholder_resend_actions(from, id, participant, retry_count, message_data) do
+    if needs_placeholder_resend_request?(message_data) and retry_count == 1 do
+      sender = if is_binary(participant) and participant != "", do: participant, else: from
+      [{:request_placeholder_resend, strip_device_from_jid(from), sender, id}]
+    else
+      []
+    end
   end
 
   defp delivery_receipt_type(from, attrs, state) do
@@ -2182,6 +2372,18 @@ defmodule ExWapp.MessageHandler do
 
   defp needs_retry_receipt?(%{decrypt_status: {:error, _}}), do: true
   defp needs_retry_receipt?(_), do: false
+
+  defp needs_placeholder_resend_request?(%{placeholder_unavailable: true}), do: true
+
+  defp needs_placeholder_resend_request?(%{
+         decrypt_status: {:error, reason},
+         encrypted: true
+       }) do
+    reason in [:no_ciphertext_candidates, :no_payload_candidates] or
+      match?({:decrypt_failed_for_payload, _, _}, reason)
+  end
+
+  defp needs_placeholder_resend_request?(_), do: false
 
   defp signal_sessions_update_actions(%{signal_sessions_update: sessions}) do
     if SessionStore.store?(sessions), do: [{:signal_sessions_updated, sessions}], else: []

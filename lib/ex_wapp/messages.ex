@@ -31,7 +31,16 @@ defmodule ExWapp.Messages do
   require Logger
 
   alias ExWapp.{Binary, Chat, Conn, JID}
-  alias ExWapp.Proto.{Message, ExtendedTextMessage, ContextInfo}
+
+  alias ExWapp.Proto.{
+    ContextInfo,
+    ExtendedTextMessage,
+    Message,
+    MessageKey,
+    PeerDataOperationRequestMessage,
+    PlaceholderMessageResendRequest,
+    ProtocolMessage
+  }
 
   @type send_opts :: [
           quoted_id: String.t(),
@@ -144,6 +153,42 @@ defmodule ExWapp.Messages do
   end
 
   @doc """
+  Builds a peer-data placeholder resend request for an undecryptable message.
+  """
+  @spec build_placeholder_resend_proto(String.t(), String.t() | nil, String.t()) :: Message.t()
+  def build_placeholder_resend_proto(chat_jid, sender_jid, message_id) do
+    %Message{
+      protocolMessage: %ProtocolMessage{
+        type: :PEER_DATA_OPERATION_REQUEST_MESSAGE,
+        peerDataOperationRequestMessage: %PeerDataOperationRequestMessage{
+          peerDataOperationRequestType: :PLACEHOLDER_MESSAGE_RESEND,
+          placeholderMessageResendRequest: [
+            %PlaceholderMessageResendRequest{
+              messageKey: build_message_key(chat_jid, sender_jid, message_id)
+            }
+          ]
+        }
+      }
+    }
+  end
+
+  @doc """
+  Builds a message key for referring to an existing WhatsApp message.
+  """
+  @spec build_message_key(String.t(), String.t() | nil, String.t()) :: MessageKey.t()
+  def build_message_key(chat_jid, sender_jid, message_id) do
+    sender_jid = normalize_optional_jid(sender_jid)
+    chat_jid = normalize_optional_jid(chat_jid)
+
+    %MessageKey{
+      remoteJID: chat_jid,
+      fromMe: false,
+      id: message_id,
+      participant: message_key_participant(chat_jid, sender_jid)
+    }
+  end
+
+  @doc """
   Builds context info for replies and mentions.
   """
   @spec build_context_info(send_opts()) :: ContextInfo.t() | nil
@@ -162,6 +207,32 @@ defmodule ExWapp.Messages do
       nil
     end
   end
+
+  defp message_key_participant(chat_jid, sender_jid) do
+    cond do
+      sender_jid == "" ->
+        nil
+
+      JID.group?(chat_jid) ->
+        strip_device(sender_jid)
+
+      true ->
+        nil
+    end
+  end
+
+  defp normalize_optional_jid(%JID{} = jid), do: JID.to_string(jid) |> normalize_optional_jid()
+
+  defp normalize_optional_jid(jid) when is_binary(jid) do
+    jid
+    |> String.trim()
+    |> String.replace("@whatsapp.net", "@s.whatsapp.net")
+  end
+
+  defp normalize_optional_jid(_), do: ""
+
+  defp strip_device(jid) when is_binary(jid), do: String.replace(jid, ~r/:(\d+)@/, "@")
+  defp strip_device(_), do: ""
 
   @doc """
   Builds the binary XML node for a message.

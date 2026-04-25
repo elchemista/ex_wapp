@@ -277,11 +277,13 @@ defmodule ExWapp.Proto.ProtocolMessage do
 
   defstruct key: nil,
             type: nil,
+            peerDataOperationRequestMessage: nil,
             __uf__: []
 
   @type t :: %__MODULE__{
           key: ExWapp.Proto.MessageKey.t() | nil,
           type: atom() | nil,
+          peerDataOperationRequestMessage: ExWapp.Proto.PeerDataOperationRequestMessage.t() | nil,
           __uf__: list()
         }
 
@@ -290,6 +292,7 @@ defmodule ExWapp.Proto.ProtocolMessage do
     []
     |> encode_key(msg)
     |> encode_type(msg)
+    |> encode_peer_data_operation_request_message(msg)
     |> IO.iodata_to_binary()
   end
 
@@ -313,7 +316,120 @@ defmodule ExWapp.Proto.ProtocolMessage do
   defp type_to_int(:REVOKE), do: 0
   defp type_to_int(:EPHEMERAL_SETTING), do: 3
   defp type_to_int(:MESSAGE_EDIT), do: 14
+  defp type_to_int(:PEER_DATA_OPERATION_REQUEST_MESSAGE), do: 16
   defp type_to_int(_), do: 0
+
+  # Field 16: peerDataOperationRequestMessage
+  defp encode_peer_data_operation_request_message(
+         acc,
+         %{peerDataOperationRequestMessage: nil}
+       ),
+       do: acc
+
+  defp encode_peer_data_operation_request_message(
+         acc,
+         %{peerDataOperationRequestMessage: value}
+       ) do
+    encoded = ExWapp.Proto.PeerDataOperationRequestMessage.encode!(value)
+    len = byte_size(encoded)
+    [acc, <<0x82, 0x01>>, encode_varint(len), encoded]
+  end
+
+  defp encode_varint(n) when n < 128, do: <<n::8>>
+
+  defp encode_varint(n) do
+    <<1::1, n::7, encode_varint(n >>> 7)::binary>>
+  end
+end
+
+defmodule ExWapp.Proto.PeerDataOperationRequestMessage do
+  import Bitwise
+
+  @moduledoc """
+  Peer-data operation request message.
+
+  This currently covers the placeholder-message resend request used to ask the
+  primary device for a copy of an undecryptable placeholder/ciphertext message.
+  """
+
+  defstruct peerDataOperationRequestType: nil,
+            placeholderMessageResendRequest: [],
+            __uf__: []
+
+  @type t :: %__MODULE__{
+          peerDataOperationRequestType: atom() | nil,
+          placeholderMessageResendRequest: [ExWapp.Proto.PlaceholderMessageResendRequest.t()],
+          __uf__: list()
+        }
+
+  @spec encode!(struct()) :: binary()
+  def encode!(msg) do
+    []
+    |> encode_peer_data_operation_request_type(msg)
+    |> encode_placeholder_message_resend_request(msg)
+    |> IO.iodata_to_binary()
+  end
+
+  # Field 1: peerDataOperationRequestType
+  defp encode_peer_data_operation_request_type(acc, %{peerDataOperationRequestType: nil}),
+    do: acc
+
+  defp encode_peer_data_operation_request_type(acc, %{peerDataOperationRequestType: value}) do
+    [acc, <<0x08>>, encode_varint(peer_data_operation_request_type_to_int(value))]
+  end
+
+  # Field 5: repeated placeholderMessageResendRequest
+  defp encode_placeholder_message_resend_request(acc, %{placeholderMessageResendRequest: values})
+       when is_list(values) do
+    Enum.reduce(values, acc, fn value, encoded_acc ->
+      encoded = ExWapp.Proto.PlaceholderMessageResendRequest.encode!(value)
+      len = byte_size(encoded)
+      [encoded_acc, <<0x2A>>, encode_varint(len), encoded]
+    end)
+  end
+
+  defp encode_placeholder_message_resend_request(acc, _), do: acc
+
+  defp peer_data_operation_request_type_to_int(:PLACEHOLDER_MESSAGE_RESEND), do: 4
+  defp peer_data_operation_request_type_to_int(_), do: 0
+
+  defp encode_varint(n) when n < 128, do: <<n::8>>
+
+  defp encode_varint(n) do
+    <<1::1, n::7, encode_varint(n >>> 7)::binary>>
+  end
+end
+
+defmodule ExWapp.Proto.PlaceholderMessageResendRequest do
+  import Bitwise
+
+  @moduledoc """
+  Placeholder-message resend request wrapper.
+  """
+
+  defstruct messageKey: nil,
+            __uf__: []
+
+  @type t :: %__MODULE__{
+          messageKey: ExWapp.Proto.MessageKey.t() | nil,
+          __uf__: list()
+        }
+
+  @spec encode!(struct()) :: binary()
+  def encode!(msg) do
+    []
+    |> encode_message_key(msg)
+    |> IO.iodata_to_binary()
+  end
+
+  # Field 1: messageKey
+  defp encode_message_key(acc, %{messageKey: nil}), do: acc
+
+  defp encode_message_key(acc, %{messageKey: value}) do
+    encoded = ExWapp.Proto.MessageKey.encode!(value)
+    len = byte_size(encoded)
+    [acc, <<0x0A>>, encode_varint(len), encoded]
+  end
 
   defp encode_varint(n) when n < 128, do: <<n::8>>
 
