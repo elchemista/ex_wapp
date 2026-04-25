@@ -51,6 +51,12 @@ defmodule ExWapp.Session do
   @spec unsubscribe_qr(GenServer.server(), reference()) :: :ok
   defdelegate unsubscribe_qr(server, ref), to: Worker
 
+  @spec subscribe_messages(GenServer.server()) :: {:ok, reference()}
+  defdelegate subscribe_messages(server), to: Worker
+
+  @spec unsubscribe_messages(GenServer.server(), reference()) :: :ok
+  defdelegate unsubscribe_messages(server, ref), to: Worker
+
   @spec send_text(GenServer.server(), binary(), iodata()) :: :ok | {:error, term()}
   defdelegate send_text(server, jid, text), to: Worker
 

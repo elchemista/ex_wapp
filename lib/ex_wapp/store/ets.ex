@@ -100,7 +100,11 @@ defmodule ExWapp.Store.Ets do
 
   @impl true
   @spec load(t()) :: {:ok, ExWapp.Store.data()} | {:error, term()}
-  def load(%__MODULE__{table: table, signal_table: signal_table, device_cache_table: device_cache_table}) do
+  def load(%__MODULE__{
+        table: table,
+        signal_table: signal_table,
+        device_cache_table: device_cache_table
+      }) do
     case :ets.lookup(table, :data) do
       [{:data, data}] ->
         {:ok,
@@ -135,7 +139,12 @@ defmodule ExWapp.Store.Ets do
 
   @impl true
   @spec clear(t()) :: :ok
-  def clear(%__MODULE__{path: path, table: table, signal_table: signal_table, device_cache_table: device_cache_table}) do
+  def clear(%__MODULE__{
+        path: path,
+        table: table,
+        signal_table: signal_table,
+        device_cache_table: device_cache_table
+      }) do
     :ets.insert(table, {:data, %{}})
     :ets.delete_all_objects(signal_table)
     :ets.insert(device_cache_table, {:snapshot, %{}})
@@ -210,7 +219,11 @@ defmodule ExWapp.Store.Ets do
     }
   end
 
-  defp merged_snapshot(%__MODULE__{table: table, signal_table: signal_table, device_cache_table: device_cache_table}) do
+  defp merged_snapshot(%__MODULE__{
+         table: table,
+         signal_table: signal_table,
+         device_cache_table: device_cache_table
+       }) do
     base_data =
       case :ets.lookup(table, :data) do
         [{:data, data}] -> data

@@ -74,7 +74,11 @@ defmodule ExWapp.Store.Memory do
 
   @spec persist_signal_sessions(t(), term()) :: :ok
   def persist_signal_sessions(%__MODULE__{agent: agent}, sessions) do
-    Agent.update(agent, &Map.put(&1, :signal_sessions, ExWapp.Signal.SessionStore.snapshot(sessions)))
+    Agent.update(
+      agent,
+      &Map.put(&1, :signal_sessions, ExWapp.Signal.SessionStore.snapshot(sessions))
+    )
+
     :ok
   end
 

@@ -47,8 +47,16 @@ defmodule ExWapp.Session.DeviceCache do
       lid_mapping = Account.load_lid_mapping(store)
       cache = Store.load_device_cache(store)
       base_jid = JIDUtils.strip_device(normalized_jid)
+
       updated_cache =
-        put_devices(cache, base_jid, [normalized_jid], lid_mapping, now_ms, @default_touch_throttle_ms)
+        put_devices(
+          cache,
+          base_jid,
+          [normalized_jid],
+          lid_mapping,
+          now_ms,
+          @default_touch_throttle_ms
+        )
 
       persist_if_changed(store, cache, updated_cache)
     end
@@ -63,7 +71,9 @@ defmodule ExWapp.Session.DeviceCache do
     lid_mapping = Account.load_lid_mapping(store)
     cache = Store.load_device_cache(store)
     now_ms = System.system_time(:millisecond)
-    max_age_ms = Config.get(runtime_cfg || %{}, [:signal, :device_cache_max_age_ms], @default_max_age_ms)
+
+    max_age_ms =
+      Config.get(runtime_cfg || %{}, [:signal, :device_cache_max_age_ms], @default_max_age_ms)
 
     aliases = JIDUtils.related_bases(base_jid, lid_mapping)
 
@@ -136,7 +146,11 @@ defmodule ExWapp.Session.DeviceCache do
       if updated_devices == existing_devices do
         acc
       else
-        Map.put(acc, related_base, %{existing_entry | devices: updated_devices, updated_at_ms: now_ms})
+        Map.put(acc, related_base, %{
+          existing_entry
+          | devices: updated_devices,
+            updated_at_ms: now_ms
+        })
       end
     end)
   end

@@ -10,6 +10,8 @@
 # Where third-party dependencies like ExDoc output generated docs.
 /doc/
 
+/ex_wapp_old_code/
+
 .elixir_ls/
 
 .codex/

@@ -1,36 +1,14 @@
 defmodule ExWapp.Messages do
   @moduledoc """
-  High-level helpers for constructing and sending WhatsApp messages.
+  Helpers for constructing WhatsApp message protocol payloads and nodes.
 
   This module handles:
   - Message ID generation
   - Message node construction
   - Protobuf payload encoding
-  - Message routing (direct, group, broadcast)
-
-  ## Message Flow
-
-      1. User calls send_text/3
-      2. Message proto is built and encoded
-      3. Binary node is constructed with proper attributes
-      4. Signal encryption is applied (when implemented)
-      5. Node is sent via the connection
-
-  ## Example
-
-      # Simple text message
-      ExWapp.Messages.send_text(session, "1234567890@s.whatsapp.net", "Hello!")
-
-      # Reply to a message
-      ExWapp.Messages.send_text(session, jid, "Reply text",
-        quoted_id: "ABC123",
-        quoted_participant: "sender@s.whatsapp.net"
-      )
   """
 
-  require Logger
-
-  alias ExWapp.{Binary, Chat, Conn, JID}
+  alias ExWapp.{Binary, JID}
 
   alias ExWapp.Proto.{
     ContextInfo,
@@ -82,50 +60,6 @@ defmodule ExWapp.Messages do
     <<first_9::binary-size(9), _rest::binary>> = :crypto.hash(:sha256, data)
 
     @web_message_id_prefix <> Base.encode16(first_9, case: :upper)
-  end
-
-  @doc """
-  Sends a text message to a JID.
-
-  ## Options
-
-    * `:quoted_id` - ID of message to reply to
-    * `:quoted_participant` - JID of quoted message sender (for groups)
-    * `:mentions` - List of JIDs to mention
-
-  ## Returns
-
-    * `{:ok, message_id}` - Message was queued for sending
-    * `{:error, reason}` - Failed to send
-  """
-  @spec send_text(pid(), String.t(), String.t(), send_opts()) ::
-          {:ok, String.t()} | {:error, term()}
-  def send_text(session, jid, text, opts \\ [])
-      when is_pid(session) and is_binary(jid) and is_binary(text) do
-    message_id = generate_id()
-    timestamp = System.system_time(:second)
-
-    # Build the message proto
-    proto = build_text_proto(text, opts)
-
-    # Encode to protobuf binary
-    case Message.encode(proto) do
-      {:ok, payload} ->
-        # Build the binary node
-        node = build_message_node(jid, message_id, payload, timestamp, opts)
-
-        # Record the outgoing message
-        record_outgoing(session, jid, message_id, text, timestamp)
-
-        # Send via connection
-        case send_node(session, node) do
-          :ok -> {:ok, message_id}
-          error -> error
-        end
-
-      {:error, reason} ->
-        {:error, {:proto_encode, reason}}
-    end
   end
 
   @doc """
@@ -269,38 +203,6 @@ defmodule ExWapp.Messages do
   end
 
   @doc """
-  Sends a read receipt for messages.
-  """
-  @spec send_read_receipt(pid(), String.t(), [String.t()]) :: :ok | {:error, term()}
-  def send_read_receipt(session, jid, message_ids) when is_list(message_ids) do
-    node = build_receipt_node(jid, message_ids, "read")
-    send_node(session, node)
-  end
-
-  @doc """
-  Sends a delivery receipt for a message.
-  """
-  @spec send_delivery_receipt(pid(), String.t(), String.t(), String.t() | nil) ::
-          :ok | {:error, term()}
-  def send_delivery_receipt(session, jid, message_id, participant \\ nil) do
-    attrs = %{
-      "id" => message_id,
-      "to" => jid,
-      "type" => "delivery"
-    }
-
-    attrs = if participant, do: Map.put(attrs, "participant", participant), else: attrs
-
-    node = %Binary.Node{
-      tag: "receipt",
-      attrs: attrs,
-      content: nil
-    }
-
-    send_node(session, node)
-  end
-
-  @doc """
   Builds a receipt node for read/played acknowledgments.
   """
   @spec build_receipt_node(String.t(), [String.t()], String.t()) :: Binary.Node.t()
@@ -364,39 +266,5 @@ defmodule ExWapp.Messages do
         }
       ]
     }
-  end
-
-  # ============================================================================
-  # Internal Helpers
-  # ============================================================================
-
-  defp send_node(session, node) do
-    try do
-      conn = GenServer.call(session, :get_conn)
-
-      if conn && Process.alive?(conn) do
-        Conn.send_node(conn, node)
-      else
-        {:error, :not_connected}
-      end
-    catch
-      :exit, _ -> {:error, :session_unavailable}
-    end
-  end
-
-  defp record_outgoing(session, jid, message_id, text, timestamp) do
-    message = %{
-      id: message_id,
-      from_me: true,
-      timestamp: timestamp,
-      text: text,
-      status: :pending,
-      participant: nil,
-      raw: nil
-    }
-
-    Chat.add_message(session, jid, message)
-  rescue
-    _ -> :ok
   end
 end

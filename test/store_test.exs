@@ -45,7 +45,10 @@ defmodule ExWapp.StoreTest do
 
       payload = %{noise: %{client_static: <<1, 2, 3>>}}
       assert :ok = Store.persist(store, payload)
-      assert {:ok, ^payload} = Store.load(store)
+      assert {:ok, loaded} = Store.load(store)
+      assert loaded.noise == payload.noise
+      assert loaded.signal_sessions
+      assert loaded.device_cache == %{}
     end
 
     test "migrates legacy ETS files on load" do
@@ -67,7 +70,7 @@ defmodule ExWapp.StoreTest do
       path = Path.join(@tmp_dir, "codec_load_path.etf")
 
       payload = %{
-        pairing: %{jid: "393519534944@s.whatsapp.net"},
+        pairing: %{jid: "15550009999@s.whatsapp.net"},
         signal: %{prekeys: %{1 => <<1, 2, 3>>}}
       }
 

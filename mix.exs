@@ -20,11 +20,11 @@ defmodule ExWapp.MixProject do
 
   defp deps do
     [
-      {:phoenix_pubsub, "~> 2.1"},
-      {:websockex, "~> 0.4"},
       {:ed25519, "~> 1.4"},
       {:protox, "~> 1.7"},
+      {:phoenix_pubsub, "~> 2.1"},
       {:telemetry, "~> 1.2"},
+      {:websockex, "~> 0.4"},
       {:qr_code, "~> 3.2.0"},
       {:credo, "~> 1.6", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.3", only: [:dev, :test], runtime: false}

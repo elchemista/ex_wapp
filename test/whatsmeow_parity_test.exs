@@ -266,7 +266,7 @@ defmodule ExWapp.WhatsmeowParityTest do
   end
 
   test "history sync collections are reflected in chat/group metadata" do
-    {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
+    store = ExWapp.Store.Memory.new(initial_data: %{chats: %{}})
 
     notification = %Node{
       tag: "notification",
@@ -323,9 +323,16 @@ defmodule ExWapp.WhatsmeowParityTest do
       ]
     }
 
-    send(session, {:connection_event, {:connection_message, notification}})
+    initial_state = %{
+      store: store,
+      signal_sessions: SessionStore.new(),
+      stats: %{messages_received: 0}
+    }
 
-    chats = wait_for_chats(session, 2)
+    assert {:ok, _state_after, _actions} =
+             MessageHandler.handle_node(notification, self(), initial_state)
+
+    chats = ExWapp.Chat.list(store)
 
     alice = Enum.find(chats, &(&1.jid == "111111111@s.whatsapp.net"))
     assert alice
@@ -347,14 +354,12 @@ defmodule ExWapp.WhatsmeowParityTest do
     assert group.muted_until == 1_730_001_234
     assert group.is_group
 
-    groups = ExWapp.list_groups(session)
+    groups = ExWapp.Chat.list_groups(store)
     assert Enum.map(groups, & &1.jid) == ["123456789@g.us"]
-
-    GenServer.stop(session)
   end
 
   test "group create notifications upsert group chats" do
-    {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
+    store = ExWapp.Store.Memory.new(initial_data: %{chats: %{}})
 
     notification = %Node{
       tag: "notification",
@@ -382,10 +387,16 @@ defmodule ExWapp.WhatsmeowParityTest do
       ]
     }
 
-    send(session, {:connection_event, {:connection_message, notification}})
+    initial_state = %{
+      store: store,
+      signal_sessions: SessionStore.new(),
+      stats: %{messages_received: 0}
+    }
 
-    _chats = wait_for_chats(session, 1)
-    groups = wait_for_groups(session, 1)
+    assert {:ok, _state_after, _actions} =
+             MessageHandler.handle_node(notification, self(), initial_state)
+
+    groups = ExWapp.Chat.list_groups(store)
 
     assert length(groups) == 1
     group = hd(groups)
@@ -393,8 +404,6 @@ defmodule ExWapp.WhatsmeowParityTest do
     assert group.name == "Project Squad"
     assert group.last_message_timestamp == 1_730_000_200
     assert group.is_group
-
-    GenServer.stop(session)
   end
 
   test "protocol history sync inline payload populates chat and group metadata" do
@@ -886,34 +895,4 @@ defmodule ExWapp.WhatsmeowParityTest do
   defp boolean_to_int(true), do: 1
   defp boolean_to_int(false), do: 0
   defp boolean_to_int(_), do: nil
-
-  defp wait_for_groups(session, expected_count, attempts \\ 20)
-
-  defp wait_for_groups(session, _expected_count, 0), do: ExWapp.list_groups(session)
-
-  defp wait_for_groups(session, expected_count, attempts) do
-    groups = ExWapp.list_groups(session)
-
-    if length(groups) >= expected_count do
-      groups
-    else
-      Process.sleep(25)
-      wait_for_groups(session, expected_count, attempts - 1)
-    end
-  end
-
-  defp wait_for_chats(session, expected_count, attempts \\ 20)
-
-  defp wait_for_chats(session, _expected_count, 0), do: ExWapp.list_chats(session)
-
-  defp wait_for_chats(session, expected_count, attempts) do
-    chats = ExWapp.list_chats(session)
-
-    if length(chats) >= expected_count do
-      chats
-    else
-      Process.sleep(25)
-      wait_for_chats(session, expected_count, attempts - 1)
-    end
-  end
 end
