@@ -1,15 +1,18 @@
 # credo:disable-for-this-file
 defmodule ExWapp.Contact do
   @moduledoc """
-  Contact struct and local CRUD operations.
+  Public contact struct and CRUD helpers backed by the configured store.
 
-  Contact data is populated from:
-  - App state sync patches (field "contact" in critical_unblock_low)
-  - Incoming message notify attribute (push name)
-  - History sync data
+  Contacts are populated from several protocol paths:
+  - App state sync patches (`contact` mutations in `critical_unblock_low`)
+  - Incoming message notify attributes (`push_name`)
+  - History sync payloads restored during session bootstrap
+
+  The store/update details live in `lib/ex_wapp/domains/contacts/` so this
+  module can stay focused on the public API.
   """
 
-  alias ExWapp.Store
+  alias ExWapp.Domains.Contacts.Repository
 
   defstruct [
     :jid,
@@ -31,127 +34,46 @@ defmodule ExWapp.Contact do
           phone_number: String.t() | nil
         }
 
-  @doc "List all contacts from the store."
+  @doc """
+  Lists all contacts currently persisted in the store.
+  """
   @spec list(struct()) :: [t()]
-  def list(store) do
-    data = Store.load!(store)
-    contacts = Map.get(data, :contacts, %{})
-    Map.values(contacts)
-  end
+  def list(store), do: Repository.list(store)
 
-  @doc "Get a contact by JID."
+  @doc """
+  Fetches a contact by JID after normalizing legacy aliases.
+  """
   @spec get(struct(), String.t()) :: t() | nil
-  def get(store, jid) do
-    data = Store.load!(store)
-    contacts = Map.get(data, :contacts, %{})
-    normalized = normalize_jid(jid)
-    Map.get(contacts, normalized) || find_legacy_contact(contacts, normalized)
-  end
+  def get(store, jid), do: Repository.get(store, jid)
 
-  @doc "Put (create or update) a contact."
+  @doc """
+  Creates or replaces a contact entry.
+
+  The stored contact JID is normalized so callers can use older forms like
+  `+1555@whatsapp.net` and still end up with one canonical key.
+  """
   @spec put(struct(), String.t(), t()) :: :ok
-  def put(store, jid, %__MODULE__{} = contact) do
-    data = Store.load!(store)
-    normalized = normalize_jid(jid)
-    contacts = data |> Map.get(:contacts, %{}) |> remove_contact_aliases(normalized)
-    contact = %{contact | jid: normalized, phone_number: extract_phone(normalized)}
-    Store.persist(store, Map.put(data, :contacts, Map.put(contacts, normalized, contact)))
-  end
+  def put(store, jid, %__MODULE__{} = contact), do: Repository.put(store, jid, contact)
 
-  @doc "Delete a contact by JID."
+  @doc """
+  Deletes a contact and any normalized aliases that point to the same JID.
+  """
   @spec delete(struct(), String.t()) :: :ok
-  def delete(store, jid) do
-    data = Store.load!(store)
-    normalized = normalize_jid(jid)
-    contacts = data |> Map.get(:contacts, %{}) |> remove_contact_aliases(normalized)
-    Store.persist(store, Map.put(data, :contacts, contacts))
-  end
+  def delete(store, jid), do: Repository.delete(store, jid)
 
-  @doc "Update push name for a contact (from incoming message notify attr)."
+  @doc """
+  Updates the push name learned from incoming message metadata.
+
+  When the contact does not exist yet, a minimal placeholder contact is created
+  so later sync patches can enrich it.
+  """
   @spec update_push_name(struct(), String.t(), String.t()) :: :ok
-  def update_push_name(store, jid, name) when is_binary(name) and name != "" do
-    normalized = normalize_jid(jid)
-    data = Store.load!(store)
-    contacts = Map.get(data, :contacts, %{})
+  def update_push_name(store, jid, name), do: Repository.update_push_name(store, jid, name)
 
-    existing =
-      Map.get(contacts, normalized) || find_legacy_contact(contacts, normalized) ||
-        %__MODULE__{jid: normalized}
-
-    contacts = remove_contact_aliases(contacts, normalized)
-    updated = %{existing | push_name: name, phone_number: extract_phone(normalized)}
-
-    Store.persist(store, Map.put(data, :contacts, Map.put(contacts, normalized, updated)))
-  end
-
-  def update_push_name(_store, _jid, _name), do: :ok
-
-  @doc "Merge contact data from an app state sync ContactAction."
+  @doc """
+  Merges app-state contact fields into the locally stored contact.
+  """
   @spec merge_from_sync(struct(), String.t(), map()) :: :ok
-  def merge_from_sync(store, jid, contact_action) when is_map(contact_action) do
-    normalized = normalize_jid(jid)
-    data = Store.load!(store)
-    contacts = Map.get(data, :contacts, %{})
-
-    existing =
-      Map.get(contacts, normalized) || find_legacy_contact(contacts, normalized) ||
-        %__MODULE__{jid: normalized}
-
-    contacts = remove_contact_aliases(contacts, normalized)
-
-    updated =
-      existing
-      |> maybe_set(:full_name, Map.get(contact_action, :full_name))
-      |> maybe_set(:first_name, Map.get(contact_action, :first_name))
-      |> maybe_set(:lid, Map.get(contact_action, :lid_jid))
-      |> maybe_set(:username, Map.get(contact_action, :username))
-      |> Map.put(:phone_number, extract_phone(normalized))
-
-    Store.persist(store, Map.put(data, :contacts, Map.put(contacts, normalized, updated)))
-  end
-
-  def merge_from_sync(_store, _jid, _contact_action), do: :ok
-
-  defp maybe_set(contact, _key, nil), do: contact
-  defp maybe_set(contact, key, value), do: Map.put(contact, key, value)
-
-  defp normalize_jid(jid) when is_binary(jid) do
-    jid = String.trim(jid)
-
-    case String.split(jid, "@", parts: 2) do
-      [user, domain] ->
-        normalized_domain =
-          case String.downcase(domain) do
-            "whatsapp.net" -> "s.whatsapp.net"
-            "s.whatsapp.net" -> "s.whatsapp.net"
-            other -> other
-          end
-
-        "#{String.trim_leading(user, "+")}@#{normalized_domain}"
-
-      [user] ->
-        "#{String.trim_leading(user, "+")}@s.whatsapp.net"
-    end
-  end
-
-  defp normalize_jid(jid), do: jid |> to_string() |> normalize_jid()
-
-  defp find_legacy_contact(contacts, normalized) when is_map(contacts) do
-    Enum.find_value(contacts, fn {jid, contact} ->
-      if normalize_jid(jid) == normalized, do: contact
-    end)
-  end
-
-  defp remove_contact_aliases(contacts, normalized) when is_map(contacts) do
-    contacts
-    |> Enum.reject(fn {jid, _contact} -> normalize_jid(jid) == normalized end)
-    |> Map.new()
-  end
-
-  defp extract_phone(jid) when is_binary(jid) do
-    case String.split(jid, "@", parts: 2) do
-      [user, _domain] when user != "" -> user
-      _ -> nil
-    end
-  end
+  def merge_from_sync(store, jid, contact_action),
+    do: Repository.merge_from_sync(store, jid, contact_action)
 end

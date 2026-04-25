@@ -60,6 +60,18 @@ defmodule ExWapp.Session do
   @spec send_text(GenServer.server(), binary(), iodata()) :: {:ok, String.t()} | {:error, term()}
   defdelegate send_text(server, jid, text), to: Worker
 
+  @spec send_image(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  defdelegate send_image(server, jid, source, opts \\ []), to: Worker
+
+  @spec send_audio(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  defdelegate send_audio(server, jid, source, opts \\ []), to: Worker
+
+  @spec download_media(GenServer.server(), ExWapp.Media.Ref.t(), keyword()) ::
+          {:ok, ExWapp.Media.Download.t()} | {:error, term()}
+  defdelegate download_media(server, ref, opts \\ []), to: Worker
+
   @spec pause_sends(GenServer.server()) :: :ok
   defdelegate pause_sends(server), to: Worker
 

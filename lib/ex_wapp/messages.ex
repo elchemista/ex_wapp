@@ -8,7 +8,7 @@ defmodule ExWapp.Messages do
   - Protobuf payload encoding
   """
 
-  alias ExWapp.{Binary, JID}
+  alias ExWapp.{Binary, JID, Media}
 
   alias ExWapp.Proto.{
     ContextInfo,
@@ -20,6 +20,9 @@ defmodule ExWapp.Messages do
     ProtocolMessage
   }
 
+  @typedoc """
+  Shared outbound send options used when building protobuf payloads.
+  """
   @type send_opts :: [
           quoted_id: String.t(),
           quoted_participant: String.t(),
@@ -64,6 +67,9 @@ defmodule ExWapp.Messages do
 
   @doc """
   Builds a text message protobuf.
+
+  WhatsApp uses a simpler `conversation` field for plain text, but switches to
+  `extendedTextMessage` as soon as reply metadata or mentions are present.
   """
   @spec build_text_proto(String.t(), send_opts()) :: Message.t()
   def build_text_proto(text, opts \\ []) do
@@ -84,6 +90,64 @@ defmodule ExWapp.Messages do
       # Simple conversation message
       %Message{conversation: text}
     end
+  end
+
+  @doc """
+  Builds an image message protobuf from uploaded media metadata.
+
+  The upload struct already contains the cryptographic hashes, CDN URL, media
+  key, and direct path returned by WhatsApp. This function only maps that data
+  into the protobuf fields expected by the E2E message payload.
+  """
+  @spec build_image_proto(Media.Upload.t(), keyword()) :: Message.t()
+  def build_image_proto(%Media.Upload{} = upload, opts \\ []) do
+    %Message{
+      imageMessage: %ExWapp.Proto.ImageMessage{
+        # These fields are the server-issued media reference the recipient will use
+        # to download and verify the encrypted payload.
+        URL: upload.url,
+        mimetype: Keyword.get(opts, :mimetype, "image/jpeg"),
+        caption: Keyword.get(opts, :caption),
+        fileSHA256: upload.file_sha256,
+        fileLength: upload.file_length,
+        height: Keyword.get(opts, :height),
+        width: Keyword.get(opts, :width),
+        mediaKey: upload.media_key,
+        fileEncSHA256: upload.file_enc_sha256,
+        directPath: upload.direct_path,
+        mediaKeyTimestamp: Keyword.get(opts, :media_key_timestamp, System.system_time(:second)),
+        JPEGThumbnail: Keyword.get(opts, :thumbnail),
+        contextInfo: build_context_info(opts)
+      }
+    }
+  end
+
+  @doc """
+  Builds an audio message protobuf from uploaded media metadata.
+
+  Audio messages use a different protobuf field number than images and may
+  carry voice-note specific metadata such as `PTT`, duration, and waveform.
+  """
+  @spec build_audio_proto(Media.Upload.t(), keyword()) :: Message.t()
+  def build_audio_proto(%Media.Upload{} = upload, opts \\ []) do
+    %Message{
+      audioMessage: %ExWapp.Proto.AudioMessage{
+        # Voice-note playback relies on the same CDN/hashes/media-key tuple used
+        # for images, with extra audio-specific metadata layered on top.
+        URL: upload.url,
+        mimetype: Keyword.get(opts, :mimetype, "audio/ogg; codecs=opus"),
+        fileSHA256: upload.file_sha256,
+        fileLength: upload.file_length,
+        seconds: Keyword.get(opts, :duration) || Keyword.get(opts, :seconds),
+        PTT: Keyword.get(opts, :ptt),
+        mediaKey: upload.media_key,
+        fileEncSHA256: upload.file_enc_sha256,
+        directPath: upload.direct_path,
+        mediaKeyTimestamp: Keyword.get(opts, :media_key_timestamp, System.system_time(:second)),
+        contextInfo: build_context_info(opts),
+        waveform: Keyword.get(opts, :waveform)
+      }
+    }
   end
 
   @doc """
@@ -124,6 +188,9 @@ defmodule ExWapp.Messages do
 
   @doc """
   Builds context info for replies and mentions.
+
+  Returning `nil` keeps the protobuf lean for plain messages that do not need
+  threading or mention metadata.
   """
   @spec build_context_info(send_opts()) :: ContextInfo.t() | nil
   def build_context_info(opts) do
@@ -168,12 +235,17 @@ defmodule ExWapp.Messages do
   defp strip_device(jid) when is_binary(jid), do: String.replace(jid, ~r/:(\d+)@/, "@")
 
   @doc """
-  Builds the binary XML node for a message.
+  Builds the binary XML node wrapper for an outbound message payload.
+
+  The payload passed into this function is already protobuf-encoded. WhatsApp
+  still expects it to live inside an `<enc>` node, which is later encrypted by
+  the Signal send pipeline.
   """
   @spec build_message_node(String.t(), String.t(), binary(), integer(), keyword()) ::
           Binary.Node.t()
   def build_message_node(jid, message_id, payload, timestamp, _opts \\ []) do
-    # Determine message type and device info
+    # Message nodes keep transport routing metadata in XML attrs while the real
+    # message body travels inside the nested encrypted payload node.
     type = if JID.group?(jid), do: "text", else: "text"
 
     attrs = %{
@@ -183,8 +255,8 @@ defmodule ExWapp.Messages do
       "t" => Integer.to_string(timestamp)
     }
 
-    # The payload needs to be encrypted with Signal
-    # For now, create the structure without encryption
+    # Signal encryption wraps the protobuf payload later; this layer only shapes
+    # the stanza that the session worker will send on the wire.
     enc_node = %Binary.Node{
       tag: "enc",
       attrs: %{
@@ -202,7 +274,7 @@ defmodule ExWapp.Messages do
   end
 
   @doc """
-  Builds a receipt node for read/played acknowledgments.
+  Builds a receipt node for read or played acknowledgments.
   """
   @spec build_receipt_node(String.t(), [String.t()], String.t()) :: Binary.Node.t()
   def build_receipt_node(jid, message_ids, type) do
@@ -249,6 +321,9 @@ defmodule ExWapp.Messages do
 
   @doc """
   Builds a typing indicator node.
+
+  WhatsApp represents typing state as a nested `chatstate` stanza with either a
+  `composing` or `paused` child tag.
   """
   @spec build_typing(String.t(), boolean()) :: Binary.Node.t()
   def build_typing(jid, composing \\ true) do

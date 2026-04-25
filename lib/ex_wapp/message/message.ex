@@ -9,8 +9,16 @@ defmodule ExWapp.Message do
 
   defstruct [:id, :to, :type, :body, opts: [], metadata: %{}]
 
-  @type message_type :: :text | :typing | :read_receipt | atom()
+  alias ExWapp.Media
 
+  @typedoc """
+  High-level message categories supported by the public API.
+  """
+  @type message_type :: :text | :typing | :read_receipt | :image | :audio | atom()
+
+  @typedoc """
+  Runtime-neutral message value passed into transport adapters.
+  """
   @type t :: %__MODULE__{
           id: String.t() | nil,
           to: String.t(),
@@ -21,7 +29,10 @@ defmodule ExWapp.Message do
         }
 
   @doc """
-  Builds a text message.
+  Builds a plain text message.
+
+  This is the simplest outbound message form and maps to WhatsApp's
+  `conversation` or `extendedTextMessage` protobuf fields depending on options.
   """
   @spec text(String.t(), iodata(), keyword()) :: t()
   def text(to, body, opts \\ []) when is_binary(to) do
@@ -37,6 +48,8 @@ defmodule ExWapp.Message do
 
   @doc """
   Builds a typing indicator message.
+
+  The boolean body is interpreted as `true => composing` and `false => paused`.
   """
   @spec typing(String.t(), boolean(), keyword()) :: t()
   def typing(to, composing \\ true, opts \\ []) when is_binary(to) and is_boolean(composing) do
@@ -51,7 +64,7 @@ defmodule ExWapp.Message do
   end
 
   @doc """
-  Builds a read receipt message.
+  Builds a read receipt message for one or more message IDs.
   """
   @spec read_receipt(String.t(), [String.t()], keyword()) :: t()
   def read_receipt(to, message_ids, opts \\ []) when is_binary(to) and is_list(message_ids) do
@@ -60,6 +73,36 @@ defmodule ExWapp.Message do
       to: to,
       type: :read_receipt,
       body: message_ids,
+      opts: Keyword.drop(opts, [:id, :metadata]),
+      metadata: Keyword.get(opts, :metadata, %{})
+    }
+  end
+
+  @doc """
+  Builds an image message from bytes, a filesystem path, or a pre-uploaded reference.
+  """
+  @spec image(String.t(), Media.source(), keyword()) :: t()
+  def image(to, source, opts \\ []) when is_binary(to) do
+    %__MODULE__{
+      id: Keyword.get(opts, :id),
+      to: to,
+      type: :image,
+      body: source,
+      opts: Keyword.drop(opts, [:id, :metadata]),
+      metadata: Keyword.get(opts, :metadata, %{})
+    }
+  end
+
+  @doc """
+  Builds an audio message from bytes, a filesystem path, or a pre-uploaded reference.
+  """
+  @spec audio(String.t(), Media.source(), keyword()) :: t()
+  def audio(to, source, opts \\ []) when is_binary(to) do
+    %__MODULE__{
+      id: Keyword.get(opts, :id),
+      to: to,
+      type: :audio,
+      body: source,
       opts: Keyword.drop(opts, [:id, :metadata]),
       metadata: Keyword.get(opts, :metadata, %{})
     }

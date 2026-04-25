@@ -3,7 +3,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   require Logger
 
-  alias ExWapp.{Binary, Chat, Config, JID, Messages, Store, Telemetry}
+  alias ExWapp.{Binary, Chat, Config, JID, Media, Messages, Store, Telemetry}
   alias ExWapp.Proto.Message
   alias ExWapp.Signal.{Encryption, SenderKey, SessionStore}
 
@@ -32,63 +32,99 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   def send_text_worker(session_pid, state, jid, text, opts) do
     normalized_jid = normalize_jid_with_device(jid)
+    proto = Messages.build_text_proto(text, opts)
+    dispatch_prepared_send(session_pid, state, normalized_jid, proto, text, opts)
+  end
 
-    if JID.group?(normalized_jid) do
-      do_send_group_worker(session_pid, state, normalized_jid, text, opts)
-    else
-      jid = normalize_jid_for_signal(normalized_jid)
+  @spec send_media_worker(pid(), map(), :image | :audio, String.t(), Media.source(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_media_worker(session_pid, state, type, jid, source, opts \\ [])
 
-      case ensure_signal_session_worker(state, jid) do
-        {:ok, updated_sessions, prekey_bundles, target_hints} ->
-          handle_encrypted_send_result(
-            session_pid,
-            state,
-            updated_sessions,
-            jid,
-            text,
-            prekey_bundles,
-            target_hints,
-            opts
-          )
+  def send_media_worker(_session_pid, %{status: status}, _type, _jid, _source, _opts)
+      when status != :connected do
+    {:error, {:not_connected, status}}
+  end
 
-        {:error, reason} ->
-          {:error, {:session_failed, reason}}
-      end
+  def send_media_worker(_session_pid, %{status: status, conn: conn}, _type, _jid, _source, _opts)
+      when not is_pid(conn) do
+    {:error, {:not_connected, status}}
+  end
+
+  def send_media_worker(session_pid, state, type, jid, source, opts) do
+    with {:ok, upload} <- resolve_media_upload(session_pid, state, type, source, opts),
+         proto <- build_media_proto(type, upload, opts) do
+      dispatch_prepared_send(
+        session_pid,
+        state,
+        normalize_jid_with_device(jid),
+        proto,
+        Keyword.get(opts, :caption),
+        opts
+      )
     end
   end
 
-  defp handle_encrypted_send_result(
-         session_pid,
-         state,
-         updated_sessions,
-         jid,
-         text,
-         prekey_bundles,
-         target_hints,
-         opts
-       ) do
+  defp resolve_media_upload(_session_pid, _state, type, %Media.Upload{} = upload, _opts),
+    do: {:ok, %{upload | type: upload.type || type}}
+
+  defp resolve_media_upload(session_pid, state, type, source, opts) do
+    with {:ok, plaintext} <- Media.read_source(source) do
+      ExWapp.Media.HTTP.upload(
+        state,
+        type,
+        plaintext,
+        Keyword.put(opts, :session, session_pid)
+      )
+    end
+  end
+
+  defp build_media_proto(:image, upload, opts), do: Messages.build_image_proto(upload, opts)
+  defp build_media_proto(:audio, upload, opts), do: Messages.build_audio_proto(upload, opts)
+
+  defp dispatch_prepared_send(session_pid, state, normalized_jid, proto, chat_text, opts) do
+    if JID.group?(normalized_jid) do
+      do_send_group_worker(session_pid, state, normalized_jid, proto, chat_text, opts)
+    else
+      deliver_direct_message(
+        session_pid,
+        state,
+        normalize_jid_for_signal(normalized_jid),
+        proto,
+        chat_text,
+        opts
+      )
+    end
+  end
+
+  defp deliver_direct_message(session_pid, state, jid, proto, chat_text, opts) do
+    case ensure_signal_session_worker(state, jid) do
+      {:ok, updated_sessions, prekey_bundles, target_hints} ->
+        state
+        |> encrypted_send_ctx(%{
+          session_pid: session_pid,
+          jid: jid,
+          proto: proto,
+          chat_text: chat_text,
+          signal_sessions: updated_sessions,
+          prekey_bundles: prekey_bundles,
+          target_hints: target_hints,
+          opts: opts
+        })
+        |> handle_encrypted_send_result()
+
+      {:error, reason} ->
+        {:error, {:session_failed, reason}}
+    end
+  end
+
+  defp encrypted_send_ctx(state, attrs) when is_map(attrs), do: Map.put(attrs, :state, state)
+
+  defp handle_encrypted_send_result(%{opts: opts} = ctx) do
     recipient_fanout_retry? = Keyword.get(opts, :recipient_fanout_retry, false)
 
-    case do_send_encrypted(
-           session_pid,
-           state,
-           updated_sessions,
-           jid,
-           text,
-           prekey_bundles,
-           target_hints,
-           opts
-         ) do
+    case do_send_encrypted(ctx) do
       {:error, {:fanout_incomplete, missing_targets}} when not recipient_fanout_retry? ->
-        retry_incomplete_fanout(
-          session_pid,
-          state,
-          updated_sessions,
-          jid,
-          text,
-          missing_targets,
-          opts
-        )
+        retry_incomplete_fanout(ctx, missing_targets)
 
       result ->
         result
@@ -96,13 +132,8 @@ defmodule ExWapp.Session.Worker.Outbound do
   end
 
   defp retry_incomplete_fanout(
-         session_pid,
-         state,
-         updated_sessions,
-         jid,
-         text,
-         missing_targets,
-         opts
+         %{jid: jid, state: state, signal_sessions: updated_sessions, opts: opts} = ctx,
+         missing_targets
        ) do
     Logger.warning(
       "[SEND] Fanout incomplete for #{jid}, clearing cached sessions and retrying once: #{inspect(missing_targets)}"
@@ -120,16 +151,14 @@ defmodule ExWapp.Session.Worker.Outbound do
 
     case ensure_signal_session_worker(retry_state, jid) do
       {:ok, retried_sessions, retried_prekey_bundles, retried_target_hints} ->
-        do_send_encrypted(
-          session_pid,
-          retry_state,
-          retried_sessions,
-          jid,
-          text,
-          retried_prekey_bundles,
-          retried_target_hints,
-          Keyword.put(opts, :recipient_fanout_retry, true)
-        )
+        do_send_encrypted(%{
+          ctx
+          | state: retry_state,
+            signal_sessions: retried_sessions,
+            prekey_bundles: retried_prekey_bundles,
+            target_hints: retried_target_hints,
+            opts: Keyword.put(opts, :recipient_fanout_retry, true)
+        })
 
       {:error, reason} ->
         {:error, {:session_failed, reason}}
@@ -140,7 +169,8 @@ defmodule ExWapp.Session.Worker.Outbound do
          session_pid,
          %{conn: conn, store: store} = state,
          group_jid,
-         text,
+         proto,
+         chat_text,
          opts
        )
        when is_pid(conn) do
@@ -158,7 +188,6 @@ defmodule ExWapp.Session.Worker.Outbound do
              group_info.participants,
              group_info.addressing_mode
            ),
-         proto <- Messages.build_text_proto(text, []),
          {:ok, payload} <- Message.encode(proto),
          {:ok, distribution_payload, skmsg_payload} <-
            build_group_sender_key_payloads(store, group_jid, payload),
@@ -174,7 +203,8 @@ defmodule ExWapp.Session.Worker.Outbound do
            ) do
       group_send_ctx = %{
         group_jid: group_jid,
-        text: text,
+        text: chat_text,
+        proto: proto,
         opts: opts,
         addressing_mode: group_info.addressing_mode,
         participant_nodes: participant_nodes,
@@ -202,7 +232,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
-  defp do_send_group_worker(_session_pid, %{status: status}, _group_jid, _text, _opts),
+  defp do_send_group_worker(_session_pid, %{status: status}, _group_jid, _proto, _text, _opts),
     do: {:error, {:not_connected, status}}
 
   defp build_group_sender_key_payloads(store, group_jid, message_payload) do
@@ -1126,23 +1156,24 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
-  defp do_send_encrypted(
-         session_pid,
-         %{conn: conn, store: store} = state,
-         signal_sessions,
-         jid,
-         text,
-         prekey_bundles,
-         target_hints,
-         opts
-       ) do
+  defp do_send_encrypted(%{
+         session_pid: session_pid,
+         state: %{conn: conn, store: store} = state,
+         signal_sessions: signal_sessions,
+         jid: jid,
+         proto: proto,
+         chat_text: chat_text,
+         prekey_bundles: prekey_bundles,
+         target_hints: target_hints,
+         opts: opts
+       }) do
     own_jid = Account.local_account_base_jid(store)
     message_id = outbound_message_id(opts, own_jid)
     timestamp = System.system_time(:second)
 
     with {target_specs, _all_usync_devices} <-
            resolve_send_targets(store, signal_sessions, jid, prekey_bundles, target_hints, opts),
-         {:ok, payloads} <- build_send_payloads(jid, text),
+         {:ok, payloads} <- build_send_payloads(jid, proto),
          {:ok, participant_nodes, updated_sessions, include_identity} <-
            encrypt_for_targets(
              store,
@@ -1154,7 +1185,7 @@ defmodule ExWapp.Session.Worker.Outbound do
       case missing_expected_targets(target_specs, participant_nodes) do
         [] ->
           persist_signal_sessions(session_pid, updated_sessions, state)
-          maybe_record_outgoing_message(store, jid, message_id, timestamp, text, opts)
+          maybe_record_outgoing_message(store, jid, message_id, timestamp, chat_text, opts)
 
           node =
             build_multi_device_encrypted_message_node(
@@ -1181,9 +1212,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
-  defp build_send_payloads(jid, text) do
-    proto = Messages.build_text_proto(text, [])
-
+  defp build_send_payloads(jid, proto) do
     case Message.encode(proto) do
       {:ok, payload} ->
         recipient_payload = Encryption.pad_message(payload)
@@ -1427,6 +1456,7 @@ defmodule ExWapp.Session.Worker.Outbound do
       session_pid,
       retry_state,
       group_send_ctx.group_jid,
+      group_send_ctx.proto,
       group_send_ctx.text,
       Keyword.put(group_send_ctx.opts, :group_fanout_retry, true)
     )

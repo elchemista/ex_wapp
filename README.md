@@ -291,6 +291,34 @@ ExWapp.send_message(client, typing)
 
 receipt = ExWapp.Message.read_receipt(jid, ["MSG_ID"])
 ExWapp.send_message(client, receipt)
+
+ExWapp.send_image(client, jid, {:path, "photo.jpg"}, mimetype: "image/jpeg", caption: "hello")
+ExWapp.send_audio(client, jid, {:path, "voice.ogg"},
+  mimetype: "audio/ogg; codecs=opus",
+  ptt: true
+)
+```
+
+Group JIDs use the same API. When the target ends in `@g.us`, the session
+transport uses the group sender-key path:
+
+```elixir
+ExWapp.send_message(client, to: "123456789@g.us", text: "team update")
+ExWapp.send_image(client, "123456789@g.us", {:bytes, image_bytes}, mimetype: "image/png")
+```
+
+## Contacts and Chats
+
+Contacts and chats are exposed through the runtime-neutral client facade:
+
+```elixir
+{:ok, contacts} = ExWapp.list_contacts(client)
+{:ok, contact} = ExWapp.get_contact(client, "15550001111@s.whatsapp.net")
+{:ok, client} = ExWapp.sync_contacts(client)
+
+{:ok, chats} = ExWapp.list_chats(client)
+{:ok, groups} = ExWapp.list_groups(client)
+{:ok, group} = ExWapp.get_chat(client, "123456789@g.us")
 ```
 
 ## Protocol Modules

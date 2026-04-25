@@ -1,0 +1,1444 @@
+defmodule ExWapp.Message.Handler.Inbound do
+  @moduledoc false
+
+  require Logger
+
+  alias ExWapp.AppState.Engine
+  alias ExWapp.{Chat, JID, MapPath, Store}
+  alias ExWapp.Binary.Node
+  alias ExWapp.Message.Handler.{Common, Wire}
+  alias ExWapp.Proto.{HistorySync, SyncAction}
+  alias ExWapp.Session.{Account, DeviceCache, JIDUtils}
+  alias ExWapp.Signal.{Encryption, SenderKey, SessionStore}
+
+  @spec handle_message(Node.t(), pid(), map()) :: {:ok, map(), [term()]}
+  def handle_message(%Node{attrs: attrs, content: content}, session, state) do
+    from =
+      case Map.get(attrs, "from", "") do
+        %JID{} = jid -> jid
+        jid when is_binary(jid) -> jid
+        _ -> ""
+      end
+
+    id = Map.get(attrs, "id", "")
+    type = Map.get(attrs, "type", "text")
+    timestamp = Common.parse_timestamp(Map.get(attrs, "t"))
+    participant = Map.get(attrs, "participant")
+
+    Logger.debug("Received message from=#{from} id=#{id} type=#{type}")
+    state = persist_envelope_lid_mappings(state, attrs, from, participant)
+    persist_observed_devices(state, attrs, from, participant)
+
+    message_data = Wire.extract_message_content(content, type)
+    {message_data, state} = maybe_decrypt_message(message_data, state, from, participant, attrs)
+    state = maybe_ingest_history_sync(message_data, session, state, from, id)
+    state = maybe_ingest_app_state_keys(message_data, session, state)
+    state = maybe_ingest_placeholder_resend_response(message_data, session, state)
+    from_me = inbound_from_me?(attrs, from, state, message_data)
+
+    message = %{
+      id: id,
+      from_me: from_me,
+      timestamp: timestamp,
+      text: message_data[:text],
+      status: if(from_me, do: :sent, else: :received),
+      participant: participant,
+      raw: %{
+        type: type,
+        attrs: attrs,
+        media: message_data[:media],
+        from_me: from_me
+      }
+    }
+
+    is_protocol = message_data[:message_content_type] == :protocol
+    suppress_message? = transient_encrypted_placeholder?(message_data)
+
+    if not is_protocol and not suppress_message? do
+      if target = Common.chat_target(session, state) do
+        maybe_update_chat_name(target, from, attrs)
+        Chat.add_message(target, from, message)
+      end
+
+      if is_pid(session) do
+        send(session, {:new_message, from, message})
+      end
+    else
+      maybe_log_suppressed_message(is_protocol, suppress_message?, from, id, message_data)
+    end
+
+    {actions, state} = build_receipt_actions(from, id, participant, attrs, message_data, state)
+    updated_state = Common.update_stats(state, :messages_received)
+    {:ok, updated_state, actions}
+  end
+
+  @doc false
+  @spec persist_notification_devices(map(), term()) :: :ok
+  def persist_notification_devices(state, content) when is_map(state) and is_list(content) do
+    store = Map.get(state, :store)
+
+    content
+    |> Enum.flat_map(fn
+      %Node{attrs: attrs} when is_map(attrs) ->
+        attrs
+        |> Map.values()
+        |> Enum.map(&Common.normalize_jid_with_device/1)
+        |> Enum.filter(&String.contains?(&1, "@"))
+
+      _ ->
+        []
+    end)
+    |> Enum.uniq()
+    |> Enum.each(&DeviceCache.persist_observed_device(store, &1))
+
+    :ok
+  end
+
+  def persist_notification_devices(_state, _content), do: :ok
+
+  defp maybe_decrypt_message(
+         %{encrypted: true, enc_type: enc_type} = message_data,
+         state,
+         from,
+         participant,
+         attrs
+       ) do
+    decrypt_ctx = build_decrypt_context(message_data, state, from, participant, attrs)
+    log_decrypt_attempt(enc_type, decrypt_ctx, from)
+
+    case validate_decrypt_context(state, decrypt_ctx) do
+      {:ok, store} ->
+        decrypt_and_decode_message(store, state, from, message_data, enc_type, decrypt_ctx)
+
+      {:error, reason} ->
+        decrypt_error_result(message_data, state, reason)
+    end
+  end
+
+  defp maybe_decrypt_message(message_data, state, _from, _participant, _attrs),
+    do: {message_data, state}
+
+  defp build_decrypt_context(message_data, state, from, participant, attrs) do
+    sender_candidates = signal_sender_jids(from, participant, attrs, state)
+    payload_candidates = encrypted_payload_candidates(message_data)
+
+    decryptable_payloads =
+      payload_candidates
+      |> prioritize_payload_candidates(state, attrs)
+      |> Enum.filter(&is_binary(&1.ciphertext))
+
+    %{
+      sender_candidates: sender_candidates,
+      payload_candidates: payload_candidates,
+      decryptable_payloads: decryptable_payloads
+    }
+  end
+
+  defp log_decrypt_attempt(enc_type, decrypt_ctx, from) do
+    Logger.debug(
+      "[DECRYPT] Attempting decrypt: enc_type=#{inspect(enc_type)} payload_candidates=#{length(decrypt_ctx.payload_candidates)} decryptable_payloads=#{length(decrypt_ctx.decryptable_payloads)} from=#{inspect(from)} sender_candidates=#{inspect(decrypt_ctx.sender_candidates)}"
+    )
+  end
+
+  defp validate_decrypt_context(state, decrypt_ctx) do
+    cond do
+      is_nil(Map.get(state, :store)) ->
+        Logger.warning("[DECRYPT] Missing store in state, cannot decrypt")
+        {:error, :missing_store}
+
+      decrypt_ctx.sender_candidates == [] ->
+        Logger.warning(
+          "[DECRYPT] No sender candidates found from from/participant/sender_lid attrs"
+        )
+
+        {:error, :no_sender_candidates}
+
+      decrypt_ctx.decryptable_payloads == [] ->
+        Logger.warning(
+          "[DECRYPT] Skipping decrypt: no binary ciphertext candidates. first_candidate=#{inspect(List.first(decrypt_ctx.payload_candidates))}"
+        )
+
+        {:error, :no_ciphertext_candidates}
+
+      true ->
+        {:ok, Map.get(state, :store)}
+    end
+  end
+
+  defp decrypt_and_decode_message(store, state, from, message_data, enc_type, decrypt_ctx) do
+    case decrypt_with_payload_candidates(
+           store,
+           Map.get(state, :signal_sessions),
+           decrypt_ctx.sender_candidates,
+           decrypt_ctx.decryptable_payloads,
+           from
+         ) do
+      {:ok, padded_plaintext, updated_sessions, sender_jid, payload} ->
+        decode_decrypted_message(
+          message_data,
+          state,
+          from,
+          enc_type,
+          padded_plaintext,
+          updated_sessions,
+          sender_jid,
+          payload
+        )
+
+      {:error, reason} ->
+        log_decrypt_failure(state, from, enc_type, reason, decrypt_ctx)
+        decrypt_error_result(message_data, state, reason, decrypt_ctx.sender_candidates)
+    end
+  end
+
+  defp log_decrypt_failure(state, from, enc_type, reason, decrypt_ctx) do
+    signal_sessions = Map.get(state, :signal_sessions)
+    sender_candidates = Map.get(decrypt_ctx, :sender_candidates, [])
+    payloads = Map.get(decrypt_ctx, :decryptable_payloads, [])
+    lid_mapping = Account.load_lid_mapping(Map.get(state, :store))
+
+    candidate_identities =
+      sender_candidates
+      |> Enum.map(&JIDUtils.identity/1)
+      |> MapSet.new()
+
+    stored_session_targets =
+      signal_sessions
+      |> SessionStore.list_sessions()
+      |> Enum.filter(&MapSet.member?(candidate_identities, JIDUtils.identity(&1)))
+      |> Enum.sort()
+      |> Enum.take(12)
+
+    related_bases =
+      sender_candidates
+      |> Enum.flat_map(&JIDUtils.related_bases(&1, lid_mapping))
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    Logger.error(
+      "[DECRYPT] Failed to decrypt message: enc_type=#{inspect(enc_type)} from=#{Common.normalize_jid_with_device(from)} reason=#{inspect(reason)} sender_candidates=#{inspect(sender_candidates)} related_bases=#{inspect(related_bases)} payload_count=#{length(payloads)} payload_types=#{inspect(Enum.map(payloads, &Map.get(&1, :enc_type)))} stored_session_targets=#{inspect(stored_session_targets)}"
+    )
+  rescue
+    error ->
+      Logger.error(
+        "[DECRYPT] Failed to decrypt message and diagnostics logging raised: reason=#{inspect(reason)} logging_error=#{inspect(error)}"
+      )
+  end
+
+  defp decode_decrypted_message(
+         message_data,
+         state,
+         from,
+         enc_type,
+         padded_plaintext,
+         updated_sessions,
+         sender_jid,
+         payload
+       ) do
+    plaintext =
+      Encryption.unpad_message(
+        padded_plaintext,
+        Map.get(payload, :enc_version) || Map.get(message_data, :enc_version)
+      )
+
+    {sender_key_dist_count, state} =
+      maybe_process_sender_key_distributions(state, from, sender_jid, plaintext)
+
+    {content_type, decoded_text} =
+      Wire.classify_decrypted_content(plaintext, sender_key_dist_count)
+
+    text = decoded_text || "(encrypted: #{Map.get(payload, :enc_type, enc_type)})"
+
+    log_decrypted_message(content_type, decoded_text, sender_jid, payload, plaintext, text)
+
+    updated_state = Map.put(state, :signal_sessions, updated_sessions)
+
+    decoded_message_data =
+      message_data
+      |> build_decoded_message_data(text, content_type, plaintext)
+      |> maybe_put_signal_sessions_update(updated_sessions)
+
+    {decoded_message_data, updated_state}
+  end
+
+  defp log_decrypted_message(:protocol, _decoded_text, _sender_jid, payload, plaintext, _text) do
+    Logger.debug(
+      "[DECRYPT] Protocol message (#{Map.get(payload, :enc_type)}), plaintext_size=#{byte_size(plaintext)} — skipping chat display"
+    )
+  end
+
+  defp log_decrypted_message(_content_type, decoded_text, sender_jid, payload, plaintext, text) do
+    if is_nil(decoded_text) do
+      preview_size = min(byte_size(plaintext), 24)
+      preview = Base.encode16(binary_part(plaintext, 0, preview_size), case: :lower)
+
+      Logger.warning(
+        "[DECRYPT] Decrypted payload but could not extract text. sender_jid=#{sender_jid} enc_type=#{Map.get(payload, :enc_type)} plaintext_size=#{byte_size(plaintext)} preview=#{preview}"
+      )
+    end
+
+    Logger.debug(
+      "[DECRYPT] Success! sender_jid=#{sender_jid} enc_type=#{Map.get(payload, :enc_type)} plaintext_size=#{byte_size(plaintext)} text=#{inspect(String.slice(text || "", 0, 50))}"
+    )
+  end
+
+  defp build_decoded_message_data(message_data, text, :protocol, plaintext) do
+    message_data
+    |> Map.put(:text, text)
+    |> Map.put(:decrypt_status, :ok)
+    |> Map.put(:message_content_type, :protocol)
+    |> Map.put(:protocol_payload, plaintext)
+    |> Map.put(:from_me, device_sent_message_payload?(plaintext))
+  end
+
+  defp build_decoded_message_data(message_data, text, content_type, plaintext) do
+    message_data
+    |> Map.put(:text, text)
+    |> Map.put(:decrypt_status, :ok)
+    |> Map.put(:message_content_type, content_type)
+    |> Map.put(:from_me, device_sent_message_payload?(plaintext))
+    |> Wire.apply_media_from_plaintext(plaintext)
+  end
+
+  defp decrypt_error_result(message_data, state, reason, sender_candidates \\ []) do
+    {updated_state, maybe_updated_sessions} =
+      maybe_reset_signal_sessions_for_decrypt_failure(state, reason, sender_candidates)
+
+    updated_message_data =
+      message_data
+      |> Map.put(:decrypt_status, {:error, reason})
+      |> maybe_put_signal_sessions_update(maybe_updated_sessions)
+
+    {updated_message_data, updated_state}
+  end
+
+  defp transient_encrypted_placeholder?(%{encrypted: true, decrypt_status: {:error, _}}), do: true
+  defp transient_encrypted_placeholder?(%{placeholder_unavailable: true}), do: true
+  defp transient_encrypted_placeholder?(_message_data), do: false
+
+  defp maybe_log_suppressed_message(true, _suppress_message?, _from, _id, _message_data), do: :ok
+
+  defp maybe_log_suppressed_message(_is_protocol, true, from, id, message_data) do
+    Logger.debug(
+      "[DECRYPT] Suppressing undecryptable encrypted placeholder from=#{Common.normalize_jid_with_device(from)} id=#{id} reason=#{inspect(Map.get(message_data, :decrypt_status))}"
+    )
+  end
+
+  defp maybe_log_suppressed_message(_is_protocol, _suppress_message?, _from, _id, _message_data),
+    do: :ok
+
+  defp maybe_put_signal_sessions_update(message_data, nil), do: message_data
+
+  defp maybe_put_signal_sessions_update(message_data, sessions) do
+    if SessionStore.store?(sessions),
+      do: Map.put(message_data, :signal_sessions_update, sessions),
+      else: message_data
+  end
+
+  defp maybe_reset_signal_sessions_for_decrypt_failure(state, reason, sender_candidates) do
+    reset_candidates = decrypt_failure_session_reset_candidates(reason, sender_candidates)
+
+    case clear_signal_sessions_for_candidates(
+           Map.get(state, :signal_sessions),
+           state,
+           reset_candidates
+         ) do
+      nil -> {state, nil}
+      updated_sessions -> {%{state | signal_sessions: updated_sessions}, updated_sessions}
+    end
+  end
+
+  defp decrypt_failure_session_reset_candidates(
+         {:decrypt_failed_for_payload, _, {:decrypt_failed_for_candidate, _candidate, reason}},
+         sender_candidates
+       )
+       when reason in [:invalid_mac, :no_session, :unknown_signed_prekey] do
+    sender_candidates
+    |> Enum.map(&Common.normalize_jid_with_device/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp decrypt_failure_session_reset_candidates(_reason, _sender_candidates), do: []
+
+  defp clear_signal_sessions_for_candidates(_signal_sessions, _state, []), do: nil
+  defp clear_signal_sessions_for_candidates(nil, _state, _candidates), do: nil
+
+  defp clear_signal_sessions_for_candidates(signal_sessions, state, candidates) do
+    if SessionStore.store?(signal_sessions) do
+      lid_mapping = ExWapp.Session.Account.load_lid_mapping(Map.get(state, :store))
+
+      Enum.reduce(candidates, signal_sessions, fn candidate, sessions ->
+        SessionStore.delete_sessions_for_user(sessions, candidate, lid_mapping)
+      end)
+    else
+      nil
+    end
+  rescue
+    error ->
+      Logger.warning("[DECRYPT] Failed clearing stale signal sessions: #{inspect(error)}")
+      nil
+  end
+
+  defp inbound_from_me?(attrs, from, state, message_data)
+       when is_map(attrs) and is_map(message_data) do
+    explicit_from_me?(Map.get(attrs, "from_me")) or
+      Map.get(message_data, :from_me, false) == true or
+      from_matches_local_identity?(from, state, attrs)
+  end
+
+  defp inbound_from_me?(_attrs, _from, _state, _message_data), do: false
+
+  defp explicit_from_me?(value) when value in [true, 1, "1", "true"], do: true
+  defp explicit_from_me?(_value), do: false
+
+  defp from_matches_local_identity?(from, state, attrs) do
+    normalized_from_with_device = Common.normalize_jid_with_device(from)
+    normalized_from = Common.normalize_jid(from)
+    local_jids = local_recipient_jids(state, attrs)
+
+    normalized_from_with_device != "" and
+      (normalized_from_with_device in local_jids or normalized_from in local_jids)
+  end
+
+  defp device_sent_message_payload?(payload) when is_binary(payload) do
+    match?({:ok, _wrapped}, Wire.find_length_delimited_field(payload, 31))
+  end
+
+  defp maybe_ingest_history_sync(
+         %{message_content_type: :protocol, protocol_payload: payload},
+         session,
+         state,
+         from,
+         id
+       )
+       when is_binary(payload) do
+    case HistorySync.extract_from_message(payload) do
+      {:ok, %{sync_type: sync_type, conversations: conversations, lid_mappings: lid_mappings}} ->
+        target = Common.chat_target(session, state)
+
+        history_message_count =
+          Enum.reduce(conversations, 0, fn conversation, count ->
+            count + length(Map.get(conversation, :messages, []))
+          end)
+
+        if target do
+          Enum.each(conversations, &upsert_chat_from_history_sync(target, &1))
+        end
+
+        persist_history_sync_lid_mappings(state, lid_mappings)
+
+        Logger.debug(
+          "[HISTORY_SYNC] Applied protocol history sync from=#{Common.normalize_jid(from)} id=#{id} sync_type=#{inspect(sync_type)} conversations=#{length(conversations)} messages=#{history_message_count} lid_mappings=#{length(lid_mappings)}"
+        )
+
+        state
+
+      :not_history_sync ->
+        state
+
+      {:error, :history_sync_download_required} ->
+        Logger.debug(
+          "[HISTORY_SYNC] History sync notification requires blob download (inline payload missing) from=#{Common.normalize_jid(from)} id=#{id}"
+        )
+
+        state
+
+      {:error, reason} ->
+        Logger.warning(
+          "[HISTORY_SYNC] Failed to parse protocol history sync from=#{Common.normalize_jid(from)} id=#{id}: #{inspect(reason)}"
+        )
+
+        state
+    end
+  end
+
+  defp maybe_ingest_history_sync(_message_data, _session, state, _from, _id), do: state
+
+  defp maybe_ingest_app_state_keys(
+         %{message_content_type: :protocol, protocol_payload: payload},
+         session,
+         state
+       )
+       when is_binary(payload) do
+    with {:ok, message_fields} <- Wire.decode_wire_fields_safe(payload),
+         protocol_message when is_binary(protocol_message) <-
+           Wire.find_first_ld_field(message_fields, 12),
+         {:ok, protocol_fields} <- Wire.decode_wire_fields_safe(protocol_message),
+         key_share_bytes when is_binary(key_share_bytes) <-
+           Wire.find_first_ld_field(protocol_fields, 7),
+         {:ok, key_share} <- SyncAction.decode_app_state_sync_key_share(key_share_bytes),
+         true <- key_share.keys != [] do
+      case store_app_state_keys(state, key_share.keys) do
+        {:ok, action} when action in [:updated, :unchanged] ->
+          maybe_trigger_initial_app_state_sync(session)
+
+        _ ->
+          :ok
+      end
+
+      state
+    else
+      _ -> state
+    end
+  rescue
+    error ->
+      Logger.warning("[APP_STATE] Failed to ingest app state keys: #{inspect(error)}")
+      state
+  end
+
+  defp maybe_ingest_app_state_keys(_message_data, _session, state), do: state
+
+  defp maybe_ingest_placeholder_resend_response(
+         %{message_content_type: :protocol, protocol_payload: payload},
+         session,
+         state
+       )
+       when is_binary(payload) do
+    case extract_placeholder_resend_response(payload) do
+      {:ok, %{request_id: request_id, messages: recovered_messages}} ->
+        target = Common.chat_target(session, state)
+
+        count =
+          recovered_messages
+          |> Enum.map(&ingest_recovered_placeholder_message(&1, target, session))
+          |> Enum.count(&(&1 == :ok))
+
+        if count > 0 do
+          Logger.debug(
+            "[PLACEHOLDER] Applied #{count} recovered message(s) from request=#{request_id}"
+          )
+        end
+
+        state
+
+      :not_placeholder_resend_response ->
+        state
+
+      {:error, reason} ->
+        Logger.warning("[PLACEHOLDER] Failed to parse resend response: #{inspect(reason)}")
+        state
+    end
+  rescue
+    error ->
+      Logger.warning("[PLACEHOLDER] Failed to ingest resend response: #{inspect(error)}")
+      state
+  end
+
+  defp maybe_ingest_placeholder_resend_response(_message_data, _session, state), do: state
+
+  defp extract_placeholder_resend_response(message_payload) do
+    with {:ok, message_fields} <- Wire.decode_wire_fields_safe(message_payload),
+         protocol_message when is_binary(protocol_message) <-
+           Wire.find_first_ld_field(message_fields, 12),
+         {:ok, protocol_fields} <- Wire.decode_wire_fields_safe(protocol_message),
+         17 <- Wire.find_first_varint_field(protocol_fields, 2),
+         peer_response when is_binary(peer_response) <-
+           Wire.find_first_ld_field(protocol_fields, 17),
+         {:ok, response_fields} <- Wire.decode_wire_fields_safe(peer_response),
+         4 <- Wire.find_first_varint_field(response_fields, 1) do
+      request_id = Wire.find_first_ld_field(response_fields, 2) || ""
+
+      messages =
+        response_fields
+        |> Wire.find_all_ld_fields(3)
+        |> Enum.flat_map(&extract_placeholder_result_messages/1)
+
+      {:ok, %{request_id: request_id, messages: messages}}
+    else
+      nil -> :not_placeholder_resend_response
+      value when is_integer(value) -> :not_placeholder_resend_response
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp extract_placeholder_result_messages(result_payload) do
+    with {:ok, result_fields} <- Wire.decode_wire_fields_safe(result_payload),
+         placeholder_response when is_binary(placeholder_response) <-
+           Wire.find_first_ld_field(result_fields, 4),
+         {:ok, placeholder_fields} <- Wire.decode_wire_fields_safe(placeholder_response),
+         web_message_info when is_binary(web_message_info) <-
+           Wire.find_first_ld_field(placeholder_fields, 1),
+         {:ok, recovered} <- decode_recovered_web_message_info(web_message_info) do
+      [recovered]
+    else
+      _ -> []
+    end
+  end
+
+  defp decode_recovered_web_message_info(web_message_info) do
+    with {:ok, fields} <- Wire.decode_wire_fields_safe(web_message_info),
+         key_payload when is_binary(key_payload) <- Wire.find_first_ld_field(fields, 1),
+         message_payload when is_binary(message_payload) <- Wire.find_first_ld_field(fields, 2),
+         {:ok, key} <- decode_message_key_payload(key_payload) do
+      timestamp = Wire.find_first_varint_field(fields, 3)
+      participant = Wire.find_first_ld_field(fields, 5) || Map.get(key, :participant)
+      push_name = Wire.find_first_ld_field(fields, 19)
+
+      {:ok,
+       %{
+         key: key,
+         message_payload: message_payload,
+         timestamp: timestamp,
+         participant: participant,
+         push_name: push_name
+       }}
+    else
+      _ -> {:error, :invalid_web_message_info}
+    end
+  end
+
+  defp decode_message_key_payload(key_payload) do
+    with {:ok, fields} <- Wire.decode_wire_fields_safe(key_payload) do
+      {:ok,
+       %{
+         remote_jid: Wire.find_first_ld_field(fields, 1) || "",
+         from_me: Wire.find_first_varint_field(fields, 2) == 1,
+         id: Wire.find_first_ld_field(fields, 3) || "",
+         participant: Wire.find_first_ld_field(fields, 4)
+       }}
+    end
+  end
+
+  defp ingest_recovered_placeholder_message(
+         %{key: %{remote_jid: chat_jid, id: id} = key, message_payload: payload} = recovered,
+         target,
+         session
+       )
+       when is_binary(chat_jid) and chat_jid != "" and is_binary(id) and id != "" do
+    {content_type, decoded_text} = Wire.classify_decrypted_content(payload, 0)
+
+    if content_type == :protocol do
+      :skip
+    else
+      message = %{
+        id: id,
+        from_me: Map.get(key, :from_me, false),
+        timestamp: Map.get(recovered, :timestamp) || System.system_time(:second),
+        text: decoded_text,
+        status: if(Map.get(key, :from_me, false), do: :sent, else: :received),
+        participant: Map.get(recovered, :participant),
+        raw: %{
+          type: :placeholder_resend,
+          from_me: Map.get(key, :from_me, false),
+          media: nil,
+          push_name: Map.get(recovered, :push_name)
+        }
+      }
+
+      if target do
+        maybe_update_chat_name(target, chat_jid, %{"notify" => Map.get(recovered, :push_name)})
+        Chat.add_message(target, chat_jid, message)
+      end
+
+      if is_pid(session) do
+        send(session, {:new_message, chat_jid, message})
+      end
+
+      :ok
+    end
+  end
+
+  defp ingest_recovered_placeholder_message(_recovered, _target, _session), do: :skip
+
+  defp store_app_state_keys(state, keys) when is_list(keys) do
+    store = Map.get(state, :store)
+
+    if is_nil(store) do
+      Logger.warning("[APP_STATE] No store available, cannot persist app state keys")
+      {:error, :missing_store}
+    else
+      data = Store.load!(store)
+      existing_keys = Map.get(data, :app_state_keys, %{})
+      updated_keys = Enum.reduce(keys, existing_keys, &maybe_put_app_state_key/2)
+
+      if updated_keys != existing_keys do
+        Store.persist(store, Map.put(data, :app_state_keys, updated_keys))
+        {:ok, :updated}
+      else
+        {:ok, :unchanged}
+      end
+    end
+  rescue
+    error ->
+      Logger.warning("[APP_STATE] Failed to store app state keys: #{inspect(error)}")
+      {:error, {:store_failed, error}}
+  end
+
+  defp maybe_put_app_state_key(key, acc) do
+    case extract_app_state_key_data(key) do
+      {:ok, key_id, key_data_bin, timestamp, fingerprint} ->
+        key_id_hex = Base.encode16(key_id, case: :lower)
+
+        Map.put(acc, key_id_hex, %{
+          data: key_data_bin,
+          timestamp: timestamp,
+          fingerprint: fingerprint
+        })
+
+      :error ->
+        Logger.warning("[APP_STATE] Skipping malformed key: #{inspect(key)}")
+        acc
+    end
+  end
+
+  defp extract_app_state_key_data(key) when is_map(key) do
+    key_id = Map.get(key, :key_id)
+    key_data = Map.get(key, :key_data)
+
+    case {key_id, key_data} do
+      {key_id, %{key_data: key_data_bin} = key_data_map}
+      when is_binary(key_id) and is_binary(key_data_bin) ->
+        {:ok, key_id, key_data_bin, Map.get(key_data_map, :timestamp),
+         Map.get(key_data_map, :fingerprint)}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp extract_app_state_key_data(_key), do: :error
+
+  defp maybe_trigger_initial_app_state_sync(session) do
+    if is_pid(session) and Process.alive?(session) do
+      send(session, {:app_state_initial_sync, Engine.all_collections()})
+    end
+  end
+
+  defp upsert_chat_from_history_sync(target, %{jid: jid} = conversation)
+       when not is_nil(target) do
+    metadata =
+      %{}
+      |> maybe_put_sync_metadata(:name, Map.get(conversation, :name))
+      |> maybe_put_sync_metadata(:unread_count, Map.get(conversation, :unread_count))
+      |> maybe_put_sync_metadata(
+        :last_message_timestamp,
+        Map.get(conversation, :last_message_timestamp)
+      )
+      |> maybe_put_sync_metadata(:pinned, Map.get(conversation, :pinned))
+      |> maybe_put_sync_metadata(:archived, Map.get(conversation, :archived))
+      |> maybe_put_sync_metadata(:muted_until, Map.get(conversation, :muted_until))
+      |> maybe_put_sync_metadata(:is_group, Map.get(conversation, :is_group))
+
+    Chat.merge_metadata(target, jid, metadata)
+
+    conversation
+    |> Map.get(:messages, [])
+    |> history_sync_chat_messages(jid)
+    |> maybe_merge_history_sync_chat_messages(target, jid)
+
+    maybe_update_history_sync_contact_name(target, jid, conversation)
+  end
+
+  defp upsert_chat_from_history_sync(_target, _conversation), do: :ok
+
+  defp history_sync_chat_messages(history_messages, jid)
+       when is_list(history_messages) and history_messages != [] do
+    history_messages
+    |> Enum.with_index()
+    |> Enum.map(fn {history_message, index} ->
+      history_sync_message_to_chat_message(history_message, jid, index)
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp history_sync_chat_messages(_history_messages, _jid), do: []
+
+  defp maybe_merge_history_sync_chat_messages([], _target, _jid), do: :ok
+
+  defp maybe_merge_history_sync_chat_messages(chat_messages, target, jid)
+       when is_list(chat_messages), do: Chat.merge_messages(target, jid, chat_messages)
+
+  defp maybe_update_history_sync_contact_name(target, jid, conversation) do
+    if Map.get(conversation, :is_group, false) do
+      :ok
+    else
+      maybe_update_push_name_from_history_sync(target, jid, Map.get(conversation, :name))
+    end
+  end
+
+  defp maybe_update_push_name_from_history_sync(target, jid, name)
+       when is_binary(name) and name != "" do
+    case Common.resolve_store_from_target(target) do
+      nil -> :ok
+      store -> ExWapp.Contact.update_push_name(store, jid, name)
+    end
+  end
+
+  defp maybe_update_push_name_from_history_sync(_target, _jid, _name), do: :ok
+
+  defp history_sync_message_to_chat_message(message, conversation_jid, index)
+       when is_map(message) and is_binary(conversation_jid) and is_integer(index) do
+    from_me = Map.get(message, :from_me, false) == true
+    timestamp = normalize_history_sync_timestamp(Map.get(message, :timestamp))
+    participant = normalize_optional_history_jid(Map.get(message, :participant))
+    remote_jid = normalize_optional_history_jid(Map.get(message, :remote_jid))
+
+    message_id =
+      Common.first_non_empty([
+        Common.normalize_optional_text(Map.get(message, :id)),
+        history_sync_message_fallback_id(message, conversation_jid, index)
+      ])
+
+    if is_binary(message_id) and message_id != "" do
+      %{
+        id: message_id,
+        from_me: from_me,
+        timestamp: timestamp,
+        text: Common.normalize_optional_text(Map.get(message, :text)),
+        status: if(from_me, do: :sent, else: :received),
+        participant: participant,
+        raw: %{
+          type: "history_sync",
+          source: :history_sync,
+          remote_jid: remote_jid,
+          order_id: Map.get(message, :order_id)
+        }
+      }
+    else
+      nil
+    end
+  end
+
+  defp history_sync_message_to_chat_message(_message, _conversation_jid, _index), do: nil
+  defp normalize_history_sync_timestamp(value) when is_integer(value) and value >= 0, do: value
+  defp normalize_history_sync_timestamp(_), do: 0
+
+  defp normalize_optional_history_jid(value) do
+    case Common.normalize_jid(value) do
+      "" -> nil
+      jid -> jid
+    end
+  end
+
+  defp history_sync_message_fallback_id(message, conversation_jid, index)
+       when is_map(message) and is_binary(conversation_jid) and is_integer(index) do
+    seed = %{
+      conversation_jid: conversation_jid,
+      order_id: Map.get(message, :order_id),
+      timestamp: Map.get(message, :timestamp),
+      text: Map.get(message, :text),
+      participant: Map.get(message, :participant),
+      remote_jid: Map.get(message, :remote_jid),
+      from_me: Map.get(message, :from_me, false),
+      index: index
+    }
+
+    "history-sync-" <>
+      (:crypto.hash(:sha256, :erlang.term_to_binary(seed))
+       |> Base.encode16(case: :lower)
+       |> binary_part(0, 20))
+  rescue
+    _ -> "history-sync-#{index}"
+  end
+
+  defp persist_history_sync_lid_mappings(state, lid_mappings)
+       when is_map(state) and is_list(lid_mappings) do
+    case {Map.get(state, :store), normalize_lid_mappings(lid_mappings)} do
+      {nil, _} ->
+        :ok
+
+      {_store, []} ->
+        :ok
+
+      {store, normalized_mappings} ->
+        data = Store.load!(store)
+        existing_mappings = Map.get(data, :lid_mapping, %{})
+
+        updated_mappings =
+          Enum.reduce(normalized_mappings, existing_mappings, fn {lid, pn}, acc ->
+            acc
+            |> Map.put({:pn_to_lid, pn}, lid)
+            |> Map.put({:lid_to_pn, lid}, pn)
+          end)
+
+        if updated_mappings != existing_mappings do
+          Store.persist(store, Map.put(data, :lid_mapping, updated_mappings))
+        end
+    end
+  rescue
+    error ->
+      Logger.warning("[HISTORY_SYNC] Failed storing LID mappings: #{inspect(error)}")
+      :ok
+  end
+
+  defp persist_history_sync_lid_mappings(_state, _lid_mappings), do: :ok
+
+  defp persist_envelope_lid_mappings(state, attrs, from, participant)
+       when is_map(state) and is_map(attrs) do
+    case {Map.get(state, :store), normalize_envelope_lid_mappings(attrs, from, participant)} do
+      {nil, _} ->
+        state
+
+      {_store, []} ->
+        state
+
+      {store, normalized_mappings} ->
+        data = Store.load!(store)
+        existing_mappings = Map.get(data, :lid_mapping, %{})
+
+        updated_mappings =
+          Enum.reduce(normalized_mappings, existing_mappings, fn {lid, pn}, acc ->
+            acc
+            |> Map.put({:pn_to_lid, pn}, lid)
+            |> Map.put({:lid_to_pn, lid}, pn)
+          end)
+
+        if updated_mappings != existing_mappings do
+          Store.persist(store, Map.put(data, :lid_mapping, updated_mappings))
+        end
+
+        state
+    end
+  rescue
+    error ->
+      Logger.warning("[DECRYPT] Failed storing envelope LID mappings: #{inspect(error)}")
+      state
+  end
+
+  defp persist_envelope_lid_mappings(state, _attrs, _from, _participant), do: state
+
+  defp persist_observed_devices(state, attrs, from, participant)
+       when is_map(state) and is_map(attrs) do
+    store = Map.get(state, :store)
+
+    [
+      from,
+      participant,
+      Map.get(attrs, "sender_lid"),
+      Map.get(attrs, "sender_pn"),
+      Map.get(attrs, "participant_lid"),
+      Map.get(attrs, "participant_pn")
+    ]
+    |> Enum.map(&Common.normalize_jid_with_device/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+    |> Enum.each(&DeviceCache.persist_observed_device(store, &1))
+
+    :ok
+  end
+
+  defp persist_observed_devices(_state, _attrs, _from, _participant), do: :ok
+
+  defp normalize_envelope_lid_mappings(attrs, from, participant) when is_map(attrs) do
+    [
+      {from, Map.get(attrs, "sender_pn")},
+      {Map.get(attrs, "sender_lid"), Map.get(attrs, "sender_pn")},
+      {participant, Map.get(attrs, "participant_pn")},
+      {Map.get(attrs, "participant_lid"), Map.get(attrs, "participant_pn")}
+    ]
+    |> Enum.reduce([], fn {left, right}, acc ->
+      case normalize_lid_mapping_pair(left, right) do
+        nil -> acc
+        mapping -> [mapping | acc]
+      end
+    end)
+    |> Enum.uniq()
+  end
+
+  defp normalize_lid_mapping_pair(left, right) do
+    left = Common.normalize_jid(left)
+    right = Common.normalize_jid(right)
+
+    cond do
+      left == "" or right == "" -> nil
+      Common.lid_jid?(left) and not Common.lid_jid?(right) -> {left, right}
+      Common.lid_jid?(right) and not Common.lid_jid?(left) -> {right, left}
+      true -> nil
+    end
+  end
+
+  defp normalize_lid_mappings(lid_mappings) when is_list(lid_mappings) do
+    lid_mappings
+    |> Enum.reduce([], fn
+      {lid, pn}, acc ->
+        normalized_lid = Common.normalize_jid(lid)
+        normalized_pn = Common.normalize_jid(pn)
+
+        if normalized_lid != "" and normalized_pn != "",
+          do: [{normalized_lid, normalized_pn} | acc],
+          else: acc
+
+      _other, acc ->
+        acc
+    end)
+    |> Enum.uniq()
+  end
+
+  defp encrypted_payload_candidates(message_data) when is_map(message_data) do
+    candidates = Map.get(message_data, :enc_candidates, [])
+
+    if is_list(candidates) and candidates != [] do
+      candidates
+    else
+      [
+        %{
+          enc_type: Map.get(message_data, :enc_type, "msg"),
+          enc_version: Map.get(message_data, :enc_version),
+          ciphertext: Map.get(message_data, :ciphertext),
+          to_jid: nil
+        }
+      ]
+    end
+  end
+
+  defp maybe_update_chat_name(target, jid, attrs) do
+    name_hint =
+      Common.first_non_empty([
+        Map.get(attrs, "notify"),
+        Map.get(attrs, "pushname")
+      ])
+
+    if is_binary(name_hint) and name_hint != "" do
+      Chat.update_name(target, jid, name_hint)
+    else
+      maybe_set_number_fallback_name(target, jid)
+    end
+  end
+
+  defp maybe_set_number_fallback_name(target, jid) do
+    jid_str = Common.normalize_jid(jid)
+
+    if JID.user?(jid_str) do
+      fallback =
+        case String.split(jid_str, "@", parts: 2) do
+          [user, _] when user != "" -> user
+          _ -> nil
+        end
+
+      case {fallback, Chat.get_or_create(target, jid).name} do
+        {name, existing}
+        when is_binary(name) and name != "" and (is_nil(existing) or existing == "") ->
+          Chat.update_name(target, jid, name)
+
+        _ ->
+          :ok
+      end
+    end
+  end
+
+  defp signal_sender_jids(from, participant, attrs, state) do
+    raw_candidates = [
+      participant,
+      from,
+      Map.get(attrs, "sender_lid"),
+      Map.get(attrs, "sender_pn"),
+      Map.get(attrs, "participant_lid"),
+      Map.get(attrs, "participant_pn")
+    ]
+
+    with_device =
+      raw_candidates
+      |> Enum.map(&Common.normalize_jid_with_device/1)
+      |> Enum.reject(&(&1 == ""))
+
+    cross_family_device_aliases = synthesize_cross_family_device_candidates(with_device)
+
+    without_device =
+      (with_device ++ cross_family_device_aliases)
+      |> Enum.map(&Common.strip_device_from_jid/1)
+      |> Enum.reject(&(&1 == ""))
+
+    base_candidates =
+      (with_device ++ cross_family_device_aliases ++ without_device)
+      |> Enum.uniq()
+
+    mapped_candidates = resolve_lid_mapping_candidates(base_candidates, state)
+
+    stored_session_candidates =
+      resolve_stored_session_candidates(base_candidates ++ mapped_candidates, state)
+
+    (base_candidates ++ mapped_candidates ++ stored_session_candidates)
+    |> Enum.uniq()
+  end
+
+  defp resolve_stored_session_candidates(candidates, state) do
+    signal_sessions = Map.get(state, :signal_sessions)
+
+    if SessionStore.store?(signal_sessions) do
+      lid_mapping = Account.load_lid_mapping(Map.get(state, :store))
+
+      related_bases =
+        candidates
+        |> Enum.flat_map(&JIDUtils.related_bases(&1, lid_mapping))
+        |> Enum.reject(&(&1 == ""))
+        |> MapSet.new()
+
+      signal_sessions
+      |> SessionStore.list_sessions()
+      |> Enum.filter(fn session_jid ->
+        JIDUtils.has_explicit_device?(session_jid) and
+          MapSet.member?(related_bases, JIDUtils.strip_device(session_jid))
+      end)
+      |> Enum.sort_by(fn session_jid ->
+        {explicit_candidate_rank(session_jid, candidates),
+         -(SessionStore.session_touched_at(signal_sessions, session_jid) || 0)}
+      end)
+    else
+      []
+    end
+  rescue
+    _ -> []
+  end
+
+  defp explicit_candidate_rank(session_jid, candidates) do
+    session_base = JIDUtils.strip_device(session_jid)
+
+    Enum.find_index(candidates, fn candidate ->
+      normalized_candidate = Common.normalize_jid_with_device(candidate)
+
+      normalized_candidate == session_jid or
+        Common.strip_device_from_jid(normalized_candidate) == session_base
+    end) || length(candidates)
+  end
+
+  defp synthesize_cross_family_device_candidates(candidates) do
+    explicit_device_candidates = Enum.filter(candidates, &JIDUtils.has_explicit_device?/1)
+    base_candidates = Enum.reject(candidates, &JIDUtils.has_explicit_device?/1)
+
+    Enum.flat_map(explicit_device_candidates, fn explicit_jid ->
+      case JIDUtils.device_id(explicit_jid) do
+        nil ->
+          []
+
+        device_id ->
+          Enum.flat_map(base_candidates, fn base_jid ->
+            cond do
+              JIDUtils.lid_jid?(explicit_jid) and not JIDUtils.lid_jid?(base_jid) ->
+                [apply_device_to_base_jid(base_jid, device_id)]
+
+              not JIDUtils.lid_jid?(explicit_jid) and JIDUtils.lid_jid?(base_jid) ->
+                [apply_device_to_base_jid(base_jid, device_id)]
+
+              true ->
+                []
+            end
+          end)
+      end
+    end)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp apply_device_to_base_jid(base_jid, device_id)
+       when is_binary(base_jid) and is_integer(device_id) and device_id > 0 do
+    case String.split(Common.strip_device_from_jid(base_jid), "@", parts: 2) do
+      [user, server] when user != "" and server != "" -> "#{user}:#{device_id}@#{server}"
+      _ -> ""
+    end
+  end
+
+  defp apply_device_to_base_jid(_base_jid, _device_id), do: ""
+
+  defp resolve_lid_mapping_candidates(candidates, state) do
+    store = Map.get(state, :store)
+    if is_nil(store), do: [], else: do_resolve_lid_mappings(candidates, store)
+  rescue
+    _ -> []
+  end
+
+  defp do_resolve_lid_mappings(candidates, store) do
+    data = Store.load!(store)
+    lid_mapping = Map.get(data, :lid_mapping, %{})
+
+    if map_size(lid_mapping) == 0 do
+      []
+    else
+      Enum.flat_map(candidates, fn jid ->
+        normalized = Common.strip_device_from_jid(jid)
+
+        mapped =
+          [
+            Map.get(lid_mapping, {:pn_to_lid, normalized}),
+            Map.get(lid_mapping, {:lid_to_pn, normalized})
+          ]
+          |> Enum.reject(&is_nil/1)
+
+        mapped ++ Enum.map(mapped, &Common.strip_device_from_jid/1)
+      end)
+      |> Enum.reject(&(&1 == ""))
+    end
+  end
+
+  defp decrypt_with_payload_candidates(_store, _signal_sessions, _candidates, [], _chat_jid),
+    do: {:error, :no_payload_candidates}
+
+  defp decrypt_with_payload_candidates(
+         store,
+         signal_sessions,
+         candidates,
+         [payload | rest],
+         chat_jid
+       ) do
+    ciphertext = Map.get(payload, :ciphertext)
+    enc_type = Map.get(payload, :enc_type, "msg")
+
+    case decrypt_with_candidates(
+           store,
+           signal_sessions,
+           candidates,
+           ciphertext,
+           enc_type,
+           chat_jid
+         ) do
+      {:ok, plaintext, updated_sessions, sender_jid} ->
+        {:ok, plaintext, updated_sessions, sender_jid, payload}
+
+      {:error, reason} ->
+        case decrypt_with_payload_candidates(store, signal_sessions, candidates, rest, chat_jid) do
+          {:ok, _plaintext, _updated_sessions, _sender_jid, _payload} = success -> success
+          {:error, _other} -> {:error, {:decrypt_failed_for_payload, enc_type, reason}}
+        end
+    end
+  end
+
+  defp decrypt_with_candidates(_store, _signal_sessions, [], _ciphertext, _enc_type, _chat_jid),
+    do: {:error, :no_sender_candidates}
+
+  defp decrypt_with_candidates(
+         store,
+         signal_sessions,
+         [candidate | rest],
+         ciphertext,
+         enc_type,
+         chat_jid
+       ) do
+    decrypt_result =
+      if sender_key_message?(enc_type, chat_jid) do
+        case SenderKey.decrypt_group_message(store, chat_jid, candidate, ciphertext) do
+          {:ok, plaintext} -> {:ok, plaintext, signal_sessions}
+          {:error, reason} -> {:error, reason}
+        end
+      else
+        Encryption.decrypt_from_sender_sync(
+          store,
+          signal_sessions,
+          candidate,
+          ciphertext,
+          enc_type
+        )
+      end
+
+    case decrypt_result do
+      {:ok, plaintext, updated_sessions} ->
+        {:ok, plaintext, updated_sessions, candidate}
+
+      {:error, reason} ->
+        case decrypt_with_candidates(store, signal_sessions, rest, ciphertext, enc_type, chat_jid) do
+          {:ok, _plaintext, _updated_sessions, _candidate} = success -> success
+          {:error, _} -> {:error, {:decrypt_failed_for_candidate, candidate, reason}}
+        end
+    end
+  end
+
+  defp sender_key_message?(enc_type, chat_jid) do
+    enc_type in [:skmsg, "skmsg"] and group_jid?(chat_jid)
+  end
+
+  defp group_jid?(jid) do
+    jid
+    |> Common.normalize_jid()
+    |> JID.group?()
+  end
+
+  defp maybe_process_sender_key_distributions(state, from, sender_jid, plaintext)
+       when is_binary(plaintext) do
+    store = Map.get(state, :store)
+
+    cond do
+      is_nil(store) ->
+        {0, state}
+
+      not group_jid?(from) ->
+        {0, state}
+
+      true ->
+        case SenderKey.process_distributions_from_plaintext(store, from, sender_jid, plaintext) do
+          {:ok, count} ->
+            {count, state}
+
+          {:error, reason} ->
+            Logger.warning(
+              "[SENDER_KEY] Failed processing sender key distribution: #{inspect(reason)}"
+            )
+
+            {0, state}
+        end
+    end
+  end
+
+  defp build_receipt_actions(from, id, participant, attrs, message_data, state) do
+    cond do
+      invalid_receipt_target?(from, id) ->
+        {[], state}
+
+      needs_retry_receipt?(message_data) ->
+        build_retry_receipt_actions(from, id, participant, attrs, message_data, state)
+
+      true ->
+        build_delivery_receipt_actions(from, id, participant, attrs, message_data, state)
+    end
+  end
+
+  defp invalid_receipt_target?(from, id), do: from == "" or id in [nil, ""]
+
+  defp build_retry_receipt_actions(from, id, participant, attrs, message_data, state) do
+    retry_reason_code = retry_reason_code(Map.get(message_data, :decrypt_status))
+    {retry_count, updated_state} = next_retry_count(state, from, id, participant)
+
+    retry_meta = %{category: Map.get(attrs, "category"), recipient: Map.get(attrs, "recipient")}
+
+    actions =
+      signal_sessions_update_actions(message_data) ++
+        placeholder_resend_actions(from, id, participant, retry_count, message_data) ++
+        [
+          {:send_retry_receipt, from, id, participant, Map.get(attrs, "t"), retry_count,
+           retry_reason_code, retry_meta}
+        ]
+
+    {actions, updated_state}
+  end
+
+  defp build_delivery_receipt_actions(from, id, participant, attrs, message_data, state) do
+    receipt_type = delivery_receipt_type(from, attrs, state)
+    receipt_meta = %{recipient: Map.get(attrs, "recipient")}
+
+    actions =
+      signal_sessions_update_actions(message_data) ++
+        placeholder_resend_actions(from, id, participant, 1, message_data) ++
+        [{:send_receipt, from, id, participant, receipt_type, receipt_meta}]
+
+    {actions, state}
+  end
+
+  defp placeholder_resend_actions(from, id, participant, retry_count, message_data) do
+    if needs_placeholder_resend_request?(message_data) and retry_count == 1 do
+      sender = if is_binary(participant) and participant != "", do: participant, else: from
+      [{:request_placeholder_resend, Common.strip_device_from_jid(from), sender, id}]
+    else
+      []
+    end
+  end
+
+  defp delivery_receipt_type(from, attrs, state) do
+    if Common.normalize_jid(from) in local_recipient_jids(state, attrs) do
+      if Map.get(attrs, "type") == "peer_msg", do: "peer_msg", else: "sender"
+    else
+      nil
+    end
+  end
+
+  defp retry_reason_code(
+         {:error,
+          {:decrypt_failed_for_payload, _, {:decrypt_failed_for_candidate, _, :invalid_mac}}}
+       ),
+       do: 7
+
+  defp retry_reason_code(
+         {:error,
+          {:decrypt_failed_for_payload, _,
+           {:decrypt_failed_for_candidate, _, :unknown_signed_prekey}}}
+       ),
+       do: 3
+
+  defp retry_reason_code(
+         {:error,
+          {:decrypt_failed_for_payload, _, {:decrypt_failed_for_candidate, _, :no_session}}}
+       ),
+       do: 1
+
+  defp retry_reason_code(_), do: 0
+
+  defp needs_retry_receipt?(%{decrypt_status: {:error, _}}), do: true
+  defp needs_retry_receipt?(_), do: false
+  defp needs_placeholder_resend_request?(%{placeholder_unavailable: true}), do: true
+
+  defp needs_placeholder_resend_request?(%{decrypt_status: {:error, reason}, encrypted: true}) do
+    reason in [:no_ciphertext_candidates, :no_payload_candidates] or
+      match?({:decrypt_failed_for_payload, _, _}, reason)
+  end
+
+  defp needs_placeholder_resend_request?(_), do: false
+
+  defp signal_sessions_update_actions(%{signal_sessions_update: sessions}) do
+    if SessionStore.store?(sessions), do: [{:signal_sessions_updated, sessions}], else: []
+  end
+
+  defp signal_sessions_update_actions(_message_data), do: []
+
+  defp next_retry_count(state, from, id, participant) when is_map(state) do
+    key = retry_counter_key(from, id, participant)
+    counters = Map.get(state, :retry_counters, %{})
+    next = Map.get(counters, key, 0) + 1
+    {next, Map.put(state, :retry_counters, Map.put(counters, key, next))}
+  end
+
+  defp next_retry_count(state, _from, _id, _participant), do: {1, state}
+
+  defp retry_counter_key(from, id, participant) do
+    [
+      Common.normalize_jid_with_device(from),
+      to_string(id || ""),
+      Common.normalize_jid_with_device(participant)
+    ]
+    |> Enum.join("|")
+  end
+
+  defp prioritize_payload_candidates(payload_candidates, state, attrs)
+       when is_list(payload_candidates) do
+    local_jids = local_recipient_jids(state, attrs)
+
+    if local_jids == [] do
+      payload_candidates
+    else
+      {matching, non_matching} =
+        Enum.split_with(payload_candidates, fn payload ->
+          payload_to = Map.get(payload, :to_jid)
+          payload_to in local_jids or Common.strip_device_from_jid(payload_to) in local_jids
+        end)
+
+      if matching == [], do: payload_candidates, else: matching ++ non_matching
+    end
+  end
+
+  defp prioritize_payload_candidates(payload_candidates, _state, _attrs), do: payload_candidates
+
+  defp local_recipient_jids(state, attrs) do
+    from_store =
+      case Map.get(state, :store) do
+        nil ->
+          []
+
+        store ->
+          data = Store.load!(store)
+
+          [
+            MapPath.first(data, [["pairing", "device", "jid"], ["client_info", "jid"]]),
+            MapPath.get(data, ["client_info", "wid"]),
+            MapPath.get(data, ["client_info", "lid"])
+          ]
+      end
+
+    from_attrs = [
+      Map.get(attrs, "to"),
+      Map.get(attrs, "recipient"),
+      Map.get(attrs, "recipient_lid"),
+      Map.get(attrs, "recipient_pn")
+    ]
+
+    normalized_with_device =
+      (from_store ++ from_attrs)
+      |> Enum.map(&Common.normalize_jid_with_device/1)
+      |> Enum.reject(&(&1 == ""))
+
+    normalized_without_device =
+      normalized_with_device
+      |> Enum.map(&Common.strip_device_from_jid/1)
+      |> Enum.reject(&(&1 == ""))
+
+    Enum.uniq(normalized_with_device ++ normalized_without_device)
+  end
+
+  defp maybe_put_sync_metadata(metadata, _key, nil), do: metadata
+  defp maybe_put_sync_metadata(metadata, key, value), do: Map.put(metadata, key, value)
+end

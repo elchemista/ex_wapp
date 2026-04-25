@@ -10,7 +10,7 @@ defmodule ExWapp do
 
   require Logger
 
-  alias ExWapp.{Client, Error, Event, Events, Message}
+  alias ExWapp.{Chat, Client, Contact, Error, Event, Events, Media, Message}
 
   @doc """
   Creates a runtime-neutral ExWapp client.
@@ -106,6 +106,179 @@ defmodule ExWapp do
         |> normalize_receive_result(client)
       else
         fail_client(client, :receive_message, :transport, :receive_not_supported)
+      end
+    end)
+  end
+
+  @doc """
+  Lists locally known contacts through the configured transport adapter.
+  """
+  @spec list_contacts(Client.t()) :: {:ok, [Contact.t()]} | {:error, Error.t(), Client.t()}
+  def list_contacts(%Client{} = client) do
+    run_client_operation(client, :list_contacts, fn ->
+      if adapter_exports?(client.transport, :list_contacts, 1) do
+        client.transport.list_contacts(client)
+        |> normalize_list_result(client, :list_contacts, :contacts)
+      else
+        fail_client(client, :list_contacts, :transport, :contacts_not_supported)
+      end
+    end)
+  end
+
+  @doc """
+  Gets a locally known contact by JID.
+  """
+  @spec get_contact(Client.t(), String.t()) ::
+          {:ok, Contact.t() | nil} | {:error, Error.t(), Client.t()}
+  def get_contact(%Client{} = client, jid) when is_binary(jid) do
+    run_client_operation(client, :get_contact, fn ->
+      if adapter_exports?(client.transport, :get_contact, 2) do
+        client.transport.get_contact(client, jid)
+        |> normalize_value_result(client, :get_contact, :contact)
+      else
+        fail_client(client, :get_contact, :transport, :contacts_not_supported)
+      end
+    end)
+  end
+
+  @doc """
+  Requests a contact app-state sync through the configured transport adapter.
+  """
+  @spec sync_contacts(Client.t()) :: {:ok, Client.t()} | {:error, Error.t(), Client.t()}
+  def sync_contacts(%Client{} = client) do
+    run_client_operation(client, :sync_contacts, fn ->
+      if adapter_exports?(client.transport, :sync_contacts, 1) do
+        client.transport.sync_contacts(client)
+        |> normalize_client_result(client, :sync_contacts, :contacts_synced, %{})
+      else
+        fail_client(client, :sync_contacts, :transport, :contacts_not_supported)
+      end
+    end)
+  end
+
+  @doc """
+  Creates or updates a server-synced contact.
+  """
+  @spec create_contact(Client.t(), String.t(), String.t()) ::
+          {:ok, Client.t()} | {:error, Error.t(), Client.t()}
+  def create_contact(%Client{} = client, jid, name) when is_binary(jid) and is_binary(name) do
+    run_client_operation(client, :create_contact, fn ->
+      if adapter_exports?(client.transport, :create_contact, 3) do
+        client.transport.create_contact(client, jid, name)
+        |> normalize_client_result(client, :create_contact, :contact_created, %{jid: jid})
+      else
+        fail_client(client, :create_contact, :transport, :contacts_not_supported)
+      end
+    end)
+  end
+
+  @doc """
+  Updates contact fields when the configured transport supports it.
+  """
+  @spec update_contact(Client.t(), String.t(), map() | keyword()) ::
+          {:ok, Client.t()} | {:error, Error.t(), Client.t()}
+  def update_contact(%Client{} = client, jid, attrs) when is_binary(jid) do
+    run_client_operation(client, :update_contact, fn ->
+      if adapter_exports?(client.transport, :update_contact, 3) do
+        client.transport.update_contact(client, jid, attrs)
+        |> normalize_client_result(client, :update_contact, :contact_updated, %{jid: jid})
+      else
+        fail_client(client, :update_contact, :transport, :contacts_not_supported)
+      end
+    end)
+  end
+
+  @doc """
+  Deletes a server-synced contact.
+  """
+  @spec delete_contact(Client.t(), String.t()) ::
+          {:ok, Client.t()} | {:error, Error.t(), Client.t()}
+  def delete_contact(%Client{} = client, jid) when is_binary(jid) do
+    run_client_operation(client, :delete_contact, fn ->
+      if adapter_exports?(client.transport, :delete_contact, 2) do
+        client.transport.delete_contact(client, jid)
+        |> normalize_client_result(client, :delete_contact, :contact_deleted, %{jid: jid})
+      else
+        fail_client(client, :delete_contact, :transport, :contacts_not_supported)
+      end
+    end)
+  end
+
+  @doc """
+  Lists locally known chats.
+  """
+  @spec list_chats(Client.t()) :: {:ok, [Chat.chat()]} | {:error, Error.t(), Client.t()}
+  def list_chats(%Client{} = client) do
+    run_client_operation(client, :list_chats, fn ->
+      if adapter_exports?(client.transport, :list_chats, 1) do
+        client.transport.list_chats(client)
+        |> normalize_list_result(client, :list_chats, :chats)
+      else
+        fail_client(client, :list_chats, :transport, :chats_not_supported)
+      end
+    end)
+  end
+
+  @doc """
+  Lists locally known group chats.
+  """
+  @spec list_groups(Client.t()) :: {:ok, [Chat.chat()]} | {:error, Error.t(), Client.t()}
+  def list_groups(%Client{} = client) do
+    run_client_operation(client, :list_groups, fn ->
+      if adapter_exports?(client.transport, :list_groups, 1) do
+        client.transport.list_groups(client)
+        |> normalize_list_result(client, :list_groups, :groups)
+      else
+        fail_client(client, :list_groups, :transport, :groups_not_supported)
+      end
+    end)
+  end
+
+  @doc """
+  Gets a locally known chat by JID.
+  """
+  @spec get_chat(Client.t(), String.t()) :: {:ok, Chat.chat()} | {:error, Error.t(), Client.t()}
+  def get_chat(%Client{} = client, jid) when is_binary(jid) do
+    run_client_operation(client, :get_chat, fn ->
+      if adapter_exports?(client.transport, :get_chat, 2) do
+        client.transport.get_chat(client, jid)
+        |> normalize_value_result(client, :get_chat, :chat)
+      else
+        fail_client(client, :get_chat, :transport, :chats_not_supported)
+      end
+    end)
+  end
+
+  @doc """
+  Sends an image message.
+  """
+  @spec send_image(Client.t(), String.t(), Media.source(), keyword()) ::
+          {:ok, Client.t(), String.t()} | {:error, Error.t(), Client.t()}
+  def send_image(%Client{} = client, to, source, opts \\ []) do
+    send_message(client, Message.image(to, source, opts))
+  end
+
+  @doc """
+  Sends an audio message.
+  """
+  @spec send_audio(Client.t(), String.t(), Media.source(), keyword()) ::
+          {:ok, Client.t(), String.t()} | {:error, Error.t(), Client.t()}
+  def send_audio(%Client{} = client, to, source, opts \\ []) do
+    send_message(client, Message.audio(to, source, opts))
+  end
+
+  @doc """
+  Downloads media referenced by an inbound media message.
+  """
+  @spec download_media(Client.t(), Media.Ref.t(), keyword()) ::
+          {:ok, Client.t(), Media.Download.t()} | {:error, Error.t(), Client.t()}
+  def download_media(%Client{} = client, %Media.Ref{} = ref, opts \\ []) do
+    run_client_operation(client, :download_media, fn ->
+      if adapter_exports?(client.transport, :download_media, 3) do
+        client.transport.download_media(client, ref, opts)
+        |> normalize_download_result(client)
+      else
+        fail_client(client, :download_media, :transport, :media_not_supported)
       end
     end)
   end
@@ -255,6 +428,20 @@ defmodule ExWapp do
           {:ok, Message.read_receipt(to, ids, message_opts)}
         end
 
+      :image ->
+        with {:ok, to} <- fetch_required(opts, :to),
+             {:ok, source} <- fetch_media_source(opts) do
+          message_opts = Keyword.drop(opts, [:to, :type, :source, :path, :bytes, :upload])
+          {:ok, Message.image(to, source, message_opts)}
+        end
+
+      :audio ->
+        with {:ok, to} <- fetch_required(opts, :to),
+             {:ok, source} <- fetch_media_source(opts) do
+          message_opts = Keyword.drop(opts, [:to, :type, :source, :path, :bytes, :upload])
+          {:ok, Message.audio(to, source, message_opts)}
+        end
+
       other ->
         {:error, {:unsupported_message_type, other}}
     end
@@ -273,6 +460,18 @@ defmodule ExWapp do
     case Keyword.fetch(opts, :text) do
       {:ok, value} -> {:ok, value}
       :error -> fetch_required(opts, :body)
+    end
+  end
+
+  @spec fetch_media_source(keyword()) ::
+          {:ok, Media.source()} | {:error, {:missing_required, atom()}}
+  defp fetch_media_source(opts) do
+    cond do
+      Keyword.has_key?(opts, :source) -> {:ok, Keyword.fetch!(opts, :source)}
+      Keyword.has_key?(opts, :path) -> {:ok, {:path, Keyword.fetch!(opts, :path)}}
+      Keyword.has_key?(opts, :bytes) -> {:ok, {:bytes, Keyword.fetch!(opts, :bytes)}}
+      Keyword.has_key?(opts, :upload) -> {:ok, Keyword.fetch!(opts, :upload)}
+      true -> {:error, {:missing_required, :source}}
     end
   end
 
@@ -413,6 +612,74 @@ defmodule ExWapp do
 
   defp normalize_receive_result(other, original) do
     fail_client(original, :receive_message, :transport, {:bad_return, other})
+  end
+
+  @spec normalize_list_result(term(), Client.t(), atom(), atom()) ::
+          {:ok, list()} | {:error, Error.t(), Client.t()}
+  defp normalize_list_result({:ok, values}, _original, _operation, _label) when is_list(values),
+    do: {:ok, values}
+
+  defp normalize_list_result({:error, reason}, original, operation, _label),
+    do: fail_client(original, operation, :transport, reason)
+
+  defp normalize_list_result(other, original, operation, label),
+    do: fail_client(original, operation, :transport, {:bad_return, label, other})
+
+  @spec normalize_value_result(term(), Client.t(), atom(), atom()) ::
+          {:ok, term()} | {:error, Error.t(), Client.t()}
+  defp normalize_value_result({:ok, value}, _original, _operation, _label), do: {:ok, value}
+
+  defp normalize_value_result({:error, reason}, original, operation, _label),
+    do: fail_client(original, operation, :transport, reason)
+
+  defp normalize_value_result(other, original, operation, label),
+    do: fail_client(original, operation, :transport, {:bad_return, label, other})
+
+  @spec normalize_client_result(term(), Client.t(), atom(), Event.type(), term()) ::
+          {:ok, Client.t()} | {:error, Error.t(), Client.t()}
+  defp normalize_client_result(
+         {:ok, %Client{} = client},
+         _original,
+         operation,
+         event_type,
+         payload
+       ) do
+    client = Client.trace(client, operation, %{result: :ok})
+    emit_client_event(client, event_type, payload)
+    {:ok, client}
+  end
+
+  defp normalize_client_result(:ok, original, operation, event_type, payload) do
+    normalize_client_result({:ok, original}, original, operation, event_type, payload)
+  end
+
+  defp normalize_client_result({:error, reason}, original, operation, _event_type, _payload),
+    do: fail_client(original, operation, :transport, reason)
+
+  defp normalize_client_result(other, original, operation, _event_type, _payload),
+    do: fail_client(original, operation, :transport, {:bad_return, other})
+
+  @spec normalize_download_result(term(), Client.t()) ::
+          {:ok, Client.t(), Media.Download.t()} | {:error, Error.t(), Client.t()}
+  defp normalize_download_result(
+         {:ok, %Client{} = client, %Media.Download{} = download},
+         _original
+       ) do
+    client = Client.trace(client, :download_media, %{bytes: byte_size(download.bytes)})
+    emit_client_event(client, :media_downloaded, download.ref)
+    {:ok, client, download}
+  end
+
+  defp normalize_download_result({:ok, %Media.Download{} = download}, original) do
+    normalize_download_result({:ok, original, download}, original)
+  end
+
+  defp normalize_download_result({:error, reason}, original) do
+    fail_client(original, :download_media, :transport, reason)
+  end
+
+  defp normalize_download_result(other, original) do
+    fail_client(original, :download_media, :transport, {:bad_return, other})
   end
 
   @spec fail_client(Client.t(), atom(), atom() | nil, term(), keyword()) ::

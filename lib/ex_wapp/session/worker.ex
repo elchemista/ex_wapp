@@ -278,6 +278,33 @@ defmodule ExWapp.Session.Worker do
     GenServer.call(server, {:send_text, jid, IO.iodata_to_binary(text)})
   end
 
+  @doc """
+  Queues an image message for sending.
+  """
+  @spec send_image(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_image(server, jid, source, opts \\ []) do
+    GenServer.call(server, {:send_media, :image, jid, source, opts})
+  end
+
+  @doc """
+  Queues an audio message for sending.
+  """
+  @spec send_audio(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_audio(server, jid, source, opts \\ []) do
+    GenServer.call(server, {:send_media, :audio, jid, source, opts})
+  end
+
+  @doc """
+  Downloads and decrypts a media reference.
+  """
+  @spec download_media(GenServer.server(), ExWapp.Media.Ref.t(), keyword()) ::
+          {:ok, ExWapp.Media.Download.t()} | {:error, term()}
+  def download_media(server, ref, opts \\ []) do
+    GenServer.call(server, {:download_media, ref, opts}, 60_000)
+  end
+
   @doc "Send an app state mutation (server-synced)."
   @spec send_app_state(GenServer.server(), map()) :: {:ok, map(), map()} | {:error, term()}
   def send_app_state(server, patch_info) do
@@ -545,6 +572,60 @@ defmodule ExWapp.Session.Worker do
     else
       {:error, reason, blocked_state} ->
         {:reply, {:error, reason}, blocked_state}
+    end
+  end
+
+  def handle_call({:send_media, _type, _jid, _source, _opts}, _from, %{status: status} = state)
+      when status != :connected do
+    {:reply, {:error, {:not_connected, status}}, state}
+  end
+
+  def handle_call({:send_media, _type, _jid, _source, _opts}, _from, %{conn: conn} = state)
+      when not is_pid(conn) do
+    {:reply, {:error, {:not_connected, state.status}}, state}
+  end
+
+  def handle_call({:send_media, type, jid, source, opts}, from, state) do
+    with {:ok, state} <- ensure_send_enabled(state, jid),
+         {:ok, policy_state} <- enforce_send_policies(state, jid) do
+      session_pid = self()
+
+      case start_send_worker(
+             policy_state,
+             jid,
+             primary_media_send_task_fun(
+               session_pid,
+               policy_state,
+               type,
+               jid,
+               source,
+               opts,
+               :primary,
+               0
+             ),
+             from
+           ) do
+        {:ok, worker, mon} ->
+          new_state = register_send_worker(policy_state, worker, mon, jid)
+          {:noreply, update_stats(new_state, :messages_sent)}
+
+        {:error, reason} ->
+          {:reply, {:error, {:send_worker_start_failed, reason}}, policy_state}
+      end
+    else
+      {:error, reason, blocked_state} ->
+        {:reply, {:error, reason}, blocked_state}
+    end
+  end
+
+  def handle_call({:download_media, %ExWapp.Media.Ref{} = ref, opts}, _from, state) do
+    case ExWapp.Media.HTTP.download(state, ref, opts) do
+      {:ok, bytes} ->
+        {:reply, {:ok, %ExWapp.Media.Download{ref: ref, bytes: bytes, mimetype: ref.mimetype}},
+         state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -1522,10 +1603,22 @@ defmodule ExWapp.Session.Worker do
     Outbound.send_text_worker(session_pid, state, jid, text, opts)
   end
 
+  defp do_send_media_worker(session_pid, state, type, jid, source, opts) do
+    Outbound.send_media_worker(session_pid, state, type, jid, source, opts)
+  end
+
   defp primary_send_task_fun(session_pid, state, jid, text, strategy, attempt) do
     fn ->
       result = do_send_text_worker(session_pid, state, jid, text)
       send(session_pid, {:send_result, jid, text, result, strategy, attempt})
+      result
+    end
+  end
+
+  defp primary_media_send_task_fun(session_pid, state, type, jid, source, opts, strategy, attempt) do
+    fn ->
+      result = do_send_media_worker(session_pid, state, type, jid, source, opts)
+      send(session_pid, {:send_result, jid, nil, result, strategy, attempt})
       result
     end
   end

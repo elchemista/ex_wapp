@@ -29,6 +29,33 @@ defmodule ExWapp.ClientApiTest do
 
       {:ok, client, [event]}
     end
+
+    @impl true
+    def list_contacts(_client), do: {:ok, [%ExWapp.Contact{jid: "15550001111@s.whatsapp.net"}]}
+
+    @impl true
+    def get_contact(_client, jid), do: {:ok, %ExWapp.Contact{jid: jid, full_name: "Alice"}}
+
+    @impl true
+    def sync_contacts(client), do: {:ok, client}
+
+    @impl true
+    def create_contact(client, _jid, _name), do: {:ok, client}
+
+    @impl true
+    def update_contact(client, _jid, _attrs), do: {:ok, client}
+
+    @impl true
+    def delete_contact(client, _jid), do: {:ok, client}
+
+    @impl true
+    def list_chats(_client), do: {:ok, [%ExWapp.Chat{jid: "15550001111@s.whatsapp.net"}]}
+
+    @impl true
+    def list_groups(_client), do: {:ok, [%ExWapp.Chat{jid: "123@g.us", is_group: true}]}
+
+    @impl true
+    def get_chat(_client, jid), do: {:ok, %ExWapp.Chat{jid: jid}}
   end
 
   defmodule TestEvents do
@@ -114,6 +141,46 @@ defmodule ExWapp.ClientApiTest do
                       type: :message_received,
                       payload: %{from: "15550001111@s.whatsapp.net", text: "hi"}
                     }}
+  end
+
+  test "contact and group APIs delegate through the high-level transport" do
+    client = new_client()
+
+    assert {:ok, [%ExWapp.Contact{}]} = ExWapp.list_contacts(client)
+
+    assert {:ok, %ExWapp.Contact{full_name: "Alice"}} =
+             ExWapp.get_contact(client, "15550001111@s.whatsapp.net")
+
+    assert {:ok, synced} = ExWapp.sync_contacts(client)
+    assert_receive {:ex_wapp_event, %ExWapp.Event{type: :contacts_synced}}
+
+    assert {:ok, _} = ExWapp.create_contact(synced, "15550001111@s.whatsapp.net", "Alice")
+    assert_receive {:ex_wapp_event, %ExWapp.Event{type: :contact_created}}
+
+    assert {:ok, [%ExWapp.Chat{}]} = ExWapp.list_chats(client)
+    assert {:ok, [%ExWapp.Chat{is_group: true}]} = ExWapp.list_groups(client)
+    assert {:ok, %ExWapp.Chat{jid: "123@g.us"}} = ExWapp.get_chat(client, "123@g.us")
+  end
+
+  test "send_image/4 and send_audio/4 build high-level media messages" do
+    client = new_client()
+
+    assert {:ok, _client, image_id} =
+             ExWapp.send_image(client, "15550001111@s.whatsapp.net", {:bytes, "img"},
+               mimetype: "image/jpeg"
+             )
+
+    assert_receive {:adapter_send_message,
+                    %ExWapp.Message{id: ^image_id, type: :image, body: {:bytes, "img"}}}
+
+    assert {:ok, _client, audio_id} =
+             ExWapp.send_audio(client, "15550001111@s.whatsapp.net", {:bytes, "aud"},
+               mimetype: "audio/ogg; codecs=opus",
+               ptt: true
+             )
+
+    assert_receive {:adapter_send_message,
+                    %ExWapp.Message{id: ^audio_id, type: :audio, body: {:bytes, "aud"}}}
   end
 
   test "use ExWapp.Client generates wrapper helpers without owning OTP" do

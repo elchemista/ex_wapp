@@ -103,6 +103,71 @@ defmodule ExWapp.Client do
       def receive_message(client, payload, receive_opts \\ []) do
         ExWapp.receive_message(client, payload, receive_opts)
       end
+
+      @doc "Lists locally known contacts."
+      @spec list_contacts(ExWapp.Client.t()) ::
+              {:ok, [ExWapp.Contact.t()]} | {:error, ExWapp.Error.t(), ExWapp.Client.t()}
+      def list_contacts(client), do: ExWapp.list_contacts(client)
+
+      @doc "Gets a locally known contact by JID."
+      @spec get_contact(ExWapp.Client.t(), String.t()) ::
+              {:ok, ExWapp.Contact.t() | nil} | {:error, ExWapp.Error.t(), ExWapp.Client.t()}
+      def get_contact(client, jid), do: ExWapp.get_contact(client, jid)
+
+      @doc "Synchronizes contacts through the configured transport adapter."
+      @spec sync_contacts(ExWapp.Client.t()) ::
+              {:ok, ExWapp.Client.t()} | {:error, ExWapp.Error.t(), ExWapp.Client.t()}
+      def sync_contacts(client), do: ExWapp.sync_contacts(client)
+
+      @doc "Creates or updates a contact."
+      @spec create_contact(ExWapp.Client.t(), String.t(), String.t()) ::
+              {:ok, ExWapp.Client.t()} | {:error, ExWapp.Error.t(), ExWapp.Client.t()}
+      def create_contact(client, jid, name), do: ExWapp.create_contact(client, jid, name)
+
+      @doc "Updates a contact."
+      @spec update_contact(ExWapp.Client.t(), String.t(), map() | keyword()) ::
+              {:ok, ExWapp.Client.t()} | {:error, ExWapp.Error.t(), ExWapp.Client.t()}
+      def update_contact(client, jid, attrs), do: ExWapp.update_contact(client, jid, attrs)
+
+      @doc "Deletes a contact."
+      @spec delete_contact(ExWapp.Client.t(), String.t()) ::
+              {:ok, ExWapp.Client.t()} | {:error, ExWapp.Error.t(), ExWapp.Client.t()}
+      def delete_contact(client, jid), do: ExWapp.delete_contact(client, jid)
+
+      @doc "Lists locally known chats."
+      @spec list_chats(ExWapp.Client.t()) ::
+              {:ok, [ExWapp.Chat.chat()]} | {:error, ExWapp.Error.t(), ExWapp.Client.t()}
+      def list_chats(client), do: ExWapp.list_chats(client)
+
+      @doc "Lists locally known group chats."
+      @spec list_groups(ExWapp.Client.t()) ::
+              {:ok, [ExWapp.Chat.chat()]} | {:error, ExWapp.Error.t(), ExWapp.Client.t()}
+      def list_groups(client), do: ExWapp.list_groups(client)
+
+      @doc "Gets chat metadata by JID."
+      @spec get_chat(ExWapp.Client.t(), String.t()) ::
+              {:ok, ExWapp.Chat.chat()} | {:error, ExWapp.Error.t(), ExWapp.Client.t()}
+      def get_chat(client, jid), do: ExWapp.get_chat(client, jid)
+
+      @doc "Sends an image message."
+      @spec send_image(ExWapp.Client.t(), String.t(), ExWapp.Media.source(), keyword()) ::
+              {:ok, ExWapp.Client.t(), String.t()}
+              | {:error, ExWapp.Error.t(), ExWapp.Client.t()}
+      def send_image(client, to, source, opts \\ []),
+        do: ExWapp.send_image(client, to, source, opts)
+
+      @doc "Sends an audio message."
+      @spec send_audio(ExWapp.Client.t(), String.t(), ExWapp.Media.source(), keyword()) ::
+              {:ok, ExWapp.Client.t(), String.t()}
+              | {:error, ExWapp.Error.t(), ExWapp.Client.t()}
+      def send_audio(client, to, source, opts \\ []),
+        do: ExWapp.send_audio(client, to, source, opts)
+
+      @doc "Downloads media referenced by an inbound media message."
+      @spec download_media(ExWapp.Client.t(), ExWapp.Media.Ref.t(), keyword()) ::
+              {:ok, ExWapp.Client.t(), ExWapp.Media.Download.t()}
+              | {:error, ExWapp.Error.t(), ExWapp.Client.t()}
+      def download_media(client, ref, opts \\ []), do: ExWapp.download_media(client, ref, opts)
     end
   end
 

@@ -6,7 +6,7 @@ defmodule ExWapp.Client.Transport do
   GenStateMachine, direct WebSocket process, test double, or any other runtime.
   """
 
-  alias ExWapp.{Client, Message}
+  alias ExWapp.{Chat, Client, Contact, Media, Message}
 
   @callback connect(Client.t()) :: {:ok, Client.t()} | {:error, term()}
   @callback pair(Client.t()) :: {:ok, Client.t(), term()} | {:error, term()}
@@ -20,8 +20,33 @@ defmodule ExWapp.Client.Transport do
               {:ok, Client.t(), [ExWapp.Event.t()]}
               | {:ok, [ExWapp.Event.t()]}
               | {:error, term()}
+  @callback list_contacts(Client.t()) :: {:ok, [Contact.t()]} | {:error, term()}
+  @callback get_contact(Client.t(), String.t()) :: {:ok, Contact.t() | nil} | {:error, term()}
+  @callback sync_contacts(Client.t()) :: {:ok, Client.t()} | :ok | {:error, term()}
+  @callback create_contact(Client.t(), String.t(), String.t()) ::
+              {:ok, Client.t()} | :ok | {:error, term()}
+  @callback update_contact(Client.t(), String.t(), map() | keyword()) ::
+              {:ok, Client.t()} | :ok | {:error, term()}
+  @callback delete_contact(Client.t(), String.t()) :: {:ok, Client.t()} | :ok | {:error, term()}
+  @callback list_chats(Client.t()) :: {:ok, [Chat.chat()]} | {:error, term()}
+  @callback list_groups(Client.t()) :: {:ok, [Chat.chat()]} | {:error, term()}
+  @callback get_chat(Client.t(), String.t()) :: {:ok, Chat.chat()} | {:error, term()}
+  @callback download_media(Client.t(), Media.Ref.t(), keyword()) ::
+              {:ok, Client.t(), Media.Download.t()} | {:error, term()}
 
-  @optional_callbacks pair: 1, disconnect: 1, receive_message: 3
+  @optional_callbacks pair: 1,
+                      disconnect: 1,
+                      receive_message: 3,
+                      list_contacts: 1,
+                      get_contact: 2,
+                      sync_contacts: 1,
+                      create_contact: 3,
+                      update_contact: 3,
+                      delete_contact: 2,
+                      list_chats: 1,
+                      list_groups: 1,
+                      get_chat: 2,
+                      download_media: 3
 end
 
 defmodule ExWapp.Client.Transport.Noop do
@@ -218,6 +243,26 @@ defmodule ExWapp.Client.Transport.Session do
     end
   end
 
+  def send_message(%Client{} = client, %Message{type: type, to: to, body: source, opts: opts})
+      when type in [:image, :audio] do
+    case ensure_session(client) do
+      {:ok, client, session} ->
+        result =
+          case type do
+            :image -> Session.send_image(session, to, source, opts)
+            :audio -> Session.send_audio(session, to, source, opts)
+          end
+
+        case result do
+          {:ok, message_id} -> {:ok, client, message_id}
+          {:error, reason} -> {:error, client, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   def send_message(_client, %Message{type: type}), do: {:error, {:unsupported_message_type, type}}
 
   @impl true
@@ -237,6 +282,75 @@ defmodule ExWapp.Client.Transport.Session do
   end
 
   def receive_message(%Client{} = client, _payload, _opts), do: {:ok, client, []}
+
+  @impl true
+  def list_contacts(%Client{} = client), do: {:ok, ExWapp.Contact.list(client.store)}
+
+  @impl true
+  def get_contact(%Client{} = client, jid), do: {:ok, ExWapp.Contact.get(client.store, jid)}
+
+  @impl true
+  def sync_contacts(%Client{} = client) do
+    with {:ok, client, session} <- ensure_session(client),
+         :ok <- Session.sync_contacts(session) do
+      {:ok, client}
+    end
+  end
+
+  @impl true
+  def create_contact(%Client{} = client, jid, name) do
+    with {:ok, client, session} <- ensure_session(client),
+         :ok <- Session.create_contact(session, jid, name) do
+      {:ok, client}
+    end
+  end
+
+  @impl true
+  def update_contact(%Client{} = client, jid, attrs) do
+    name = contact_name_from_attrs(attrs)
+
+    if is_binary(name) and name != "" do
+      create_contact(client, jid, name)
+    else
+      {:error, :missing_contact_name}
+    end
+  end
+
+  @impl true
+  def delete_contact(%Client{} = client, jid) do
+    with {:ok, client, session} <- ensure_session(client),
+         :ok <- Session.delete_contact(session, jid) do
+      {:ok, client}
+    end
+  end
+
+  @impl true
+  def list_chats(%Client{} = client), do: {:ok, ExWapp.Chat.list(client.store)}
+
+  @impl true
+  def list_groups(%Client{} = client), do: {:ok, ExWapp.Chat.list_groups(client.store)}
+
+  @impl true
+  def get_chat(%Client{} = client, jid), do: ExWapp.Chat.get(client.store, jid)
+
+  @impl true
+  def download_media(%Client{} = client, %ExWapp.Media.Ref{} = ref, opts) do
+    with {:ok, client, session} <- ensure_session(client),
+         {:ok, download} <- Session.download_media(session, ref, opts) do
+      {:ok, client, download}
+    end
+  end
+
+  defp contact_name_from_attrs(attrs) when is_list(attrs) do
+    Keyword.get(attrs, :full_name) || Keyword.get(attrs, :name) || Keyword.get(attrs, :push_name)
+  end
+
+  defp contact_name_from_attrs(attrs) when is_map(attrs) do
+    Map.get(attrs, :full_name) || Map.get(attrs, :name) || Map.get(attrs, :push_name) ||
+      Map.get(attrs, "full_name") || Map.get(attrs, "name") || Map.get(attrs, "push_name")
+  end
+
+  defp contact_name_from_attrs(_), do: nil
 
   @spec ensure_session(Client.t()) :: {:ok, Client.t(), pid()} | {:error, term()}
   defp ensure_session(%Client{} = client) do

@@ -8,6 +8,50 @@ defmodule ExWapp.Session.IQ do
   alias ExWapp.{Binary, JID}
   alias ExWapp.Session.JIDUtils
 
+  @spec build_media_conn_query(String.t()) :: Binary.Node.t()
+  def build_media_conn_query(message_id) do
+    %Binary.Node{
+      tag: "iq",
+      attrs: %{
+        "id" => message_id,
+        "xmlns" => "w:m",
+        "type" => "set",
+        "to" => "s.whatsapp.net"
+      },
+      content: [
+        %Binary.Node{tag: "media_conn", attrs: %{}, content: nil}
+      ]
+    }
+  end
+
+  @spec parse_media_conn_response(term()) :: {:ok, map()} | {:error, term()}
+  def parse_media_conn_response(%Binary.Node{
+        tag: "iq",
+        attrs: %{"type" => "result"},
+        content: content
+      })
+      when is_list(content) do
+    case find_child(content, "media_conn") do
+      %Binary.Node{attrs: attrs, content: children} ->
+        {:ok,
+         %{
+           auth: Map.get(attrs, "auth"),
+           ttl: parse_int(Map.get(attrs, "ttl")),
+           auth_ttl: parse_int(Map.get(attrs, "auth_ttl")),
+           max_buckets: parse_int(Map.get(attrs, "max_buckets")),
+           hosts: parse_media_hosts(children)
+         }}
+
+      _ ->
+        {:error, :missing_media_conn}
+    end
+  end
+
+  def parse_media_conn_response(%Binary.Node{attrs: %{"type" => "error"}} = node),
+    do: {:error, {:media_conn_error, node}}
+
+  def parse_media_conn_response(_), do: {:error, :invalid_media_conn_response}
+
   @spec build_prekey_request(String.t() | [String.t()], String.t()) :: Binary.Node.t()
   def build_prekey_request(jid, message_id) when is_binary(jid) do
     build_prekey_request([jid], message_id)
@@ -305,6 +349,21 @@ defmodule ExWapp.Session.IQ do
       _ -> 0
     end
   end
+
+  defp parse_int(value) when is_integer(value), do: value
+  defp parse_int(value) when is_binary(value), do: parse_int_or_zero(value)
+  defp parse_int(_), do: 0
+
+  defp parse_media_hosts(children) when is_list(children) do
+    children
+    |> Enum.filter(&match?(%Binary.Node{tag: "host"}, &1))
+    |> Enum.map(fn %Binary.Node{attrs: attrs} ->
+      %{hostname: Map.get(attrs || %{}, "hostname")}
+    end)
+    |> Enum.reject(&is_nil(&1.hostname))
+  end
+
+  defp parse_media_hosts(_), do: []
 
   defp extract_user_jid(%Binary.Node{attrs: attrs}) do
     case Map.get(attrs, "jid") do
