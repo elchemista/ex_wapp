@@ -1,75 +1,54 @@
 defmodule ExWapp.Telemetry do
   @moduledoc """
-  Telemetry helpers for the runtime-neutral ExWapp client API.
+  Telemetry helpers and canonical event list for ExWapp.
 
-  Events use the `[:ex_wapp, ...]` prefix and are emitted by the high-level
-  facade and the optional telemetry event adapter.
+  All events use the `[:ex_wapp, :session, ...]` prefix.
   """
 
+  @prefix [:ex_wapp, :session]
+
   @events [
-    [:ex_wapp, :client, :connect, :start],
-    [:ex_wapp, :client, :connect, :stop],
-    [:ex_wapp, :client, :connect, :exception],
-    [:ex_wapp, :client, :pair, :start],
-    [:ex_wapp, :client, :pair, :stop],
-    [:ex_wapp, :client, :pair, :exception],
-    [:ex_wapp, :client, :disconnect, :start],
-    [:ex_wapp, :client, :disconnect, :stop],
-    [:ex_wapp, :client, :disconnect, :exception],
-    [:ex_wapp, :client, :send_message, :start],
-    [:ex_wapp, :client, :send_message, :stop],
-    [:ex_wapp, :client, :send_message, :exception],
-    [:ex_wapp, :client, :receive_message, :start],
-    [:ex_wapp, :client, :receive_message, :stop],
-    [:ex_wapp, :client, :receive_message, :exception],
-    [:ex_wapp, :event, :emit],
-    [:ex_wapp, :transport, :websocket, :connect],
-    [:ex_wapp, :transport, :websocket, :disconnect],
-    [:ex_wapp, :transport, :websocket, :frame_received],
-    [:ex_wapp, :transport, :websocket, :frame_sent],
-    [:ex_wapp, :transport, :websocket, :error],
-    [:ex_wapp, :session, :init],
-    [:ex_wapp, :session, :connect],
-    [:ex_wapp, :session, :connected],
-    [:ex_wapp, :session, :disconnected],
-    [:ex_wapp, :session, :reconnect],
-    [:ex_wapp, :session, :error],
-    [:ex_wapp, :session, :qr],
-    [:ex_wapp, :session, :message_received],
-    [:ex_wapp, :session, :message_sent],
-    [:ex_wapp, :session, :terminate]
+    @prefix ++ [:init],
+    @prefix ++ [:connect],
+    @prefix ++ [:connected],
+    @prefix ++ [:disconnected],
+    @prefix ++ [:reconnect],
+    @prefix ++ [:error],
+    @prefix ++ [:terminate],
+    @prefix ++ [:qr],
+    @prefix ++ [:message_received],
+    @prefix ++ [:message_sent],
+    [:ex_wapp, :rate, :limited],
+    [:ex_wapp, :quota, :exceeded],
+    [:ex_wapp, :safety, :trip],
+    [:ex_wapp, :policy, :blocked_send]
   ]
 
-  @type event_name :: [atom()] | atom()
-  @type metadata :: map() | keyword()
+  @type event_name :: [atom()]
 
   @doc """
-  Returns all canonical telemetry events.
+  Returns all canonical ExWapp telemetry events.
   """
   @spec events() :: [event_name()]
   def events, do: @events
 
   @doc """
-  Emits a telemetry event.
+  Executes an ExWapp session event.
   """
-  @spec execute(event_name(), map(), metadata()) :: :ok
+  @spec execute(atom(), map(), map()) :: :ok
   def execute(event, measurements, metadata \\ %{})
-
-  def execute(event, measurements, metadata)
-      when is_list(event) and is_map(measurements) do
-    :telemetry.execute(event, measurements, Map.new(metadata))
-  end
-
-  def execute(event, measurements, metadata)
-      when is_atom(event) and is_map(measurements) do
-    execute([:ex_wapp, :session, event], measurements, metadata)
+      when is_atom(event) and is_map(measurements) and is_map(metadata) do
+    :telemetry.execute(@prefix ++ [event], measurements, metadata)
   end
 
   @doc """
-  Attaches one handler to all ExWapp telemetry events.
+  Attaches one handler to all ExWapp session events.
   """
-  @spec attach_many(term(), :telemetry.handler_function(), term()) ::
-          :ok | {:error, :already_exists}
+  @spec attach_many(
+          handler_id :: term(),
+          handler :: :telemetry.handler_function(),
+          config :: term()
+        ) :: :ok | {:error, :already_exists}
   def attach_many(handler_id, handler, config \\ nil) when is_function(handler, 4) do
     :telemetry.attach_many(handler_id, @events, handler, config)
   end

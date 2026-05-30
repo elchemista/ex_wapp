@@ -330,7 +330,10 @@ defmodule ExWapp.Noise do
         |> Map.put(:static_private, priv)
         |> Map.put(:static_public, pub)
 
-      :ok = Store.persist(store, Map.put(data, :noise, updated_noise))
+      case Store.persist(store, Map.put(data, :noise, updated_noise)) do
+        :ok -> :ok
+        {:error, _reason} = error -> error
+      end
     end
   end
 

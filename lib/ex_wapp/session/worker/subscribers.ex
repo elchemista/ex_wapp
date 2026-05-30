@@ -121,6 +121,20 @@ defmodule ExWapp.Session.Worker.Subscribers do
   end
 
   @doc """
+  Broadcasts a transient reconnect notice via lifecycle PubSub topics.
+
+  Emitted for recoverable server-side conditions (e.g. `503`/`515` stream
+  errors) so owners can stay calm instead of treating them as a hard error.
+
+  Message format:
+  - `{:ex_wapp_session, :reconnecting, reason}`
+  """
+  @spec broadcast_reconnecting(term(), term()) :: :ok
+  def broadcast_reconnecting(session_id, reason) do
+    broadcast_lifecycle(session_id, {:ex_wapp_session, :reconnecting, reason})
+  end
+
+  @doc """
   Broadcasts session health events (errors, drops, retries, guard trips).
 
   Events are sent on:

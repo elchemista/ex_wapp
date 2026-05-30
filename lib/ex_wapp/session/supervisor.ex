@@ -154,36 +154,6 @@ defmodule ExWapp.Session.Supervisor do
   end
 
   @doc """
-  Returns all currently alive session processes registered for `session_id`.
-
-  The default registry is unique, so this normally returns either `[]` or
-  `[pid]`. The list form keeps callers decoupled from registry internals and is
-  useful for defensive cleanup in host applications.
-  """
-  @spec get_live_sessions(term()) :: [pid()]
-  def get_live_sessions(session_id) do
-    @registry
-    |> Registry.lookup(session_id)
-    |> Enum.map(&elem(&1, 0))
-    |> Enum.filter(&Process.alive?/1)
-    |> Enum.uniq()
-  end
-
-  @doc """
-  Disconnects and terminates every live session process registered for `session_id`.
-
-  Returns `:ok` whether or not any process existed.
-  """
-  @spec stop_all_sessions(term()) :: :ok
-  def stop_all_sessions(session_id) do
-    session_id
-    |> get_live_sessions()
-    |> Enum.each(&stop_live_session/1)
-
-    :ok
-  end
-
-  @doc """
   Looks up a session by ID.
 
   Returns `{:ok, pid}` if found, or `:error` if not found.
@@ -228,35 +198,5 @@ defmodule ExWapp.Session.Supervisor do
       {:ok, _} -> true
       :error -> false
     end
-  end
-
-  defp stop_live_session(pid) when is_pid(pid) do
-    safe_disconnect(pid)
-
-    case DynamicSupervisor.terminate_child(@supervisor, pid) do
-      :ok ->
-        :ok
-
-      {:error, :not_found} ->
-        safe_stop(pid)
-    end
-  end
-
-  defp safe_disconnect(pid) when is_pid(pid) do
-    ExWapp.Session.disconnect(pid)
-  catch
-    _, _ -> :ok
-  end
-
-  defp safe_stop(pid) when is_pid(pid) do
-    if Process.alive?(pid) do
-      GenServer.stop(pid, :normal, 1_000)
-    end
-
-    :ok
-  catch
-    _, _ ->
-      if Process.alive?(pid), do: Process.exit(pid, :shutdown)
-      :ok
   end
 end

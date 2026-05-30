@@ -1,713 +1,719 @@
 defmodule ExWapp do
   @moduledoc """
-  Runtime-neutral WhatsApp Web protocol client.
+  Elixir client for WhatsApp Web.
 
-  ExWapp exposes a high-level client API and adapter behaviours. It does not
-  own supervision, GenServers, queues, sockets, PubSub, or retry policy. Keep
-  `%ExWapp.Client{}` in your own process state, or use it directly in scripts
-  and tests.
-  """
+  ExWapp implements the WhatsApp Web protocol, allowing you to send and receive
+  messages through a linked companion device. This is the same protocol used by
+  WhatsApp Web in browsers.
 
-  require Logger
+  ## Quick Start
 
-  alias ExWapp.{Chat, Client, Contact, Error, Event, Events, Media, Message}
+  ```elixir
+  # Start a session with default ETS storage
+  {:ok, session} = ExWapp.start_link()
 
-  @doc """
-  Creates a runtime-neutral ExWapp client.
-  """
-  @spec new(keyword()) :: Client.t()
-  def new(opts \\ []), do: Client.new(opts)
+  # Connect to WhatsApp servers
+  ExWapp.connect(session)
 
-  @doc """
-  Connects a client through its configured `ExWapp.Client.Transport` adapter.
-  """
-  @spec connect(Client.t()) :: {:ok, Client.t()} | {:error, Error.t(), Client.t()}
-  def connect(%Client{} = client) do
-    run_client_operation(client, :connect, fn ->
-      client.transport.connect(client)
-      |> normalize_connect_result(client)
-    end)
-  end
+  # Stream QR codes for pairing
+  ExWapp.qr_stream(session)
+  |> Stream.each(fn
+    {:code, data} ->
+      # Display QR code for user to scan
+      IO.puts("Scan this QR with WhatsApp:")
+      data |> ExWapp.Pairing.QR.to_terminal() |> IO.puts()
 
-  @doc """
-  Starts pairing through the configured transport adapter.
-  """
-  @spec pair(Client.t()) :: {:ok, Client.t(), term()} | {:error, Error.t(), Client.t()}
-  def pair(%Client{} = client) do
-    run_client_operation(client, :pair, fn ->
-      if adapter_exports?(client.transport, :pair, 1) do
-        client.transport.pair(client)
-        |> normalize_pair_result(client)
-      else
-        fail_client(client, :pair, :transport, :pair_not_supported)
+    :success ->
+      IO.puts("Successfully paired!")
+
+    {:error, reason} ->
+      IO.puts("Pairing failed: \#{inspect(reason)}")
+  end)
+  |> Stream.run()
+  ```
+
+  ## Architecture
+
+  ExWapp is organized into several layers:
+
+  - **Transport** (`ExWapp.Conn`) - WebSocket connection to WhatsApp servers
+  - **Noise Protocol** (`ExWapp.Noise`) - End-to-end encryption handshake
+  - **Signal Protocol** (`ExWapp.Signal`) - Message encryption (Double Ratchet)
+  - **Binary Encoding** (`ExWapp.Binary`) - WhatsApp's custom XML-binary format
+  - **Session** (`ExWapp.Session`) - State machine orchestrating the above
+
+  ## Storage Adapters
+
+  Session state (keys, identity, message history) is persisted via storage adapters.
+  See `ExWapp.Store` for the behaviour and built-in implementations:
+
+  ```elixir
+  # Default: ETS with file persistence
+  ExWapp.start_link(store: nil)
+
+  # ETS with custom path
+  ExWapp.start_link(store: {ExWapp.Store.Ets, path: "/my/path.etf"})
+
+  # In-memory for testing
+  ExWapp.start_link(store: ExWapp.Store.Memory)
+
+  # Custom adapter (e.g., PostgreSQL)
+  ExWapp.start_link(store: {MyApp.PostgresStore, user_id: 123})
+  ```
+
+  ## Example: Persistent Session
+
+  ```elixir
+  defmodule MyApp.WhatsApp do
+    @store_path "/var/lib/myapp/whatsapp_session.etf"
+
+    def start do
+      {:ok, session} = ExWapp.start_link(
+        store: {ExWapp.Store.Ets, path: @store_path}
+      )
+
+      case ExWapp.state(session) do
+        :connected ->
+          IO.puts("Already connected")
+          {:ok, session}
+
+        _other ->
+          ExWapp.connect(session)
+          wait_for_pairing(session)
       end
-    end)
-  end
+    end
 
-  @doc """
-  Disconnects through the configured transport adapter when it supports
-  `disconnect/1`; otherwise marks the local client as disconnected.
-  """
-  @spec disconnect(Client.t()) :: {:ok, Client.t()} | {:error, Error.t(), Client.t()}
-  def disconnect(%Client{} = client) do
-    run_client_operation(client, :disconnect, fn ->
-      if adapter_exports?(client.transport, :disconnect, 1) do
-        client.transport.disconnect(client)
-        |> normalize_disconnect_result(client)
-      else
-        disconnected =
-          client
-          |> Map.put(:status, :disconnected)
-          |> Client.trace(:disconnect, %{adapter: :not_supported})
-
-        emit_client_event(disconnected, :disconnected, %{reason: :local})
-        {:ok, disconnected}
+    defp wait_for_pairing(session) do
+      ExWapp.qr_stream(session)
+      |> Enum.find(fn
+        :success -> true
+        {:error, _} -> true
+        _ -> false
+      end)
+      |> case do
+        :success -> {:ok, session}
+        {:error, reason} -> {:error, reason}
       end
-    end)
+    end
+  end
+  ```
+
+  ## Protocol Details
+
+  For implementation details, see:
+  - `FLOW.md` - Detailed protocol documentation
+  - `ExWapp.Noise` - Noise_XX_25519_AESGCM_SHA256 handshake
+  - `ExWapp.Signal` - X3DH and Double Ratchet
+  """
+
+  alias ExWapp.Session
+
+  @doc """
+  Starts a WhatsApp session process.
+
+  ## Options
+
+    * `:store` - Storage adapter for session state. See `ExWapp.Store`.
+      Defaults to `ExWapp.Store.Ets` with default path.
+
+    * `:name` - Optional name to register the process.
+
+    * `:runtime` - Per-session runtime config overrides (same shape as
+      `config :ex_wapp, :runtime`).
+
+    * `:client_version` / `:wa_version` - Optional shorthand override for
+      `runtime.protocol.client_version`. Accepted forms:
+      `"2.3000.1034187832"`, `{2, 3000, 1034187832}`, or
+      `%{primary: 2, secondary: 3000, tertiary: 1034187832}`.
+
+  ## Examples
+
+      # Anonymous session with default storage
+      {:ok, session} = ExWapp.start_link()
+
+      # Named session with custom storage
+      {:ok, _} = ExWapp.start_link(
+        name: MyApp.WhatsApp,
+        store: {ExWapp.Store.Ets, path: "/tmp/wa.etf"}
+      )
+
+      # For testing
+      {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
+  """
+  @spec start_link(keyword()) :: GenServer.on_start()
+  def start_link(opts \\ []) do
+    Session.start_link(opts)
   end
 
   @doc """
-  Sends a high-level message through the configured transport adapter.
+  Initiates connection to WhatsApp servers.
 
-  Accepts either an `%ExWapp.Message{}` or keyword options:
+  This starts the Noise handshake and pairing flow. The call returns
+  immediately; use `qr_stream/1` to receive pairing events.
 
-      ExWapp.send_message(client, to: jid, text: "hello")
-      ExWapp.send_message(client, ExWapp.Message.text(jid, "hello"))
+  ## Example
+
+      {:ok, session} = ExWapp.start_link()
+      :ok = ExWapp.connect(session)
+
+      # Now stream QR codes
+      ExWapp.qr_stream(session) |> Stream.run()
   """
-  @spec send_message(Client.t(), keyword() | Message.t()) ::
-          {:ok, Client.t(), String.t()} | {:error, Error.t(), Client.t()}
-  def send_message(%Client{} = client, %Message{} = message) do
-    run_client_operation(client, :send_message, fn ->
-      do_send_message(client, message)
-    end)
-  end
-
-  def send_message(%Client{} = client, opts) when is_list(opts) do
-    run_client_operation(client, :send_message, fn ->
-      case build_message_from_opts(opts) do
-        {:ok, message} ->
-          do_send_message(client, message)
-
-        {:error, reason} ->
-          fail_client(client, :send_message, :build_message, reason)
-      end
-    end)
-  end
+  @spec connect(GenServer.server()) :: :ok
+  defdelegate connect(server), to: Session
 
   @doc """
-  Processes an inbound adapter payload.
+  Returns a stream of QR code and pairing events.
+
+  Subscribe to this stream after calling `connect/1` to receive:
+
+    * `{:code, data}` - New QR code payload to display (codes expire periodically)
+    * `:success` - Successfully paired with phone
+    * `{:error, reason}` - Pairing failed
+
+  ## Example
+
+      ExWapp.qr_stream(session)
+      |> Stream.each(fn
+        {:code, data} ->
+          # Render QR code (e.g., using qrencode or terminal output)
+          qr = ExWapp.Pairing.QR.to_terminal(data)
+          IO.puts(qr)
+
+        :success ->
+          IO.puts("Paired successfully")
+
+        {:error, :timeout} ->
+          IO.puts("QR expired, generating new one...")
+      end)
+      |> Stream.run()
   """
-  @spec receive_message(Client.t(), term(), keyword()) ::
-          {:ok, Client.t(), [Event.t()]} | {:error, Error.t(), Client.t()}
-  def receive_message(%Client{} = client, payload, opts \\ []) do
-    run_client_operation(client, :receive_message, fn ->
-      if adapter_exports?(client.transport, :receive_message, 3) do
-        client.transport.receive_message(client, payload, opts)
-        |> normalize_receive_result(client)
-      else
-        fail_client(client, :receive_message, :transport, :receive_not_supported)
-      end
-    end)
+  @spec qr_stream(GenServer.server()) :: Enumerable.t()
+  defdelegate qr_stream(server), to: Session
+
+  @doc """
+  Sends a text message to a WhatsApp contact or group.
+
+  The session must be paired before sending messages. The `jid` is the
+  recipient's WhatsApp ID (phone number for individuals, group ID for groups).
+
+  ## Examples
+
+      # Send to individual (use full JID format)
+      ExWapp.send_text(session, "1234567890@s.whatsapp.net", "Hello!")
+
+      # Send to group
+      ExWapp.send_text(session, "123456789-987654321@g.us", "Hello group!")
+  """
+  @spec send_text(GenServer.server(), binary(), iodata()) :: :ok | {:error, term()}
+  defdelegate send_text(server, jid, text), to: Session
+
+  @doc """
+  Returns the current session status.
+
+  Possible values: `:idle`, `:connecting`, `:handshaking`, `:connected`, `:disconnected`
+
+  ## Example
+
+      iex> ExWapp.state(session)
+      :connected
+  """
+  @spec state(GenServer.server()) :: Session.status()
+  defdelegate state(server), to: Session
+
+  @doc """
+  Returns session statistics for monitoring.
+
+  ## Example
+
+      iex> ExWapp.stats(session)
+      %{
+        status: :connected,
+        connected_at: ~U[2024-01-15 10:30:00Z],
+        uptime_seconds: 3600,
+        messages_sent: 42,
+        messages_received: 128,
+        reconnects: 1,
+        errors: 0
+      }
+  """
+  @spec stats(GenServer.server()) :: map()
+  defdelegate stats(server), to: Session
+
+  @doc """
+  Returns the session_id for a session process.
+
+  Returns `nil` when no explicit `:session_id` option was provided at start.
+
+  ## Example
+
+      session_id = ExWapp.get_session_id(session)
+  """
+  @spec get_session_id(GenServer.server()) :: term() | nil
+  defdelegate get_session_id(server), to: Session
+
+  @doc """
+  Returns the effective runtime configuration for a running session.
+  """
+  @spec runtime_config(GenServer.server()) :: map()
+  defdelegate runtime_config(server), to: Session
+
+  @doc """
+  Returns current policy status (safety breaker, quota, rate limiter snapshot).
+  """
+  @spec policy_status(GenServer.server()) :: map()
+  defdelegate policy_status(server), to: Session
+
+  @doc """
+  Returns send health counters and guard state for a running session.
+  """
+  @spec health_status(GenServer.server()) :: map()
+  defdelegate health_status(server), to: Session
+
+  @doc """
+  Gracefully disconnects from WhatsApp servers.
+
+  Stops automatic reconnection and closes the connection cleanly.
+  Call `connect/1` to reconnect.
+  """
+  @spec disconnect(GenServer.server()) :: :ok
+  defdelegate disconnect(server), to: Session
+
+  # ============================================================================
+  # Chat & Messaging API
+  # ============================================================================
+
+  alias ExWapp.{Chat, Messages}
+
+  @doc """
+  Lists all chats for a session.
+
+  Returns chats sorted by last message timestamp (most recent first).
+
+  ## Example
+
+      chats = ExWapp.list_chats(session)
+      Enum.each(chats, fn chat ->
+        IO.puts("\#{chat.name || chat.jid} - \#{chat.unread_count} unread")
+      end)
+  """
+  @spec list_chats(GenServer.server()) :: [Chat.chat()]
+  def list_chats(session), do: Chat.list(session)
+
+  @doc """
+  Lists only group chats for a session.
+
+  Returns chats where JID ends with `@g.us`, sorted by most recent activity.
+  """
+  @spec list_groups(GenServer.server()) :: [Chat.chat()]
+  def list_groups(session), do: Chat.list_groups(session)
+
+  @doc """
+  Gets a specific chat by JID.
+
+  ## Example
+
+      {:ok, chat} = ExWapp.get_chat(session, "1234567890@s.whatsapp.net")
+      IO.inspect(chat.messages)
+  """
+  @spec get_chat(GenServer.server(), String.t()) :: {:ok, Chat.chat()} | {:error, :not_found}
+  def get_chat(session, jid), do: Chat.get(session, jid)
+
+  @doc """
+  Gets messages for a chat with optional pagination.
+
+  ## Options
+
+    * `:limit` - Maximum messages to return (default: 50)
+    * `:offset` - Number of messages to skip (default: 0)
+
+  ## Example
+
+      # Get last 20 messages
+      messages = ExWapp.get_messages(session, jid, limit: 20)
+  """
+  @spec get_messages(GenServer.server(), String.t(), keyword()) :: [Chat.message()]
+  def get_messages(session, jid, opts \\ []), do: Chat.messages(session, jid, opts)
+
+  @doc """
+  Marks all messages in a chat as read.
+
+  ## Example
+
+      ExWapp.mark_chat_read(session, "1234567890@s.whatsapp.net")
+  """
+  @spec mark_chat_read(GenServer.server(), String.t()) :: :ok
+  def mark_chat_read(session, jid), do: Chat.mark_read(session, jid)
+
+  @doc """
+  Sends a text message to a contact or group.
+
+  Accepts either a session pid or a session_id string.
+
+  When called with a **pid**, the call is synchronous and returns the message ID.
+  When called with a **session_id string**, the send command is dispatched via
+  PubSub (fire-and-forget) and returns `:ok` immediately.
+
+  ## Returns
+
+    * `{:ok, message_id}` - Message was queued for sending (pid path)
+    * `:ok` - Send command dispatched via PubSub (session_id path)
+    * `{:error, reason}` - Failed to send
+
+  ## Examples
+
+      # With session pid (synchronous, returns message_id)
+      {:ok, id} = ExWapp.send_message(session, "1234567890@s.whatsapp.net", "Hello!")
+
+      # With session_id string (fire-and-forget via PubSub)
+      :ok = ExWapp.send_message("my_session", "1234567890@s.whatsapp.net", "Hello!")
+  """
+  @spec send_message(pid() | binary(), String.t(), String.t()) ::
+          {:ok, String.t()} | :ok | {:error, term()}
+  def send_message(session, jid, text)
+
+  def send_message(session, jid, text) when is_pid(session) do
+    Session.send_text(session, jid, text)
   end
 
-  @doc """
-  Lists locally known contacts through the configured transport adapter.
-  """
-  @spec list_contacts(Client.t()) :: {:ok, [Contact.t()]} | {:error, Error.t(), Client.t()}
-  def list_contacts(%Client{} = client) do
-    run_client_operation(client, :list_contacts, fn ->
-      if adapter_exports?(client.transport, :list_contacts, 1) do
-        client.transport.list_contacts(client)
-        |> normalize_list_result(client, :list_contacts, :contacts)
-      else
-        fail_client(client, :list_contacts, :transport, :contacts_not_supported)
-      end
-    end)
-  end
-
-  @doc """
-  Gets a locally known contact by JID.
-  """
-  @spec get_contact(Client.t(), String.t()) ::
-          {:ok, Contact.t() | nil} | {:error, Error.t(), Client.t()}
-  def get_contact(%Client{} = client, jid) when is_binary(jid) do
-    run_client_operation(client, :get_contact, fn ->
-      if adapter_exports?(client.transport, :get_contact, 2) do
-        client.transport.get_contact(client, jid)
-        |> normalize_value_result(client, :get_contact, :contact)
-      else
-        fail_client(client, :get_contact, :transport, :contacts_not_supported)
-      end
-    end)
-  end
-
-  @doc """
-  Requests a contact app-state sync through the configured transport adapter.
-  """
-  @spec sync_contacts(Client.t()) :: {:ok, Client.t()} | {:error, Error.t(), Client.t()}
-  def sync_contacts(%Client{} = client) do
-    run_client_operation(client, :sync_contacts, fn ->
-      if adapter_exports?(client.transport, :sync_contacts, 1) do
-        client.transport.sync_contacts(client)
-        |> normalize_client_result(client, :sync_contacts, :contacts_synced, %{})
-      else
-        fail_client(client, :sync_contacts, :transport, :contacts_not_supported)
-      end
-    end)
-  end
-
-  @doc """
-  Creates or updates a server-synced contact.
-  """
-  @spec create_contact(Client.t(), String.t(), String.t()) ::
-          {:ok, Client.t()} | {:error, Error.t(), Client.t()}
-  def create_contact(%Client{} = client, jid, name) when is_binary(jid) and is_binary(name) do
-    run_client_operation(client, :create_contact, fn ->
-      if adapter_exports?(client.transport, :create_contact, 3) do
-        client.transport.create_contact(client, jid, name)
-        |> normalize_client_result(client, :create_contact, :contact_created, %{jid: jid})
-      else
-        fail_client(client, :create_contact, :transport, :contacts_not_supported)
-      end
-    end)
-  end
-
-  @doc """
-  Updates contact fields when the configured transport supports it.
-  """
-  @spec update_contact(Client.t(), String.t(), map() | keyword()) ::
-          {:ok, Client.t()} | {:error, Error.t(), Client.t()}
-  def update_contact(%Client{} = client, jid, attrs) when is_binary(jid) do
-    run_client_operation(client, :update_contact, fn ->
-      if adapter_exports?(client.transport, :update_contact, 3) do
-        client.transport.update_contact(client, jid, attrs)
-        |> normalize_client_result(client, :update_contact, :contact_updated, %{jid: jid})
-      else
-        fail_client(client, :update_contact, :transport, :contacts_not_supported)
-      end
-    end)
-  end
-
-  @doc """
-  Deletes a server-synced contact.
-  """
-  @spec delete_contact(Client.t(), String.t()) ::
-          {:ok, Client.t()} | {:error, Error.t(), Client.t()}
-  def delete_contact(%Client{} = client, jid) when is_binary(jid) do
-    run_client_operation(client, :delete_contact, fn ->
-      if adapter_exports?(client.transport, :delete_contact, 2) do
-        client.transport.delete_contact(client, jid)
-        |> normalize_client_result(client, :delete_contact, :contact_deleted, %{jid: jid})
-      else
-        fail_client(client, :delete_contact, :transport, :contacts_not_supported)
-      end
-    end)
-  end
-
-  @doc """
-  Lists locally known chats.
-  """
-  @spec list_chats(Client.t()) :: {:ok, [Chat.chat()]} | {:error, Error.t(), Client.t()}
-  def list_chats(%Client{} = client) do
-    run_client_operation(client, :list_chats, fn ->
-      if adapter_exports?(client.transport, :list_chats, 1) do
-        client.transport.list_chats(client)
-        |> normalize_list_result(client, :list_chats, :chats)
-      else
-        fail_client(client, :list_chats, :transport, :chats_not_supported)
-      end
-    end)
-  end
-
-  @doc """
-  Lists locally known group chats.
-  """
-  @spec list_groups(Client.t()) :: {:ok, [Chat.chat()]} | {:error, Error.t(), Client.t()}
-  def list_groups(%Client{} = client) do
-    run_client_operation(client, :list_groups, fn ->
-      if adapter_exports?(client.transport, :list_groups, 1) do
-        client.transport.list_groups(client)
-        |> normalize_list_result(client, :list_groups, :groups)
-      else
-        fail_client(client, :list_groups, :transport, :groups_not_supported)
-      end
-    end)
-  end
-
-  @doc """
-  Gets a locally known chat by JID.
-  """
-  @spec get_chat(Client.t(), String.t()) :: {:ok, Chat.chat()} | {:error, Error.t(), Client.t()}
-  def get_chat(%Client{} = client, jid) when is_binary(jid) do
-    run_client_operation(client, :get_chat, fn ->
-      if adapter_exports?(client.transport, :get_chat, 2) do
-        client.transport.get_chat(client, jid)
-        |> normalize_value_result(client, :get_chat, :chat)
-      else
-        fail_client(client, :get_chat, :transport, :chats_not_supported)
-      end
-    end)
-  end
-
-  @doc """
-  Sends an image message.
-  """
-  @spec send_image(Client.t(), String.t(), Media.source(), keyword()) ::
-          {:ok, Client.t(), String.t()} | {:error, Error.t(), Client.t()}
-  def send_image(%Client{} = client, to, source, opts \\ []) do
-    send_message(client, Message.image(to, source, opts))
-  end
-
-  @doc """
-  Sends an audio message.
-  """
-  @spec send_audio(Client.t(), String.t(), Media.source(), keyword()) ::
-          {:ok, Client.t(), String.t()} | {:error, Error.t(), Client.t()}
-  def send_audio(%Client{} = client, to, source, opts \\ []) do
-    send_message(client, Message.audio(to, source, opts))
-  end
-
-  @doc """
-  Downloads media referenced by an inbound media message.
-  """
-  @spec download_media(Client.t(), Media.Ref.t(), keyword()) ::
-          {:ok, Client.t(), Media.Download.t()} | {:error, Error.t(), Client.t()}
-  def download_media(%Client{} = client, %Media.Ref{} = ref, opts \\ []) do
-    run_client_operation(client, :download_media, fn ->
-      if adapter_exports?(client.transport, :download_media, 3) do
-        client.transport.download_media(client, ref, opts)
-        |> normalize_download_result(client)
-      else
-        fail_client(client, :download_media, :transport, :media_not_supported)
-      end
-    end)
-  end
-
-  @doc """
-  Returns the high-level client status.
-  """
-  @spec status(Client.t()) :: Client.status()
-  def status(%Client{} = client), do: client.status
-
-  @doc """
-  Returns the last structured client error, if any.
-  """
-  @spec last_error(Client.t()) :: Error.t() | nil
-  def last_error(%Client{} = client), do: client.last_error
-
-  @doc """
-  Returns compact diagnostics for a high-level client.
-  """
-  @spec diagnostics(Client.t()) :: map()
-  def diagnostics(%Client{} = client) do
-    %{
-      session_id: client.session_id,
-      status: client.status,
-      transport: client.transport,
-      events: client.events,
-      store: client.store.__struct__,
-      last_error: client.last_error,
-      trace: client.trace
-    }
-  end
-
-  @spec run_client_operation(Client.t(), atom(), (-> term())) :: term()
-  defp run_client_operation(%Client{} = client, operation, fun)
-       when is_atom(operation) and is_function(fun, 0) do
-    start = System.monotonic_time()
-    metadata = client_metadata(client, operation)
-
-    Logger.debug("[ExWapp] #{operation} start session_id=#{inspect(client.session_id)}")
-
-    ExWapp.Telemetry.execute(
-      [:ex_wapp, :client, operation, :start],
-      %{system_time: System.system_time()},
-      metadata
+  def send_message(session_id, jid, text) when is_binary(session_id) do
+    Phoenix.PubSub.broadcast(
+      ExWapp.PubSub,
+      "ex_wapp:commands:#{session_id}",
+      {:ex_wapp_send, jid, text}
     )
+  end
+
+  @doc """
+  Controls a session worker using either pid (direct cast) or session_id (PubSub command).
+
+  Supported actions:
+  - `:pause_sends`
+  - `:resume_sends`
+  - `:disconnect`
+  - `:stop_session`
+  """
+  @spec control_session(
+          pid() | binary(),
+          :pause_sends | :resume_sends | :disconnect | :stop_session
+        ) ::
+          :ok
+  def control_session(session, action)
+
+  def control_session(session, action) when is_pid(session) do
+    case action do
+      :pause_sends -> Session.pause_sends(session)
+      :resume_sends -> Session.resume_sends(session)
+      :disconnect -> Session.disconnect(session)
+      :stop_session -> Session.stop_worker(session)
+    end
+  end
+
+  def control_session(session_id, action) when is_binary(session_id) do
+    Phoenix.PubSub.broadcast(
+      ExWapp.PubSub,
+      "ex_wapp:commands:#{session_id}",
+      {:ex_wapp_control, action}
+    )
+  end
+
+  @doc """
+  Sends a read receipt to mark messages as read.
+
+  ## Example
+
+      ExWapp.send_read_receipt(session, jid, ["MSG_ID_1", "MSG_ID_2"])
+  """
+  @spec send_read_receipt(GenServer.server(), String.t(), [String.t()]) :: :ok | {:error, term()}
+  def send_read_receipt(session, jid, message_ids) do
+    Messages.send_read_receipt(session, jid, message_ids)
+  end
+
+  @doc """
+  Sends a typing indicator to a chat.
+
+  ## Example
+
+      # Show typing
+      ExWapp.send_typing(session, jid, true)
+
+      # Stop typing
+      ExWapp.send_typing(session, jid, false)
+  """
+  @spec send_typing(GenServer.server(), String.t(), boolean()) :: :ok | {:error, term()}
+  def send_typing(session, jid, composing \\ true) do
+    node = Messages.build_typing(jid, composing)
 
     try do
-      result = fun.()
-      duration = System.monotonic_time() - start
-
-      case result do
-        {:error, error, _client} ->
-          Logger.error("[ExWapp] #{operation} failed reason=#{inspect(error)}")
-
-        _ ->
-          Logger.info("[ExWapp] #{operation} ok session_id=#{inspect(client.session_id)}")
-      end
-
-      ExWapp.Telemetry.execute(
-        [:ex_wapp, :client, operation, :stop],
-        %{duration: duration},
-        metadata
-      )
-
-      result
-    rescue
-      exception ->
-        duration = System.monotonic_time() - start
-        stacktrace = __STACKTRACE__
-
-        Logger.error(
-          "[ExWapp] #{operation} exception=#{Exception.format(:error, exception, stacktrace)}"
-        )
-
-        ExWapp.Telemetry.execute(
-          [:ex_wapp, :client, operation, :exception],
-          %{duration: duration},
-          Map.put(metadata, :kind, :error)
-        )
-
-        reraise exception, stacktrace
+      conn = GenServer.call(session, :get_conn)
+      if conn, do: ExWapp.Conn.send_node(conn, node), else: {:error, :not_connected}
     catch
-      kind, reason ->
-        duration = System.monotonic_time() - start
-
-        Logger.error(
-          "[ExWapp] #{operation} throw/exit kind=#{inspect(kind)} reason=#{inspect(reason)}"
-        )
-
-        ExWapp.Telemetry.execute(
-          [:ex_wapp, :client, operation, :exception],
-          %{duration: duration},
-          Map.merge(metadata, %{kind: kind, reason: inspect(reason)})
-        )
-
-        :erlang.raise(kind, reason, __STACKTRACE__)
+      :exit, _ -> {:error, :session_unavailable}
     end
   end
 
-  @spec client_metadata(Client.t(), atom()) :: map()
-  defp client_metadata(%Client{} = client, operation) do
-    %{
-      session_id: client.session_id,
-      operation: operation,
-      transport: client.transport,
-      events: client.events
-    }
-  end
+  @doc """
+  Builds a lazy stream of incoming messages.
 
-  @spec adapter_exports?(module(), atom(), non_neg_integer()) :: boolean()
-  defp adapter_exports?(module, function, arity) do
-    Code.ensure_loaded?(module) and function_exported?(module, function, arity)
-  end
+  Each element is a tuple of `{jid, message}`.
 
-  @spec do_send_message(Client.t(), Message.t()) ::
-          {:ok, Client.t(), String.t()} | {:error, Error.t(), Client.t()}
-  defp do_send_message(%Client{} = client, %Message{} = message) do
-    message = ensure_message_id(message)
+  ## Example
 
-    client.transport.send_message(client, message)
-    |> normalize_send_result(client, message)
-  end
+      ExWapp.message_stream(session)
+      |> Stream.each(fn {jid, msg} ->
+        IO.puts("[\#{jid}] \#{msg.text}")
+      end)
+      |> Stream.run()
+  """
+  @spec message_stream(GenServer.server()) :: Enumerable.t()
+  defdelegate message_stream(session), to: Session
 
-  @spec build_message_from_opts(keyword()) :: {:ok, Message.t()} | {:error, term()}
-  defp build_message_from_opts(opts) do
-    type = Keyword.get(opts, :type, :text)
+  # ============================================================================
+  # PubSub Subscription API
+  # ============================================================================
 
-    case type do
-      :text ->
-        with {:ok, to} <- fetch_required(opts, :to),
-             {:ok, text} <- fetch_required_text(opts) do
-          message_opts = Keyword.drop(opts, [:to, :text, :body, :type])
-          {:ok, Message.text(to, text, message_opts)}
-        end
+  @doc """
+  Subscribe the calling process to a session's events via PubSub.
 
-      :typing ->
-        with {:ok, to} <- fetch_required(opts, :to) do
-          composing = Keyword.get(opts, :composing, true)
-          message_opts = Keyword.drop(opts, [:to, :type, :composing])
-          {:ok, Message.typing(to, composing, message_opts)}
-        end
+  Subscribes to **both** incoming messages and session lifecycle events
+  in a single call. Accepts either a session pid or a session_id string.
 
-      :read_receipt ->
-        with {:ok, to} <- fetch_required(opts, :to),
-             {:ok, ids} <- fetch_required(opts, :message_ids) do
-          message_opts = Keyword.drop(opts, [:to, :type, :message_ids])
-          {:ok, Message.read_receipt(to, ids, message_opts)}
-        end
+  ## Messages received
 
-      :image ->
-        with {:ok, to} <- fetch_required(opts, :to),
-             {:ok, source} <- fetch_media_source(opts) do
-          message_opts = Keyword.drop(opts, [:to, :type, :source, :path, :bytes, :upload])
-          {:ok, Message.image(to, source, message_opts)}
-        end
+  - `{:ex_wapp_message, jid, message}` - incoming WhatsApp message
+  - `{:ex_wapp_session, :connected}` - session connected
+  - `{:ex_wapp_session, :error, reason}` - session-level error event
+  - `{:ex_wapp_session, :disconnected, reason}` - session disconnected
+  - `{:ex_wapp_session, :terminated, reason}` - session process stopped
+  - `{:ex_wapp_health, type, metadata}` - send health/error/guard events
 
-      :audio ->
-        with {:ok, to} <- fetch_required(opts, :to),
-             {:ok, source} <- fetch_media_source(opts) do
-          message_opts = Keyword.drop(opts, [:to, :type, :source, :path, :bytes, :upload])
-          {:ok, Message.audio(to, source, message_opts)}
-        end
+  ## Example
 
-      other ->
-        {:error, {:unsupported_message_type, other}}
-    end
-  end
+      ExWapp.subscribe(session)
+      # or
+      ExWapp.subscribe("my_session")
 
-  @spec fetch_required(keyword(), atom()) :: {:ok, term()} | {:error, {:missing_required, atom()}}
-  defp fetch_required(opts, key) do
-    case Keyword.fetch(opts, key) do
-      {:ok, value} -> {:ok, value}
-      :error -> {:error, {:missing_required, key}}
-    end
-  end
-
-  @spec fetch_required_text(keyword()) :: {:ok, term()} | {:error, {:missing_required, atom()}}
-  defp fetch_required_text(opts) do
-    case Keyword.fetch(opts, :text) do
-      {:ok, value} -> {:ok, value}
-      :error -> fetch_required(opts, :body)
-    end
-  end
-
-  @spec fetch_media_source(keyword()) ::
-          {:ok, Media.source()} | {:error, {:missing_required, atom()}}
-  defp fetch_media_source(opts) do
-    cond do
-      Keyword.has_key?(opts, :source) -> {:ok, Keyword.fetch!(opts, :source)}
-      Keyword.has_key?(opts, :path) -> {:ok, {:path, Keyword.fetch!(opts, :path)}}
-      Keyword.has_key?(opts, :bytes) -> {:ok, {:bytes, Keyword.fetch!(opts, :bytes)}}
-      Keyword.has_key?(opts, :upload) -> {:ok, Keyword.fetch!(opts, :upload)}
-      true -> {:error, {:missing_required, :source}}
-    end
-  end
-
-  @spec ensure_message_id(Message.t()) :: Message.t()
-  defp ensure_message_id(%Message{id: id} = message) when is_binary(id) and id != "" do
-    message
-  end
-
-  defp ensure_message_id(%Message{} = message) do
-    %{message | id: ExWapp.Messages.generate_id()}
-  end
-
-  @spec normalize_pair_result(term(), Client.t()) ::
-          {:ok, Client.t(), term()} | {:error, Error.t(), Client.t()}
-  defp normalize_pair_result({:ok, %Client{} = client, qr}, _original) do
-    client =
-      client
-      |> Map.put(:status, :pairing)
-      |> Client.trace(:pair, %{result: :ok})
-
-    emit_client_event(client, :qr, qr)
-    {:ok, client, qr}
-  end
-
-  defp normalize_pair_result({:ok, qr}, original) do
-    normalize_pair_result({:ok, original, qr}, original)
-  end
-
-  defp normalize_pair_result({:error, reason}, original) do
-    fail_client(original, :pair, :transport, reason)
-  end
-
-  defp normalize_pair_result(other, original) do
-    fail_client(original, :pair, :transport, {:bad_return, other})
-  end
-
-  @spec normalize_connect_result(term(), Client.t()) ::
-          {:ok, Client.t()} | {:error, Error.t(), Client.t()}
-  defp normalize_connect_result({:ok, %Client{} = client}, _original) do
-    status =
-      case client.status do
-        :new -> :connected
-        nil -> :connected
-        other -> other
+      def handle_info({:ex_wapp_message, jid, message}, state) do
+        IO.puts("Message from \#{jid}")
+        {:noreply, state}
       end
 
-    client =
-      client
-      |> Map.put(:status, status)
-      |> Client.trace(:connect, %{result: :ok})
+      def handle_info({:ex_wapp_session, :connected}, state) do
+        {:noreply, assign(state, :status, :connected)}
+      end
 
-    emit_client_event(client, :status, status)
-    {:ok, client}
+      def handle_info({:ex_wapp_session, :disconnected, _reason}, state) do
+        {:noreply, assign(state, :status, :disconnected)}
+      end
+  """
+  @spec subscribe(pid() | term()) :: :ok | {:error, term()}
+  def subscribe(session) when is_pid(session) do
+    session_id = Session.get_session_id(session) || session
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:messages:#{session_id}")
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:health:#{session_id}")
   end
 
-  defp normalize_connect_result(:ok, original) do
-    normalize_connect_result({:ok, original}, original)
+  def subscribe(session_id) do
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:messages:#{session_id}")
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:health:#{session_id}")
   end
 
-  defp normalize_connect_result({:error, reason}, original) do
-    fail_client(original, :connect, :transport, reason)
+  @doc """
+  Unsubscribe the calling process from a session's events.
+
+  Unsubscribes from both messages and lifecycle topics.
+  Accepts either a session pid or a session_id string.
+  """
+  @spec unsubscribe(pid() | term()) :: :ok
+  def unsubscribe(session) when is_pid(session) do
+    session_id = Session.get_session_id(session) || session
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:messages:#{session_id}")
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:health:#{session_id}")
   end
 
-  defp normalize_connect_result(other, original) do
-    fail_client(original, :connect, :transport, {:bad_return, other})
+  def unsubscribe(session_id) do
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:messages:#{session_id}")
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:health:#{session_id}")
   end
 
-  @spec normalize_disconnect_result(term(), Client.t()) ::
-          {:ok, Client.t()} | {:error, Error.t(), Client.t()}
-  defp normalize_disconnect_result({:ok, %Client{} = client}, _original) do
-    client =
-      client
-      |> Map.put(:status, :disconnected)
-      |> Client.trace(:disconnect, %{result: :ok})
+  @doc """
+  Subscribe to events from ALL sessions via PubSub.
 
-    emit_client_event(client, :disconnected, %{reason: :adapter})
-    {:ok, client}
+  Subscribes to both global messages and global lifecycle topics.
+
+  ## Messages received
+
+  - `{:ex_wapp_message, session_id, jid, message}` - message from any session
+  - `{session_id, {:ex_wapp_session, event, ...}}` - lifecycle from any session
+  - `{session_id, {:ex_wapp_health, type, metadata}}` - health events from any session
+  """
+  @spec subscribe_all() :: :ok | {:error, term()}
+  def subscribe_all do
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:messages")
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:session")
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:health")
   end
 
-  defp normalize_disconnect_result(:ok, original) do
-    normalize_disconnect_result({:ok, original}, original)
+  @doc """
+  Unsubscribe from all global topics (messages + lifecycle).
+  """
+  @spec unsubscribe_all() :: :ok
+  def unsubscribe_all do
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:messages")
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:session")
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:health")
   end
 
-  defp normalize_disconnect_result({:error, reason}, original) do
-    fail_client(original, :disconnect, :transport, reason)
-  end
+  # ============================================================================
+  # Server-Synced Chat & Contact Operations
+  # ============================================================================
 
-  defp normalize_disconnect_result(other, original) do
-    fail_client(original, :disconnect, :transport, {:bad_return, other})
-  end
+  @doc """
+  Archives a chat (server-synced via app state).
 
-  @spec normalize_send_result(term(), Client.t(), Message.t()) ::
-          {:ok, Client.t(), String.t()} | {:error, Error.t(), Client.t()}
-  defp normalize_send_result({:ok, %Client{} = client, message_id}, _original, message) do
-    client = Client.trace(client, :send_message, %{message_id: message_id, to: message.to})
-
-    emit_client_event(client, :message_sent, %{id: message_id, to: message.to, type: message.type})
-
-    {:ok, client, message_id}
-  end
-
-  defp normalize_send_result({:ok, message_id}, original, message) when is_binary(message_id) do
-    normalize_send_result({:ok, original, message_id}, original, message)
-  end
-
-  defp normalize_send_result(:ok, original, %Message{id: message_id} = message) do
-    normalize_send_result({:ok, original, message_id}, original, message)
-  end
-
-  defp normalize_send_result({:error, %Client{} = client, reason}, _original, message) do
-    fail_client(client, :send_message, :transport, reason, message_id: message.id)
-  end
-
-  defp normalize_send_result({:error, reason}, original, message) do
-    fail_client(original, :send_message, :transport, reason, message_id: message.id)
-  end
-
-  defp normalize_send_result(other, original, message) do
-    fail_client(original, :send_message, :transport, {:bad_return, other}, message_id: message.id)
-  end
-
-  @spec normalize_receive_result(term(), Client.t()) ::
-          {:ok, Client.t(), [Event.t()]} | {:error, Error.t(), Client.t()}
-  defp normalize_receive_result({:ok, %Client{} = client, events}, _original)
-       when is_list(events) do
-    client = Client.trace(client, :receive_message, %{events: length(events)})
-    Events.emit_many(client, events)
-    {:ok, client, events}
-  end
-
-  defp normalize_receive_result({:ok, events}, original) when is_list(events) do
-    normalize_receive_result({:ok, original, events}, original)
-  end
-
-  defp normalize_receive_result({:error, reason}, original) do
-    fail_client(original, :receive_message, :transport, reason)
-  end
-
-  defp normalize_receive_result(other, original) do
-    fail_client(original, :receive_message, :transport, {:bad_return, other})
-  end
-
-  @spec normalize_list_result(term(), Client.t(), atom(), atom()) ::
-          {:ok, list()} | {:error, Error.t(), Client.t()}
-  defp normalize_list_result({:ok, values}, _original, _operation, _label) when is_list(values),
-    do: {:ok, values}
-
-  defp normalize_list_result({:error, reason}, original, operation, _label),
-    do: fail_client(original, operation, :transport, reason)
-
-  defp normalize_list_result(other, original, operation, label),
-    do: fail_client(original, operation, :transport, {:bad_return, label, other})
-
-  @spec normalize_value_result(term(), Client.t(), atom(), atom()) ::
-          {:ok, term()} | {:error, Error.t(), Client.t()}
-  defp normalize_value_result({:ok, value}, _original, _operation, _label), do: {:ok, value}
-
-  defp normalize_value_result({:error, reason}, original, operation, _label),
-    do: fail_client(original, operation, :transport, reason)
-
-  defp normalize_value_result(other, original, operation, label),
-    do: fail_client(original, operation, :transport, {:bad_return, label, other})
-
-  @spec normalize_client_result(term(), Client.t(), atom(), Event.type(), term()) ::
-          {:ok, Client.t()} | {:error, Error.t(), Client.t()}
-  defp normalize_client_result(
-         {:ok, %Client{} = client},
-         _original,
-         operation,
-         event_type,
-         payload
-       ) do
-    client = Client.trace(client, operation, %{result: :ok})
-    emit_client_event(client, event_type, payload)
-    {:ok, client}
-  end
-
-  defp normalize_client_result(:ok, original, operation, event_type, payload) do
-    normalize_client_result({:ok, original}, original, operation, event_type, payload)
-  end
-
-  defp normalize_client_result({:error, reason}, original, operation, _event_type, _payload),
-    do: fail_client(original, operation, :transport, reason)
-
-  defp normalize_client_result(other, original, operation, _event_type, _payload),
-    do: fail_client(original, operation, :transport, {:bad_return, other})
-
-  @spec normalize_download_result(term(), Client.t()) ::
-          {:ok, Client.t(), Media.Download.t()} | {:error, Error.t(), Client.t()}
-  defp normalize_download_result(
-         {:ok, %Client{} = client, %Media.Download{} = download},
-         _original
-       ) do
-    client = Client.trace(client, :download_media, %{bytes: byte_size(download.bytes)})
-    emit_client_event(client, :media_downloaded, download.ref)
-    {:ok, client, download}
-  end
-
-  defp normalize_download_result({:ok, %Media.Download{} = download}, original) do
-    normalize_download_result({:ok, original, download}, original)
-  end
-
-  defp normalize_download_result({:error, reason}, original) do
-    fail_client(original, :download_media, :transport, reason)
-  end
-
-  defp normalize_download_result(other, original) do
-    fail_client(original, :download_media, :transport, {:bad_return, other})
-  end
-
-  @spec fail_client(Client.t(), atom(), atom() | nil, term(), keyword()) ::
-          {:error, Error.t(), Client.t()}
-  defp fail_client(%Client{} = client, operation, phase, reason, opts \\ []) do
-    error =
-      Error.new(operation, phase, reason,
-        message_id: Keyword.get(opts, :message_id),
-        metadata: Keyword.get(opts, :metadata, %{})
-      )
-
-    failed =
-      client
-      |> Map.put(:status, :error)
-      |> Map.put(:last_error, error)
-      |> Client.trace(operation, %{result: :error, phase: phase, reason: reason})
-
-    emit_client_event(failed, :error, error)
-    {:error, error, failed}
-  end
-
-  @spec emit_client_event(Client.t(), Event.type(), term()) :: :ok
-  defp emit_client_event(%Client{} = client, type, payload) do
-    event = Event.new(type, payload, session_id: client.session_id)
-
-    case Events.emit(client, event) do
+  Falls back to local-only archive if not connected.
+  """
+  @spec archive_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def archive_chat(session, jid) do
+    case Session.archive_chat(session, jid) do
       :ok -> :ok
-      {:error, _reason} -> :ok
+      {:error, {:not_connected, _}} -> Chat.archive(session, jid)
+      error -> error
     end
   end
+
+  @doc """
+  Unarchives a chat (server-synced via app state).
+  """
+  @spec unarchive_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def unarchive_chat(session, jid) do
+    case Session.unarchive_chat(session, jid) do
+      :ok -> :ok
+      {:error, {:not_connected, _}} -> Chat.unarchive(session, jid)
+      error -> error
+    end
+  end
+
+  @doc """
+  Pins a chat to the top (server-synced via app state).
+  """
+  @spec pin_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def pin_chat(session, jid) do
+    patch = ExWapp.AppState.Engine.build_pin(jid, true)
+
+    case Session.send_app_state(session, patch) do
+      {:ok, _, _} -> :ok
+      {:error, {:not_connected, _}} -> Chat.pin(session, jid)
+      error -> error
+    end
+  end
+
+  @doc """
+  Unpins a chat (server-synced via app state).
+  """
+  @spec unpin_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def unpin_chat(session, jid) do
+    patch = ExWapp.AppState.Engine.build_pin(jid, false)
+
+    case Session.send_app_state(session, patch) do
+      {:ok, _, _} -> :ok
+      {:error, {:not_connected, _}} -> Chat.unpin(session, jid)
+      error -> error
+    end
+  end
+
+  @doc """
+  Deletes a chat (server-synced via app state).
+  """
+  @spec delete_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def delete_chat(session, jid) do
+    case Session.delete_chat(session, jid) do
+      :ok -> :ok
+      {:error, {:not_connected, _}} -> Chat.delete(session, jid)
+      error -> error
+    end
+  end
+
+  @doc """
+  Mutes a chat (server-synced via app state).
+
+  `mute_end_timestamp` is milliseconds epoch, or -1 for forever, or 0/nil to unmute.
+  """
+  @spec mute_chat(GenServer.server(), String.t(), integer()) :: :ok | {:error, term()}
+  def mute_chat(session, jid, mute_end_timestamp \\ -1) do
+    patch = ExWapp.AppState.Engine.build_mute(jid, true, mute_end_timestamp)
+
+    case Session.send_app_state(session, patch) do
+      {:ok, _, _} -> :ok
+      error -> error
+    end
+  end
+
+  @doc """
+  Unmutes a chat (server-synced via app state).
+  """
+  @spec unmute_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def unmute_chat(session, jid) do
+    patch = ExWapp.AppState.Engine.build_mute(jid, false)
+
+    case Session.send_app_state(session, patch) do
+      {:ok, _, _} -> :ok
+      error -> error
+    end
+  end
+
+  @doc """
+  Marks a chat as read (server-synced via app state).
+  """
+  @spec mark_chat_as_read(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def mark_chat_as_read(session, jid) do
+    patch = ExWapp.AppState.Engine.build_mark_read(jid, true)
+
+    case Session.send_app_state(session, patch) do
+      {:ok, _, _} -> :ok
+      {:error, {:not_connected, _}} -> Chat.mark_read(session, jid)
+      error -> error
+    end
+  end
+
+  @doc """
+  Creates or updates a contact (server-synced via app state).
+  """
+  @spec create_contact(GenServer.server(), String.t(), String.t()) :: :ok | {:error, term()}
+  defdelegate create_contact(session, jid, name), to: Session
+
+  @doc """
+  Deletes a contact (server-synced via app state).
+  """
+  @spec delete_contact(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  defdelegate delete_contact(session, jid), to: Session
+
+  @doc """
+  Fetches and applies the contacts collection from app state (`critical_unblock_low`).
+  """
+  @spec sync_contacts(GenServer.server()) :: :ok | {:error, term()}
+  defdelegate sync_contacts(session), to: Session
+
+  @doc """
+  Lists all contacts.
+  """
+  @spec list_contacts(GenServer.server()) :: [ExWapp.Contact.t()]
+  defdelegate list_contacts(session), to: Session
+
+  @doc """
+  Gets a specific contact by JID.
+  """
+  @spec get_contact(GenServer.server(), String.t()) :: ExWapp.Contact.t() | nil
+  defdelegate get_contact(session, jid), to: Session
+
+  @doc """
+  Returns local metadata for a specific chat.
+  """
+  @spec get_chat_info(GenServer.server(), String.t()) ::
+          {:ok, ExWapp.Chat.chat()} | {:error, :not_found}
+  defdelegate get_chat_info(session, jid), to: Session
 end

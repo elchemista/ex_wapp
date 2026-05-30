@@ -187,40 +187,29 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     first_child_tag = first_stream_error_child_tag(children)
     children_summary = summarize_stream_error_children(children)
 
-    # 515 ("restart required" after pair-success) and 503/504/505 ("service unavailable")
-    # are expected transient signals that the session auto-recovers from via
-    # reconnect. Log their details at debug to avoid alarming error noise; all
-    # other codes are treated as real errors below.
-    log_level =
-      case code do
-        "515" -> :debug
-        "503" -> :debug
-        "504" -> :debug
-        "505" -> :debug
-        _ -> :error
-      end
+    Logger.error("[SESSION] Stream error: code=#{code}")
+    Logger.error("[SESSION] Stream error attrs: #{inspect(attrs, limit: :infinity)}")
 
-    Logger.log(log_level, "[SESSION] Stream error: code=#{code}")
-
-    Logger.log(
-      log_level,
-      "[SESSION] Stream error attrs: #{inspect(attrs, limit: :infinity)}"
-    )
-
-    Logger.log(
-      log_level,
+    Logger.error(
       "[SESSION] Stream error children summary: #{inspect(children_summary, limit: :infinity)}"
     )
 
-    Logger.log(
-      log_level,
+    Logger.error(
       "[SESSION] Stream error raw children: #{inspect(children, limit: :infinity, printable_limit: 8_000)}"
     )
 
     # Check for conflict type in children
     conflict_type = extract_conflict_type(children)
-    broadcast_error_event(state, {:stream_error, code, conflict_type})
     stream_error_reason = {:stream_error, code, conflict_type}
+
+    # Recoverable server-side conditions (503/515) are announced as a soft
+    # "reconnecting" notice rather than a hard error, so owners don't raise
+    # user-facing alerts for transient blips that the runtime recovers from.
+    if transient_stream_error?(code) do
+      broadcast_reconnecting_event(state, stream_error_reason)
+    else
+      broadcast_error_event(state, stream_error_reason)
+    end
 
     new_state =
       cond do
@@ -241,11 +230,11 @@ defmodule ExWapp.Session.Worker.NodeHandler do
           restart_connection_now(state, :stream_replaced)
 
         code == "515" ->
-          Logger.debug("[SESSION] Got 515, will reconnect...")
+          Logger.warning("[SESSION] Got 515, will reconnect...")
           mark_transport_closed(state, stream_error_reason)
 
-        code in ["503", "504", "505"] ->
-          Logger.debug("[SESSION] Got #{code} (service unavailable), will reconnect...")
+        code == "503" ->
+          Logger.warning("[SESSION] Got 503 (service unavailable), will reconnect...")
           mark_transport_closed(state, stream_error_reason)
 
         true ->
@@ -448,13 +437,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     Logger.debug("[NODE_HANDLER] matched post-auth prekey count IQ id=#{iq_id}")
 
     {next_state, actions} =
-      PostAuth.handle_prekey_count_response(
-        node,
-        state,
-        &build_set_passive_iq/0,
-        &build_digest_query/0,
-        fn -> build_unified_session_node(state) end
-      )
+      PostAuth.handle_prekey_count_response(node, state, &build_set_passive_iq/0)
 
     {:handled, next_state, actions}
   end
@@ -465,14 +448,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     Logger.debug("[NODE_HANDLER] matched post-auth prekey upload IQ id=#{iq_id} type=#{iq_type}")
 
     {next_state, actions} =
-      PostAuth.handle_prekey_upload_response(
-        node,
-        iq_type,
-        state,
-        &build_set_passive_iq/0,
-        &build_digest_query/0,
-        fn -> build_unified_session_node(state) end
-      )
+      PostAuth.handle_prekey_upload_response(node, iq_type, state, &build_set_passive_iq/0)
 
     {:handled, next_state, actions}
   end
@@ -660,6 +636,15 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     _ -> :ok
   end
 
+  defp broadcast_reconnecting_event(state, reason) do
+    Subscribers.broadcast_reconnecting(Map.get(state, :session_id), reason)
+  rescue
+    _ -> :ok
+  end
+
+  # Recoverable, server-driven stream errors that the runtime reconnects from.
+  defp transient_stream_error?(code), do: code in ["503", "515"]
+
   defp restart_connection_now(state, reason) do
     # Delegate back to the worker process
     send(self(), {:restart_connection, reason})
@@ -689,6 +674,8 @@ defmodule ExWapp.Session.Worker.NodeHandler do
         state
     end
   end
+
+  defp update_server_time_offset(state, _attrs), do: state
 
   defp maybe_reset_pairing(actions, pairing) do
     if Enum.any?(actions, &match?({:status, :success}, &1)) do

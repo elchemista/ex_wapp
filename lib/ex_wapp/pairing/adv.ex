@@ -121,10 +121,9 @@ defmodule ExWapp.Pairing.ADV do
   # Parse HMAC-wrapped ADV (from pair-success device-identity)
   @spec parse_hmac_container(binary(), binary(), binary(), binary()) :: adv_result()
   defp parse_hmac_container(adv_bytes, adv_secret, identity_pub, identity_priv) do
-    case decode_container(adv_bytes) do
-      {:ok, %ADVSignedDeviceIdentityHMAC{} = container} ->
-        parse_hmac_wrapped(container, adv_secret, identity_pub, identity_priv)
-
+    with {:ok, %ADVSignedDeviceIdentityHMAC{} = container} <- decode_container(adv_bytes) do
+      parse_hmac_wrapped(container, adv_secret, identity_pub, identity_priv)
+    else
       {:error, container_error} ->
         Logger.error("[ADV] HMAC container decode failed: #{inspect(container_error)}")
         {:error, container_error}

@@ -1,28 +1,38 @@
 defmodule ExWapp.Messages do
   @moduledoc """
-  Helpers for constructing WhatsApp message protocol payloads and nodes.
+  High-level helpers for constructing and sending WhatsApp messages.
 
   This module handles:
   - Message ID generation
   - Message node construction
   - Protobuf payload encoding
+  - Message routing (direct, group, broadcast)
+
+  ## Message Flow
+
+      1. User calls send_text/3
+      2. Message proto is built and encoded
+      3. Binary node is constructed with proper attributes
+      4. Signal encryption is applied (when implemented)
+      5. Node is sent via the connection
+
+  ## Example
+
+      # Simple text message
+      ExWapp.Messages.send_text(session, "1234567890@s.whatsapp.net", "Hello!")
+
+      # Reply to a message
+      ExWapp.Messages.send_text(session, jid, "Reply text",
+        quoted_id: "ABC123",
+        quoted_participant: "sender@s.whatsapp.net"
+      )
   """
 
-  alias ExWapp.{Binary, JID, Media}
+  require Logger
 
-  alias ExWapp.Proto.{
-    ContextInfo,
-    ExtendedTextMessage,
-    Message,
-    MessageKey,
-    PeerDataOperationRequestMessage,
-    PlaceholderMessageResendRequest,
-    ProtocolMessage
-  }
+  alias ExWapp.{Binary, Chat, Conn, JID}
+  alias ExWapp.Proto.{Message, ExtendedTextMessage, ContextInfo}
 
-  @typedoc """
-  Shared outbound send options used when building protobuf payloads.
-  """
   @type send_opts :: [
           quoted_id: String.t(),
           quoted_participant: String.t(),
@@ -66,10 +76,51 @@ defmodule ExWapp.Messages do
   end
 
   @doc """
-  Builds a text message protobuf.
+  Sends a text message to a JID.
 
-  WhatsApp uses a simpler `conversation` field for plain text, but switches to
-  `extendedTextMessage` as soon as reply metadata or mentions are present.
+  ## Options
+
+    * `:quoted_id` - ID of message to reply to
+    * `:quoted_participant` - JID of quoted message sender (for groups)
+    * `:mentions` - List of JIDs to mention
+
+  ## Returns
+
+    * `{:ok, message_id}` - Message was queued for sending
+    * `{:error, reason}` - Failed to send
+  """
+  @spec send_text(pid(), String.t(), String.t(), send_opts()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_text(session, jid, text, opts \\ [])
+      when is_pid(session) and is_binary(jid) and is_binary(text) do
+    message_id = generate_id()
+    timestamp = System.system_time(:second)
+
+    # Build the message proto
+    proto = build_text_proto(text, opts)
+
+    # Encode to protobuf binary
+    case Message.encode(proto) do
+      {:ok, payload} ->
+        # Build the binary node
+        node = build_message_node(jid, message_id, payload, timestamp, opts)
+
+        # Record the outgoing message
+        record_outgoing(session, jid, message_id, text, timestamp)
+
+        # Send via connection
+        case send_node(session, node) do
+          :ok -> {:ok, message_id}
+          error -> error
+        end
+
+      {:error, reason} ->
+        {:error, {:proto_encode, reason}}
+    end
+  end
+
+  @doc """
+  Builds a text message protobuf.
   """
   @spec build_text_proto(String.t(), send_opts()) :: Message.t()
   def build_text_proto(text, opts \\ []) do
@@ -93,104 +144,7 @@ defmodule ExWapp.Messages do
   end
 
   @doc """
-  Builds an image message protobuf from uploaded media metadata.
-
-  The upload struct already contains the cryptographic hashes, CDN URL, media
-  key, and direct path returned by WhatsApp. This function only maps that data
-  into the protobuf fields expected by the E2E message payload.
-  """
-  @spec build_image_proto(Media.Upload.t(), keyword()) :: Message.t()
-  def build_image_proto(%Media.Upload{} = upload, opts \\ []) do
-    %Message{
-      imageMessage: %ExWapp.Proto.ImageMessage{
-        # These fields are the server-issued media reference the recipient will use
-        # to download and verify the encrypted payload.
-        URL: upload.url,
-        mimetype: Keyword.get(opts, :mimetype, "image/jpeg"),
-        caption: Keyword.get(opts, :caption),
-        fileSHA256: upload.file_sha256,
-        fileLength: upload.file_length,
-        height: Keyword.get(opts, :height),
-        width: Keyword.get(opts, :width),
-        mediaKey: upload.media_key,
-        fileEncSHA256: upload.file_enc_sha256,
-        directPath: upload.direct_path,
-        mediaKeyTimestamp: Keyword.get(opts, :media_key_timestamp, System.system_time(:second)),
-        JPEGThumbnail: Keyword.get(opts, :thumbnail),
-        contextInfo: build_context_info(opts)
-      }
-    }
-  end
-
-  @doc """
-  Builds an audio message protobuf from uploaded media metadata.
-
-  Audio messages use a different protobuf field number than images and may
-  carry voice-note specific metadata such as `PTT`, duration, and waveform.
-  """
-  @spec build_audio_proto(Media.Upload.t(), keyword()) :: Message.t()
-  def build_audio_proto(%Media.Upload{} = upload, opts \\ []) do
-    %Message{
-      audioMessage: %ExWapp.Proto.AudioMessage{
-        # Voice-note playback relies on the same CDN/hashes/media-key tuple used
-        # for images, with extra audio-specific metadata layered on top.
-        URL: upload.url,
-        mimetype: Keyword.get(opts, :mimetype, "audio/ogg; codecs=opus"),
-        fileSHA256: upload.file_sha256,
-        fileLength: upload.file_length,
-        seconds: Keyword.get(opts, :duration) || Keyword.get(opts, :seconds),
-        PTT: Keyword.get(opts, :ptt),
-        mediaKey: upload.media_key,
-        fileEncSHA256: upload.file_enc_sha256,
-        directPath: upload.direct_path,
-        mediaKeyTimestamp: Keyword.get(opts, :media_key_timestamp, System.system_time(:second)),
-        contextInfo: build_context_info(opts),
-        waveform: Keyword.get(opts, :waveform)
-      }
-    }
-  end
-
-  @doc """
-  Builds a peer-data placeholder resend request for an undecryptable message.
-  """
-  @spec build_placeholder_resend_proto(String.t(), String.t() | nil, String.t()) :: Message.t()
-  def build_placeholder_resend_proto(chat_jid, sender_jid, message_id) do
-    %Message{
-      protocolMessage: %ProtocolMessage{
-        type: :PEER_DATA_OPERATION_REQUEST_MESSAGE,
-        peerDataOperationRequestMessage: %PeerDataOperationRequestMessage{
-          peerDataOperationRequestType: :PLACEHOLDER_MESSAGE_RESEND,
-          placeholderMessageResendRequest: [
-            %PlaceholderMessageResendRequest{
-              messageKey: build_message_key(chat_jid, sender_jid, message_id)
-            }
-          ]
-        }
-      }
-    }
-  end
-
-  @doc """
-  Builds a message key for referring to an existing WhatsApp message.
-  """
-  @spec build_message_key(String.t(), String.t() | nil, String.t()) :: MessageKey.t()
-  def build_message_key(chat_jid, sender_jid, message_id) do
-    sender_jid = normalize_optional_jid(sender_jid)
-    chat_jid = normalize_optional_jid(chat_jid)
-
-    %MessageKey{
-      remoteJID: chat_jid,
-      fromMe: false,
-      id: message_id,
-      participant: message_key_participant(chat_jid, sender_jid)
-    }
-  end
-
-  @doc """
   Builds context info for replies and mentions.
-
-  Returning `nil` keeps the protobuf lean for plain messages that do not need
-  threading or mention metadata.
   """
   @spec build_context_info(send_opts()) :: ContextInfo.t() | nil
   def build_context_info(opts) do
@@ -209,43 +163,13 @@ defmodule ExWapp.Messages do
     end
   end
 
-  defp message_key_participant(chat_jid, sender_jid) do
-    cond do
-      sender_jid == "" ->
-        nil
-
-      JID.group?(chat_jid) ->
-        strip_device(sender_jid)
-
-      true ->
-        nil
-    end
-  end
-
-  defp normalize_optional_jid(%JID{} = jid), do: JID.to_string(jid) |> normalize_optional_jid()
-
-  defp normalize_optional_jid(jid) when is_binary(jid) do
-    jid
-    |> String.trim()
-    |> String.replace("@whatsapp.net", "@s.whatsapp.net")
-  end
-
-  defp normalize_optional_jid(_), do: ""
-
-  defp strip_device(jid) when is_binary(jid), do: String.replace(jid, ~r/:(\d+)@/, "@")
-
   @doc """
-  Builds the binary XML node wrapper for an outbound message payload.
-
-  The payload passed into this function is already protobuf-encoded. WhatsApp
-  still expects it to live inside an `<enc>` node, which is later encrypted by
-  the Signal send pipeline.
+  Builds the binary XML node for a message.
   """
   @spec build_message_node(String.t(), String.t(), binary(), integer(), keyword()) ::
           Binary.Node.t()
   def build_message_node(jid, message_id, payload, timestamp, _opts \\ []) do
-    # Message nodes keep transport routing metadata in XML attrs while the real
-    # message body travels inside the nested encrypted payload node.
+    # Determine message type and device info
     type = if JID.group?(jid), do: "text", else: "text"
 
     attrs = %{
@@ -255,8 +179,8 @@ defmodule ExWapp.Messages do
       "t" => Integer.to_string(timestamp)
     }
 
-    # Signal encryption wraps the protobuf payload later; this layer only shapes
-    # the stanza that the session worker will send on the wire.
+    # The payload needs to be encrypted with Signal
+    # For now, create the structure without encryption
     enc_node = %Binary.Node{
       tag: "enc",
       attrs: %{
@@ -274,7 +198,39 @@ defmodule ExWapp.Messages do
   end
 
   @doc """
-  Builds a receipt node for read or played acknowledgments.
+  Sends a read receipt for messages.
+  """
+  @spec send_read_receipt(pid(), String.t(), [String.t()]) :: :ok | {:error, term()}
+  def send_read_receipt(session, jid, message_ids) when is_list(message_ids) do
+    node = build_receipt_node(jid, message_ids, "read")
+    send_node(session, node)
+  end
+
+  @doc """
+  Sends a delivery receipt for a message.
+  """
+  @spec send_delivery_receipt(pid(), String.t(), String.t(), String.t() | nil) ::
+          :ok | {:error, term()}
+  def send_delivery_receipt(session, jid, message_id, participant \\ nil) do
+    attrs = %{
+      "id" => message_id,
+      "to" => jid,
+      "type" => "delivery"
+    }
+
+    attrs = if participant, do: Map.put(attrs, "participant", participant), else: attrs
+
+    node = %Binary.Node{
+      tag: "receipt",
+      attrs: attrs,
+      content: nil
+    }
+
+    send_node(session, node)
+  end
+
+  @doc """
+  Builds a receipt node for read/played acknowledgments.
   """
   @spec build_receipt_node(String.t(), [String.t()], String.t()) :: Binary.Node.t()
   def build_receipt_node(jid, message_ids, type) do
@@ -321,9 +277,6 @@ defmodule ExWapp.Messages do
 
   @doc """
   Builds a typing indicator node.
-
-  WhatsApp represents typing state as a nested `chatstate` stanza with either a
-  `composing` or `paused` child tag.
   """
   @spec build_typing(String.t(), boolean()) :: Binary.Node.t()
   def build_typing(jid, composing \\ true) do
@@ -340,5 +293,39 @@ defmodule ExWapp.Messages do
         }
       ]
     }
+  end
+
+  # ============================================================================
+  # Internal Helpers
+  # ============================================================================
+
+  defp send_node(session, node) do
+    try do
+      conn = GenServer.call(session, :get_conn)
+
+      if conn && Process.alive?(conn) do
+        Conn.send_node(conn, node)
+      else
+        {:error, :not_connected}
+      end
+    catch
+      :exit, _ -> {:error, :session_unavailable}
+    end
+  end
+
+  defp record_outgoing(session, jid, message_id, text, timestamp) do
+    message = %{
+      id: message_id,
+      from_me: true,
+      timestamp: timestamp,
+      text: text,
+      status: :pending,
+      participant: nil,
+      raw: nil
+    }
+
+    Chat.add_message(session, jid, message)
+  rescue
+    _ -> :ok
   end
 end
