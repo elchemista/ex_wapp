@@ -16,6 +16,8 @@ defmodule ExWapp.Signal.SessionStore do
   defmodule Ref do
     @moduledoc false
     defstruct [:table]
+
+    @type t :: %__MODULE__{table: term()}
   end
 
   @type t ::
@@ -24,7 +26,7 @@ defmodule ExWapp.Signal.SessionStore do
             pending_prekeys: %{String.t() => map()},
             session_touched_at_ms: %{String.t() => integer()}
           }
-          | %Ref{table: :ets.tid()}
+          | Ref.t()
 
   @doc """
   Creates a new empty session store.
@@ -59,7 +61,7 @@ defmodule ExWapp.Signal.SessionStore do
   @doc """
   Attaches to an existing ETS-backed session store table.
   """
-  @spec attach(:ets.tid()) :: t()
+  @spec attach(term()) :: t()
   def attach(table) when is_reference(table), do: %Ref{table: table}
 
   @doc """

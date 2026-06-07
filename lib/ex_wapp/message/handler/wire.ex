@@ -151,8 +151,6 @@ defmodule ExWapp.Message.Handler.Wire do
     |> Enum.reverse()
   end
 
-  defp extract_enc_candidates(_), do: []
-
   defp do_extract_enc_candidates([], _current_to_jid, acc), do: acc
 
   defp do_extract_enc_candidates([node | rest], current_to_jid, acc) do
@@ -318,7 +316,7 @@ defmodule ExWapp.Message.Handler.Wire do
   defp decode_wire_field_acc(2, rest, field_num, acc) do
     with {:ok, len, tail} <- decode_varint_safe(rest),
          true <- byte_size(tail) >= len do
-      <<value::binary-size(len), next::binary>> = tail
+      <<value::binary-size(^len), next::binary>> = tail
       decode_wire_fields_acc(next, [{field_num, 2, value} | acc])
     else
       false -> {:error, :invalid_length}
@@ -379,7 +377,7 @@ defmodule ExWapp.Message.Handler.Wire do
   defp find_length_delimited_by_wire_type(2, rest, field, field_num) do
     with {:ok, len, tail} <- decode_varint(rest),
          true <- byte_size(tail) >= len do
-      <<value::binary-size(len), next::binary>> = tail
+      <<value::binary-size(^len), next::binary>> = tail
 
       if field == field_num,
         do: {:ok, value},
@@ -441,7 +439,7 @@ defmodule ExWapp.Message.Handler.Wire do
   defp collect_length_delimited_by_wire_type(2, rest, acc) do
     with {:ok, len, tail} <- decode_varint(rest),
          true <- byte_size(tail) >= len do
-      <<value::binary-size(len), next::binary>> = tail
+      <<value::binary-size(^len), next::binary>> = tail
       collect_length_delimited_fields(next, [value | acc])
     else
       false -> {:error, :invalid_length}
@@ -492,7 +490,7 @@ defmodule ExWapp.Message.Handler.Wire do
   defp find_varint_by_wire_type(2, rest, _field, wanted_field) do
     with {:ok, len, tail} <- decode_varint(rest),
          true <- byte_size(tail) >= len do
-      <<_skip::binary-size(len), next::binary>> = tail
+      <<_skip::binary-size(^len), next::binary>> = tail
       do_find_varint_field(next, wanted_field)
     else
       _ -> nil

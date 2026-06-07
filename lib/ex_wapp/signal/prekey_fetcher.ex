@@ -280,10 +280,7 @@ defmodule ExWapp.Signal.PrekeyFetcher do
     end)
   end
 
-  defp find_child(_, _), do: nil
-
   defp get_attr(%Binary.Node{attrs: attrs}, key), do: Map.get(attrs, key)
-  defp get_attr(_, _), do: nil
 
   defp normalize_jid(jid) when is_binary(jid) do
     case String.split(jid, [":", "@"]) do

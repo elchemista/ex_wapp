@@ -1916,8 +1916,6 @@ defmodule ExWapp.Session.Worker.Outbound do
     end)
   end
 
-  defp find_child(_, _), do: nil
-
   defp normalize_jid_for_signal(jid) when is_binary(jid), do: JIDUtils.normalize_for_signal(jid)
 
   defp normalize_jid_for_signal(_), do: ""

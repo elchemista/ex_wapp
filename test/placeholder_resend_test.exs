@@ -101,7 +101,7 @@ defmodule ExWapp.PlaceholderResendTest do
   defp decode_field(2, rest, field_num, acc) do
     with {:ok, len, tail} <- decode_varint(rest),
          true <- byte_size(tail) >= len do
-      <<value::binary-size(len), next::binary>> = tail
+      <<value::binary-size(^len), next::binary>> = tail
       decode_fields(next, [{field_num, 2, value} | acc])
     else
       false -> {:error, :invalid_length}

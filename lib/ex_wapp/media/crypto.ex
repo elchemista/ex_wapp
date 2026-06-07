@@ -86,7 +86,7 @@ defmodule ExWapp.Media.Crypto do
   @spec split_body(binary()) :: {:ok, binary(), binary()}
   defp split_body(body) do
     ciphertext_len = byte_size(body) - @hmac_len
-    <<ciphertext::binary-size(ciphertext_len), mac::binary-size(@hmac_len)>> = body
+    <<ciphertext::binary-size(^ciphertext_len), mac::binary-size(@hmac_len)>> = body
     {:ok, ciphertext, mac}
   end
 

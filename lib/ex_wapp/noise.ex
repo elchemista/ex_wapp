@@ -137,16 +137,10 @@ defmodule ExWapp.Noise do
     if is_nil(cipher) do
       {:error, :invalid_state}
     else
-      case NoiseEngine.encrypt(cipher, plaintext, state.tx_counter) do
-        {:ok, new_cipher, payload} when is_binary(payload) or is_list(payload) ->
-          payload = ensure_binary(payload)
+      {:ok, new_cipher, payload} = NoiseEngine.encrypt(cipher, plaintext, state.tx_counter)
+      new_state = %{state | cipher_ref: new_cipher, tx_counter: state.tx_counter + 1}
 
-          new_state = %{state | cipher_ref: new_cipher, tx_counter: state.tx_counter + 1}
-          {:ok, payload, new_state}
-
-        other ->
-          {:error, {:encrypt_failed, other}}
-      end
+      {:ok, ensure_binary(payload), new_state}
     end
   end
 

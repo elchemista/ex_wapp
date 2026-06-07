@@ -1551,7 +1551,7 @@ defmodule ExWapp.AppState.Engine do
       {:error, :external_blob_payload_too_short}
     else
       ciphertext_len = byte_size(payload) - @media_hmac_length
-      <<ciphertext::binary-size(ciphertext_len), mac::binary-size(@media_hmac_length)>> = payload
+      <<ciphertext::binary-size(^ciphertext_len), mac::binary-size(@media_hmac_length)>> = payload
 
       with {:ok, iv, cipher_key, mac_key} <- derive_external_blob_keys(media_key),
            :ok <- verify_external_blob_mac(iv, ciphertext, mac_key, mac),

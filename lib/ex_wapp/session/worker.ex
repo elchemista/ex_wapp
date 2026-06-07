@@ -1653,8 +1653,6 @@ defmodule ExWapp.Session.Worker do
   # Helpers
   # ============================================================================
 
-  defp load_persisted_signal_sessions(nil), do: nil
-
   defp load_persisted_signal_sessions(store) do
     store
     |> Store.load_signal_sessions()

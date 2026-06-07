@@ -1401,8 +1401,6 @@ defmodule ExWapp.Message.Handler.Inbound do
     end
   end
 
-  defp prioritize_payload_candidates(payload_candidates, _state, _attrs), do: payload_candidates
-
   defp local_recipient_jids(state, attrs) do
     from_store =
       case Map.get(state, :store) do

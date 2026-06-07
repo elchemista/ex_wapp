@@ -264,7 +264,7 @@ defmodule ExWapp.Signal.Encryption do
 
     if pad_len > 0 and pad_len <= 16 and pad_len <= byte_size(padded) do
       payload_len = byte_size(padded) - pad_len
-      <<payload::binary-size(payload_len), padding::binary-size(pad_len)>> = padded
+      <<payload::binary-size(^payload_len), padding::binary-size(^pad_len)>> = padded
       if valid_padding?(padding, pad_len), do: payload, else: padded
     else
       padded

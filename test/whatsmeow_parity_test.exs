@@ -844,8 +844,6 @@ defmodule ExWapp.WhatsmeowParityTest do
     end
   end
 
-  defp encode_history_sync_message_payload(_), do: <<>>
-
   defp encode_history_sync_message_key(message, conversation_jid) when is_map(message) do
     remote_jid =
       first_binary([

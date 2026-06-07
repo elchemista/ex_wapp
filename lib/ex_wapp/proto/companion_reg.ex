@@ -57,8 +57,13 @@ defmodule ExWapp.Proto.CompanionReg.AppVersion do
   defp encode_uint32_field(acc, _tag, nil), do: acc
 
   defp encode_uint32_field(acc, tag, value) do
-    [acc, Protox.Encode.make_key_bytes(tag, :uint32), Protox.Encode.encode_uint32(value)]
+    [acc, app_version_key(tag), Protox.Encode.encode_uint32(value)]
   end
+
+  @spec app_version_key(1 | 2 | 3) :: binary()
+  defp app_version_key(1), do: <<8>>
+  defp app_version_key(2), do: <<16>>
+  defp app_version_key(3), do: <<24>>
 end
 
 defmodule ExWapp.Proto.CompanionReg.HistorySyncConfig do
@@ -172,14 +177,27 @@ defmodule ExWapp.Proto.CompanionReg.HistorySyncConfig do
   defp encode_uint32_field(acc, _tag, nil), do: acc
 
   defp encode_uint32_field(acc, tag, value) do
-    [acc, Protox.Encode.make_key_bytes(tag, :uint32), Protox.Encode.encode_uint32(value)]
+    [acc, history_sync_key(tag), Protox.Encode.encode_uint32(value)]
   end
 
   defp encode_bool_field(acc, _tag, nil), do: acc
 
   defp encode_bool_field(acc, tag, value) do
-    [acc, Protox.Encode.make_key_bytes(tag, :bool), Protox.Encode.encode_bool(value)]
+    [acc, history_sync_key(tag), Protox.Encode.encode_bool(value)]
   end
+
+  @spec history_sync_key(3 | 4 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 14 | 15) :: binary()
+  defp history_sync_key(3), do: <<24>>
+  defp history_sync_key(4), do: <<32>>
+  defp history_sync_key(6), do: <<48>>
+  defp history_sync_key(7), do: <<56>>
+  defp history_sync_key(8), do: <<64>>
+  defp history_sync_key(9), do: <<72>>
+  defp history_sync_key(10), do: <<80>>
+  defp history_sync_key(11), do: <<88>>
+  defp history_sync_key(12), do: <<96>>
+  defp history_sync_key(14), do: <<112>>
+  defp history_sync_key(15), do: <<120>>
 end
 
 defmodule ExWapp.Proto.CompanionReg.DeviceProps do
@@ -261,19 +279,19 @@ defmodule ExWapp.Proto.CompanionReg.DeviceProps do
   defp encode_string_field(acc, _tag, nil), do: acc
 
   defp encode_string_field(acc, tag, value) do
-    [acc, Protox.Encode.make_key_bytes(tag, :string), Protox.Encode.encode_string(value)]
+    [acc, device_props_key(tag), Protox.Encode.encode_string(value)]
   end
 
   defp encode_uint32_field(acc, _tag, nil), do: acc
 
   defp encode_uint32_field(acc, tag, value) do
-    [acc, Protox.Encode.make_key_bytes(tag, :uint32), Protox.Encode.encode_uint32(value)]
+    [acc, device_props_key(tag), Protox.Encode.encode_uint32(value)]
   end
 
   defp encode_bool_field(acc, _tag, nil), do: acc
 
   defp encode_bool_field(acc, tag, value) do
-    [acc, Protox.Encode.make_key_bytes(tag, :bool), Protox.Encode.encode_bool(value)]
+    [acc, device_props_key(tag), Protox.Encode.encode_bool(value)]
   end
 
   defp encode_message_field(acc, _tag, nil, _encoder), do: acc
@@ -284,6 +302,13 @@ defmodule ExWapp.Proto.CompanionReg.DeviceProps do
       |> encoder.()
       |> IO.iodata_to_binary()
 
-    [acc, Protox.Encode.make_key_bytes(tag, :bytes), Protox.Encode.encode_bytes(encoded)]
+    [acc, device_props_key(tag), Protox.Encode.encode_bytes(encoded)]
   end
+
+  @spec device_props_key(1 | 2 | 3 | 4 | 5) :: binary()
+  defp device_props_key(1), do: <<10>>
+  defp device_props_key(2), do: <<18>>
+  defp device_props_key(3), do: <<24>>
+  defp device_props_key(4), do: <<32>>
+  defp device_props_key(5), do: <<42>>
 end

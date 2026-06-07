@@ -205,7 +205,7 @@ defmodule ExWapp.SignalSenderKeyTest do
              )
 
     sig_size = byte_size(skmsg_ciphertext) - 1
-    <<sig_prefix::binary-size(sig_size), sig_last::unsigned-integer-size(8)>> = skmsg_ciphertext
+    <<sig_prefix::binary-size(^sig_size), sig_last::unsigned-integer-size(8)>> = skmsg_ciphertext
     tampered_signature = sig_prefix <> <<bxor(sig_last, 0x01)>>
 
     assert {:error, :invalid_sender_key_signature} =

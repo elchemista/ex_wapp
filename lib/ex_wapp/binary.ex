@@ -842,7 +842,8 @@ defmodule ExWapp.Binary do
 
     defp read_int(%__MODULE__{data: data, index: index} = decoder, bytes) do
       ensure_bytes(decoder, bytes)
-      <<value::unsigned-integer-size(bytes * 8), _::binary>> = binary_part(data, index, bytes)
+      bits = bytes * 8
+      <<value::unsigned-integer-size(^bits), _::binary>> = binary_part(data, index, bytes)
       {value, %{decoder | index: index + bytes}}
     end
 

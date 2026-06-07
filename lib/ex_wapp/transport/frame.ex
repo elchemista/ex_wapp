@@ -51,7 +51,7 @@ defmodule ExWapp.Transport.Frame do
       if byte_size(rest) < len do
         {Enum.reverse(acc), buffer}
       else
-        <<frame::binary-size(len), tail::binary>> = rest
+        <<frame::binary-size(^len), tail::binary>> = rest
         do_decode(tail, [frame | acc])
       end
     end

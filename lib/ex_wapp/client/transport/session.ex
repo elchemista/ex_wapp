@@ -83,11 +83,11 @@ defmodule ExWapp.Client.Transport.Session do
   @impl true
   @spec send_message(Client.t(), Message.t()) ::
           {:ok, Client.t(), String.t()} | {:error, Client.t(), term()} | {:error, term()}
-  def send_message(%Client{} = client, %Message{type: :text, to: to, body: text}) do
+  def send_message(%Client{} = client, %Message{type: :text, to: to, body: text, id: id}) do
     case ensure_session(client) do
       {:ok, client, session} ->
         case Session.send_text(session, to, text) do
-          {:ok, message_id} -> {:ok, client, message_id}
+          :ok -> {:ok, client, id}
           {:error, reason} -> {:error, client, reason}
         end
 
@@ -96,24 +96,9 @@ defmodule ExWapp.Client.Transport.Session do
     end
   end
 
-  def send_message(%Client{} = client, %Message{type: type, to: to, body: source, opts: opts})
+  def send_message(%Client{} = client, %Message{type: type})
       when type in [:image, :audio] do
-    case ensure_session(client) do
-      {:ok, client, session} ->
-        result =
-          case type do
-            :image -> Session.send_image(session, to, source, opts)
-            :audio -> Session.send_audio(session, to, source, opts)
-          end
-
-        case result do
-          {:ok, message_id} -> {:ok, client, message_id}
-          {:error, reason} -> {:error, client, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    {:error, client, :media_send_not_implemented}
   end
 
   def send_message(_client, %Message{type: type}), do: {:error, {:unsupported_message_type, type}}
@@ -187,11 +172,8 @@ defmodule ExWapp.Client.Transport.Session do
   def get_chat(%Client{} = client, jid), do: ExWapp.Chat.get(client.store, jid)
 
   @impl true
-  def download_media(%Client{} = client, %ExWapp.Media.Ref{} = ref, opts) do
-    with {:ok, client, session} <- ensure_session(client),
-         {:ok, download} <- Session.download_media(session, ref, opts) do
-      {:ok, client, download}
-    end
+  def download_media(%Client{} = _client, %ExWapp.Media.Ref{} = _ref, _opts) do
+    {:error, :media_download_not_implemented}
   end
 
   defp contact_name_from_attrs(attrs) when is_list(attrs) do

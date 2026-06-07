@@ -767,7 +767,7 @@ defmodule ExWapp.Proto.SyncAction do
   defp decode_wire_field(2, field_num, rest, acc) do
     with {:ok, len, tail} <- decode_varint_bin(rest),
          true <- byte_size(tail) >= len do
-      <<value::binary-size(len), next::binary>> = tail
+      <<value::binary-size(^len), next::binary>> = tail
       decode_wire_fields(next, [{field_num, 2, value} | acc])
     else
       false -> {:error, :invalid_length_delimited_field}

@@ -27,9 +27,6 @@ defmodule ExWapp.Messages do
         quoted_participant: "sender@s.whatsapp.net"
       )
   """
-
-  require Logger
-
   alias ExWapp.{Binary, Chat, Conn, JID}
   alias ExWapp.Proto.{Message, ExtendedTextMessage, ContextInfo}
 
@@ -365,10 +362,6 @@ defmodule ExWapp.Messages do
       ]
     }
   end
-
-  # ============================================================================
-  # Internal Helpers
-  # ============================================================================
 
   defp send_node(session, node) do
     try do

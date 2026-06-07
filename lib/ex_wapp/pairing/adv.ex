@@ -407,7 +407,7 @@ defmodule ExWapp.Pairing.ADV do
   defp extract_key_index_field(2, _field_num, rest) do
     with {:ok, len, tail} <- decode_varint(rest),
          true <- byte_size(tail) >= len do
-      <<_value::binary-size(len), next::binary>> = tail
+      <<_value::binary-size(^len), next::binary>> = tail
       do_extract_key_index(next)
     else
       _ -> nil

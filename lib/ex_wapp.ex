@@ -106,9 +106,7 @@ defmodule ExWapp do
   - `ExWapp.Signal` - X3DH and Double Ratchet
   """
 
-  require Logger
-
-  alias ExWapp.{Client, Error, Event, Message, Session}
+  alias ExWapp.{Chat, Client, Error, Event, Messages, Session}
 
   @doc """
   Creates a high-level, runtime-neutral client.
@@ -169,25 +167,14 @@ defmodule ExWapp do
   """
   @spec connect(Client.t() | GenServer.server()) ::
           {:ok, Client.t()} | {:error, Error.t(), Client.t()} | :ok
-  def connect(%Client{} = client), do: client_connect(client)
+  def connect(%Client{} = client), do: Client.API.connect(client)
   def connect(server), do: Session.connect(server)
 
   @doc """
   Starts pairing for a high-level client.
   """
   @spec pair(Client.t()) :: {:ok, Client.t(), term()} | {:error, Error.t(), Client.t()}
-  def pair(%Client{} = client) do
-    case client.transport.pair(client) do
-      {:ok, updated_client, qr_payload} ->
-        updated_client = %{updated_client | status: :pairing}
-        event = Event.new(:qr, qr_payload, session_id: updated_client.session_id)
-        :ok = emit_event(updated_client, event)
-        {:ok, updated_client, qr_payload}
-
-      {:error, reason} ->
-        client_error(client, :pair, :transport, reason)
-    end
-  end
+  def pair(%Client{} = client), do: Client.API.pair(client)
 
   @doc """
   Returns a stream of QR code and pairing events.
@@ -305,22 +292,9 @@ defmodule ExWapp do
   """
   @spec disconnect(Client.t() | GenServer.server()) ::
           {:ok, Client.t()} | {:error, Error.t(), Client.t()} | :ok
-  def disconnect(%Client{} = client) do
-    case client.transport.disconnect(client) do
-      {:ok, updated_client} ->
-        {:ok, %{updated_client | status: :disconnected}}
-
-      :ok ->
-        {:ok, %{client | status: :disconnected}}
-
-      {:error, reason} ->
-        client_error(client, :disconnect, :transport, reason)
-    end
-  end
+  def disconnect(%Client{} = client), do: Client.API.disconnect(client)
 
   def disconnect(server), do: Session.disconnect(server)
-
-  alias ExWapp.{Chat, Messages}
 
   @doc """
   Lists all chats for a session.
@@ -336,7 +310,7 @@ defmodule ExWapp do
   """
   @spec list_chats(Client.t() | GenServer.server()) ::
           {:ok, [Chat.chat()]} | {:error, Error.t(), Client.t()} | [Chat.chat()]
-  def list_chats(%Client{} = client), do: client_read(client, :list_chats, [])
+  def list_chats(%Client{} = client), do: Client.API.list_chats(client)
   def list_chats(session), do: Chat.list(session)
 
   @doc """
@@ -346,7 +320,7 @@ defmodule ExWapp do
   """
   @spec list_groups(Client.t() | GenServer.server()) ::
           {:ok, [Chat.chat()]} | {:error, Error.t(), Client.t()} | [Chat.chat()]
-  def list_groups(%Client{} = client), do: client_read(client, :list_groups, [])
+  def list_groups(%Client{} = client), do: Client.API.list_groups(client)
   def list_groups(session), do: Chat.list_groups(session)
 
   @doc """
@@ -359,7 +333,7 @@ defmodule ExWapp do
   """
   @spec get_chat(Client.t() | GenServer.server(), String.t()) ::
           {:ok, Chat.chat()} | {:error, Error.t(), Client.t()} | {:error, :not_found}
-  def get_chat(%Client{} = client, jid), do: client_read(client, :get_chat, [jid])
+  def get_chat(%Client{} = client, jid), do: Client.API.get_chat(client, jid)
   def get_chat(session, jid), do: Chat.get(session, jid)
 
   @doc """
@@ -413,13 +387,8 @@ defmodule ExWapp do
   """
   @spec send_message(Client.t(), keyword()) ::
           {:ok, Client.t(), String.t()} | {:error, Error.t(), Client.t()}
-  def send_message(%Client{} = client, opts) when is_list(opts) do
-    to = Keyword.fetch!(opts, :to)
-    text = Keyword.fetch!(opts, :text)
-
-    message = Message.text(to, text, Keyword.drop(opts, [:to, :text]))
-    send_client_message(client, message, :send_message)
-  end
+  def send_message(%Client{} = client, opts) when is_list(opts),
+    do: Client.API.send_message(client, opts)
 
   @spec send_message(pid() | binary(), String.t(), String.t()) ::
           {:ok, String.t()} | :ok | {:error, term()}
@@ -443,7 +412,7 @@ defmodule ExWapp do
   @spec send_image(Client.t(), String.t(), ExWapp.Media.source(), keyword()) ::
           {:ok, Client.t(), String.t()} | {:error, Error.t(), Client.t()}
   def send_image(%Client{} = client, to, source, opts \\ []) do
-    send_client_message(client, Message.image(to, source, opts), :send_image)
+    Client.API.send_image(client, to, source, opts)
   end
 
   @doc """
@@ -452,7 +421,7 @@ defmodule ExWapp do
   @spec send_audio(Client.t(), String.t(), ExWapp.Media.source(), keyword()) ::
           {:ok, Client.t(), String.t()} | {:error, Error.t(), Client.t()}
   def send_audio(%Client{} = client, to, source, opts \\ []) do
-    send_client_message(client, Message.audio(to, source, opts), :send_audio)
+    Client.API.send_audio(client, to, source, opts)
   end
 
   @doc """
@@ -460,48 +429,26 @@ defmodule ExWapp do
   """
   @spec receive_message(Client.t(), term(), keyword()) ::
           {:ok, Client.t(), [Event.t()]} | {:error, Error.t(), Client.t()}
-  def receive_message(%Client{} = client, payload, opts \\ []) do
-    case client.transport.receive_message(client, payload, opts) do
-      {:ok, updated_client, events} ->
-        :ok = ExWapp.Events.emit_many(updated_client, events)
-
-        {:ok, Client.trace(updated_client, :receive_message, %{event_count: length(events)}),
-         events}
-
-      {:ok, events} when is_list(events) ->
-        :ok = ExWapp.Events.emit_many(client, events)
-        {:ok, Client.trace(client, :receive_message, %{event_count: length(events)}), events}
-
-      {:error, reason} ->
-        client_error(client, :receive_message, :transport, reason)
-    end
-  end
+  def receive_message(%Client{} = client, payload, opts \\ []),
+    do: Client.API.receive_message(client, payload, opts)
 
   @doc """
   Returns the status of a high-level client.
   """
   @spec status(Client.t()) :: Client.status()
-  def status(%Client{} = client), do: client.status
+  def status(%Client{} = client), do: Client.API.status(client)
 
   @doc """
   Returns the last structured error recorded on a high-level client.
   """
   @spec last_error(Client.t()) :: Error.t() | nil
-  def last_error(%Client{} = client), do: client.last_error
+  def last_error(%Client{} = client), do: Client.API.last_error(client)
 
   @doc """
   Returns a compact diagnostics map for a high-level client.
   """
   @spec diagnostics(Client.t()) :: map()
-  def diagnostics(%Client{} = client) do
-    %{
-      session_id: client.session_id,
-      status: client.status,
-      last_error: client.last_error,
-      trace: client.trace,
-      metadata: client.metadata
-    }
-  end
+  def diagnostics(%Client{} = client), do: Client.API.diagnostics(client)
 
   @doc """
   Controls a session worker using either pid (direct cast) or session_id (PubSub command).
@@ -797,7 +744,7 @@ defmodule ExWapp do
   @spec create_contact(Client.t() | GenServer.server(), String.t(), String.t()) ::
           {:ok, Client.t()} | {:error, Error.t(), Client.t()} | :ok | {:error, term()}
   def create_contact(%Client{} = client, jid, name),
-    do: client_mutation(client, :create_contact, [jid, name], :contact_created)
+    do: Client.API.create_contact(client, jid, name)
 
   defdelegate create_contact(session, jid, name), to: Session
 
@@ -807,7 +754,7 @@ defmodule ExWapp do
   @spec delete_contact(Client.t() | GenServer.server(), String.t()) ::
           {:ok, Client.t()} | {:error, Error.t(), Client.t()} | :ok | {:error, term()}
   def delete_contact(%Client{} = client, jid),
-    do: client_mutation(client, :delete_contact, [jid], :contact_deleted)
+    do: Client.API.delete_contact(client, jid)
 
   defdelegate delete_contact(session, jid), to: Session
 
@@ -817,7 +764,7 @@ defmodule ExWapp do
   @spec sync_contacts(Client.t() | GenServer.server()) ::
           {:ok, Client.t()} | {:error, Error.t(), Client.t()} | :ok | {:error, term()}
   def sync_contacts(%Client{} = client),
-    do: client_mutation(client, :sync_contacts, [], :contacts_synced)
+    do: Client.API.sync_contacts(client)
 
   defdelegate sync_contacts(session), to: Session
 
@@ -826,7 +773,7 @@ defmodule ExWapp do
   """
   @spec list_contacts(Client.t() | GenServer.server()) ::
           {:ok, [ExWapp.Contact.t()]} | {:error, Error.t(), Client.t()} | [ExWapp.Contact.t()]
-  def list_contacts(%Client{} = client), do: client_read(client, :list_contacts, [])
+  def list_contacts(%Client{} = client), do: Client.API.list_contacts(client)
   defdelegate list_contacts(session), to: Session
 
   @doc """
@@ -837,7 +784,7 @@ defmodule ExWapp do
           | {:error, Error.t(), Client.t()}
           | ExWapp.Contact.t()
           | nil
-  def get_contact(%Client{} = client, jid), do: client_read(client, :get_contact, [jid])
+  def get_contact(%Client{} = client, jid), do: Client.API.get_contact(client, jid)
   defdelegate get_contact(session, jid), to: Session
 
   @doc """
@@ -846,116 +793,4 @@ defmodule ExWapp do
   @spec get_chat_info(GenServer.server(), String.t()) ::
           {:ok, ExWapp.Chat.chat()} | {:error, :not_found}
   defdelegate get_chat_info(session, jid), to: Session
-
-  defp client_connect(%Client{} = client) do
-    start_ms = System.monotonic_time(:millisecond)
-
-    :telemetry.execute([:ex_wapp, :client, :connect, :start], %{count: 1}, %{
-      session_id: client.session_id
-    })
-
-    case client.transport.connect(client) do
-      {:ok, updated_client} ->
-        status =
-          if updated_client.status == client.status, do: :connected, else: updated_client.status
-
-        updated_client = %{updated_client | status: status} |> Client.trace(:connect)
-        event = Event.new(:status, status, session_id: updated_client.session_id)
-        :ok = emit_event(updated_client, event)
-
-        duration = System.monotonic_time(:millisecond) - start_ms
-
-        :telemetry.execute([:ex_wapp, :client, :connect, :stop], %{duration: duration}, %{
-          session_id: client.session_id
-        })
-
-        {:ok, updated_client}
-
-      {:error, reason} ->
-        duration = System.monotonic_time(:millisecond) - start_ms
-
-        :telemetry.execute([:ex_wapp, :client, :connect, :exception], %{duration: duration}, %{
-          session_id: client.session_id,
-          reason: reason
-        })
-
-        client_error(client, :connect, :transport, reason)
-    end
-  end
-
-  defp send_client_message(%Client{} = client, %Message{} = message, operation) do
-    message = %{message | id: message.id || Messages.generate_id(client.session_id)}
-
-    case client.transport.send_message(client, message) do
-      {:ok, updated_client, message_id} ->
-        updated_client = Client.trace(updated_client, operation, %{message_id: message_id})
-
-        event =
-          Event.new(:message_sent, %{id: message_id, to: message.to, type: message.type},
-            session_id: updated_client.session_id
-          )
-
-        :ok = emit_event(updated_client, event)
-        {:ok, updated_client, message_id}
-
-      {:ok, message_id} ->
-        updated_client = Client.trace(client, operation, %{message_id: message_id})
-
-        event =
-          Event.new(:message_sent, %{id: message_id, to: message.to, type: message.type},
-            session_id: updated_client.session_id
-          )
-
-        :ok = emit_event(updated_client, event)
-        {:ok, updated_client, message_id}
-
-      {:error, %Client{} = updated_client, reason} ->
-        client_error(updated_client, operation, :transport, reason)
-
-      {:error, reason} ->
-        client_error(client, operation, :transport, reason)
-    end
-  end
-
-  defp client_read(%Client{} = client, function, args) do
-    case apply(client.transport, function, [client | args]) do
-      {:ok, value} -> {:ok, value}
-      {:error, reason} -> client_error(client, function, :transport, reason)
-    end
-  end
-
-  defp client_mutation(%Client{} = client, function, args, event_type) do
-    case apply(client.transport, function, [client | args]) do
-      {:ok, updated_client} ->
-        event = Event.new(event_type, %{}, session_id: updated_client.session_id)
-        :ok = emit_event(updated_client, event)
-        {:ok, Client.trace(updated_client, function)}
-
-      :ok ->
-        event = Event.new(event_type, %{}, session_id: client.session_id)
-        :ok = emit_event(client, event)
-        {:ok, Client.trace(client, function)}
-
-      {:error, reason} ->
-        client_error(client, function, :transport, reason)
-    end
-  end
-
-  defp emit_event(%Client{} = client, %Event{} = event) do
-    case ExWapp.Events.emit(client, event) do
-      :ok -> :ok
-      {:error, _reason} -> :ok
-    end
-  end
-
-  defp client_error(%Client{} = client, operation, phase, reason) do
-    error = Error.new(operation, phase, reason)
-
-    failed_client =
-      %{client | status: :error, last_error: error} |> Client.trace(operation, %{error: reason})
-
-    Logger.error("#{operation} failed: #{inspect(reason)}")
-
-    {:error, error, failed_client}
-  end
 end

@@ -70,7 +70,8 @@ defmodule ExWapp.Noise.Handshake do
 
   def decrypt(%__MODULE__{} = state, ciphertext) when is_binary(ciphertext) do
     total = byte_size(ciphertext)
-    <<body::binary-size(total - @tag_size), tag::binary-size(@tag_size)>> = ciphertext
+    body_size = total - @tag_size
+    <<body::binary-size(^body_size), tag::binary-size(@tag_size)>> = ciphertext
     iv = generate_iv(state.counter)
 
     case :crypto.crypto_one_time_aead(:aes_256_gcm, state.key, iv, body, state.hash, tag, false) do

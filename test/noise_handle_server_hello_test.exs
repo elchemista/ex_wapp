@@ -173,7 +173,8 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
   end
 
   defp decrypt_with_key(key, counter, payload) do
-    <<cipher::binary-size(byte_size(payload) - 16), tag::binary-size(16)>> = payload
+    cipher_size = byte_size(payload) - 16
+    <<cipher::binary-size(^cipher_size), tag::binary-size(16)>> = payload
 
     case :crypto.crypto_one_time_aead(:aes_256_gcm, key, nonce(counter), cipher, <<>>, tag, false) do
       :error -> flunk("failed to decrypt test payload")

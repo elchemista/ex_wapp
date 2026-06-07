@@ -246,7 +246,7 @@ defmodule ExWapp.Debug do
         {:error, :too_short}
       else
         body_len = byte_size(ciphertext) - tag_len
-        <<body::binary-size(body_len), tag::binary-size(tag_len)>> = ciphertext
+        <<body::binary-size(^body_len), tag::binary-size(^tag_len)>> = ciphertext
 
         case :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, body, <<>>, tag, false) do
           plaintext when is_binary(plaintext) -> {:ok, plaintext}

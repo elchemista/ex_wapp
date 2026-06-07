@@ -186,7 +186,7 @@ defmodule ExWapp.Noise.Engine do
       {:error, :decrypt_failed}
     else
       body_len = byte_size(ciphertext) - tag_len
-      <<body::binary-size(body_len), tag::binary-size(tag_len)>> = ciphertext
+      <<body::binary-size(^body_len), tag::binary-size(^tag_len)>> = ciphertext
 
       iv = generate_iv(counter)
 

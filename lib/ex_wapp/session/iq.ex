@@ -93,6 +93,49 @@ defmodule ExWapp.Session.IQ do
     }
   end
 
+  @doc """
+  Builds the IQ stanza used to request WhatsApp media upload hosts.
+  """
+  @spec build_media_conn_query(String.t()) :: Binary.Node.t()
+  def build_media_conn_query(message_id) when is_binary(message_id) do
+    %Binary.Node{
+      tag: "iq",
+      attrs: %{
+        "id" => message_id,
+        "type" => "set",
+        "xmlns" => "w:m",
+        "to" => "s.whatsapp.net"
+      },
+      content: [
+        %Binary.Node{
+          tag: "media_conn",
+          attrs: %{},
+          content: nil
+        }
+      ]
+    }
+  end
+
+  @doc """
+  Parses a media connection response into upload/download host metadata.
+  """
+  @spec parse_media_conn_response(term()) :: {:ok, map()} | {:error, term()}
+  def parse_media_conn_response(%Binary.Node{attrs: %{"type" => "result"}} = node) do
+    case find_media_conn_node(node) do
+      %Binary.Node{} = media_conn ->
+        {:ok, media_conn_info(media_conn)}
+
+      nil ->
+        {:error, :media_conn_not_found}
+    end
+  end
+
+  def parse_media_conn_response(%Binary.Node{attrs: %{"type" => "error"}} = node) do
+    {:error, {:media_conn_error, node}}
+  end
+
+  def parse_media_conn_response(_), do: {:error, :invalid_media_conn_response}
+
   @spec parse_usync_device_response(term()) :: {:ok, map()} | {:error, term()}
   def parse_usync_device_response(%Binary.Node{
         tag: "iq",
@@ -322,6 +365,39 @@ defmodule ExWapp.Session.IQ do
   end
 
   defp find_child(_, _), do: nil
+
+  @spec find_media_conn_node(term()) :: Binary.Node.t() | nil
+  defp find_media_conn_node(%Binary.Node{tag: "media_conn"} = node), do: node
+
+  defp find_media_conn_node(%Binary.Node{content: children}) when is_list(children) do
+    Enum.find_value(children, &find_media_conn_node/1)
+  end
+
+  defp find_media_conn_node(_), do: nil
+
+  @spec media_conn_info(Binary.Node.t()) :: %{auth: term(), hosts: [%{hostname: String.t()}]}
+  defp media_conn_info(%Binary.Node{attrs: attrs, content: content}) do
+    %{
+      auth: Map.get(attrs, "auth"),
+      hosts: media_hosts(content || [])
+    }
+  end
+
+  @spec media_hosts([term()]) :: [%{hostname: String.t()}]
+  defp media_hosts(children) when is_list(children) do
+    children
+    |> Enum.flat_map(&media_host/1)
+  end
+
+  @spec media_host(term()) :: [%{hostname: String.t()}]
+  defp media_host(%Binary.Node{tag: "host", attrs: attrs}) do
+    case Map.get(attrs || %{}, "hostname") || Map.get(attrs || %{}, "name") do
+      hostname when is_binary(hostname) and hostname != "" -> [%{hostname: hostname}]
+      _ -> []
+    end
+  end
+
+  defp media_host(_), do: []
 
   defp extract_binary(nil), do: nil
   defp extract_binary(binary) when is_binary(binary), do: binary

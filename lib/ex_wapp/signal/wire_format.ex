@@ -15,8 +15,6 @@ defmodule ExWapp.Signal.WireFormat do
   - (current_version << 4) | current_version
   - For version 3: 0x33
   """
-
-  require Logger
   import Bitwise
 
   # Current Signal protocol version (current_version=3) - matches Go whatsmeow
@@ -313,7 +311,7 @@ defmodule ExWapp.Signal.WireFormat do
       {:error, {:unknown_version, version}}
     else
       proto_size = byte_size(rest) - @mac_length
-      <<proto::binary-size(proto_size), mac::binary-size(@mac_length)>> = rest
+      <<proto::binary-size(^proto_size), mac::binary-size(@mac_length)>> = rest
 
       with {:ok, fields, <<>>} <- decode_fields(proto, %{}),
            {:ok, serialized_ratchet_key} <- fetch_required_bytes(fields, 1),
@@ -462,7 +460,7 @@ defmodule ExWapp.Signal.WireFormat do
   defp decode_wire_field(2, rest, acc, field_num) do
     with {:ok, len, tail} <- decode_varint(rest),
          true <- byte_size(tail) >= len do
-      <<value::binary-size(len), next::binary>> = tail
+      <<value::binary-size(^len), next::binary>> = tail
       decode_fields(next, Map.put(acc, field_num, value))
     else
       false -> {:error, :invalid_length_delimited_field}

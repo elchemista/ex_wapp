@@ -601,7 +601,7 @@ defmodule ExWapp.Signal.SenderKey do
 
   defp parse_sender_key_message(binary) when is_binary(binary) and byte_size(binary) > 65 do
     payload_size = byte_size(binary) - 64
-    <<version_and_proto::binary-size(payload_size), signature::binary-size(64)>> = binary
+    <<version_and_proto::binary-size(^payload_size), signature::binary-size(64)>> = binary
     <<version_byte, proto::binary>> = version_and_proto
 
     version = version_byte >>> 4
@@ -666,7 +666,7 @@ defmodule ExWapp.Signal.SenderKey do
   defp collect_wire_field(2, field_num, rest, field_nums, acc) do
     with {:ok, len, tail} <- decode_varint(rest),
          true <- byte_size(tail) >= len do
-      <<value::binary-size(len), next::binary>> = tail
+      <<value::binary-size(^len), next::binary>> = tail
       next_acc = if field_num in field_nums, do: [{field_num, value} | acc], else: acc
       do_collect_length_delimited_fields(next, field_nums, next_acc)
     else
@@ -708,7 +708,7 @@ defmodule ExWapp.Signal.SenderKey do
   defp decode_wire_field(2, field_num, rest, acc) do
     with {:ok, len, tail} <- decode_varint(rest),
          true <- byte_size(tail) >= len do
-      <<value::binary-size(len), next::binary>> = tail
+      <<value::binary-size(^len), next::binary>> = tail
       decode_fields(next, Map.put(acc, field_num, value))
     else
       false -> {:error, :invalid_length_delimited_field}
