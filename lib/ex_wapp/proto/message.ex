@@ -45,6 +45,7 @@ defmodule ExWapp.Proto.Message do
     |> encode_extended_text_message(msg)
     |> encode_protocol_message(msg)
     |> encode_device_sent_message(msg)
+    |> encode_unknown_fields(msg)
     |> IO.iodata_to_binary()
   end
 
@@ -82,6 +83,21 @@ defmodule ExWapp.Proto.Message do
     len = byte_size(encoded)
     [acc, <<0xFA, 0x01>>, encode_varint(len), encoded]
   end
+
+  defp encode_unknown_fields(acc, %{__uf__: fields}) when is_list(fields) do
+    Enum.reduce(fields, acc, fn
+      {field_num, 0, value}, acc when is_integer(value) ->
+        [acc, encode_varint(field_num <<< 3 ||| 0), encode_varint(value)]
+
+      {field_num, 2, value}, acc when is_binary(value) ->
+        [acc, encode_varint(field_num <<< 3 ||| 2), encode_varint(byte_size(value)), value]
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  defp encode_unknown_fields(acc, _msg), do: acc
 
   defp encode_varint(n) when n < 128, do: <<n::8>>
 
@@ -290,6 +306,7 @@ defmodule ExWapp.Proto.ProtocolMessage do
     []
     |> encode_key(msg)
     |> encode_type(msg)
+    |> encode_unknown_fields(msg)
     |> IO.iodata_to_binary()
   end
 
@@ -313,7 +330,23 @@ defmodule ExWapp.Proto.ProtocolMessage do
   defp type_to_int(:REVOKE), do: 0
   defp type_to_int(:EPHEMERAL_SETTING), do: 3
   defp type_to_int(:MESSAGE_EDIT), do: 14
+  defp type_to_int(:PEER_DATA_OPERATION_REQUEST), do: 16
   defp type_to_int(_), do: 0
+
+  defp encode_unknown_fields(acc, %{__uf__: fields}) when is_list(fields) do
+    Enum.reduce(fields, acc, fn
+      {field_num, 0, value}, acc when is_integer(value) ->
+        [acc, encode_varint(field_num <<< 3 ||| 0), encode_varint(value)]
+
+      {field_num, 2, value}, acc when is_binary(value) ->
+        [acc, encode_varint(field_num <<< 3 ||| 2), encode_varint(byte_size(value)), value]
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  defp encode_unknown_fields(acc, _msg), do: acc
 
   defp encode_varint(n) when n < 128, do: <<n::8>>
 

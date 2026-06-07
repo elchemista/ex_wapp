@@ -154,6 +154,18 @@ defmodule ExWapp.Session.Supervisor do
   end
 
   @doc """
+  Stops all live sessions for the given ID.
+  """
+  @spec stop_all_sessions(term()) :: :ok
+  def stop_all_sessions(session_id) do
+    session_id
+    |> get_live_sessions()
+    |> Enum.each(&DynamicSupervisor.terminate_child(@supervisor, &1))
+
+    :ok
+  end
+
+  @doc """
   Looks up a session by ID.
 
   Returns `{:ok, pid}` if found, or `:error` if not found.
@@ -167,6 +179,17 @@ defmodule ExWapp.Session.Supervisor do
       [] ->
         :error
     end
+  end
+
+  @doc """
+  Returns all live session pids matching a session ID.
+  """
+  @spec get_live_sessions(term()) :: [pid()]
+  def get_live_sessions(session_id) do
+    @registry
+    |> Registry.lookup(session_id)
+    |> Enum.map(fn {pid, _} -> pid end)
+    |> Enum.filter(&Process.alive?/1)
   end
 
   @doc """

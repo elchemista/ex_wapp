@@ -261,7 +261,7 @@ defmodule ExWappTest do
                       {:collection_fetch_failed, failures}, payload},
                      1_000
 
-      assert length(failures) > 0
+      assert failures != []
       assert payload.success_count == 0
       assert eventually(fn -> ExWapp.state(session) == :connected end)
 

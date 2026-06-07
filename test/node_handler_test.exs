@@ -26,15 +26,16 @@ defmodule ExWapp.Session.Worker.NodeHandlerTest do
     assert next_state.post_auth_phase == :awaiting_prekey_count
 
     assert [
+             :mark_auth_connected,
              {:send_node,
               %Binary.Node{
                 tag: "iq",
-                attrs: %{"type" => "get", "xmlns" => "encrypt", "to" => "s.whatsapp.net"}
+                attrs: count_attrs
               }},
              {:send_node,
               %Binary.Node{
                 tag: "iq",
-                attrs: %{"type" => "set", "xmlns" => "passive", "to" => "s.whatsapp.net"},
+                attrs: passive_attrs,
                 content: [%Binary.Node{tag: "active"}]
               }},
              {:send_node,
@@ -44,6 +45,18 @@ defmodule ExWapp.Session.Worker.NodeHandlerTest do
                 content: nil
               }}
            ] = actions
+
+    assert Map.take(count_attrs, ["type", "xmlns", "to"]) == %{
+             "type" => "get",
+             "xmlns" => "encrypt",
+             "to" => "s.whatsapp.net"
+           }
+
+    assert Map.take(passive_attrs, ["type", "xmlns", "to"]) == %{
+             "type" => "set",
+             "xmlns" => "passive",
+             "to" => "s.whatsapp.net"
+           }
   end
 
   test "post-auth high-count path does not send a duplicate passive iq" do

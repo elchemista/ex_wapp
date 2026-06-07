@@ -22,7 +22,7 @@ defmodule ExWapp.Session do
   defdelegate start_link(opts), to: Worker
 
   @spec connect(GenServer.server()) :: :ok
-  defdelegate connect(server), to: Worker
+  def connect(server), do: GenServer.cast(server, :connect)
 
   @spec disconnect(GenServer.server()) :: :ok
   defdelegate disconnect(server), to: Worker
@@ -52,7 +52,50 @@ defmodule ExWapp.Session do
   defdelegate unsubscribe_qr(server, ref), to: Worker
 
   @spec send_text(GenServer.server(), binary(), iodata()) :: :ok | {:error, term()}
-  defdelegate send_text(server, jid, text), to: Worker
+  def send_text(server, jid, text) do
+    GenServer.call(server, {:send_text, jid, IO.iodata_to_binary(text)})
+  end
+
+  @spec send_typing(GenServer.server(), binary(), boolean()) :: :ok | {:error, term()}
+  def send_typing(server, jid, composing \\ true) do
+    GenServer.call(server, {:send_typing, jid, composing})
+  end
+
+  @spec send_image(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_image(_server, _jid, _source, _opts \\ []), do: {:error, :media_send_not_implemented}
+
+  @spec send_audio(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_audio(_server, _jid, _source, _opts \\ []), do: {:error, :media_send_not_implemented}
+
+  @spec download_media(GenServer.server(), ExWapp.Media.Ref.t(), keyword()) ::
+          {:ok, ExWapp.Media.Download.t()} | {:error, term()}
+  def download_media(_server, _ref, _opts \\ []), do: {:error, :media_download_not_implemented}
+
+  @spec flush_store(GenServer.server()) :: :ok | {:error, term()}
+  def flush_store(server) do
+    server
+    |> GenServer.call(:get_store)
+    |> flush_store_adapter()
+  end
+
+  @spec export_snapshot(GenServer.server()) :: {:ok, map()} | {:error, term()}
+  def export_snapshot(server) do
+    store = GenServer.call(server, :get_store)
+
+    with :ok <- flush_store_adapter(store),
+         {:ok, data} <- ExWapp.Store.load(store) do
+      blob = :erlang.term_to_binary(data)
+
+      {:ok,
+       %{
+         data: data,
+         blob: blob,
+         checksum: :crypto.hash(:sha256, blob) |> Base.encode16(case: :lower)
+       }}
+    end
+  end
 
   @spec pause_sends(GenServer.server()) :: :ok
   defdelegate pause_sends(server), to: Worker
@@ -101,4 +144,16 @@ defmodule ExWapp.Session do
   @spec get_chat_info(GenServer.server(), String.t()) ::
           {:ok, ExWapp.Chat.chat()} | {:error, :not_found}
   defdelegate get_chat_info(server, jid), to: Worker
+
+  defp flush_store_adapter(nil), do: :ok
+
+  defp flush_store_adapter(%_{} = store) do
+    if function_exported?(store.__struct__, :flush, 1) do
+      store.__struct__.flush(store)
+    else
+      :ok
+    end
+  rescue
+    exception -> {:error, exception}
+  end
 end

@@ -8,7 +8,7 @@ defmodule ExWapp.Store.CodecTest do
   test "roundtrips nested store data with structs, tuples, atoms, and binaries" do
     payload = %{
       client_info: %{
-        jid: %JID{user: "393519534944", device: 7, server: "s.whatsapp.net"},
+        jid: %JID{user: "12025550123", device: 7, server: "s.whatsapp.net"},
         push_name: "Alice"
       },
       signal: %{
@@ -16,8 +16,8 @@ defmodule ExWapp.Store.CodecTest do
         account_type: :primary
       },
       chats: %{
-        "393519534944@s.whatsapp.net" => %Chat{
-          jid: "393519534944@s.whatsapp.net",
+        "12025550123@s.whatsapp.net" => %Chat{
+          jid: "12025550123@s.whatsapp.net",
           name: "Alice",
           messages: [
             %{
@@ -32,13 +32,13 @@ defmodule ExWapp.Store.CodecTest do
         }
       },
       contacts: %{
-        "393519534944@s.whatsapp.net" => %Contact{
-          jid: "393519534944@s.whatsapp.net",
+        "12025550123@s.whatsapp.net" => %Contact{
+          jid: "12025550123@s.whatsapp.net",
           full_name: "Alice Example"
         }
       },
       lid_mapping: %{
-        {:pn, "393519534944@s.whatsapp.net"} => {:lid, "123456789@lid"}
+        {:pn, "12025550123@s.whatsapp.net"} => {:lid, "123456789@lid"}
       },
       adv: %WAAdv.ADVSignedDeviceIdentity{
         details: <<4, 5, 6>>,

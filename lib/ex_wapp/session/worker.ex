@@ -49,7 +49,7 @@ defmodule ExWapp.Session.Worker do
   require Logger
 
   alias ExWapp.AppState.Engine
-  alias ExWapp.{Binary, Config, Pairing, Quota, RateLimiter, Store, Telemetry}
+  alias ExWapp.{Binary, Config, Messages, Pairing, Quota, RateLimiter, Store, Telemetry}
   alias ExWapp.Signal.SessionStore
 
   alias ExWapp.Session.{InboundRouter, JIDUtils, OutboundQueue}
@@ -201,14 +201,6 @@ defmodule ExWapp.Session.Worker do
   end
 
   @doc """
-  Initiates connection to WhatsApp servers.
-
-  Returns immediately. Use `qr_stream/1` to receive connection events.
-  """
-  @spec connect(GenServer.server()) :: :ok
-  def connect(server), do: GenServer.cast(server, :connect)
-
-  @doc """
   Gracefully disconnects from WhatsApp servers.
 
   Stops reconnection attempts and closes the connection cleanly.
@@ -271,14 +263,6 @@ defmodule ExWapp.Session.Worker do
   """
   @spec unsubscribe_qr(GenServer.server(), reference()) :: :ok
   def unsubscribe_qr(server, ref), do: GenServer.cast(server, {:unsubscribe_qr, ref})
-
-  @doc """
-  Queues a plain text message for sending.
-  """
-  @spec send_text(GenServer.server(), binary(), iodata()) :: :ok | {:error, term()}
-  def send_text(server, jid, text) do
-    GenServer.call(server, {:send_text, jid, IO.iodata_to_binary(text)})
-  end
 
   @doc "Send an app state mutation (server-synced)."
   @spec send_app_state(GenServer.server(), map()) :: {:ok, map(), map()} | {:error, term()}
@@ -513,18 +497,9 @@ defmodule ExWapp.Session.Worker do
     {:reply, {:ok, ref}, new_state}
   end
 
-  def handle_call({:send_text, _jid, _text}, _from, %{status: status} = state)
-      when status != :connected do
-    {:reply, {:error, {:not_connected, status}}, state}
-  end
-
-  def handle_call({:send_text, _jid, _text}, _from, %{conn: conn} = state)
-      when not is_pid(conn) do
-    {:reply, {:error, {:not_connected, state.status}}, state}
-  end
-
   def handle_call({:send_text, jid, text}, from, state) do
     with {:ok, state} <- ensure_send_enabled(state, jid),
+         :ok <- ensure_connected_for_send(state),
          {:ok, policy_state} <- enforce_send_policies(state, jid) do
       # Spawn a worker to handle the full send flow (including prekey fetch if needed)
       # This allows us to wait for IQ responses without blocking the GenServer
@@ -547,6 +522,9 @@ defmodule ExWapp.Session.Worker do
     else
       {:error, reason, blocked_state} ->
         {:reply, {:error, reason}, blocked_state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -572,6 +550,21 @@ defmodule ExWapp.Session.Worker do
 
   def handle_call(:get_conn, _from, state) do
     {:reply, state.conn, state}
+  end
+
+  def handle_call({:send_typing, _jid, _composing}, _from, %{status: status} = state)
+      when status != :connected do
+    {:reply, {:error, {:not_connected, status}}, state}
+  end
+
+  def handle_call({:send_typing, _jid, _composing}, _from, %{conn: conn} = state)
+      when not is_pid(conn) do
+    {:reply, {:error, {:not_connected, state.status}}, state}
+  end
+
+  def handle_call({:send_typing, jid, composing}, _from, %{conn: conn} = state) do
+    node = Messages.build_typing(jid, composing)
+    {:reply, state.transport_mod.send_node(conn, node), state}
   end
 
   def handle_call({:send_iq, node, message_id}, from, %{status: status, conn: conn} = state)
@@ -1935,6 +1928,14 @@ defmodule ExWapp.Session.Worker do
   defp normalize_outbound_text(text) when is_binary(text), do: text
   defp normalize_outbound_text(text) when is_list(text), do: IO.iodata_to_binary(text)
   defp normalize_outbound_text(_), do: ""
+
+  defp ensure_connected_for_send(%{status: status}) when status != :connected,
+    do: {:error, {:not_connected, status}}
+
+  defp ensure_connected_for_send(%{conn: conn, status: status}) when not is_pid(conn),
+    do: {:error, {:not_connected, status}}
+
+  defp ensure_connected_for_send(_state), do: :ok
 
   defp ensure_send_enabled(state, jid) do
     cond do

@@ -21,7 +21,11 @@ defmodule ExWapp.Telemetry do
     [:ex_wapp, :rate, :limited],
     [:ex_wapp, :quota, :exceeded],
     [:ex_wapp, :safety, :trip],
-    [:ex_wapp, :policy, :blocked_send]
+    [:ex_wapp, :policy, :blocked_send],
+    [:ex_wapp, :client, :connect, :start],
+    [:ex_wapp, :client, :connect, :stop],
+    [:ex_wapp, :client, :connect, :exception],
+    [:ex_wapp, :event, :emit]
   ]
 
   @type event_name :: [atom()]
@@ -35,10 +39,17 @@ defmodule ExWapp.Telemetry do
   @doc """
   Executes an ExWapp session event.
   """
-  @spec execute(atom(), map(), map()) :: :ok
+  @spec execute(atom() | [atom()], map(), map()) :: :ok
   def execute(event, measurements, metadata \\ %{})
+
+  def execute(event, measurements, metadata)
       when is_atom(event) and is_map(measurements) and is_map(metadata) do
     :telemetry.execute(@prefix ++ [event], measurements, metadata)
+  end
+
+  def execute(event, measurements, metadata)
+      when is_list(event) and is_map(measurements) and is_map(metadata) do
+    :telemetry.execute(event, measurements, metadata)
   end
 
   @doc """

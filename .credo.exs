@@ -9,7 +9,7 @@
       strict: false,
       color: true,
       checks: [
-        {Credo.Check.Warning.StructFieldAmount, max_fields: 40}
+        {Credo.Check.Warning.StructFieldAmount, max_fields: 41}
       ]
     }
   ]

@@ -133,22 +133,37 @@ defmodule ExWapp.Config.Validator do
       fn -> ensure_non_neg_integer(cfg, [:protocol, :pairing_device_props, :platform_type]) end,
       fn -> ensure_boolean(cfg, [:protocol, :pairing_device_props, :require_full_sync]) end,
       fn ->
-        ensure_non_neg_integer(cfg, [:protocol, :pairing_device_props, :version, :primary])
+        ensure_optional_non_neg_integer(cfg, [
+          :protocol,
+          :pairing_device_props,
+          :version,
+          :primary
+        ])
       end,
       fn ->
-        ensure_non_neg_integer(cfg, [:protocol, :pairing_device_props, :version, :secondary])
+        ensure_optional_non_neg_integer(cfg, [
+          :protocol,
+          :pairing_device_props,
+          :version,
+          :secondary
+        ])
       end,
       fn ->
-        ensure_non_neg_integer(cfg, [:protocol, :pairing_device_props, :version, :tertiary])
+        ensure_optional_non_neg_integer(cfg, [
+          :protocol,
+          :pairing_device_props,
+          :version,
+          :tertiary
+        ])
       end,
       fn ->
-        ensure_non_neg_integer(
+        ensure_optional_non_neg_integer(
           cfg,
           [:protocol, :pairing_device_props, :history_sync_config, :storage_quota_mb]
         )
       end,
       fn ->
-        ensure_boolean(
+        ensure_optional_boolean(
           cfg,
           [
             :protocol,
@@ -159,13 +174,13 @@ defmodule ExWapp.Config.Validator do
         )
       end,
       fn ->
-        ensure_boolean(
+        ensure_optional_boolean(
           cfg,
           [:protocol, :pairing_device_props, :history_sync_config, :support_call_log_history]
         )
       end,
       fn ->
-        ensure_boolean(
+        ensure_optional_boolean(
           cfg,
           [
             :protocol,
@@ -176,7 +191,7 @@ defmodule ExWapp.Config.Validator do
         )
       end,
       fn ->
-        ensure_boolean(
+        ensure_optional_boolean(
           cfg,
           [
             :protocol,
@@ -187,13 +202,13 @@ defmodule ExWapp.Config.Validator do
         )
       end,
       fn ->
-        ensure_boolean(
+        ensure_optional_boolean(
           cfg,
           [:protocol, :pairing_device_props, :history_sync_config, :support_biz_hosted_msg]
         )
       end,
       fn ->
-        ensure_boolean(
+        ensure_optional_boolean(
           cfg,
           [
             :protocol,
@@ -204,13 +219,13 @@ defmodule ExWapp.Config.Validator do
         )
       end,
       fn ->
-        ensure_boolean(
+        ensure_optional_boolean(
           cfg,
           [:protocol, :pairing_device_props, :history_sync_config, :support_hosted_group_msg]
         )
       end,
       fn ->
-        ensure_boolean(
+        ensure_optional_boolean(
           cfg,
           [
             :protocol,
@@ -221,7 +236,7 @@ defmodule ExWapp.Config.Validator do
         )
       end,
       fn ->
-        ensure_boolean(
+        ensure_optional_boolean(
           cfg,
           [
             :protocol,
@@ -232,7 +247,7 @@ defmodule ExWapp.Config.Validator do
         )
       end,
       fn ->
-        ensure_boolean(
+        ensure_optional_boolean(
           cfg,
           [:protocol, :pairing_device_props, :history_sync_config, :support_group_history]
         )
@@ -428,6 +443,14 @@ defmodule ExWapp.Config.Validator do
     end
   end
 
+  defp ensure_optional_boolean(cfg, path) do
+    case fetch(cfg, path) do
+      nil -> :ok
+      value when is_boolean(value) -> :ok
+      value -> {:error, {:invalid_runtime_config, path, value, :expected_boolean}}
+    end
+  end
+
   defp ensure_positive_integer(cfg, path) do
     case fetch(cfg, path) do
       value when is_integer(value) and value > 0 -> :ok
@@ -437,6 +460,14 @@ defmodule ExWapp.Config.Validator do
 
   defp ensure_non_neg_integer(cfg, path) do
     case fetch(cfg, path) do
+      value when is_integer(value) and value >= 0 -> :ok
+      value -> {:error, {:invalid_runtime_config, path, value, :expected_non_neg_integer}}
+    end
+  end
+
+  defp ensure_optional_non_neg_integer(cfg, path) do
+    case fetch(cfg, path) do
+      nil -> :ok
       value when is_integer(value) and value >= 0 -> :ok
       value -> {:error, {:invalid_runtime_config, path, value, :expected_non_neg_integer}}
     end

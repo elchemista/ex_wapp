@@ -32,66 +32,129 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   def send_text_worker(session_pid, state, jid, text, opts) do
     normalized_jid = normalize_jid_with_device(jid)
-    recipient_fanout_retry? = Keyword.get(opts, :recipient_fanout_retry, false)
 
     if JID.group?(normalized_jid) do
       do_send_group_worker(session_pid, state, normalized_jid, text, opts)
     else
-      jid = normalize_jid_for_signal(normalized_jid)
+      send_direct_text_worker(
+        session_pid,
+        state,
+        normalize_jid_for_signal(normalized_jid),
+        text,
+        opts
+      )
+    end
+  end
 
-      case ensure_signal_session_worker(state, jid) do
-        {:ok, updated_sessions, prekey_bundles, target_hints} ->
-          # Now send with encryption
-          case do_send_encrypted(
-                 session_pid,
-                 state,
-                 updated_sessions,
-                 jid,
-                 text,
-                 prekey_bundles,
-                 target_hints,
-                 opts
-               ) do
-            {:error, {:fanout_incomplete, missing_targets}}
-            when not recipient_fanout_retry? ->
-              Logger.warning(
-                "[SEND] Fanout incomplete for #{jid}, clearing cached sessions and retrying once: #{inspect(missing_targets)}"
-              )
+  @spec send_direct_text_worker(pid(), map(), String.t(), iodata(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  defp send_direct_text_worker(session_pid, state, jid, text, opts) do
+    case ensure_signal_session_worker(state, jid) do
+      {:ok, updated_sessions, prekey_bundles, target_hints} ->
+        session_pid
+        |> do_send_encrypted(
+          state,
+          updated_sessions,
+          jid,
+          text,
+          prekey_bundles,
+          target_hints,
+          opts
+        )
+        |> maybe_retry_recipient_fanout(
+          session_pid,
+          state,
+          updated_sessions,
+          jid,
+          text,
+          opts
+        )
 
-              retry_state = %{
-                state
-                | signal_sessions:
-                    clear_cached_signal_sessions_for_targets(
-                      updated_sessions,
-                      missing_targets,
-                      state.store
-                    )
-              }
+      {:error, reason} ->
+        {:error, {:session_failed, reason}}
+    end
+  end
 
-              case ensure_signal_session_worker(retry_state, jid) do
-                {:ok, retried_sessions, retried_prekey_bundles, retried_target_hints} ->
-                  do_send_encrypted(
-                    session_pid,
-                    retry_state,
-                    retried_sessions,
-                    jid,
-                    text,
-                    retried_prekey_bundles,
-                    retried_target_hints,
-                    Keyword.put(opts, :recipient_fanout_retry, true)
-                  )
+  @spec maybe_retry_recipient_fanout(
+          {:ok, String.t()} | {:error, term()},
+          pid(),
+          map(),
+          term(),
+          String.t(),
+          iodata(),
+          keyword()
+        ) :: {:ok, String.t()} | {:error, term()}
+  defp maybe_retry_recipient_fanout(
+         {:error, {:fanout_incomplete, missing_targets}},
+         session_pid,
+         state,
+         updated_sessions,
+         jid,
+         text,
+         opts
+       ) do
+    if Keyword.get(opts, :recipient_fanout_retry, false) do
+      {:error, {:fanout_incomplete, missing_targets}}
+    else
+      retry_recipient_fanout(
+        session_pid,
+        state,
+        updated_sessions,
+        jid,
+        text,
+        opts,
+        missing_targets
+      )
+    end
+  end
 
-                {:error, reason} ->
-                  {:error, {:session_failed, reason}}
-              end
+  defp maybe_retry_recipient_fanout(
+         result,
+         _session_pid,
+         _state,
+         _updated_sessions,
+         _jid,
+         _text,
+         _opts
+       ),
+       do: result
 
-            result ->
-              result
-          end
+  @spec retry_recipient_fanout(pid(), map(), term(), String.t(), iodata(), keyword(), [term()]) ::
+          {:ok, String.t()} | {:error, term()}
+  defp retry_recipient_fanout(
+         session_pid,
+         state,
+         updated_sessions,
+         jid,
+         text,
+         opts,
+         missing_targets
+       ) do
+    Logger.warning(
+      "[SEND] Fanout incomplete for #{jid}, clearing cached sessions and retrying once: #{inspect(missing_targets)}"
+    )
 
-        {:error, reason} ->
-          {:error, {:session_failed, reason}}
-      end
+    retry_state = %{
+      state
+      | signal_sessions:
+          clear_cached_signal_sessions_for_targets(updated_sessions, missing_targets, state.store)
+    }
+
+    case ensure_signal_session_worker(retry_state, jid) do
+      {:ok, retried_sessions, retried_prekey_bundles, retried_target_hints} ->
+        do_send_encrypted(
+          session_pid,
+          retry_state,
+          retried_sessions,
+          jid,
+          text,
+          retried_prekey_bundles,
+          retried_target_hints,
+          Keyword.put(opts, :recipient_fanout_retry, true)
+        )
+
+      {:error, reason} ->
+        {:error, {:session_failed, reason}}
     end
   end
 
@@ -131,83 +194,29 @@ defmodule ExWapp.Session.Worker.Outbound do
              %{recipient: distribution_payload},
              prekey_bundles || %{}
            ) do
-      case missing_expected_targets(distribution_target_specs, participant_nodes) do
-        [] ->
-          persist_signal_sessions(session_pid, persisted_sessions, state)
+      missing_targets = missing_expected_targets(distribution_target_specs, participant_nodes)
 
-          pending_message = %{
-            id: message_id,
-            from_me: true,
-            timestamp: timestamp,
-            text: text,
-            status: :pending,
-            participant: nil,
-            raw: nil
-          }
-
-          Chat.add_message(store, group_jid, pending_message)
-
-          node =
-            build_group_encrypted_message_node(
-              group_jid,
-              message_id,
-              participant_nodes,
-              skmsg_payload,
-              group_info.addressing_mode,
-              store,
-              include_identity
-            )
-
-          case send_transport_node(state, conn, node) do
-            :ok ->
-              Logger.debug(
-                "[SEND] Sent group encrypted message to #{group_jid} (distribution_targets=#{length(participant_nodes)})"
-              )
-
-              emit_telemetry(
-                :message_sent,
-                %{message_count: 1, payload_bytes: byte_size(payload)},
-                state,
-                %{jid: group_jid, message_id: message_id, encryption: :group_sender_key}
-              )
-
-              {:ok, message_id}
-
-            error ->
-              Chat.update_message_status(store, group_jid, message_id, :failed)
-              error
-          end
-
-        missing_targets when not group_fanout_retry? ->
-          Logger.warning(
-            "[SEND] Group distribution incomplete for #{group_jid}, clearing cached sessions and retrying once: #{inspect(missing_targets)}"
-          )
-
-          retry_state = %{
-            state
-            | signal_sessions:
-                clear_cached_signal_sessions_for_targets(
-                  persisted_sessions,
-                  missing_targets,
-                  state.store
-                )
-          }
-
-          do_send_group_worker(
-            session_pid,
-            retry_state,
-            group_jid,
-            text,
-            Keyword.put(opts, :group_fanout_retry, true)
-          )
-
-        missing_targets ->
-          Logger.error(
-            "[SEND] Aborting group send to #{group_jid}: missing encrypted targets #{inspect(missing_targets)}"
-          )
-
-          {:error, {:group_distribution_incomplete, missing_targets}}
-      end
+      handle_group_distribution_result(
+        missing_targets,
+        %{
+          session_pid: session_pid,
+          state: state,
+          conn: conn,
+          store: store,
+          group_jid: group_jid,
+          message_id: message_id,
+          participant_nodes: participant_nodes,
+          skmsg_payload: skmsg_payload,
+          addressing_mode: group_info.addressing_mode,
+          include_identity: include_identity,
+          payload: payload,
+          text: text,
+          timestamp: timestamp,
+          opts: opts,
+          persisted_sessions: persisted_sessions,
+          retried?: group_fanout_retry?
+        }
+      )
     else
       {:error, reason} ->
         Logger.error("[SEND] Group send failed for #{group_jid}: #{inspect(reason)}")
@@ -217,6 +226,93 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   defp do_send_group_worker(_session_pid, %{status: status}, _group_jid, _text, _opts),
     do: {:error, {:not_connected, status}}
+
+  @spec handle_group_distribution_result([term()], map()) :: {:ok, String.t()} | {:error, term()}
+  defp handle_group_distribution_result([], context), do: send_group_distribution(context)
+
+  defp handle_group_distribution_result(missing_targets, %{retried?: false} = context),
+    do: retry_group_distribution(context, missing_targets)
+
+  defp handle_group_distribution_result(missing_targets, %{group_jid: group_jid}) do
+    Logger.error(
+      "[SEND] Aborting group send to #{group_jid}: missing encrypted targets #{inspect(missing_targets)}"
+    )
+
+    {:error, {:group_distribution_incomplete, missing_targets}}
+  end
+
+  @spec send_group_distribution(map()) :: {:ok, String.t()} | {:error, term()}
+  defp send_group_distribution(context) do
+    persist_signal_sessions(context.session_pid, context.persisted_sessions, context.state)
+
+    pending_message = %{
+      id: context.message_id,
+      from_me: true,
+      timestamp: context.timestamp,
+      text: context.text,
+      status: :pending,
+      participant: nil,
+      raw: nil
+    }
+
+    Chat.add_message(context.store, context.group_jid, pending_message)
+
+    node =
+      build_group_encrypted_message_node(
+        context.group_jid,
+        context.message_id,
+        context.participant_nodes,
+        context.skmsg_payload,
+        context.addressing_mode,
+        context.store,
+        context.include_identity
+      )
+
+    case send_transport_node(context.state, context.conn, node) do
+      :ok ->
+        Logger.debug(
+          "[SEND] Sent group encrypted message to #{context.group_jid} (distribution_targets=#{length(context.participant_nodes)})"
+        )
+
+        emit_telemetry(
+          :message_sent,
+          %{message_count: 1, payload_bytes: byte_size(context.payload)},
+          context.state,
+          %{jid: context.group_jid, message_id: context.message_id, encryption: :group_sender_key}
+        )
+
+        {:ok, context.message_id}
+
+      error ->
+        Chat.update_message_status(context.store, context.group_jid, context.message_id, :failed)
+        error
+    end
+  end
+
+  @spec retry_group_distribution(map(), [term()]) :: {:ok, String.t()} | {:error, term()}
+  defp retry_group_distribution(context, missing_targets) do
+    Logger.warning(
+      "[SEND] Group distribution incomplete for #{context.group_jid}, clearing cached sessions and retrying once: #{inspect(missing_targets)}"
+    )
+
+    retry_state = %{
+      context.state
+      | signal_sessions:
+          clear_cached_signal_sessions_for_targets(
+            context.persisted_sessions,
+            missing_targets,
+            context.state.store
+          )
+    }
+
+    do_send_group_worker(
+      context.session_pid,
+      retry_state,
+      context.group_jid,
+      context.text,
+      Keyword.put(context.opts, :group_fanout_retry, true)
+    )
+  end
 
   defp build_group_sender_key_payloads(store, group_jid, message_payload) do
     padded_group_payload = Encryption.pad_message(message_payload)
@@ -362,9 +458,9 @@ defmodule ExWapp.Session.Worker.Outbound do
       |> JIDUtils.normalize_target_list()
       |> filter_group_targets_for_addressing_mode(addressing_mode)
       |> Enum.reject(
-        &group_current_device_target?(&1, own_device_id, [own_base_jid, own_lid_jid])
+        &(group_current_device_target?(&1, own_device_id, [own_base_jid, own_lid_jid]) or
+            &1 in live_targets)
       )
-      |> Enum.reject(&(&1 in live_targets))
       |> Enum.uniq()
 
     {live_targets, cached_targets}
@@ -1064,43 +1160,77 @@ defmodule ExWapp.Session.Worker.Outbound do
        ) do
     prekey_bundles = prekey_bundles || %{}
 
-    if SessionStore.store?(sessions) do
-      requested =
-        requested_device_jids
-        |> JIDUtils.normalize_target_list()
-        |> MapSet.new()
-
-      returned =
-        prekey_bundles
-        |> Map.keys()
-        |> JIDUtils.normalize_target_list()
-        |> MapSet.new()
-
-      missing =
-        requested
-        |> MapSet.difference(returned)
-        |> MapSet.to_list()
-        |> Enum.sort()
-
-      if missing == [] do
-        {sessions, prekey_bundles}
-      else
-        Logger.warning(
-          "[SEND] Missing #{context} prekey bundles for #{length(missing)} device(s), retrying individually: #{inspect(missing)}"
+    case SessionStore.store?(sessions) do
+      true ->
+        retry_missing_prekeys_from_store(
+          state,
+          requested_device_jids,
+          sessions,
+          prekey_bundles,
+          context
         )
 
-        case fetch_prekeys_individually_worker(state, missing, sessions) do
-          {:ok, retried_sessions, retried_bundles} ->
-            {retried_sessions, Map.merge(prekey_bundles, retried_bundles)}
+      false ->
+        {sessions, prekey_bundles}
+    end
+  end
 
-          {:error, reason} ->
-            Logger.warning("[SEND] Individual #{context} prekey retry failed: #{inspect(reason)}")
+  @spec retry_missing_prekeys_from_store(map(), [term()], term(), map(), term()) ::
+          {term(), map()}
+  defp retry_missing_prekeys_from_store(
+         state,
+         requested_device_jids,
+         sessions,
+         prekey_bundles,
+         context
+       ) do
+    missing =
+      requested_device_jids
+      |> missing_prekey_bundle_targets(prekey_bundles)
+      |> Enum.sort()
 
-            {sessions, prekey_bundles}
-        end
-      end
-    else
-      {sessions, prekey_bundles}
+    case missing do
+      [] ->
+        {sessions, prekey_bundles}
+
+      _ ->
+        fetch_missing_prekeys_individually(state, missing, sessions, prekey_bundles, context)
+    end
+  end
+
+  @spec missing_prekey_bundle_targets([term()], map()) :: [String.t()]
+  defp missing_prekey_bundle_targets(requested_device_jids, prekey_bundles) do
+    requested =
+      requested_device_jids
+      |> JIDUtils.normalize_target_list()
+      |> MapSet.new()
+
+    returned =
+      prekey_bundles
+      |> Map.keys()
+      |> JIDUtils.normalize_target_list()
+      |> MapSet.new()
+
+    requested
+    |> MapSet.difference(returned)
+    |> MapSet.to_list()
+  end
+
+  @spec fetch_missing_prekeys_individually(map(), [String.t()], term(), map(), term()) ::
+          {term(), map()}
+  defp fetch_missing_prekeys_individually(state, missing, sessions, prekey_bundles, context) do
+    Logger.warning(
+      "[SEND] Missing #{context} prekey bundles for #{length(missing)} device(s), retrying individually: #{inspect(missing)}"
+    )
+
+    case fetch_prekeys_individually_worker(state, missing, sessions) do
+      {:ok, retried_sessions, retried_bundles} ->
+        {retried_sessions, Map.merge(prekey_bundles, retried_bundles)}
+
+      {:error, reason} ->
+        Logger.warning("[SEND] Individual #{context} prekey retry failed: #{inspect(reason)}")
+
+        {sessions, prekey_bundles}
     end
   end
 
@@ -1297,9 +1427,7 @@ defmodule ExWapp.Session.Worker.Outbound do
   end
 
   defp finalize_soft_targets(store, signal_sessions, prekey_bundles, live_targets, cached_targets) do
-    if not SessionStore.store?(signal_sessions) do
-      JIDUtils.normalize_target_list(live_targets)
-    else
+    if SessionStore.store?(signal_sessions) do
       live_targets = JIDUtils.normalize_target_list(live_targets)
       cached_targets = JIDUtils.normalize_target_list(cached_targets)
 
@@ -1313,6 +1441,8 @@ defmodule ExWapp.Session.Worker.Outbound do
       end
 
       JIDUtils.normalize_target_list(live_targets ++ reachable_cached_targets)
+    else
+      JIDUtils.normalize_target_list(live_targets)
     end
   end
 

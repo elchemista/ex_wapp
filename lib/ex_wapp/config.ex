@@ -248,8 +248,9 @@ defmodule ExWapp.Config do
 
     cfg =
       defaults()
+      |> put_in([:signal, :session_max_age_ms], :timer.hours(3))
       |> deep_merge(app_runtime)
-      |> deep_merge(session_runtime)
+      |> deep_merge_runtime(session_runtime)
       |> apply_legacy_overrides(opts)
       |> normalize_protocol_client_version()
 
@@ -311,6 +312,17 @@ defmodule ExWapp.Config do
   end
 
   defp deep_merge(_left, right), do: right
+
+  defp deep_merge_runtime(cfg, %{protocol: %{pairing_device_props: _props}} = runtime) do
+    cfg
+    |> put_in(
+      [:protocol, :pairing_device_props],
+      get_in(runtime, [:protocol, :pairing_device_props])
+    )
+    |> deep_merge(Map.update!(runtime, :protocol, &Map.delete(&1, :pairing_device_props)))
+  end
+
+  defp deep_merge_runtime(cfg, runtime), do: deep_merge(cfg, runtime)
 
   defp maybe_put_normalized_client_version(cfg, nil), do: cfg
 

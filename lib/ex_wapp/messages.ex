@@ -144,6 +144,77 @@ defmodule ExWapp.Messages do
   end
 
   @doc """
+  Builds an image message protobuf from uploaded media metadata.
+  """
+  @spec build_image_proto(ExWapp.Media.Upload.t(), keyword()) :: Message.t()
+  def build_image_proto(%ExWapp.Media.Upload{} = upload, opts \\ []) do
+    payload =
+      []
+      |> encode_ld_field(1, upload.url || "")
+      |> encode_string_field(2, Keyword.get(opts, :mimetype, "image/jpeg"))
+      |> encode_binary_field(3, upload.file_sha256)
+      |> encode_binary_field(4, upload.file_enc_sha256)
+      |> encode_binary_field(5, upload.media_key)
+      |> encode_ld_field(6, upload.direct_path || "")
+      |> encode_varint_field(7, upload.file_length || 0)
+      |> encode_optional_string_field(8, Keyword.get(opts, :caption))
+      |> IO.iodata_to_binary()
+
+    %Message{__uf__: [{3, 2, payload}]}
+  end
+
+  @doc """
+  Builds an audio message protobuf from uploaded media metadata.
+  """
+  @spec build_audio_proto(ExWapp.Media.Upload.t(), keyword()) :: Message.t()
+  def build_audio_proto(%ExWapp.Media.Upload{} = upload, opts \\ []) do
+    payload =
+      []
+      |> encode_ld_field(1, upload.url || "")
+      |> encode_string_field(2, Keyword.get(opts, :mimetype, "audio/ogg; codecs=opus"))
+      |> encode_binary_field(3, upload.file_sha256)
+      |> encode_binary_field(4, upload.file_enc_sha256)
+      |> encode_binary_field(5, upload.media_key)
+      |> encode_ld_field(6, upload.direct_path || "")
+      |> encode_varint_field(7, upload.file_length || 0)
+      |> encode_bool_field(8, Keyword.get(opts, :ptt, false))
+      |> encode_varint_field(9, Keyword.get(opts, :duration, 0))
+      |> IO.iodata_to_binary()
+
+    %Message{__uf__: [{8, 2, payload}]}
+  end
+
+  @doc """
+  Builds a protocol message requesting resend of an unavailable placeholder.
+  """
+  @spec build_placeholder_resend_proto(String.t(), String.t(), String.t()) :: Message.t()
+  def build_placeholder_resend_proto(chat_jid, sender_jid, message_id) do
+    message_key =
+      %ExWapp.Proto.MessageKey{
+        remoteJID: chat_jid,
+        fromMe: false,
+        id: message_id,
+        participant: strip_device(sender_jid)
+      }
+      |> ExWapp.Proto.MessageKey.encode!()
+
+    resend_request = encode_ld_field([], 1, message_key) |> IO.iodata_to_binary()
+
+    request_message =
+      []
+      |> encode_varint_field(1, 4)
+      |> encode_ld_field(5, resend_request)
+      |> IO.iodata_to_binary()
+
+    %Message{
+      protocolMessage: %ExWapp.Proto.ProtocolMessage{
+        type: :PEER_DATA_OPERATION_REQUEST,
+        __uf__: [{16, 2, request_message}]
+      }
+    }
+  end
+
+  @doc """
   Builds context info for replies and mentions.
   """
   @spec build_context_info(send_opts()) :: ContextInfo.t() | nil
@@ -327,5 +398,38 @@ defmodule ExWapp.Messages do
     Chat.add_message(session, jid, message)
   rescue
     _ -> :ok
+  end
+
+  defp encode_optional_string_field(acc, _field_num, nil), do: acc
+
+  defp encode_optional_string_field(acc, field_num, value),
+    do: encode_string_field(acc, field_num, value)
+
+  defp encode_string_field(acc, field_num, value) when is_binary(value),
+    do: encode_ld_field(acc, field_num, value)
+
+  defp encode_binary_field(acc, _field_num, nil), do: acc
+
+  defp encode_binary_field(acc, field_num, value) when is_binary(value),
+    do: encode_ld_field(acc, field_num, value)
+
+  defp encode_ld_field(acc, field_num, value) when is_binary(value) do
+    [acc, encode_varint(Bitwise.bsl(field_num, 3) + 2), encode_varint(byte_size(value)), value]
+  end
+
+  defp encode_varint_field(acc, field_num, value) when is_integer(value),
+    do: [acc, encode_varint(Bitwise.bsl(field_num, 3)), encode_varint(value)]
+
+  defp encode_bool_field(acc, field_num, value) when is_boolean(value),
+    do: encode_varint_field(acc, field_num, if(value, do: 1, else: 0))
+
+  defp encode_varint(n) when n < 128, do: <<n::8>>
+
+  defp encode_varint(n) do
+    <<Bitwise.bor(Bitwise.band(n, 0x7F), 0x80), encode_varint(Bitwise.bsr(n, 7))::binary>>
+  end
+
+  defp strip_device(jid) when is_binary(jid) do
+    String.replace(jid, ~r/:\d+@/, "@")
   end
 end

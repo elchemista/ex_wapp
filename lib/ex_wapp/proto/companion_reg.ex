@@ -119,58 +119,54 @@ defmodule ExWapp.Proto.CompanionReg.HistorySyncConfig do
   defp parse_key_value(<<>>, msg), do: msg
 
   defp parse_key_value(bytes, msg) do
-    {field, rest} =
-      case Protox.Decode.parse_key(bytes) do
-        {3, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_uint32(bytes)
-          {[storage_quota_mb: value], rest}
-
-        {4, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[inline_initial_payload_in_e2ee_msg: value], rest}
-
-        {6, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_call_log_history: value], rest}
-
-        {7, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_bot_user_agent_chat_history: value], rest}
-
-        {8, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_cag_reactions_and_polls: value], rest}
-
-        {9, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_biz_hosted_msg: value], rest}
-
-        {10, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_recent_sync_chunk_message_count_tuning: value], rest}
-
-        {11, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_hosted_group_msg: value], rest}
-
-        {12, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_fbid_bot_chat_history: value], rest}
-
-        {14, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_message_association: value], rest}
-
-        {15, _, bytes} ->
-          {value, rest} = Protox.Decode.parse_bool(bytes)
-          {[support_group_history: value], rest}
-
-        {tag, wire_type, rest} ->
-          {_value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
-          {[], rest}
-      end
+    {field, rest} = parse_history_sync_field(Protox.Decode.parse_key(bytes))
 
     parse_key_value(rest, struct(msg, field))
+  end
+
+  defp parse_history_sync_field({3, _, bytes}) do
+    {value, rest} = Protox.Decode.parse_uint32(bytes)
+    {[storage_quota_mb: value], rest}
+  end
+
+  defp parse_history_sync_field({4, _, bytes}),
+    do: parse_history_sync_bool_field(bytes, :inline_initial_payload_in_e2ee_msg)
+
+  defp parse_history_sync_field({6, _, bytes}),
+    do: parse_history_sync_bool_field(bytes, :support_call_log_history)
+
+  defp parse_history_sync_field({7, _, bytes}),
+    do: parse_history_sync_bool_field(bytes, :support_bot_user_agent_chat_history)
+
+  defp parse_history_sync_field({8, _, bytes}),
+    do: parse_history_sync_bool_field(bytes, :support_cag_reactions_and_polls)
+
+  defp parse_history_sync_field({9, _, bytes}),
+    do: parse_history_sync_bool_field(bytes, :support_biz_hosted_msg)
+
+  defp parse_history_sync_field({10, _, bytes}),
+    do: parse_history_sync_bool_field(bytes, :support_recent_sync_chunk_message_count_tuning)
+
+  defp parse_history_sync_field({11, _, bytes}),
+    do: parse_history_sync_bool_field(bytes, :support_hosted_group_msg)
+
+  defp parse_history_sync_field({12, _, bytes}),
+    do: parse_history_sync_bool_field(bytes, :support_fbid_bot_chat_history)
+
+  defp parse_history_sync_field({14, _, bytes}),
+    do: parse_history_sync_bool_field(bytes, :support_message_association)
+
+  defp parse_history_sync_field({15, _, bytes}),
+    do: parse_history_sync_bool_field(bytes, :support_group_history)
+
+  defp parse_history_sync_field({tag, wire_type, rest}) do
+    {_value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
+    {[], rest}
+  end
+
+  defp parse_history_sync_bool_field(bytes, field_name) do
+    {value, rest} = Protox.Decode.parse_bool(bytes)
+    {[{field_name, value}], rest}
   end
 
   defp encode_uint32_field(acc, _tag, nil), do: acc

@@ -18,7 +18,7 @@ defmodule ExWapp.InboundDeviceSessionRestoreTest do
 
     sender_device_jid = "33625382846503:91@lid"
     sender_base_jid = "33625382846503@lid"
-    sender_pn_jid = "393519534944@s.whatsapp.net"
+    sender_pn_jid = "12025550123@s.whatsapp.net"
 
     bob_store =
       ExWapp.Store.Memory.new(

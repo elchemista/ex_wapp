@@ -1289,12 +1289,12 @@ defmodule ExWapp.Message.Handler.Inbound do
     retry_meta = %{category: Map.get(attrs, "category"), recipient: Map.get(attrs, "recipient")}
 
     actions =
-      signal_sessions_update_actions(message_data) ++
+      [
+        {:send_retry_receipt, from, id, participant, Map.get(attrs, "t"), retry_count,
+         retry_reason_code, retry_meta}
+      ] ++
         placeholder_resend_actions(from, id, participant, retry_count, message_data) ++
-        [
-          {:send_retry_receipt, from, id, participant, Map.get(attrs, "t"), retry_count,
-           retry_reason_code, retry_meta}
-        ]
+        signal_sessions_update_actions(message_data)
 
     {actions, updated_state}
   end
@@ -1304,9 +1304,9 @@ defmodule ExWapp.Message.Handler.Inbound do
     receipt_meta = %{recipient: Map.get(attrs, "recipient")}
 
     actions =
-      signal_sessions_update_actions(message_data) ++
+      [{:send_receipt, from, id, participant, receipt_type, receipt_meta}] ++
         placeholder_resend_actions(from, id, participant, 1, message_data) ++
-        [{:send_receipt, from, id, participant, receipt_type, receipt_meta}]
+        signal_sessions_update_actions(message_data)
 
     {actions, state}
   end
