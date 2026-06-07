@@ -223,6 +223,55 @@ defmodule ExWappTest do
       Process.exit(conn, :kill)
     end
 
+    test "auth ready can skip initial app-state sync even when keys are present" do
+      if Process.whereis(ExWapp.PubSub) == nil do
+        start_supervised!({Phoenix.PubSub, name: ExWapp.PubSub})
+      end
+
+      key_id_hex = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+      key_data = :crypto.strong_rand_bytes(32)
+      session_id = "session-skip-initial-sync"
+
+      Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
+
+      {:ok, session} =
+        ExWapp.start_link(
+          reconnect: false,
+          transport: FakeTransport,
+          runtime: [app_state: [initial_sync_enabled: false]],
+          store:
+            {ExWapp.Store.Memory,
+             initial_data: %{
+               app_state_keys: %{
+                 key_id_hex => %{data: key_data, timestamp: 1}
+               }
+             }},
+          session_id: session_id
+        )
+
+      conn = spawn(fn -> Process.sleep(:infinity) end)
+
+      :sys.replace_state(session, fn state ->
+        %{state | conn: conn, status: :handshaking, app_state_initial_sync_requested: false}
+      end)
+
+      send(session, {:connection_event, {:auth, :ready}})
+
+      assert_receive {:ex_wapp_session, :post_auth_ready,
+                      %{status: :connected, initial_sync_pending?: false}},
+                     1_000
+
+      refute_receive {:ex_wapp_session, :initial_sync, :started, _payload}, 200
+
+      state = :sys.get_state(session)
+      assert state.status == :connected
+      assert state.app_state_initial_sync_requested == false
+      assert map_size(state.pending_iqs) == 0
+
+      GenServer.stop(session)
+      Process.exit(conn, :kill)
+    end
+
     test "initial app-state sync failure is broadcast and still releases the sync gate" do
       if Process.whereis(ExWapp.PubSub) == nil do
         start_supervised!({Phoenix.PubSub, name: ExWapp.PubSub})

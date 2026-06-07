@@ -51,11 +51,18 @@ defmodule ExWapp.RuntimeHardeningTest do
   test "config resolve exposes post-auth digest toggle" do
     {:ok, default_cfg} = Config.resolve([])
     assert get_in(default_cfg, [:protocol, :post_auth_digest_enabled]) == false
+    assert get_in(default_cfg, [:app_state, :initial_sync_enabled]) == true
 
     {:ok, overridden_cfg} =
-      Config.resolve(runtime: [protocol: [post_auth_digest_enabled: true]])
+      Config.resolve(
+        runtime: [
+          app_state: [initial_sync_enabled: false],
+          protocol: [post_auth_digest_enabled: true]
+        ]
+      )
 
     assert get_in(overridden_cfg, [:protocol, :post_auth_digest_enabled]) == true
+    assert get_in(overridden_cfg, [:app_state, :initial_sync_enabled]) == false
   end
 
   test "config resolve keeps the vendor default but allows app/runtime overrides" do

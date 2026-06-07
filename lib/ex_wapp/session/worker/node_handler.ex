@@ -581,12 +581,6 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   defp handle_pairing_action({:qr, code}, state), do: notify_qr(state, {:code, code})
 
-  defp handle_pairing_action({:status, :success}, %{outbound_queue: outbound_queue} = state)
-       when is_pid(outbound_queue) do
-    OutboundQueue.enqueue_node(outbound_queue, build_unified_session_node(state))
-    notify_qr(state, :success)
-  end
-
   defp handle_pairing_action({:status, :success}, state), do: notify_qr(state, :success)
 
   defp handle_pairing_action(:mark_authenticated, _state),

@@ -2,7 +2,17 @@ defmodule ExWapp.Session.Worker.NodeHandlerTest do
   use ExUnit.Case, async: true
 
   alias ExWapp.Binary
+  alias ExWapp.Session.OutboundQueue
   alias ExWapp.Session.Worker.NodeHandler
+
+  defmodule TestTransport do
+    def send_node(test_pid, node) when is_pid(test_pid) do
+      send(test_pid, {:transport_send, node})
+      :ok
+    end
+
+    def restart_stream(_test_pid), do: :ok
+  end
 
   test "success node starts post-auth with prekey count, passive iq, and presence" do
     state = %{
@@ -177,5 +187,20 @@ defmodule ExWapp.Session.Worker.NodeHandlerTest do
            ] = digest_actions
 
     assert is_binary(id)
+  end
+
+  test "pair-success action only notifies QR success and does not start unified session" do
+    queue =
+      start_supervised!({OutboundQueue, session: self(), transport: TestTransport})
+
+    OutboundQueue.set_conn(queue, self())
+
+    NodeHandler.safe_handle_action({:status, :success}, %{
+      outbound_queue: queue,
+      qr_subscribers: %{},
+      runtime_cfg: %{}
+    })
+
+    refute_receive {:transport_send, %Binary.Node{tag: "ib"}}, 100
   end
 end

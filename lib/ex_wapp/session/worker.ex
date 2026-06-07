@@ -1449,7 +1449,7 @@ defmodule ExWapp.Session.Worker do
   defp handle_connection_event({:auth, :ready}, state) do
     emit_telemetry(:connected, %{}, state)
 
-    initial_sync? = has_app_state_keys?(state.store)
+    initial_sync? = initial_app_state_sync_enabled?(state) and has_app_state_keys?(state.store)
 
     state =
       %{
@@ -2243,7 +2243,7 @@ defmodule ExWapp.Session.Worker do
   # ============================================================================
 
   defp maybe_schedule_initial_app_state_sync(state) do
-    if has_app_state_keys?(state.store) do
+    if initial_app_state_sync_enabled?(state) and has_app_state_keys?(state.store) do
       send(self(), {:app_state_initial_sync, Engine.all_collections()})
     else
       Logger.debug(
@@ -2252,6 +2252,10 @@ defmodule ExWapp.Session.Worker do
     end
 
     state
+  end
+
+  defp initial_app_state_sync_enabled?(state) do
+    Config.get(state.runtime_cfg, [:app_state, :initial_sync_enabled], true)
   end
 
   defp has_app_state_keys?(store) do

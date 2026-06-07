@@ -9,6 +9,7 @@ defmodule ExWapp.Config.Validator do
       fn -> validate_iq(cfg) end,
       fn -> validate_send(cfg) end,
       fn -> validate_signal(cfg) end,
+      fn -> validate_app_state(cfg) end,
       fn -> validate_send_error_guard(cfg) end,
       fn -> validate_queue(cfg) end,
       fn -> validate_throttle(cfg) end,
@@ -67,6 +68,13 @@ defmodule ExWapp.Config.Validator do
     run_validations([
       fn -> ensure_positive_integer(cfg, [:signal, :session_max_age_ms]) end,
       fn -> ensure_positive_integer(cfg, [:signal, :device_cache_max_age_ms]) end
+    ])
+  end
+
+  defp validate_app_state(cfg) do
+    run_validations([
+      fn -> ensure_boolean(cfg, [:app_state, :initial_sync_enabled]) end,
+      fn -> ensure_positive_integer(cfg, [:app_state, :initial_sync_gate_ms]) end
     ])
   end
 
