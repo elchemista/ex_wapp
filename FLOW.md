@@ -292,7 +292,7 @@ end
     supportHostedGroupMsg: true,
     supportFbidBotChatHistory: true,
     supportMessageAssociation: true,
-    supportGroupHistory: false
+    supportGroupHistory: true
   }
 }
 ```
@@ -537,7 +537,7 @@ PreKeySignalMessage (164 bytes):
 
 3. **Login vs Registration Payload** (`lib/ex_wapp/noise/client_payload.ex`):
    - Registration: Uses `devicePairingData`, `passive: false`, `pull: false`
-   - Login: Uses `username`, `device`, `passive: true`, `pull: true`, `lidDbMigrated: true`
+   - Login: Uses `username`, `device`, `passive: true`, `pull: true`, `lidDbMigrated: true`, `lc: 1`
 
 4. **Ping Handling** (`lib/ex_wapp/session.ex`):
    ```elixir

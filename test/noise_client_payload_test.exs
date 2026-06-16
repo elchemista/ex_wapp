@@ -10,7 +10,7 @@ defmodule ExWapp.Noise.ClientPayloadTest do
   alias WAWebProtobufsWa6.ClientPayload, as: ClientPayloadProto
   alias WAWebProtobufsWa6.ClientPayload.DevicePairingRegistrationData
 
-  @version_hash :crypto.hash(:md5, "2.3000.1034566421")
+  @version_hash :crypto.hash(:md5, "2.3000.1041540217")
   # DeviceProps with historySyncConfig matching Firefox/Linux identity
   @device_props <<
     0x0A,
@@ -52,7 +52,7 @@ defmodule ExWapp.Noise.ClientPayloadTest do
     0x70,
     0x01,
     0x78,
-    0x00
+    0x01
   >>
   @firefox_device_props <<
     0x0A,
@@ -94,7 +94,7 @@ defmodule ExWapp.Noise.ClientPayloadTest do
     0x70,
     0x01,
     0x78,
-    0x00
+    0x01
   >>
 
   describe "build/1" do
@@ -124,6 +124,7 @@ defmodule ExWapp.Noise.ClientPayloadTest do
       assert device_props.history_sync_config.storage_quota_mb == 10_240
       assert device_props.history_sync_config.inline_initial_payload_in_e2ee_msg == true
       assert device_props.history_sync_config.support_message_association == true
+      assert device_props.history_sync_config.support_group_history == true
 
       assert %{registration_id: reg_id} = data[:signal]
       assert reg_id in 1..65_535
@@ -256,6 +257,7 @@ defmodule ExWapp.Noise.ClientPayloadTest do
       assert decoded.userAgent.device == "Firefox"
       assert decoded.userAgent.osBuildNumber == "Linux"
       assert decoded.lidDbMigrated == true
+      assert decoded.lc == 1
 
       assert get_in(data, [:client_info, :os_version]) == "Linux"
       assert get_in(data, [:client_info, :manufacturer]) == "Mozilla"
@@ -279,6 +281,7 @@ defmodule ExWapp.Noise.ClientPayloadTest do
       assert decoded.passive
       assert decoded.pull
       assert decoded.lidDbMigrated == true
+      assert decoded.lc == 1
       assert decoded.username == 15_550_001_111
       assert decoded.device == 40
       assert data[:client_info][:jid] == %ExWapp.JID{user: "15550001111", device: 40}

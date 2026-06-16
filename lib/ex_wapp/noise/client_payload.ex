@@ -58,6 +58,7 @@ defmodule ExWapp.Noise.ClientPayload do
       passive: true,
       pull: true,
       lidDbMigrated: true,
+      lc: 1,
       userAgent: build_user_agent(nil, info, runtime_cfg),
       webInfo: build_web_info(info),
       connectType: :WIFI_UNKNOWN,
@@ -320,7 +321,7 @@ defmodule ExWapp.Noise.ClientPayload do
       support_hosted_group_msg: Map.get(config, :support_hosted_group_msg, true),
       support_fbid_bot_chat_history: Map.get(config, :support_fbid_bot_chat_history, true),
       support_message_association: Map.get(config, :support_message_association, true),
-      support_group_history: Map.get(config, :support_group_history, false)
+      support_group_history: Map.get(config, :support_group_history, true)
     }
   end
 end

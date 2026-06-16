@@ -3,7 +3,7 @@ defmodule ExWapp.Config do
 
   alias ExWapp.Config.Validator
 
-  @default_client_version %{primary: 2, secondary: 3000, tertiary: 1_034_566_421}
+  @default_client_version %{primary: 2, secondary: 3000, tertiary: 1_041_540_217}
 
   @type runtime_cfg :: map()
   @type client_version :: %{
@@ -126,7 +126,7 @@ defmodule ExWapp.Config do
             support_hosted_group_msg: true,
             support_fbid_bot_chat_history: true,
             support_message_association: true,
-            support_group_history: false
+            support_group_history: true
           }
         },
         user_agent: %{
