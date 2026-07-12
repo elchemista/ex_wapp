@@ -187,16 +187,20 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     first_child_tag = first_stream_error_child_tag(children)
     children_summary = summarize_stream_error_children(children)
 
-    Logger.error("[SESSION] Stream error: code=#{code}")
-    Logger.error("[SESSION] Stream error attrs: #{inspect(attrs, limit: :infinity)}")
+    if transient_stream_error?(code) do
+      Logger.warning("[SESSION] Recoverable stream error: code=#{code}; reconnecting")
+    else
+      Logger.error("[SESSION] Stream error: code=#{code}")
+      Logger.error("[SESSION] Stream error attrs: #{inspect(attrs, limit: :infinity)}")
 
-    Logger.error(
-      "[SESSION] Stream error children summary: #{inspect(children_summary, limit: :infinity)}"
-    )
+      Logger.error(
+        "[SESSION] Stream error children summary: #{inspect(children_summary, limit: :infinity)}"
+      )
 
-    Logger.error(
-      "[SESSION] Stream error raw children: #{inspect(children, limit: :infinity, printable_limit: 8_000)}"
-    )
+      Logger.error(
+        "[SESSION] Stream error raw children: #{inspect(children, limit: :infinity, printable_limit: 8_000)}"
+      )
+    end
 
     # Check for conflict type in children
     conflict_type = extract_conflict_type(children)
