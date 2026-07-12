@@ -36,37 +36,13 @@ defmodule ExWapp.Session.Worker.Outbound do
     if JID.group?(normalized_jid) do
       do_send_group_worker(session_pid, state, normalized_jid, text, opts)
     else
-      with {:ok, resolved_jid} <- resolve_direct_destination(state, normalized_jid) do
-        send_direct_text_worker(
-          session_pid,
-          state,
-          normalize_jid_for_signal(resolved_jid),
-          text,
-          opts
-        )
-      end
-    end
-  end
-
-  @spec resolve_direct_destination(map(), String.t()) ::
-          {:ok, String.t()} | {:error, {:unresolved_lid, String.t()}}
-  defp resolve_direct_destination(%{store: store}, jid) do
-    if JIDUtils.lid_jid?(jid) do
-      lid_mapping = Account.load_lid_mapping(store)
-      base_lid = strip_device_from_jid(jid)
-      mapped_pn = Map.get(lid_mapping, {:lid_to_pn, base_lid}, "")
-
-      case JIDUtils.map_to_preferred_family(jid, mapped_pn, lid_mapping) do
-        resolved when resolved != "" and resolved != jid ->
-          Logger.debug("[SEND] Resolved direct LID target #{jid} to phone-number JID #{resolved}")
-          {:ok, resolved}
-
-        _unresolved ->
-          Logger.error("[SEND] Cannot send to unresolved direct LID target #{jid}")
-          {:error, {:unresolved_lid, jid}}
-      end
-    else
-      {:ok, jid}
+      send_direct_text_worker(
+        session_pid,
+        state,
+        normalize_jid_for_signal(normalized_jid),
+        text,
+        opts
+      )
     end
   end
 
@@ -951,7 +927,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     query_jids =
       if own_sender_jid != "" and own_sender_jid != recipient_base_jid do
         related_query_bases(recipient_base_jid, lid_mapping) ++
-          related_query_bases(own_sender_jid, lid_mapping)
+          [own_sender_jid]
       else
         related_query_bases(recipient_base_jid, lid_mapping)
       end
@@ -1102,7 +1078,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
         case fetch_prekeys_worker(state, recipient_base_jid, signal_sessions) do
           {:ok, sessions, bundles} -> {sessions, bundles}
-          {:error, reason2} -> {:error, reason2}
+          {:error, reason2} -> {{:error, reason2}, %{}}
         end
     end
   end
