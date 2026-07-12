@@ -1395,14 +1395,18 @@ defmodule ExWapp.Session.Worker.Outbound do
     case Message.encode(proto) do
       {:ok, payload} ->
         recipient_payload = Encryption.pad_message(payload)
+        own_device_destination = Keyword.get(opts, :own_device_destination_jid, jid)
 
         own_payload =
-          case build_own_devices_payload(proto, jid, nil) do
+          case build_own_devices_payload(proto, own_device_destination, nil) do
             {:ok, own_p} ->
               Encryption.pad_message(own_p)
 
             {:error, reason} ->
-              Logger.warning("[SEND] Own-device payload failed for #{jid}: #{inspect(reason)}")
+              Logger.warning(
+                "[SEND] Own-device payload failed for #{own_device_destination}: #{inspect(reason)}"
+              )
+
               recipient_payload
           end
 
@@ -1569,6 +1573,10 @@ defmodule ExWapp.Session.Worker.Outbound do
         {:ok, message_id}
 
       error ->
+        Logger.error(
+          "[SEND] Transport send failed for #{jid} id=#{message_id}: #{inspect(error)}"
+        )
+
         Chat.update_message_status(store, jid, message_id, :failed)
         error
     end
