@@ -1055,7 +1055,11 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_info({:retry_outgoing_message, jid, message_id}, state) do
-    {:noreply, maybe_retry_outgoing_message(state, jid, message_id)}
+    {:noreply, maybe_retry_outgoing_message(state, jid, message_id, %{})}
+  end
+
+  def handle_info({:retry_outgoing_message, jid, message_id, retry_meta}, state) do
+    {:noreply, maybe_retry_outgoing_message(state, jid, message_id, retry_meta)}
   end
 
   def handle_info({:send_result, jid, text, {:ok, message_id}, strategy, attempt}, state) do
@@ -1566,7 +1570,7 @@ defmodule ExWapp.Session.Worker do
     state
   end
 
-  defp maybe_retry_outgoing_message(state, jid, message_id) do
+  defp maybe_retry_outgoing_message(state, jid, message_id, retry_meta) do
     session_pid = self()
     max_attempts = Config.get(state.runtime_cfg, [:send, :max_outgoing_retry_attempts], 2)
     retries_before = total_retry_attempts(state)
@@ -1577,13 +1581,18 @@ defmodule ExWapp.Session.Worker do
         normalize_jid: &JIDUtils.normalize_for_signal/1,
         start_worker: &start_send_worker/3,
         outgoing_payloads: Map.get(state, :outgoing_retry_payloads, %{}),
+        retry_meta: retry_meta,
         send_fun: fn normalized_jid, text ->
           retry_state = clear_signal_sessions_for_jid_in_memory(state, normalized_jid)
 
-          do_send_text_worker(session_pid, retry_state, normalized_jid, text,
-            retry_message_id: message_id,
-            suppress_outgoing_chat_add: true
-          )
+          retry_opts =
+            [
+              retry_message_id: message_id,
+              suppress_outgoing_chat_add: true
+            ]
+            |> maybe_put_retry_own_device_destination(retry_meta)
+
+          do_send_text_worker(session_pid, retry_state, normalized_jid, text, retry_opts)
         end
       )
 
@@ -1614,6 +1623,21 @@ defmodule ExWapp.Session.Worker do
   defp do_send_text_worker(session_pid, state, jid, text, opts \\ []) do
     Outbound.send_text_worker(session_pid, state, jid, text, opts)
   end
+
+  defp maybe_put_retry_own_device_destination(opts, %{recipient: recipient}) do
+    recipient =
+      recipient
+      |> JIDUtils.normalize_with_device()
+      |> JIDUtils.strip_device()
+
+    if recipient == "" do
+      opts
+    else
+      Keyword.put(opts, :own_device_destination_jid, recipient)
+    end
+  end
+
+  defp maybe_put_retry_own_device_destination(opts, _retry_meta), do: opts
 
   defp safe_send_content(session_pid, state, type, jid, body, opts) do
     do_send_content(session_pid, state, type, jid, body, opts)
