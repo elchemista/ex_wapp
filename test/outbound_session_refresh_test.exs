@@ -101,6 +101,77 @@ defmodule ExWapp.OutboundSessionRefreshTest do
     assert_receive {:message_send, %Binary.Node{tag: "message"}}
   end
 
+  test "direct media puts mediatype on participant enc nodes instead of the message node" do
+    local_jid = "55555555555@s.whatsapp.net"
+    recipient_jid = "66666666666@s.whatsapp.net"
+
+    %{store: store, local_signal: local_signal} = build_local_store(local_jid)
+    recipient_bundle = build_remote_bundle(recipient_jid)
+    signal_sessions = build_existing_session(local_signal, recipient_jid, recipient_bundle)
+    session_pid = start_supervised!({SessionSink, initial: signal_sessions})
+
+    conn =
+      start_fake_conn(self(), %{
+        device_map: %{recipient_jid => [recipient_jid]},
+        prekey_bundles: %{recipient_jid => recipient_bundle}
+      })
+
+    state = outbound_state(store, conn, signal_sessions)
+    proto = %ExWapp.Proto.Message{conversation: "media payload"}
+
+    assert {:ok, _message_id} =
+             Outbound.send_proto_worker(session_pid, state, recipient_jid, proto,
+               chat_text: "media payload",
+               message_node_type: "media",
+               mediatype: "image"
+             )
+
+    assert_receive {:message_send,
+                    %Binary.Node{tag: "message", attrs: attrs, content: content} = node}
+
+    assert attrs["type"] == "media"
+    refute Map.has_key?(attrs, "mediatype")
+
+    assert Enum.all?(encrypted_participant_nodes(node), fn %Binary.Node{content: [enc]} ->
+             enc.attrs["mediatype"] == "image"
+           end)
+
+    refute Enum.any?(content, &match?(%Binary.Node{tag: "meta"}, &1))
+  end
+
+  test "additional message nodes are appended for event metadata" do
+    local_jid = "77777777777@s.whatsapp.net"
+    recipient_jid = "88888888888@s.whatsapp.net"
+
+    %{store: store, local_signal: local_signal} = build_local_store(local_jid)
+    recipient_bundle = build_remote_bundle(recipient_jid)
+    signal_sessions = build_existing_session(local_signal, recipient_jid, recipient_bundle)
+    session_pid = start_supervised!({SessionSink, initial: signal_sessions})
+
+    conn =
+      start_fake_conn(self(), %{
+        device_map: %{recipient_jid => [recipient_jid]},
+        prekey_bundles: %{recipient_jid => recipient_bundle}
+      })
+
+    state = outbound_state(store, conn, signal_sessions)
+    proto = %ExWapp.Proto.Message{conversation: "event payload"}
+    meta = %Binary.Node{tag: "meta", attrs: %{"event_type" => "creation"}, content: nil}
+
+    assert {:ok, _message_id} =
+             Outbound.send_proto_worker(session_pid, state, recipient_jid, proto,
+               chat_text: "event payload",
+               message_node_type: "event",
+               additional_message_nodes: [meta]
+             )
+
+    assert_receive {:message_send,
+                    %Binary.Node{tag: "message", attrs: attrs, content: content}}
+
+    assert attrs["type"] == "event"
+    assert List.last(content) == meta
+  end
+
   test "encrypted DM fans out to recipient devices and own PN devices" do
     local_pn_device_jid = "393519534944:5@s.whatsapp.net"
     local_lid_device_jid = "33625382846503:5@lid"
@@ -606,4 +677,3 @@ defmodule ExWapp.OutboundSessionRefreshTest do
     }
   end
 end
-
