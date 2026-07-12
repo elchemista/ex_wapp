@@ -308,7 +308,7 @@ defmodule ExWapp.Debug do
         0x70,
         0x01,
         0x78,
-        0x01
+        0x00
       >>
 
       build_hash = :crypto.hash(:md5, "2.3000.1041540217")

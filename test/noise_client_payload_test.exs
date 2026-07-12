@@ -52,7 +52,7 @@ defmodule ExWapp.Noise.ClientPayloadTest do
     0x70,
     0x01,
     0x78,
-    0x01
+    0x00
   >>
   @firefox_device_props <<
     0x0A,
@@ -94,7 +94,7 @@ defmodule ExWapp.Noise.ClientPayloadTest do
     0x70,
     0x01,
     0x78,
-    0x01
+    0x00
   >>
 
   describe "build/1" do
@@ -124,7 +124,7 @@ defmodule ExWapp.Noise.ClientPayloadTest do
       assert device_props.history_sync_config.storage_quota_mb == 10_240
       assert device_props.history_sync_config.inline_initial_payload_in_e2ee_msg == true
       assert device_props.history_sync_config.support_message_association == true
-      assert device_props.history_sync_config.support_group_history == true
+      assert device_props.history_sync_config.support_group_history == false
 
       assert %{registration_id: reg_id} = data[:signal]
       assert reg_id in 1..65_535

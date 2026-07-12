@@ -147,6 +147,18 @@ defmodule ExWapp.Message.Handler.Common do
 
   def parse_enc_version(_), do: nil
 
+  @spec parse_non_neg_integer(term()) :: non_neg_integer() | nil
+  def parse_non_neg_integer(value) when is_integer(value) and value >= 0, do: value
+
+  def parse_non_neg_integer(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, ""} when parsed >= 0 -> parsed
+      _ -> nil
+    end
+  end
+
+  def parse_non_neg_integer(_), do: nil
+
   @spec normalize_content(term()) :: binary() | nil
   def normalize_content(%Binary.Raw{data: data}), do: data
   def normalize_content({:raw, data}) when is_binary(data), do: data

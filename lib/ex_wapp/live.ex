@@ -17,8 +17,8 @@ defmodule ExWapp.Live do
   @default_qr_path "/tmp/whatsapp_qr.svg"
   @default_multi_store_dir "/tmp/ex_wapp/sessions"
   @default_multi_qr_dir "/tmp/ex_wapp/qr"
-  @default_pair_timeout_ms 300_000
-  @default_connect_timeout_ms 30_000
+  @default_pair_timeout_ms 15_000
+  @default_connect_timeout_ms 15_000
   @default_sync_wait_ms 15_000
   @default_session_name ExWapp.Live.Session
 

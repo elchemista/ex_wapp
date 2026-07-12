@@ -144,6 +144,7 @@ defmodule ExWapp.Message.Handler.Wire do
       encrypted: true,
       enc_type: enc_type,
       enc_version: enc_version,
+      enc_count: Map.get(List.first(enc_candidates) || %{}, :enc_count),
       ciphertext: ciphertext,
       enc_candidates: enc_candidates
     }
@@ -186,6 +187,7 @@ defmodule ExWapp.Message.Handler.Wire do
             %{
               enc_type: Map.get(enc_attrs, "type", "msg"),
               enc_version: Common.parse_enc_version(Map.get(enc_attrs, "v")),
+              enc_count: Common.parse_non_neg_integer(Map.get(enc_attrs, "count")),
               ciphertext: Common.normalize_content(enc_content),
               to_jid: Common.normalize_jid_with_device(current_to_jid)
             }
