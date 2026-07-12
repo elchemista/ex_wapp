@@ -126,7 +126,7 @@ defmodule ExWapp.Config do
             support_hosted_group_msg: true,
             support_fbid_bot_chat_history: true,
             support_message_association: true,
-            support_group_history: true
+            support_group_history: false
           }
         },
         user_agent: %{

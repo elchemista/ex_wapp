@@ -292,7 +292,7 @@ end
     supportHostedGroupMsg: true,
     supportFbidBotChatHistory: true,
     supportMessageAssociation: true,
-    supportGroupHistory: true
+    supportGroupHistory: false
   }
 }
 ```

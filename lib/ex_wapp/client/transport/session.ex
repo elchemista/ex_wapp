@@ -45,7 +45,7 @@ defmodule ExWapp.Client.Transport.Session do
          {:ok, ref} <- Session.subscribe_qr(session) do
       :ok = Session.connect(session)
 
-      timeout = get_in(client.metadata, [:pair_timeout]) || 30_000
+      timeout = get_in(client.metadata, [:pair_timeout]) || 15_000
 
       receive do
         {:ex_wapp_qr, ^ref, event} ->

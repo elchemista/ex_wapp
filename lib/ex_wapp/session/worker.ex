@@ -356,7 +356,7 @@ defmodule ExWapp.Session.Worker do
           {:ex_wapp_qr, ^ref, event} -> {[event], subscription}
           {:ex_wapp_qr_closed, ^ref} -> {:halt, subscription}
         after
-          60_000 -> {[{:error, :timeout}], subscription}
+          15_000 -> {[{:error, :timeout}], subscription}
         end
       end,
       fn {:ok, ref} -> unsubscribe_qr(server, ref) end

@@ -321,7 +321,7 @@ defmodule ExWapp.Noise.ClientPayload do
       support_hosted_group_msg: Map.get(config, :support_hosted_group_msg, true),
       support_fbid_bot_chat_history: Map.get(config, :support_fbid_bot_chat_history, true),
       support_message_association: Map.get(config, :support_message_association, true),
-      support_group_history: Map.get(config, :support_group_history, true)
+      support_group_history: Map.get(config, :support_group_history, false)
     }
   end
 end

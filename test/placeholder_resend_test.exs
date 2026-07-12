@@ -73,6 +73,36 @@ defmodule ExWapp.PlaceholderResendTest do
            end)
   end
 
+  test "encrypted retry responses stop after two retries" do
+    node = %Node{
+      tag: "message",
+      attrs: %{
+        "from" => "15550001111@s.whatsapp.net",
+        "id" => "MSG_RETRY_LIMIT",
+        "type" => "text",
+        "t" => "1730000202"
+      },
+      content: [
+        %Node{
+          tag: "enc",
+          attrs: %{"type" => "pkmsg", "v" => "2", "count" => "2"},
+          content: <<0x33, 0x00>>
+        }
+      ]
+    }
+
+    state = %{stats: %{messages_received: 0}, retry_counters: %{}}
+
+    assert {:ok, updated_state, actions} = MessageHandler.handle_node(node, self(), state)
+
+    refute Enum.any?(actions, fn
+             {:send_retry_receipt, _, _, _, _, _, _, _} -> true
+             _ -> false
+           end)
+
+    assert updated_state.retry_counters["15550001111@s.whatsapp.net|MSG_RETRY_LIMIT|"] == 3
+  end
+
   defp field_value(fields, field_num) do
     Enum.find_value(fields, fn
       {^field_num, _wire_type, value} -> value

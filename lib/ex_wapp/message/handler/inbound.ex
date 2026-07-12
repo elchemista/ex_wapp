@@ -11,6 +11,8 @@ defmodule ExWapp.Message.Handler.Inbound do
   alias ExWapp.Session.{Account, DeviceCache, JIDUtils}
   alias ExWapp.Signal.{Encryption, SenderKey, SessionStore}
 
+  @max_retry_receipt_count 2
+
   @spec handle_message(Node.t(), pid(), map()) :: {:ok, map(), [term()]}
   def handle_message(%Node{attrs: attrs, content: content}, session, state) do
     from =
@@ -975,6 +977,7 @@ defmodule ExWapp.Message.Handler.Inbound do
         %{
           enc_type: Map.get(message_data, :enc_type, "msg"),
           enc_version: Map.get(message_data, :enc_version),
+          enc_count: Map.get(message_data, :enc_count),
           ciphertext: Map.get(message_data, :ciphertext),
           to_jid: nil
         }
@@ -1284,17 +1287,28 @@ defmodule ExWapp.Message.Handler.Inbound do
 
   defp build_retry_receipt_actions(from, id, participant, attrs, message_data, state) do
     retry_reason_code = retry_reason_code(Map.get(message_data, :decrypt_status))
-    {retry_count, updated_state} = next_retry_count(state, from, id, participant)
-
-    retry_meta = %{category: Map.get(attrs, "category"), recipient: Map.get(attrs, "recipient")}
+    {retry_count, updated_state} = next_retry_count(state, from, id, participant, message_data)
 
     actions =
-      [
-        {:send_retry_receipt, from, id, participant, Map.get(attrs, "t"), retry_count,
-         retry_reason_code, retry_meta}
-      ] ++
-        placeholder_resend_actions(from, id, participant, retry_count, message_data) ++
+      if retry_count > @max_retry_receipt_count do
+        Logger.warning(
+          "[DECRYPT] Not sending more retry receipts for #{id}: count=#{retry_count}"
+        )
+
         signal_sessions_update_actions(message_data)
+      else
+        retry_meta = %{
+          category: Map.get(attrs, "category"),
+          recipient: Map.get(attrs, "recipient")
+        }
+
+        [
+          {:send_retry_receipt, from, id, participant, Map.get(attrs, "t"), retry_count,
+           retry_reason_code, retry_meta}
+        ] ++
+          placeholder_resend_actions(from, id, participant, retry_count, message_data) ++
+          signal_sessions_update_actions(message_data)
+      end
 
     {actions, updated_state}
   end
@@ -1366,14 +1380,30 @@ defmodule ExWapp.Message.Handler.Inbound do
 
   defp signal_sessions_update_actions(_message_data), do: []
 
-  defp next_retry_count(state, from, id, participant) when is_map(state) do
+  defp next_retry_count(state, from, id, participant, message_data) when is_map(state) do
     key = retry_counter_key(from, id, participant)
     counters = Map.get(state, :retry_counters, %{})
-    next = Map.get(counters, key, 0) + 1
+    local_next = Map.get(counters, key, 0) + 1
+    incoming_next = incoming_retry_count(message_data) + 1
+    next = if local_next == 1 and incoming_next > 1, do: incoming_next, else: local_next
     {next, Map.put(state, :retry_counters, Map.put(counters, key, next))}
   end
 
-  defp next_retry_count(state, _from, _id, _participant), do: {1, state}
+  defp next_retry_count(state, _from, _id, _participant, _message_data), do: {1, state}
+
+  defp incoming_retry_count(%{enc_candidates: candidates})
+       when is_list(candidates) and candidates != [] do
+    candidates
+    |> Enum.map(&Map.get(&1, :enc_count))
+    |> Enum.filter(&is_integer/1)
+    |> case do
+      [] -> 0
+      counts -> Enum.max(counts)
+    end
+  end
+
+  defp incoming_retry_count(%{enc_count: count}) when is_integer(count), do: count
+  defp incoming_retry_count(_), do: 0
 
   defp retry_counter_key(from, id, participant) do
     [
