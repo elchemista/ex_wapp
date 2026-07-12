@@ -1722,6 +1722,9 @@ defmodule ExWapp.Session.Worker do
         |> Keyword.put(:chat_text, name)
         |> Keyword.put(:message_node_type, "event")
         |> Keyword.delete(:mediatype)
+        |> Keyword.put(:additional_message_nodes, [
+          %Binary.Node{tag: "meta", attrs: %{"event_type" => "creation"}, content: nil}
+        ])
         |> Keyword.put(:outgoing_raw, %{content_type: :event, event: Map.merge(body, Map.new(opts))})
 
       Outbound.send_proto_worker(session_pid, state, jid, proto, send_opts)
