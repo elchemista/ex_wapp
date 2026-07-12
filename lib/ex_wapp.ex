@@ -409,20 +409,121 @@ defmodule ExWapp do
   @doc """
   Sends an image through a high-level client.
   """
-  @spec send_image(Client.t(), String.t(), ExWapp.Media.source(), keyword()) ::
-          {:ok, Client.t(), String.t()} | {:error, Error.t(), Client.t()}
-  def send_image(%Client{} = client, to, source, opts \\ []) do
-    Client.API.send_image(client, to, source, opts)
-  end
+  @spec send_image(Client.t() | GenServer.server(), String.t(), ExWapp.Media.source(), keyword()) ::
+          {:ok, Client.t(), String.t()}
+          | {:error, Error.t(), Client.t()}
+          | {:ok, String.t()}
+          | {:error, term()}
+  def send_image(target, to, source, opts \\ [])
+  def send_image(%Client{} = client, to, source, opts),
+    do: Client.API.send_image(client, to, source, opts)
+
+  def send_image(session, to, source, opts), do: Session.send_image(session, to, source, opts)
 
   @doc """
   Sends audio through a high-level client.
   """
-  @spec send_audio(Client.t(), String.t(), ExWapp.Media.source(), keyword()) ::
-          {:ok, Client.t(), String.t()} | {:error, Error.t(), Client.t()}
-  def send_audio(%Client{} = client, to, source, opts \\ []) do
-    Client.API.send_audio(client, to, source, opts)
-  end
+  @spec send_audio(Client.t() | GenServer.server(), String.t(), ExWapp.Media.source(), keyword()) ::
+          {:ok, Client.t(), String.t()}
+          | {:error, Error.t(), Client.t()}
+          | {:ok, String.t()}
+          | {:error, term()}
+  def send_audio(target, to, source, opts \\ [])
+  def send_audio(%Client{} = client, to, source, opts),
+    do: Client.API.send_audio(client, to, source, opts)
+
+  def send_audio(session, to, source, opts), do: Session.send_audio(session, to, source, opts)
+
+  @doc "Sends a document through a high-level client or a session process."
+  @spec send_document(
+          Client.t() | GenServer.server(),
+          String.t(),
+          ExWapp.Media.source(),
+          keyword()
+        ) ::
+          {:ok, Client.t(), String.t()}
+          | {:error, Error.t(), Client.t()}
+          | {:ok, String.t()}
+          | {:error, term()}
+  def send_document(target, to, source, opts \\ [])
+  def send_document(%Client{} = client, to, source, opts),
+    do: Client.API.send_document(client, to, source, opts)
+
+  def send_document(session, to, source, opts),
+    do: Session.send_document(session, to, source, opts)
+
+  @doc "Sends a GPS location through a high-level client or a session process."
+  @spec send_location(
+          Client.t() | GenServer.server(),
+          String.t(),
+          number(),
+          number(),
+          keyword()
+        ) ::
+          {:ok, Client.t(), String.t()}
+          | {:error, Error.t(), Client.t()}
+          | {:ok, String.t()}
+          | {:error, term()}
+  def send_location(target, to, latitude, longitude, opts \\ [])
+  def send_location(%Client{} = client, to, latitude, longitude, opts),
+    do: Client.API.send_location(client, to, latitude, longitude, opts)
+
+  def send_location(session, to, latitude, longitude, opts),
+    do: Session.send_location(session, to, latitude, longitude, opts)
+
+  @doc "Sends one vCard contact through a high-level client or session process."
+  @spec send_contact(
+          Client.t() | GenServer.server(),
+          String.t(),
+          String.t(),
+          String.t(),
+          keyword()
+        ) ::
+          {:ok, Client.t(), String.t()}
+          | {:error, Error.t(), Client.t()}
+          | {:ok, String.t()}
+          | {:error, term()}
+  def send_contact(target, to, display_name, vcard, opts \\ [])
+  def send_contact(%Client{} = client, to, display_name, vcard, opts),
+    do: Client.API.send_contact(client, to, display_name, vcard, opts)
+
+  def send_contact(session, to, display_name, vcard, opts),
+    do: Session.send_contact(session, to, display_name, vcard, opts)
+
+  @doc "Sends WhatsApp's experimental calendar event message."
+  @spec send_event(
+          Client.t() | GenServer.server(),
+          String.t(),
+          String.t(),
+          integer() | DateTime.t(),
+          keyword()
+        ) ::
+          {:ok, Client.t(), String.t()}
+          | {:error, Error.t(), Client.t()}
+          | {:ok, String.t()}
+          | {:error, term()}
+  def send_event(target, to, name, start_time, opts \\ [])
+  def send_event(%Client{} = client, to, name, start_time, opts),
+    do: Client.API.send_event(client, to, name, start_time, opts)
+
+  def send_event(session, to, name, start_time, opts),
+    do: Session.send_event(session, to, name, start_time, opts)
+
+  @doc "Downloads and decrypts image, audio, or document media."
+  @spec download_media(
+          Client.t() | GenServer.server(),
+          ExWapp.Media.Ref.t(),
+          keyword()
+        ) ::
+          {:ok, Client.t(), ExWapp.Media.Download.t()}
+          | {:error, Error.t(), Client.t()}
+          | {:ok, ExWapp.Media.Download.t()}
+          | {:error, term()}
+  def download_media(target, ref, opts \\ [])
+  def download_media(%Client{} = client, ref, opts),
+    do: Client.API.download_media(client, ref, opts)
+
+  def download_media(session, ref, opts), do: Session.download_media(session, ref, opts)
 
   @doc """
   Handles an inbound payload through a high-level client transport.

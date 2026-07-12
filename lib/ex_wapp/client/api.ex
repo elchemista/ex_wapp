@@ -15,6 +15,7 @@ defmodule ExWapp.Client.API do
   @type client_error :: {:error, Error.t(), Client.t()}
   @type message_result :: {:ok, Client.t(), String.t()} | client_error()
   @type mutation_result :: {:ok, Client.t()} | client_error()
+  @type download_result :: {:ok, Client.t(), ExWapp.Media.Download.t()} | client_error()
   @typep read_result(value) :: {:ok, value} | client_error()
 
   @doc """
@@ -100,6 +101,68 @@ defmodule ExWapp.Client.API do
     to
     |> Message.audio(source, opts)
     |> send_client_message(client, :send_audio)
+  end
+
+  @doc """
+  Sends a document message through the configured transport adapter.
+  """
+  @spec send_document(Client.t(), String.t(), ExWapp.Media.source(), keyword()) ::
+          message_result()
+  def send_document(%Client{} = client, to, source, opts \\ []) do
+    to
+    |> Message.document(source, opts)
+    |> send_client_message(client, :send_document)
+  end
+
+  @doc """
+  Sends a GPS location through the configured transport adapter.
+  """
+  @spec send_location(Client.t(), String.t(), number(), number(), keyword()) :: message_result()
+  def send_location(%Client{} = client, to, latitude, longitude, opts \\ []) do
+    to
+    |> Message.location(latitude, longitude, opts)
+    |> send_client_message(client, :send_location)
+  end
+
+  @doc """
+  Sends a WhatsApp contact card through the configured transport adapter.
+  """
+  @spec send_contact(Client.t(), String.t(), String.t(), String.t(), keyword()) ::
+          message_result()
+  def send_contact(%Client{} = client, to, display_name, vcard, opts \\ []) do
+    to
+    |> Message.contact(display_name, vcard, opts)
+    |> send_client_message(client, :send_contact)
+  end
+
+  @doc """
+  Sends WhatsApp's calendar event message through the configured transport.
+  """
+  @spec send_event(
+          Client.t(),
+          String.t(),
+          String.t(),
+          integer() | DateTime.t(),
+          keyword()
+        ) :: message_result()
+  def send_event(%Client{} = client, to, name, start_time, opts \\ []) do
+    to
+    |> Message.event(name, start_time, opts)
+    |> send_client_message(client, :send_event)
+  end
+
+  @doc """
+  Downloads and decrypts a media reference through the configured transport.
+  """
+  @spec download_media(Client.t(), ExWapp.Media.Ref.t(), keyword()) :: download_result()
+  def download_media(%Client{} = client, %ExWapp.Media.Ref{} = ref, opts \\ []) do
+    if Code.ensure_loaded?(client.transport) and
+         function_exported?(client.transport, :download_media, 3) do
+      client.transport.download_media(client, ref, opts)
+      |> normalize_downloaded_media(client)
+    else
+      client_error(client, :download_media, :transport, :unsupported_operation)
+    end
   end
 
   @doc """
@@ -237,6 +300,22 @@ defmodule ExWapp.Client.API do
 
   defp normalize_sent_message({:error, reason}, %Client{} = client, _message, operation) do
     client_error(client, operation, :transport, reason)
+  end
+
+  @spec normalize_downloaded_media(term(), Client.t()) :: download_result()
+  defp normalize_downloaded_media(
+         {:ok, %Client{} = updated_client, %ExWapp.Media.Download{} = download},
+         _client
+       ) do
+    {:ok, Client.trace(updated_client, :download_media), download}
+  end
+
+  defp normalize_downloaded_media({:ok, %ExWapp.Media.Download{} = download}, client) do
+    {:ok, Client.trace(client, :download_media), download}
+  end
+
+  defp normalize_downloaded_media({:error, reason}, client) do
+    client_error(client, :download_media, :transport, reason)
   end
 
   @spec record_sent_message(Client.t(), Message.t(), String.t(), atom()) :: Client.t()

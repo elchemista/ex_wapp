@@ -14,7 +14,17 @@ defmodule ExWapp.Message do
   @typedoc """
   High-level message categories supported by the public API.
   """
-  @type message_type :: :text | :typing | :read_receipt | :image | :audio | atom()
+  @type message_type ::
+          :text
+          | :typing
+          | :read_receipt
+          | :image
+          | :audio
+          | :document
+          | :location
+          | :contact
+          | :event
+          | atom()
 
   @typedoc """
   Runtime-neutral message value passed into transport adapters.
@@ -103,6 +113,80 @@ defmodule ExWapp.Message do
       to: to,
       type: :audio,
       body: source,
+      opts: Keyword.drop(opts, [:id, :metadata]),
+      metadata: Keyword.get(opts, :metadata, %{})
+    }
+  end
+
+  @doc """
+  Builds a document message from bytes, a filesystem path, or a pre-uploaded reference.
+  """
+  @spec document(String.t(), Media.source(), keyword()) :: t()
+  def document(to, source, opts \\ []) when is_binary(to) do
+    %__MODULE__{
+      id: Keyword.get(opts, :id),
+      to: to,
+      type: :document,
+      body: source,
+      opts: Keyword.drop(opts, [:id, :metadata]),
+      metadata: Keyword.get(opts, :metadata, %{})
+    }
+  end
+
+  @doc """
+  Builds a static GPS location message.
+
+  Latitude and longitude are encoded as protobuf doubles. Optional fields such
+  as `:name`, `:address`, `:url`, `:comment`, and `:accuracy` are kept in
+  `opts` until the session transport builds the wire payload.
+  """
+  @spec location(String.t(), number(), number(), keyword()) :: t()
+  def location(to, latitude, longitude, opts \\ [])
+      when is_binary(to) and is_number(latitude) and is_number(longitude) do
+    %__MODULE__{
+      id: Keyword.get(opts, :id),
+      to: to,
+      type: :location,
+      body: %{latitude: latitude, longitude: longitude},
+      opts: Keyword.drop(opts, [:id, :metadata]),
+      metadata: Keyword.get(opts, :metadata, %{})
+    }
+  end
+
+  @doc """
+  Builds a single WhatsApp contact card message.
+
+  `vcard` must contain the complete vCard payload (normally vCard 3.0).
+  """
+  @spec contact(String.t(), String.t(), String.t(), keyword()) :: t()
+  def contact(to, display_name, vcard, opts \\ [])
+      when is_binary(to) and is_binary(display_name) and is_binary(vcard) do
+    %__MODULE__{
+      id: Keyword.get(opts, :id),
+      to: to,
+      type: :contact,
+      body: %{display_name: display_name, vcard: vcard},
+      opts: Keyword.drop(opts, [:id, :metadata]),
+      metadata: Keyword.get(opts, :metadata, %{})
+    }
+  end
+
+  @doc """
+  Builds a WhatsApp calendar event message.
+
+  This message type exists in WhatsApp Web but is less stable than text,
+  media, location, and contact messages. `start_time` may be a Unix timestamp
+  in seconds or a `DateTime`.
+  """
+  @spec event(String.t(), String.t(), integer() | DateTime.t(), keyword()) :: t()
+  def event(to, name, start_time, opts \\ [])
+      when is_binary(to) and is_binary(name) and
+             (is_integer(start_time) or is_struct(start_time, DateTime)) do
+    %__MODULE__{
+      id: Keyword.get(opts, :id),
+      to: to,
+      type: :event,
+      body: %{name: name, start_time: start_time},
       opts: Keyword.drop(opts, [:id, :metadata]),
       metadata: Keyword.get(opts, :metadata, %{})
     }

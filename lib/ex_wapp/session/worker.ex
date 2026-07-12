@@ -49,7 +49,7 @@ defmodule ExWapp.Session.Worker do
   require Logger
 
   alias ExWapp.AppState.Engine
-  alias ExWapp.{Binary, Config, Messages, Pairing, Quota, RateLimiter, Store, Telemetry}
+  alias ExWapp.{Binary, Config, Media, Messages, Pairing, Quota, RateLimiter, Store, Telemetry}
   alias ExWapp.Signal.SessionStore
 
   alias ExWapp.Session.{InboundRouter, JIDUtils, OutboundQueue}
@@ -526,6 +526,57 @@ defmodule ExWapp.Session.Worker do
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
+  end
+
+  def handle_call({:send_content, type, jid, body, opts}, from, state)
+      when type in [:image, :audio, :document, :location, :contact, :event] and
+             is_binary(jid) and is_list(opts) do
+    with {:ok, state} <- ensure_send_enabled(state, jid),
+         :ok <- ensure_connected_for_send(state),
+         {:ok, policy_state} <- enforce_send_policies(state, jid) do
+      session_pid = self()
+
+      task = fn -> safe_send_content(session_pid, policy_state, type, jid, body, opts) end
+
+      case start_send_worker(policy_state, jid, task, from) do
+        {:ok, worker, mon} ->
+          new_state = register_send_worker(policy_state, worker, mon, jid)
+          {:noreply, update_stats(new_state, :messages_sent)}
+
+        {:error, reason} ->
+          {:reply, {:error, {:send_worker_start_failed, reason}}, policy_state}
+      end
+    else
+      {:error, reason, blocked_state} -> {:reply, {:error, reason}, blocked_state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:send_content, type, _jid, _body, _opts}, _from, state) do
+    {:reply, {:error, {:unsupported_message_type, type}}, state}
+  end
+
+  def handle_call({:download_media, %Media.Ref{} = ref, opts}, from, state)
+      when is_list(opts) do
+    if state.status in [:connected, :syncing] and is_pid(state.conn) do
+      session_pid = self()
+
+      task = fn -> safe_download_media(session_pid, state, ref, opts) end
+
+      case start_send_worker(state, "media_download", task, from) do
+        {:ok, worker, mon} ->
+          {:noreply, register_send_worker(state, worker, mon, "media_download")}
+
+        {:error, reason} ->
+          {:reply, {:error, {:download_worker_start_failed, reason}}, state}
+      end
+    else
+      {:reply, {:error, {:not_connected, state.status}}, state}
+    end
+  end
+
+  def handle_call({:download_media, _ref, _opts}, _from, state) do
+    {:reply, {:error, :invalid_media_reference}, state}
   end
 
   def handle_call(:get_store, _from, state) do
@@ -1544,6 +1595,161 @@ defmodule ExWapp.Session.Worker do
   # Worker function - runs in a separate process so it can wait for IQ responses
   defp do_send_text_worker(session_pid, state, jid, text, opts \\ []) do
     Outbound.send_text_worker(session_pid, state, jid, text, opts)
+  end
+
+  defp safe_send_content(session_pid, state, type, jid, body, opts) do
+    do_send_content(session_pid, state, type, jid, body, opts)
+  rescue
+    exception -> {:error, {:content_send_exception, exception}}
+  catch
+    kind, reason -> {:error, {:content_send_throw, kind, reason}}
+  end
+
+  defp do_send_content(session_pid, state, type, jid, body, opts)
+       when type in [:image, :audio, :document] do
+    opts = maybe_put_document_file_name(type, body, opts)
+
+    with {:ok, upload} <- prepare_media_upload(session_pid, state, type, body, opts),
+         proto <- build_media_proto(type, upload, opts) do
+      send_opts =
+        opts
+        |> Keyword.put(:chat_text, media_chat_text(type, opts))
+        |> Keyword.put(:message_node_type, "media")
+        |> Keyword.put(:mediatype, media_stanza_type(type, opts))
+        |> Keyword.put(
+          :outgoing_raw,
+          %{content_type: type, media: Media.ref_from_upload(upload, opts)}
+        )
+
+      Outbound.send_proto_worker(session_pid, state, jid, proto, send_opts)
+    end
+  end
+
+  defp do_send_content(session_pid, state, :location, jid, body, opts) when is_map(body) do
+    latitude = Map.get(body, :latitude)
+    longitude = Map.get(body, :longitude)
+
+    if valid_location?(latitude, longitude) do
+      proto = Messages.build_location_proto(latitude, longitude, opts)
+
+      send_opts =
+        opts
+        |> Keyword.put(:chat_text, Keyword.get(opts, :comment) || Keyword.get(opts, :name))
+        |> Keyword.put(:message_node_type, "text")
+        |> Keyword.put(
+          :outgoing_raw,
+          %{content_type: :location, location: Map.merge(body, Map.new(opts))}
+        )
+
+      Outbound.send_proto_worker(session_pid, state, jid, proto, send_opts)
+    else
+      {:error, :invalid_location}
+    end
+  end
+
+  defp do_send_content(session_pid, state, :contact, jid, body, opts) when is_map(body) do
+    display_name = Map.get(body, :display_name)
+    vcard = Map.get(body, :vcard)
+
+    if is_binary(display_name) and display_name != "" and is_binary(vcard) and vcard != "" do
+      proto = Messages.build_contact_proto(display_name, vcard, opts)
+
+      send_opts =
+        opts
+        |> Keyword.put(:chat_text, display_name)
+        |> Keyword.put(:message_node_type, "media")
+        |> Keyword.put(:mediatype, "vcard")
+        |> Keyword.put(:outgoing_raw, %{content_type: :contact, contact: body})
+
+      Outbound.send_proto_worker(session_pid, state, jid, proto, send_opts)
+    else
+      {:error, :invalid_contact}
+    end
+  end
+
+  defp do_send_content(session_pid, state, :event, jid, body, opts) when is_map(body) do
+    name = Map.get(body, :name)
+    start_time = Map.get(body, :start_time)
+
+    if is_binary(name) and name != "" and
+         (is_integer(start_time) or is_struct(start_time, DateTime)) do
+      proto = Messages.build_event_proto(name, start_time, opts)
+
+      send_opts =
+        opts
+        |> Keyword.put(:chat_text, name)
+        |> Keyword.put(:message_node_type, "event")
+        |> Keyword.delete(:mediatype)
+        |> Keyword.put(:outgoing_raw, %{content_type: :event, event: Map.merge(body, Map.new(opts))})
+
+      Outbound.send_proto_worker(session_pid, state, jid, proto, send_opts)
+    else
+      {:error, :invalid_event}
+    end
+  end
+
+  defp do_send_content(_session_pid, _state, type, _jid, _body, _opts),
+    do: {:error, {:invalid_content, type}}
+
+  defp prepare_media_upload(
+         _session_pid,
+         _state,
+         type,
+         %Media.Upload{type: upload_type} = upload,
+         _opts
+       )
+       when upload_type == type,
+       do: {:ok, upload}
+
+  defp prepare_media_upload(_session_pid, _state, type, %Media.Upload{type: other}, _opts),
+    do: {:error, {:media_type_mismatch, type, other}}
+
+  defp prepare_media_upload(session_pid, state, type, source, opts) do
+    with {:ok, bytes} <- Media.read_source(source) do
+      Media.HTTP.upload(state, type, bytes, Keyword.put(opts, :session, session_pid))
+    end
+  end
+
+  defp build_media_proto(:image, upload, opts), do: Messages.build_image_proto(upload, opts)
+  defp build_media_proto(:audio, upload, opts), do: Messages.build_audio_proto(upload, opts)
+
+  defp build_media_proto(:document, upload, opts),
+    do: Messages.build_document_proto(upload, opts)
+
+  defp maybe_put_document_file_name(:document, {:path, path}, opts) when is_binary(path),
+    do: Keyword.put_new(opts, :file_name, Path.basename(path))
+
+  defp maybe_put_document_file_name(_type, _source, opts), do: opts
+
+  defp media_chat_text(:image, opts), do: Keyword.get(opts, :caption)
+  defp media_chat_text(:document, opts), do: Keyword.get(opts, :caption)
+  defp media_chat_text(:audio, _opts), do: nil
+
+  defp media_stanza_type(:image, _opts), do: "image"
+  defp media_stanza_type(:document, _opts), do: "document"
+  defp media_stanza_type(:audio, opts),
+    do: if(Keyword.get(opts, :ptt, false), do: "ptt", else: "audio")
+
+  defp valid_location?(latitude, longitude) do
+    is_number(latitude) and is_number(longitude) and latitude >= -90 and latitude <= 90 and
+      longitude >= -180 and longitude <= 180
+  end
+
+  defp safe_download_media(session_pid, state, ref, opts) do
+    with {:ok, bytes} <-
+           Media.HTTP.download(state, ref, Keyword.put(opts, :session, session_pid)) do
+      {:ok,
+       %Media.Download{
+         ref: ref,
+         bytes: bytes,
+         mimetype: ref.mimetype,
+         metadata: ref.metadata
+       }}
+    end
+  rescue
+    exception -> {:error, {:media_download_exception, exception}}
+  catch
+    kind, reason -> {:error, {:media_download_throw, kind, reason}}
   end
 
   defp primary_send_task_fun(session_pid, state, jid, text, strategy, attempt) do

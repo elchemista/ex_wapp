@@ -29,9 +29,28 @@ defmodule ExWapp.Media.HTTP do
   """
   @spec download(map(), Media.Ref.t(), keyword()) :: {:ok, binary()} | {:error, term()}
   def download(state, %Media.Ref{} = ref, opts \\ []) do
-    with {:ok, media_conn} <- media_conn(state, opts),
-         {:ok, body} <- do_download(media_conn, ref, opts) do
+    with {:ok, body} <- fetch_encrypted_body(state, ref, opts) do
       Media.Crypto.decrypt_download(body, ref)
+    end
+  end
+
+  @spec fetch_encrypted_body(map(), Media.Ref.t(), keyword()) ::
+          {:ok, binary()} | {:error, term()}
+  defp fetch_encrypted_body(state, %Media.Ref{url: url} = ref, opts)
+       when is_binary(url) and url != "" do
+    case http_get(url) do
+      {:ok, body} -> {:ok, body}
+      {:error, _reason} -> fetch_from_direct_path(state, %{ref | url: nil}, opts)
+    end
+  end
+
+  defp fetch_encrypted_body(state, ref, opts), do: fetch_from_direct_path(state, ref, opts)
+
+  @spec fetch_from_direct_path(map(), Media.Ref.t(), keyword()) ::
+          {:ok, binary()} | {:error, term()}
+  defp fetch_from_direct_path(state, ref, opts) do
+    with {:ok, media_conn} <- media_conn(state, opts) do
+      do_download(media_conn, ref, opts)
     end
   end
 
@@ -63,7 +82,7 @@ defmodule ExWapp.Media.HTTP do
   @spec do_upload(map(), Media.Upload.t(), binary()) ::
           {:ok, Media.Upload.t()} | {:error, term()}
   defp do_upload(%{hosts: [%{hostname: host} | _], auth: auth}, upload, body) do
-    token = Base.url_encode64(upload.file_enc_sha256, padding: false)
+    token = Base.url_encode64(upload.file_enc_sha256)
     mms_type = mms_type(upload.type)
 
     url =
@@ -101,7 +120,7 @@ defmodule ExWapp.Media.HTTP do
 
   defp do_download(%{hosts: hosts}, %Media.Ref{direct_path: direct_path} = ref, opts)
        when is_binary(direct_path) and direct_path != "" do
-    hash = Base.url_encode64(ref.file_enc_sha256 || <<>>, padding: false)
+    hash = Base.url_encode64(ref.file_enc_sha256 || <<>>)
     mms_type = mms_type(ref.type)
 
     # When the full CDN URL is missing, we reconstruct candidates from `media_conn`
@@ -181,6 +200,7 @@ defmodule ExWapp.Media.HTTP do
   @spec mms_type(Media.media_type()) :: binary()
   defp mms_type(:image), do: "image"
   defp mms_type(:audio), do: "audio"
+  defp mms_type(:document), do: "document"
 
   @spec uri(term()) :: binary()
   defp uri(value), do: value |> to_string() |> URI.encode_www_form()

@@ -96,9 +96,15 @@ defmodule ExWapp.Client.Transport.Session do
     end
   end
 
-  def send_message(%Client{} = client, %Message{type: type})
-      when type in [:image, :audio] do
-    {:error, client, :media_send_not_implemented}
+  def send_message(%Client{} = client, %Message{type: type} = message)
+      when type in [:image, :audio, :document, :location, :contact, :event] do
+    with {:ok, client, session} <- ensure_session(client) do
+      opts = Keyword.put(message.opts, :retry_message_id, message.id)
+
+      session
+      |> send_session_content(message, opts)
+      |> normalize_session_send(client, message.id)
+    end
   end
 
   def send_message(_client, %Message{type: type}), do: {:error, {:unsupported_message_type, type}}
@@ -172,9 +178,50 @@ defmodule ExWapp.Client.Transport.Session do
   def get_chat(%Client{} = client, jid), do: ExWapp.Chat.get(client.store, jid)
 
   @impl true
-  def download_media(%Client{} = _client, %ExWapp.Media.Ref{} = _ref, _opts) do
-    {:error, :media_download_not_implemented}
+  def download_media(%Client{} = client, %ExWapp.Media.Ref{} = ref, opts) do
+    with {:ok, client, session} <- ensure_session(client),
+         {:ok, download} <- Session.download_media(session, ref, opts) do
+      {:ok, client, download}
+    end
   end
+
+  defp send_session_content(session, %Message{type: :image, to: to, body: source}, opts),
+    do: Session.send_image(session, to, source, opts)
+
+  defp send_session_content(session, %Message{type: :audio, to: to, body: source}, opts),
+    do: Session.send_audio(session, to, source, opts)
+
+  defp send_session_content(session, %Message{type: :document, to: to, body: source}, opts),
+    do: Session.send_document(session, to, source, opts)
+
+  defp send_session_content(
+         session,
+         %Message{type: :location, to: to, body: %{latitude: latitude, longitude: longitude}},
+         opts
+       ),
+       do: Session.send_location(session, to, latitude, longitude, opts)
+
+  defp send_session_content(
+         session,
+         %Message{type: :contact, to: to, body: %{display_name: name, vcard: vcard}},
+         opts
+       ),
+       do: Session.send_contact(session, to, name, vcard, opts)
+
+  defp send_session_content(
+         session,
+         %Message{type: :event, to: to, body: %{name: name, start_time: start_time}},
+         opts
+       ),
+       do: Session.send_event(session, to, name, start_time, opts)
+
+  defp normalize_session_send({:ok, message_id}, client, _fallback_id),
+    do: {:ok, client, message_id}
+
+  defp normalize_session_send(:ok, client, fallback_id), do: {:ok, client, fallback_id}
+
+  defp normalize_session_send({:error, reason}, client, _fallback_id),
+    do: {:error, client, reason}
 
   defp contact_name_from_attrs(attrs) when is_list(attrs) do
     Keyword.get(attrs, :full_name) || Keyword.get(attrs, :name) || Keyword.get(attrs, :push_name)
