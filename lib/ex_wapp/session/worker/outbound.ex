@@ -292,6 +292,10 @@ defmodule ExWapp.Session.Worker.Outbound do
         {:ok, context.message_id}
 
       error ->
+        Logger.error(
+          "[SEND] Group transport send failed for #{context.group_jid} id=#{context.message_id}: #{inspect(error)}"
+        )
+
         Chat.update_message_status(context.store, context.group_jid, context.message_id, :failed)
         error
     end
