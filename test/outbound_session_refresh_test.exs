@@ -101,6 +101,47 @@ defmodule ExWapp.OutboundSessionRefreshTest do
     assert_receive {:message_send, %Binary.Node{tag: "message"}}
   end
 
+  test "direct usync query skips known LID aliases when a phone-number JID is available" do
+    local_jid = "55555555555@s.whatsapp.net"
+    recipient_base_jid = "66666666666@s.whatsapp.net"
+    recipient_lid_jid = "777777777777777@lid"
+
+    lid_mapping = %{
+      {:pn_to_lid, recipient_base_jid} => recipient_lid_jid,
+      {:lid_to_pn, recipient_lid_jid} => recipient_base_jid
+    }
+
+    %{store: store, local_signal: local_signal} =
+      build_local_store(local_jid, lid_mapping: lid_mapping)
+
+    recipient_base_bundle = build_remote_bundle(recipient_base_jid)
+
+    signal_sessions =
+      build_existing_session(local_signal, recipient_base_jid, recipient_base_bundle)
+
+    session_pid = start_supervised!({SessionSink, initial: signal_sessions})
+
+    conn =
+      start_fake_conn(self(), %{
+        device_map: %{
+          recipient_base_jid => [recipient_base_jid]
+        },
+        prekey_bundles: %{
+          recipient_base_jid => recipient_base_bundle
+        }
+      })
+
+    state = outbound_state(store, conn, signal_sessions)
+
+    assert {:ok, _message_id} =
+             Outbound.send_text_worker(session_pid, state, recipient_base_jid, "hello")
+
+    assert_receive {:usync_query, queried_jids}
+    assert Enum.sort(queried_jids) == Enum.sort([recipient_base_jid, local_jid])
+    refute recipient_lid_jid in queried_jids
+    assert_receive {:message_send, %Binary.Node{tag: "message"}}
+  end
+
   test "send_text_worker returns not_connected when the runtime is disconnected" do
     assert {:error, {:not_connected, :disconnected}} =
              Outbound.send_text_worker(
@@ -129,15 +170,22 @@ defmodule ExWapp.OutboundSessionRefreshTest do
     }
   end
 
-  defp build_local_store(local_jid) do
+  defp build_local_store(local_jid, opts \\ []) do
     {:ok, _signal_info, local_signal} = Signal.bootstrap(%{device_attrs: %{"jid" => local_jid}})
+
+    client_info =
+      case Keyword.get(opts, :lid) do
+        lid when is_binary(lid) and lid != "" -> %{jid: local_jid, lid: lid}
+        _ -> %{jid: local_jid}
+      end
 
     store =
       Memory.new(
         initial_data: %{
-          client_info: %{jid: local_jid},
+          client_info: client_info,
           pairing: %{adv_device_identity: <<1, 2, 3, 4>>},
-          signal: local_signal
+          signal: local_signal,
+          lid_mapping: Keyword.get(opts, :lid_mapping, %{})
         }
       )
 

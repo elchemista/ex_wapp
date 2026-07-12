@@ -926,10 +926,10 @@ defmodule ExWapp.Session.Worker.Outbound do
 
     query_jids =
       if own_sender_jid != "" and own_sender_jid != recipient_base_jid do
-        related_query_bases(recipient_base_jid, lid_mapping) ++
-          [own_sender_jid]
+        usync_query_bases(recipient_base_jid, lid_mapping) ++
+          usync_query_bases(own_sender_jid, lid_mapping)
       else
-        related_query_bases(recipient_base_jid, lid_mapping)
+        usync_query_bases(recipient_base_jid, lid_mapping)
       end
       |> JIDUtils.normalize_target_list()
 
@@ -993,6 +993,30 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   defp related_query_bases(base_jid, lid_mapping) do
     JIDUtils.related_bases(base_jid, lid_mapping)
+  end
+
+  defp usync_query_bases(base_jid, lid_mapping) do
+    base_jid =
+      base_jid
+      |> normalize_jid_with_device()
+      |> strip_device_from_jid()
+
+    cond do
+      base_jid == "" ->
+        []
+
+      JIDUtils.lid_jid?(base_jid) ->
+        mapped_pn =
+          lid_mapping
+          |> Map.get({:lid_to_pn, base_jid}, "")
+          |> normalize_jid_with_device()
+          |> strip_device_from_jid()
+
+        if mapped_pn == "", do: [base_jid], else: [mapped_pn]
+
+      true ->
+        [base_jid]
+    end
   end
 
   defp resolve_usync_devices_for_identity(device_map, base_jid, lid_mapping) do

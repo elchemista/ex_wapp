@@ -53,7 +53,11 @@ defmodule ExWapp.Session do
 
   @spec send_text(GenServer.server(), binary(), iodata()) :: :ok | {:error, term()}
   def send_text(server, jid, text) do
-    GenServer.call(server, {:send_text, jid, IO.iodata_to_binary(text)})
+    GenServer.call(
+      server,
+      {:send_text, jid, IO.iodata_to_binary(text)},
+      media_timeout([])
+    )
   end
 
   @spec send_typing(GenServer.server(), binary(), boolean()) :: :ok | {:error, term()}
@@ -180,6 +184,7 @@ defmodule ExWapp.Session do
   defdelegate get_chat_info(server, jid), to: Worker
 
   defp flush_store_adapter(nil), do: :ok
+
   defp flush_store_adapter(%_{} = store) do
     if function_exported?(store.__struct__, :flush, 1) do
       store.__struct__.flush(store)
