@@ -995,7 +995,6 @@ defmodule ExWapp.Session.Worker.Outbound do
     JIDUtils.related_bases(base_jid, lid_mapping)
   end
 
-
   defp resolve_usync_devices_for_identity(device_map, base_jid, lid_mapping) do
     aliases = related_query_bases(base_jid, lid_mapping)
     prefer_lid? = JIDUtils.lid_jid?(base_jid)
