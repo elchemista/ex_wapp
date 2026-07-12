@@ -226,23 +226,7 @@ defmodule ExWapp.Messages do
   @spec build_location_proto(number(), number(), keyword()) :: Message.t()
   def build_location_proto(latitude, longitude, opts \\ [])
       when is_number(latitude) and is_number(longitude) do
-    payload =
-      []
-      |> encode_double_field(1, latitude)
-      |> encode_double_field(2, longitude)
-      |> encode_optional_string_field(3, Keyword.get(opts, :name))
-      |> encode_optional_string_field(4, Keyword.get(opts, :address))
-      |> encode_optional_string_field(5, Keyword.get(opts, :url))
-      |> encode_optional_bool_field(6, Keyword.get(opts, :is_live))
-      |> encode_optional_varint_field(7, Keyword.get(opts, :accuracy))
-      |> encode_optional_float_field(8, Keyword.get(opts, :speed))
-      |> encode_optional_varint_field(9, Keyword.get(opts, :bearing))
-      |> encode_optional_string_field(11, Keyword.get(opts, :comment))
-      |> encode_binary_field(16, Keyword.get(opts, :jpeg_thumbnail))
-      |> encode_context_info_field(17, opts)
-      |> IO.iodata_to_binary()
-
-    %Message{__uf__: [{5, 2, payload}]}
+    %Message{__uf__: [{5, 2, encode_location_payload(latitude, longitude, opts)}]}
   end
 
   @doc """
@@ -325,7 +309,7 @@ defmodule ExWapp.Messages do
   @doc """
   Builds context info for replies and mentions.
   """
-  @spec build_context_info(send_opts()) :: ContextInfo.t() | nil
+  @spec build_context_info(keyword()) :: ContextInfo.t() | nil
   def build_context_info(opts) do
     quoted_id = Keyword.get(opts, :quoted_id)
     quoted_participant = Keyword.get(opts, :quoted_participant)
@@ -535,35 +519,68 @@ defmodule ExWapp.Messages do
     end
   end
 
+  @spec encode_optional_location_field(iodata(), non_neg_integer(), term()) :: iodata()
   defp encode_optional_location_field(acc, _field_num, nil), do: acc
 
   defp encode_optional_location_field(acc, field_num, location) when is_map(location) do
-    latitude = Map.get(location, :latitude) || Map.get(location, "latitude")
-    longitude = Map.get(location, :longitude) || Map.get(location, "longitude")
+    case location_coordinates(location) do
+      {:ok, latitude, longitude} ->
+        payload = encode_location_payload(latitude, longitude, event_location_opts(location))
+        encode_ld_field(acc, field_num, payload)
 
-    if is_number(latitude) and is_number(longitude) do
-      location_opts = [
-        name: Map.get(location, :name) || Map.get(location, "name"),
-        address: Map.get(location, :address) || Map.get(location, "address"),
-        url: Map.get(location, :url) || Map.get(location, "url"),
-        comment: Map.get(location, :comment) || Map.get(location, "comment"),
-        accuracy: Map.get(location, :accuracy) || Map.get(location, "accuracy")
-      ]
-
-      location_payload =
-        build_location_proto(latitude, longitude, location_opts).__uf__
-        |> Enum.find_value(fn
-          {5, 2, value} -> value
-          _ -> nil
-        end)
-
-      encode_ld_field(acc, field_num, location_payload)
-    else
-      acc
+      :error ->
+        acc
     end
   end
 
   defp encode_optional_location_field(acc, _field_num, _location), do: acc
+
+  @spec location_coordinates(map()) :: {:ok, number(), number()} | :error
+  defp location_coordinates(location) do
+    latitude = location_value(location, :latitude, "latitude")
+    longitude = location_value(location, :longitude, "longitude")
+    validate_location_coordinates(latitude, longitude)
+  end
+
+  @spec validate_location_coordinates(term(), term()) :: {:ok, number(), number()} | :error
+  defp validate_location_coordinates(latitude, longitude)
+       when is_number(latitude) and is_number(longitude),
+       do: {:ok, latitude, longitude}
+
+  defp validate_location_coordinates(_latitude, _longitude), do: :error
+
+  @spec event_location_opts(map()) :: keyword()
+  defp event_location_opts(location) do
+    [
+      name: location_value(location, :name, "name"),
+      address: location_value(location, :address, "address"),
+      url: location_value(location, :url, "url"),
+      comment: location_value(location, :comment, "comment"),
+      accuracy: location_value(location, :accuracy, "accuracy")
+    ]
+  end
+
+  @spec location_value(map(), atom(), String.t()) :: term()
+  defp location_value(location, atom_key, string_key),
+    do: Map.get(location, atom_key) || Map.get(location, string_key)
+
+  @spec encode_location_payload(number(), number(), keyword()) :: binary()
+  defp encode_location_payload(latitude, longitude, opts) do
+    []
+    |> encode_double_field(1, latitude)
+    |> encode_double_field(2, longitude)
+    |> encode_optional_string_field(3, Keyword.get(opts, :name))
+    |> encode_optional_string_field(4, Keyword.get(opts, :address))
+    |> encode_optional_string_field(5, Keyword.get(opts, :url))
+    |> encode_optional_bool_field(6, Keyword.get(opts, :is_live))
+    |> encode_optional_varint_field(7, Keyword.get(opts, :accuracy))
+    |> encode_optional_float_field(8, Keyword.get(opts, :speed))
+    |> encode_optional_varint_field(9, Keyword.get(opts, :bearing))
+    |> encode_optional_string_field(11, Keyword.get(opts, :comment))
+    |> encode_binary_field(16, Keyword.get(opts, :jpeg_thumbnail))
+    |> encode_context_info_field(17, opts)
+    |> IO.iodata_to_binary()
+  end
 
   defp encode_optional_timestamp_field(acc, _field_num, nil), do: acc
 

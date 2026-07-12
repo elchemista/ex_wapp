@@ -103,7 +103,7 @@ defmodule ExWapp.Client.Transport.Session do
 
       session
       |> send_session_content(message, opts)
-      |> normalize_session_send(client, message.id)
+      |> normalize_session_send(client)
     end
   end
 
@@ -215,12 +215,14 @@ defmodule ExWapp.Client.Transport.Session do
        ),
        do: Session.send_event(session, to, name, start_time, opts)
 
-  defp normalize_session_send({:ok, message_id}, client, _fallback_id),
+  @spec normalize_session_send(
+          {:ok, String.t()} | {:error, term()},
+          Client.t()
+        ) :: {:ok, Client.t(), String.t()} | {:error, Client.t(), term()}
+  defp normalize_session_send({:ok, message_id}, client),
     do: {:ok, client, message_id}
 
-  defp normalize_session_send(:ok, client, fallback_id), do: {:ok, client, fallback_id}
-
-  defp normalize_session_send({:error, reason}, client, _fallback_id),
+  defp normalize_session_send({:error, reason}, client),
     do: {:error, client, reason}
 
   defp contact_name_from_attrs(attrs) when is_list(attrs) do
