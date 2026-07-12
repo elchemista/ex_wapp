@@ -179,7 +179,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     message_id = Messages.generate_id(own_jid)
     timestamp = System.system_time(:second)
 
-    with {:ok, group_info} <- query_group_info_worker(session_pid, state, group_jid),
+    with {:ok, group_info} <- query_group_info_worker(state, group_jid),
          {:ok, updated_sessions, prekey_bundles, distribution_targets} <-
            ensure_group_sender_key_sessions_worker(
              state,
@@ -697,52 +697,27 @@ defmodule ExWapp.Session.Worker.Outbound do
   defp normalize_addressing_mode(mode) when mode in ["lid", "pn"], do: mode
   defp normalize_addressing_mode(_), do: nil
 
-  defp query_group_info_worker(session_pid, state, group_jid) do
+  defp query_group_info_worker(%{conn: conn} = state, group_jid) do
     message_id = generate_request_id()
     query_node = build_group_info_query(group_jid, message_id)
-    timeout_ms = group_info_timeout_ms(state)
 
-    Logger.debug(
-      "[GROUP] Querying group info jid=#{group_jid} request_id=#{message_id} timeout_ms=#{timeout_ms}"
-    )
+    Logger.debug("[GROUP] Querying group info for #{group_jid}")
 
-    try do
-      case GenServer.call(
-             session_pid,
-             {:send_iq, query_node, message_id, timeout_ms},
-             timeout_ms + 1_000
-           ) do
-        {:ok, response_node} ->
-          Logger.debug(
-            "[GROUP] Received group info response jid=#{group_jid} request_id=#{message_id} attrs=#{inspect(response_node.attrs || %{})}"
-          )
+    case send_transport_node(state, conn, query_node) do
+      :ok ->
+        receive do
+          {:prekey_response, ^message_id, response_node} ->
+            parse_group_info_response(response_node, group_jid)
 
-          parse_group_info_response(response_node, group_jid)
+          {:prekey_error, ^message_id, error} ->
+            {:error, {:group_info_query_error, error}}
+        after
+          group_info_timeout_ms(state) ->
+            {:error, :group_info_timeout}
+        end
 
-        {:error, :timeout} ->
-          Logger.error(
-            "[GROUP] Group info query timed out jid=#{group_jid} request_id=#{message_id} timeout_ms=#{timeout_ms}"
-          )
-
-          {:error, :group_info_timeout}
-
-        {:error, error} ->
-          Logger.warning(
-            "[GROUP] Group info query error jid=#{group_jid} request_id=#{message_id} error=#{inspect(error)}"
-          )
-
-          {:error, {:group_info_query_error, error}}
-
-        error ->
-          {:error, {:group_info_send_failed, error}}
-      end
-    catch
-      :exit, {:timeout, _call} ->
-        Logger.error(
-          "[GROUP] Group info call exited on timeout jid=#{group_jid} request_id=#{message_id} timeout_ms=#{timeout_ms}"
-        )
-
-        {:error, :group_info_timeout}
+      error ->
+        {:error, {:group_info_send_failed, error}}
     end
   end
 
@@ -838,12 +813,9 @@ defmodule ExWapp.Session.Worker.Outbound do
       end
 
     own_target_candidates =
-      Targets.resolve_own_device_targets(
-        signal_sessions,
-        own_sender_jid,
-        own_device_id,
-        own_devices
-      )
+      own_devices
+      |> JIDUtils.normalize_target_list()
+      |> Enum.reject(&current_device_target?(&1, own_device_id))
 
     all_target_device_jids =
       JIDUtils.normalize_target_list(
@@ -923,13 +895,20 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   defp discover_devices(state, recipient_base_jid, own_sender_jid, own_device_id) do
     lid_mapping = Account.load_lid_mapping(state.store)
+    own_base_jid = Account.local_account_base_jid(state.store)
+    own_lid_jid = Account.local_account_lid_jid(state.store)
+
+    own_query_bases =
+      (related_query_bases(own_sender_jid, lid_mapping) ++
+         related_query_bases(own_base_jid, lid_mapping) ++
+         related_query_bases(own_lid_jid, lid_mapping))
+      |> JIDUtils.normalize_target_list()
 
     query_jids =
-      if own_sender_jid != "" and own_sender_jid != recipient_base_jid do
-        usync_query_bases(recipient_base_jid, lid_mapping) ++
-          usync_query_bases(own_sender_jid, lid_mapping)
+      if own_query_bases != [] and recipient_base_jid not in own_query_bases do
+        related_query_bases(recipient_base_jid, lid_mapping) ++ own_query_bases
       else
-        usync_query_bases(recipient_base_jid, lid_mapping)
+        related_query_bases(recipient_base_jid, lid_mapping)
       end
       |> JIDUtils.normalize_target_list()
 
@@ -958,12 +937,19 @@ defmodule ExWapp.Session.Worker.Outbound do
       DeviceCache.resolve_recent_devices(state.store, recipient_base_jid, state.runtime_cfg)
       |> Enum.reject(&(&1 in recipient_devices))
 
+    own_preferred_jid = if own_base_jid != "", do: own_base_jid, else: own_sender_jid
+
     own_devices_all =
-      resolve_usync_devices_for_identity(device_map, own_sender_jid, lid_mapping)
+      resolve_own_usync_devices(
+        device_map,
+        [own_sender_jid, own_preferred_jid, own_lid_jid],
+        own_preferred_jid,
+        lid_mapping
+      )
       |> JIDUtils.normalize_target_list()
 
     own_cached_devices =
-      DeviceCache.resolve_recent_devices(state.store, own_sender_jid, state.runtime_cfg)
+      DeviceCache.resolve_recent_devices(state.store, own_preferred_jid, state.runtime_cfg)
       |> Enum.reject(&(&1 in own_devices_all))
 
     own_devices = Enum.reject(own_devices_all, &current_device_target?(&1, own_device_id))
@@ -995,30 +981,6 @@ defmodule ExWapp.Session.Worker.Outbound do
     JIDUtils.related_bases(base_jid, lid_mapping)
   end
 
-  defp usync_query_bases(base_jid, lid_mapping) do
-    base_jid =
-      base_jid
-      |> normalize_jid_with_device()
-      |> strip_device_from_jid()
-
-    cond do
-      base_jid == "" ->
-        []
-
-      JIDUtils.lid_jid?(base_jid) ->
-        mapped_pn =
-          lid_mapping
-          |> Map.get({:lid_to_pn, base_jid}, "")
-          |> normalize_jid_with_device()
-          |> strip_device_from_jid()
-
-        if mapped_pn == "", do: [base_jid], else: [mapped_pn]
-
-      true ->
-        [base_jid]
-    end
-  end
-
   defp resolve_usync_devices_for_identity(device_map, base_jid, lid_mapping) do
     aliases = related_query_bases(base_jid, lid_mapping)
     prefer_lid? = JIDUtils.lid_jid?(base_jid)
@@ -1036,6 +998,56 @@ defmodule ExWapp.Session.Worker.Outbound do
     (preferred_devices ++ fallback_devices)
     |> Enum.map(&JIDUtils.map_to_preferred_family(&1, base_jid, lid_mapping))
     |> JIDUtils.normalize_target_list()
+  end
+
+  defp resolve_own_usync_devices(device_map, identity_jids, preferred_jid, lid_mapping)
+       when is_list(identity_jids) do
+    aliases =
+      identity_jids
+      |> Enum.flat_map(&related_query_bases(&1, lid_mapping))
+      |> JIDUtils.normalize_target_list()
+
+    aliases
+    |> Enum.flat_map(&Map.get(device_map, &1, []))
+    |> Enum.map(&map_own_device_to_preferred_family(&1, preferred_jid, lid_mapping))
+    |> JIDUtils.normalize_target_list()
+  end
+
+  defp map_own_device_to_preferred_family(target_jid, preferred_jid, lid_mapping) do
+    target_jid = JIDUtils.normalize_with_device(target_jid)
+    preferred_jid = preferred_jid |> JIDUtils.normalize_with_device() |> JIDUtils.strip_device()
+    mapped_jid = JIDUtils.map_to_preferred_family(target_jid, preferred_jid, lid_mapping)
+
+    if synthesize_preferred_own_device?(target_jid, mapped_jid, preferred_jid) do
+      apply_device_to_base(target_jid, preferred_jid)
+    else
+      mapped_jid
+    end
+  end
+
+  defp synthesize_preferred_own_device?(target_jid, mapped_jid, preferred_jid) do
+    target_base = JIDUtils.strip_device(target_jid)
+    mapped_base = JIDUtils.strip_device(mapped_jid)
+
+    preferred_jid != "" and
+      not JIDUtils.lid_jid?(preferred_jid) and
+      JIDUtils.lid_jid?(target_base) and
+      mapped_base == target_base
+  end
+
+  defp apply_device_to_base(source_jid, base_jid) do
+    base_jid = base_jid |> JIDUtils.normalize_with_device() |> JIDUtils.strip_device()
+
+    case {JIDUtils.device_id(source_jid), String.split(base_jid, "@", parts: 2)} do
+      {device_id, [user, server]} when is_integer(device_id) and device_id > 0 ->
+        "#{user}:#{device_id}@#{server}"
+
+      {_device_id, [_user, _server]} ->
+        base_jid
+
+      _ ->
+        source_jid
+    end
   end
 
   # Match whatsmeow: check existing sessions by BOTH wire JID and LID-mapped JID,
@@ -1447,12 +1459,18 @@ defmodule ExWapp.Session.Worker.Outbound do
       )
 
     own_targets =
-      Targets.resolve_own_device_targets(
-        signal_sessions,
-        own_sender_jid,
-        own_device_id,
+      if Map.has_key?(hints, :own_devices) or Map.has_key?(hints, :own_cached_devices) do
         own_targets_hint
-      )
+        |> JIDUtils.normalize_target_list()
+        |> Enum.reject(&current_device_target?(&1, own_device_id))
+      else
+        Targets.resolve_own_device_targets(
+          signal_sessions,
+          own_sender_jid,
+          own_device_id,
+          own_targets_hint
+        )
+      end
 
     self_chat? = self_chat_destination?(store, jid, own_sender_jid)
 
@@ -1884,10 +1902,11 @@ defmodule ExWapp.Session.Worker.Outbound do
   end
 
   defp maybe_alias_signal_session(signal_sessions, requested_jid, device_jid, session) do
-    requested_jid = normalize_jid_for_signal(requested_jid)
+    requested_jid = normalize_jid_with_device(requested_jid)
     device_jid = normalize_jid_with_device(device_jid)
 
-    if requested_jid != "" and device_jid != "" and requested_jid != device_jid do
+    if requested_jid != "" and device_jid != "" and requested_jid != device_jid and
+         not SessionStore.has_session?(signal_sessions, requested_jid) do
       Logger.debug("[PREKEY] Aliasing session #{requested_jid} -> #{device_jid}")
       SessionStore.put_session(signal_sessions, requested_jid, session)
     else
