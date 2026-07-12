@@ -3,7 +3,7 @@ defmodule ExWapp.Config do
 
   alias ExWapp.Config.Validator
 
-  @default_client_version %{primary: 2, secondary: 3000, tertiary: 1_042_386_815}
+  @default_client_version %{primary: 2, secondary: 3000, tertiary: 1_041_540_217}
 
   @type runtime_cfg :: map()
   @type client_version :: %{
