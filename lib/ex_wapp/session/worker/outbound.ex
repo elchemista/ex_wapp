@@ -36,13 +36,37 @@ defmodule ExWapp.Session.Worker.Outbound do
     if JID.group?(normalized_jid) do
       do_send_group_worker(session_pid, state, normalized_jid, text, opts)
     else
-      send_direct_text_worker(
-        session_pid,
-        state,
-        normalize_jid_for_signal(normalized_jid),
-        text,
-        opts
-      )
+      with {:ok, resolved_jid} <- resolve_direct_destination(state, normalized_jid) do
+        send_direct_text_worker(
+          session_pid,
+          state,
+          normalize_jid_for_signal(resolved_jid),
+          text,
+          opts
+        )
+      end
+    end
+  end
+
+  @spec resolve_direct_destination(map(), String.t()) ::
+          {:ok, String.t()} | {:error, {:unresolved_lid, String.t()}}
+  defp resolve_direct_destination(%{store: store}, jid) do
+    if JIDUtils.lid_jid?(jid) do
+      lid_mapping = Account.load_lid_mapping(store)
+      base_lid = strip_device_from_jid(jid)
+      mapped_pn = Map.get(lid_mapping, {:lid_to_pn, base_lid}, "")
+
+      case JIDUtils.map_to_preferred_family(jid, mapped_pn, lid_mapping) do
+        resolved when resolved != "" and resolved != jid ->
+          Logger.debug("[SEND] Resolved direct LID target #{jid} to phone-number JID #{resolved}")
+          {:ok, resolved}
+
+        _unresolved ->
+          Logger.error("[SEND] Cannot send to unresolved direct LID target #{jid}")
+          {:error, {:unresolved_lid, jid}}
+      end
+    else
+      {:ok, jid}
     end
   end
 
@@ -179,7 +203,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     message_id = Messages.generate_id(own_jid)
     timestamp = System.system_time(:second)
 
-    with {:ok, group_info} <- query_group_info_worker(state, group_jid),
+    with {:ok, group_info} <- query_group_info_worker(session_pid, state, group_jid),
          {:ok, updated_sessions, prekey_bundles, distribution_targets} <-
            ensure_group_sender_key_sessions_worker(
              state,
@@ -697,7 +721,7 @@ defmodule ExWapp.Session.Worker.Outbound do
   defp normalize_addressing_mode(mode) when mode in ["lid", "pn"], do: mode
   defp normalize_addressing_mode(_), do: nil
 
-  defp query_group_info_worker(%{conn: conn} = state, group_jid) do
+  defp query_group_info_worker(session_pid, state, group_jid) do
     message_id = generate_request_id()
     query_node = build_group_info_query(group_jid, message_id)
     timeout_ms = group_info_timeout_ms(state)
@@ -706,34 +730,42 @@ defmodule ExWapp.Session.Worker.Outbound do
       "[GROUP] Querying group info jid=#{group_jid} request_id=#{message_id} timeout_ms=#{timeout_ms}"
     )
 
-    case send_transport_node(state, conn, query_node) do
-      :ok ->
-        receive do
-          {:prekey_response, ^message_id, response_node} ->
-            Logger.debug(
-              "[GROUP] Received group info response jid=#{group_jid} request_id=#{message_id} attrs=#{inspect(response_node.attrs || %{})}"
-            )
+    case GenServer.call(
+           session_pid,
+           {:send_iq, query_node, message_id, timeout_ms},
+           timeout_ms + 1_000
+         ) do
+      {:ok, response_node} ->
+        Logger.debug(
+          "[GROUP] Received group info response jid=#{group_jid} request_id=#{message_id} attrs=#{inspect(response_node.attrs || %{})}"
+        )
 
-            parse_group_info_response(response_node, group_jid)
+        parse_group_info_response(response_node, group_jid)
 
-          {:prekey_error, ^message_id, error} ->
-            Logger.warning(
-              "[GROUP] Group info query error jid=#{group_jid} request_id=#{message_id} error=#{inspect(error)}"
-            )
+      {:error, :timeout} ->
+        Logger.error(
+          "[GROUP] Group info query timed out jid=#{group_jid} request_id=#{message_id} timeout_ms=#{timeout_ms}"
+        )
 
-            {:error, {:group_info_query_error, error}}
-        after
-          timeout_ms ->
-            Logger.error(
-              "[GROUP] Group info query timed out jid=#{group_jid} request_id=#{message_id} timeout_ms=#{timeout_ms}"
-            )
+        {:error, :group_info_timeout}
 
-            {:error, :group_info_timeout}
-        end
+      {:error, error} ->
+        Logger.warning(
+          "[GROUP] Group info query error jid=#{group_jid} request_id=#{message_id} error=#{inspect(error)}"
+        )
+
+        {:error, {:group_info_query_error, error}}
 
       error ->
         {:error, {:group_info_send_failed, error}}
     end
+  catch
+    :exit, {:timeout, _call} ->
+      Logger.error(
+        "[GROUP] Group info call exited on timeout jid=#{group_jid} request_id=#{message_id} timeout_ms=#{timeout_ms}"
+      )
+
+      {:error, :group_info_timeout}
   end
 
   defp build_group_info_query(group_jid, message_id) do

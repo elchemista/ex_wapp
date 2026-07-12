@@ -620,28 +620,25 @@ defmodule ExWapp.Session.Worker do
 
   def handle_call({:send_iq, node, message_id}, from, %{status: status, conn: conn} = state)
       when status in [:connected, :syncing] and is_pid(conn) do
-    max_pending = Config.get(state.runtime_cfg, [:iq, :max_pending_requests], 1_000)
+    timeout_ms = Config.get(state.runtime_cfg, [:iq, :default_timeout_ms], 30_000)
+    send_iq_call(node, message_id, timeout_ms, from, state)
+  end
 
-    if map_size(state.pending_iqs) >= max_pending do
-      {:reply, {:error, :too_many_pending_iq_requests}, state}
-    else
-      # Send the IQ node
-      case state.transport_mod.send_node(conn, node) do
-        :ok ->
-          # Register pending IQ with timeout
-          timeout_ms = Config.get(state.runtime_cfg, [:iq, :default_timeout_ms], 30_000)
-          timer = Process.send_after(self(), {:iq_timeout, message_id}, timeout_ms)
-          pending = %{from: from, timer: timer}
-          new_state = %{state | pending_iqs: Map.put(state.pending_iqs, message_id, pending)}
-          {:noreply, new_state}
-
-        error ->
-          {:reply, error, state}
-      end
-    end
+  def handle_call(
+        {:send_iq, node, message_id, timeout_ms},
+        from,
+        %{status: status, conn: conn} = state
+      )
+      when status in [:connected, :syncing] and is_pid(conn) and is_integer(timeout_ms) and
+             timeout_ms > 0 do
+    send_iq_call(node, message_id, timeout_ms, from, state)
   end
 
   def handle_call({:send_iq, _node, _message_id}, _from, state) do
+    {:reply, {:error, {:not_connected, state.status}}, state}
+  end
+
+  def handle_call({:send_iq, _node, _message_id, _timeout_ms}, _from, state) do
     {:reply, {:error, {:not_connected, state.status}}, state}
   end
 
@@ -738,6 +735,27 @@ defmodule ExWapp.Session.Worker do
     mon = Process.monitor(pid)
     new_state = put_in(state.message_subscribers[ref], {pid, mon})
     {:reply, {:ok, ref}, new_state}
+  end
+
+  @spec send_iq_call(Binary.Node.t(), String.t(), pos_integer(), GenServer.from(), t()) ::
+          {:reply, term(), t()} | {:noreply, t()}
+  defp send_iq_call(node, message_id, timeout_ms, from, state) do
+    max_pending = Config.get(state.runtime_cfg, [:iq, :max_pending_requests], 1_000)
+
+    if map_size(state.pending_iqs) >= max_pending do
+      {:reply, {:error, :too_many_pending_iq_requests}, state}
+    else
+      case state.transport_mod.send_node(state.conn, node) do
+        :ok ->
+          timer = Process.send_after(self(), {:iq_timeout, message_id}, timeout_ms)
+          pending = %{from: from, timer: timer}
+          new_state = %{state | pending_iqs: Map.put(state.pending_iqs, message_id, pending)}
+          {:noreply, new_state}
+
+        error ->
+          {:reply, error, state}
+      end
+    end
   end
 
   @impl true
