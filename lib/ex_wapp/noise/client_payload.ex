@@ -35,7 +35,7 @@ defmodule ExWapp.Noise.ClientPayload do
 
       other ->
         # Not paired - use registration payload
-        Logger.warning(
+        Logger.debug(
           "[ClientPayload] Building REGISTRATION payload — no JID found (got #{inspect(other)})"
         )
 

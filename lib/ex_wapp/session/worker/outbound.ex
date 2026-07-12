@@ -730,42 +730,44 @@ defmodule ExWapp.Session.Worker.Outbound do
       "[GROUP] Querying group info jid=#{group_jid} request_id=#{message_id} timeout_ms=#{timeout_ms}"
     )
 
-    case GenServer.call(
-           session_pid,
-           {:send_iq, query_node, message_id, timeout_ms},
-           timeout_ms + 1_000
-         ) do
-      {:ok, response_node} ->
-        Logger.debug(
-          "[GROUP] Received group info response jid=#{group_jid} request_id=#{message_id} attrs=#{inspect(response_node.attrs || %{})}"
-        )
+    try do
+      case GenServer.call(
+             session_pid,
+             {:send_iq, query_node, message_id, timeout_ms},
+             timeout_ms + 1_000
+           ) do
+        {:ok, response_node} ->
+          Logger.debug(
+            "[GROUP] Received group info response jid=#{group_jid} request_id=#{message_id} attrs=#{inspect(response_node.attrs || %{})}"
+          )
 
-        parse_group_info_response(response_node, group_jid)
+          parse_group_info_response(response_node, group_jid)
 
-      {:error, :timeout} ->
+        {:error, :timeout} ->
+          Logger.error(
+            "[GROUP] Group info query timed out jid=#{group_jid} request_id=#{message_id} timeout_ms=#{timeout_ms}"
+          )
+
+          {:error, :group_info_timeout}
+
+        {:error, error} ->
+          Logger.warning(
+            "[GROUP] Group info query error jid=#{group_jid} request_id=#{message_id} error=#{inspect(error)}"
+          )
+
+          {:error, {:group_info_query_error, error}}
+
+        error ->
+          {:error, {:group_info_send_failed, error}}
+      end
+    catch
+      :exit, {:timeout, _call} ->
         Logger.error(
-          "[GROUP] Group info query timed out jid=#{group_jid} request_id=#{message_id} timeout_ms=#{timeout_ms}"
+          "[GROUP] Group info call exited on timeout jid=#{group_jid} request_id=#{message_id} timeout_ms=#{timeout_ms}"
         )
 
         {:error, :group_info_timeout}
-
-      {:error, error} ->
-        Logger.warning(
-          "[GROUP] Group info query error jid=#{group_jid} request_id=#{message_id} error=#{inspect(error)}"
-        )
-
-        {:error, {:group_info_query_error, error}}
-
-      error ->
-        {:error, {:group_info_send_failed, error}}
     end
-  catch
-    :exit, {:timeout, _call} ->
-      Logger.error(
-        "[GROUP] Group info call exited on timeout jid=#{group_jid} request_id=#{message_id} timeout_ms=#{timeout_ms}"
-      )
-
-      {:error, :group_info_timeout}
   end
 
   defp build_group_info_query(group_jid, message_id) do
