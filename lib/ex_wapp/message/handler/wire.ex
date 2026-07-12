@@ -683,15 +683,18 @@ defmodule ExWapp.Message.Handler.Wire do
 
   defp find_varint_by_wire_type(_wire_type, _rest, _field, _wanted_field), do: nil
 
+  @spec do_find_fixed_field(binary(), non_neg_integer(), 1 | 5) :: float() | nil
   defp do_find_fixed_field(<<>>, _wanted_field, _wanted_wire_type), do: nil
 
   defp do_find_fixed_field(binary, wanted_field, wanted_wire_type) do
-    with {:ok, tag, rest} <- decode_varint(binary) do
-      wire_type = Bitwise.band(tag, 0x07)
-      field = Bitwise.bsr(tag, 3)
-      find_fixed_by_wire_type(wire_type, rest, field, wanted_field, wanted_wire_type)
-    else
-      _ -> nil
+    case decode_varint(binary) do
+      {:ok, tag, rest} ->
+        wire_type = Bitwise.band(tag, 0x07)
+        field = Bitwise.bsr(tag, 3)
+        find_fixed_by_wire_type(wire_type, rest, field, wanted_field, wanted_wire_type)
+
+      _ ->
+        nil
     end
   end
 
