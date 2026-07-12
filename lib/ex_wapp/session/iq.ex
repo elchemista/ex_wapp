@@ -18,7 +18,7 @@ defmodule ExWapp.Session.IQ do
       Enum.map(jids, fn jid ->
         %Binary.Node{
           tag: "user",
-          attrs: %{"jid" => jid},
+          attrs: %{"jid" => jid, "reason" => "identity"},
           content: nil
         }
       end)
