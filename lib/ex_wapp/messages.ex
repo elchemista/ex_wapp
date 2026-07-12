@@ -147,14 +147,20 @@ defmodule ExWapp.Messages do
   def build_image_proto(%ExWapp.Media.Upload{} = upload, opts \\ []) do
     payload =
       []
-      |> encode_ld_field(1, upload.url || "")
+      |> encode_optional_string_field(1, upload.url)
       |> encode_string_field(2, Keyword.get(opts, :mimetype, "image/jpeg"))
-      |> encode_binary_field(3, upload.file_sha256)
-      |> encode_binary_field(4, upload.file_enc_sha256)
-      |> encode_binary_field(5, upload.media_key)
-      |> encode_ld_field(6, upload.direct_path || "")
-      |> encode_varint_field(7, upload.file_length || 0)
-      |> encode_optional_string_field(8, Keyword.get(opts, :caption))
+      |> encode_optional_string_field(3, Keyword.get(opts, :caption))
+      |> encode_binary_field(4, upload.file_sha256)
+      |> encode_varint_field(5, upload.file_length || 0)
+      |> encode_optional_varint_field(6, Keyword.get(opts, :height))
+      |> encode_optional_varint_field(7, Keyword.get(opts, :width))
+      |> encode_binary_field(8, upload.media_key)
+      |> encode_binary_field(9, upload.file_enc_sha256)
+      |> encode_optional_string_field(11, upload.direct_path)
+      |> encode_optional_varint_field(12, upload.media_key_timestamp)
+      |> encode_binary_field(16, Keyword.get(opts, :jpeg_thumbnail))
+      |> encode_context_info_field(17, opts)
+      |> encode_optional_bool_field(25, Keyword.get(opts, :view_once))
       |> IO.iodata_to_binary()
 
     %Message{__uf__: [{3, 2, payload}]}
@@ -165,20 +171,125 @@ defmodule ExWapp.Messages do
   """
   @spec build_audio_proto(ExWapp.Media.Upload.t(), keyword()) :: Message.t()
   def build_audio_proto(%ExWapp.Media.Upload{} = upload, opts \\ []) do
+    seconds = Keyword.get(opts, :seconds, Keyword.get(opts, :duration, 0))
+
     payload =
       []
-      |> encode_ld_field(1, upload.url || "")
+      |> encode_optional_string_field(1, upload.url)
       |> encode_string_field(2, Keyword.get(opts, :mimetype, "audio/ogg; codecs=opus"))
       |> encode_binary_field(3, upload.file_sha256)
-      |> encode_binary_field(4, upload.file_enc_sha256)
-      |> encode_binary_field(5, upload.media_key)
-      |> encode_ld_field(6, upload.direct_path || "")
-      |> encode_varint_field(7, upload.file_length || 0)
-      |> encode_bool_field(8, Keyword.get(opts, :ptt, false))
-      |> encode_varint_field(9, Keyword.get(opts, :duration, 0))
+      |> encode_varint_field(4, upload.file_length || 0)
+      |> encode_varint_field(5, seconds)
+      |> encode_bool_field(6, Keyword.get(opts, :ptt, false))
+      |> encode_binary_field(7, upload.media_key)
+      |> encode_binary_field(8, upload.file_enc_sha256)
+      |> encode_optional_string_field(9, upload.direct_path)
+      |> encode_optional_varint_field(10, upload.media_key_timestamp)
+      |> encode_context_info_field(17, opts)
+      |> encode_binary_field(19, Keyword.get(opts, :waveform))
+      |> encode_optional_bool_field(21, Keyword.get(opts, :view_once))
       |> IO.iodata_to_binary()
 
     %Message{__uf__: [{8, 2, payload}]}
+  end
+
+  @doc """
+  Builds a document message protobuf from uploaded media metadata.
+  """
+  @spec build_document_proto(ExWapp.Media.Upload.t(), keyword()) :: Message.t()
+  def build_document_proto(%ExWapp.Media.Upload{} = upload, opts \\ []) do
+    payload =
+      []
+      |> encode_optional_string_field(1, upload.url)
+      |> encode_string_field(2, Keyword.get(opts, :mimetype, "application/octet-stream"))
+      |> encode_optional_string_field(3, Keyword.get(opts, :title))
+      |> encode_binary_field(4, upload.file_sha256)
+      |> encode_varint_field(5, upload.file_length || 0)
+      |> encode_optional_varint_field(6, Keyword.get(opts, :page_count))
+      |> encode_binary_field(7, upload.media_key)
+      |> encode_string_field(8, Keyword.get(opts, :file_name) || "document")
+      |> encode_binary_field(9, upload.file_enc_sha256)
+      |> encode_optional_string_field(10, upload.direct_path)
+      |> encode_optional_varint_field(11, upload.media_key_timestamp)
+      |> encode_optional_bool_field(12, Keyword.get(opts, :contact_vcard))
+      |> encode_binary_field(16, Keyword.get(opts, :jpeg_thumbnail))
+      |> encode_context_info_field(17, opts)
+      |> encode_optional_string_field(20, Keyword.get(opts, :caption))
+      |> IO.iodata_to_binary()
+
+    %Message{__uf__: [{7, 2, payload}]}
+  end
+
+  @doc """
+  Builds a static or live GPS location protobuf.
+  """
+  @spec build_location_proto(number(), number(), keyword()) :: Message.t()
+  def build_location_proto(latitude, longitude, opts \\ [])
+      when is_number(latitude) and is_number(longitude) do
+    payload =
+      []
+      |> encode_double_field(1, latitude)
+      |> encode_double_field(2, longitude)
+      |> encode_optional_string_field(3, Keyword.get(opts, :name))
+      |> encode_optional_string_field(4, Keyword.get(opts, :address))
+      |> encode_optional_string_field(5, Keyword.get(opts, :url))
+      |> encode_optional_bool_field(6, Keyword.get(opts, :is_live))
+      |> encode_optional_varint_field(7, Keyword.get(opts, :accuracy))
+      |> encode_optional_float_field(8, Keyword.get(opts, :speed))
+      |> encode_optional_varint_field(9, Keyword.get(opts, :bearing))
+      |> encode_optional_string_field(11, Keyword.get(opts, :comment))
+      |> encode_binary_field(16, Keyword.get(opts, :jpeg_thumbnail))
+      |> encode_context_info_field(17, opts)
+      |> IO.iodata_to_binary()
+
+    %Message{__uf__: [{5, 2, payload}]}
+  end
+
+  @doc """
+  Builds a single WhatsApp contact-card protobuf.
+  """
+  @spec build_contact_proto(String.t(), String.t(), keyword()) :: Message.t()
+  def build_contact_proto(display_name, vcard, opts \\ [])
+      when is_binary(display_name) and is_binary(vcard) do
+    payload =
+      []
+      |> encode_string_field(1, display_name)
+      |> encode_string_field(16, vcard)
+      |> encode_context_info_field(17, opts)
+      |> encode_optional_bool_field(18, Keyword.get(opts, :is_self_contact))
+      |> IO.iodata_to_binary()
+
+    %Message{__uf__: [{4, 2, payload}]}
+  end
+
+  @doc """
+  Builds WhatsApp's calendar event message (E2E Message field 75).
+
+  WhatsApp Web also attaches a 32-byte message secret to event messages; it is
+  generated automatically unless `:message_secret` is supplied.
+  """
+  @spec build_event_proto(String.t(), integer() | DateTime.t(), keyword()) :: Message.t()
+  def build_event_proto(name, start_time, opts \\ []) when is_binary(name) do
+    payload =
+      []
+      |> encode_context_info_field(1, opts)
+      |> encode_optional_bool_field(2, Keyword.get(opts, :canceled))
+      |> encode_string_field(3, name)
+      |> encode_optional_string_field(4, Keyword.get(opts, :description))
+      |> encode_optional_location_field(5, Keyword.get(opts, :location))
+      |> encode_optional_string_field(6, Keyword.get(opts, :join_link))
+      |> encode_varint_field(7, unix_seconds(start_time))
+      |> encode_optional_timestamp_field(8, Keyword.get(opts, :end_time))
+      |> encode_optional_bool_field(9, Keyword.get(opts, :extra_guests_allowed))
+      |> encode_optional_bool_field(10, Keyword.get(opts, :scheduled_call))
+      |> encode_optional_bool_field(11, Keyword.get(opts, :has_reminder))
+      |> encode_optional_varint_field(12, Keyword.get(opts, :reminder_offset_seconds))
+      |> IO.iodata_to_binary()
+
+    message_secret = event_message_secret(opts)
+    message_context = encode_ld_field([], 3, message_secret) |> IO.iodata_to_binary()
+
+    %Message{__uf__: [{35, 2, message_context}, {75, 2, payload}]}
   end
 
   @doc """
@@ -406,6 +517,59 @@ defmodule ExWapp.Messages do
   defp encode_binary_field(acc, field_num, value) when is_binary(value),
     do: encode_ld_field(acc, field_num, value)
 
+  defp encode_optional_varint_field(acc, _field_num, nil), do: acc
+
+  defp encode_optional_varint_field(acc, field_num, value)
+       when is_integer(value) and value >= 0,
+       do: encode_varint_field(acc, field_num, value)
+
+  defp encode_optional_bool_field(acc, _field_num, nil), do: acc
+
+  defp encode_optional_bool_field(acc, field_num, value) when is_boolean(value),
+    do: encode_bool_field(acc, field_num, value)
+
+  defp encode_context_info_field(acc, field_num, opts) do
+    case build_context_info(opts) do
+      nil -> acc
+      context -> encode_ld_field(acc, field_num, ContextInfo.encode!(context))
+    end
+  end
+
+  defp encode_optional_location_field(acc, _field_num, nil), do: acc
+
+  defp encode_optional_location_field(acc, field_num, location) when is_map(location) do
+    latitude = Map.get(location, :latitude) || Map.get(location, "latitude")
+    longitude = Map.get(location, :longitude) || Map.get(location, "longitude")
+
+    if is_number(latitude) and is_number(longitude) do
+      location_opts = [
+        name: Map.get(location, :name) || Map.get(location, "name"),
+        address: Map.get(location, :address) || Map.get(location, "address"),
+        url: Map.get(location, :url) || Map.get(location, "url"),
+        comment: Map.get(location, :comment) || Map.get(location, "comment"),
+        accuracy: Map.get(location, :accuracy) || Map.get(location, "accuracy")
+      ]
+
+      location_payload =
+        build_location_proto(latitude, longitude, location_opts).__uf__
+        |> Enum.find_value(fn
+          {5, 2, value} -> value
+          _ -> nil
+        end)
+
+      encode_ld_field(acc, field_num, location_payload)
+    else
+      acc
+    end
+  end
+
+  defp encode_optional_location_field(acc, _field_num, _location), do: acc
+
+  defp encode_optional_timestamp_field(acc, _field_num, nil), do: acc
+
+  defp encode_optional_timestamp_field(acc, field_num, value),
+    do: encode_varint_field(acc, field_num, unix_seconds(value))
+
   defp encode_ld_field(acc, field_num, value) when is_binary(value) do
     [acc, encode_varint(Bitwise.bsl(field_num, 3) + 2), encode_varint(byte_size(value)), value]
   end
@@ -415,6 +579,24 @@ defmodule ExWapp.Messages do
 
   defp encode_bool_field(acc, field_num, value) when is_boolean(value),
     do: encode_varint_field(acc, field_num, if(value, do: 1, else: 0))
+
+  defp encode_double_field(acc, field_num, value) when is_number(value),
+    do: [acc, encode_varint(Bitwise.bsl(field_num, 3) + 1), <<(value * 1.0)::little-float-64>>]
+
+  defp encode_optional_float_field(acc, _field_num, nil), do: acc
+
+  defp encode_optional_float_field(acc, field_num, value) when is_number(value),
+    do: [acc, encode_varint(Bitwise.bsl(field_num, 3) + 5), <<(value * 1.0)::little-float-32>>]
+
+  defp unix_seconds(%DateTime{} = value), do: DateTime.to_unix(value, :second)
+  defp unix_seconds(value) when is_integer(value) and value >= 0, do: value
+
+  defp event_message_secret(opts) do
+    case Keyword.get(opts, :message_secret) do
+      secret when is_binary(secret) and byte_size(secret) == 32 -> secret
+      _ -> :crypto.strong_rand_bytes(32)
+    end
+  end
 
   defp encode_varint(n) when n < 128, do: <<n::8>>
 

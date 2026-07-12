@@ -46,6 +46,13 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
+  @spec send_proto_worker(pid(), map(), String.t(), ExWapp.Proto.Message.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_proto_worker(session_pid, state, jid, %Message{} = proto, opts \\ []) do
+    chat_text = Keyword.get(opts, :chat_text)
+    send_text_worker(session_pid, state, jid, chat_text, Keyword.put(opts, :proto_message, proto))
+  end
+
   @spec send_direct_text_worker(pid(), map(), String.t(), iodata(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   defp send_direct_text_worker(session_pid, state, jid, text, opts) do
@@ -180,7 +187,7 @@ defmodule ExWapp.Session.Worker.Outbound do
              group_info.participants,
              group_info.addressing_mode
            ),
-         proto <- Messages.build_text_proto(text, []),
+         proto <- outbound_proto(text, opts),
          {:ok, payload} <- Message.encode(proto),
          {:ok, distribution_payload, skmsg_payload} <-
            build_group_sender_key_payloads(store, group_jid, payload),
@@ -252,7 +259,7 @@ defmodule ExWapp.Session.Worker.Outbound do
       text: context.text,
       status: :pending,
       participant: nil,
-      raw: nil
+      raw: Keyword.get(context.opts, :outgoing_raw)
     }
 
     Chat.add_message(context.store, context.group_jid, pending_message)
@@ -267,6 +274,7 @@ defmodule ExWapp.Session.Worker.Outbound do
         context.store,
         context.include_identity
       )
+      |> apply_message_node_attrs(context.opts)
 
     case send_transport_node(context.state, context.conn, node) do
       :ok ->
@@ -1280,7 +1288,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
     with {target_specs, _all_usync_devices} <-
            resolve_send_targets(store, signal_sessions, jid, prekey_bundles, target_hints, opts),
-         {:ok, payloads} <- build_send_payloads(jid, text),
+         {:ok, payloads} <- build_send_payloads(jid, text, opts),
          {:ok, participant_nodes, updated_sessions, include_identity} <-
            encrypt_for_targets(
              store,
@@ -1302,6 +1310,7 @@ defmodule ExWapp.Session.Worker.Outbound do
               store,
               include_identity
             )
+            |> apply_message_node_attrs(opts)
 
           send_encrypted_node(state, conn, store, jid, message_id, node, payloads)
 
@@ -1319,8 +1328,8 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
-  defp build_send_payloads(jid, text) do
-    proto = Messages.build_text_proto(text, [])
+  defp build_send_payloads(jid, text, opts) do
+    proto = outbound_proto(text, opts)
 
     case Message.encode(proto) do
       {:ok, payload} ->
@@ -1340,6 +1349,13 @@ defmodule ExWapp.Session.Worker.Outbound do
 
       {:error, reason} ->
         {:error, {:proto_encode, reason}}
+    end
+  end
+
+  defp outbound_proto(text, opts) do
+    case Keyword.get(opts, :proto_message) do
+      %Message{} = proto -> proto
+      _ -> Messages.build_text_proto(text, [])
     end
   end
 
@@ -1874,6 +1890,21 @@ defmodule ExWapp.Session.Worker.Outbound do
     }
   end
 
+  defp apply_message_node_attrs(%Binary.Node{} = node, opts) do
+    attrs = Map.put(node.attrs, "type", Keyword.get(opts, :message_node_type, "text"))
+
+    attrs =
+      case Keyword.get(opts, :mediatype) do
+        mediatype when is_binary(mediatype) and mediatype != "" ->
+          Map.put(attrs, "mediatype", mediatype)
+
+        _ ->
+          attrs
+      end
+
+    %{node | attrs: attrs}
+  end
+
   defp query_device_list_worker(%{conn: conn} = state, jids) when is_list(jids) do
     message_id = generate_request_id()
     query_node = IQ.build_usync_device_query(jids, message_id)
@@ -1958,7 +1989,7 @@ defmodule ExWapp.Session.Worker.Outbound do
         text: text,
         status: :pending,
         participant: nil,
-        raw: nil
+        raw: Keyword.get(opts, :outgoing_raw)
       })
     end
   end

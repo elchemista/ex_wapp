@@ -21,15 +21,34 @@ defmodule ExWapp.Message.Handler.Wire do
 
   @spec apply_media_from_plaintext(map(), binary()) :: map()
   def apply_media_from_plaintext(message_data, plaintext) when is_binary(plaintext) do
-    case extract_media_ref(plaintext) do
-      nil ->
-        message_data
-
-      %{type: type, ref: ref, caption: caption} ->
+    case extract_supported_content(plaintext) do
+      %{kind: :media, type: type, ref: ref, caption: caption} ->
         message_data
         |> Map.put(:media, ref)
         |> Map.put(:media_type, type)
-        |> Map.update(:text, caption, fn existing -> existing || caption end)
+        |> Map.put(:content_type, type)
+        |> Map.put(:text, caption)
+
+      %{kind: :location, value: location} ->
+        message_data
+        |> Map.put(:location, location)
+        |> Map.put(:content_type, :location)
+        |> Map.put(:text, location.comment || location.name || location.address)
+
+      %{kind: :contact, value: contact} ->
+        message_data
+        |> Map.put(:contact, contact)
+        |> Map.put(:content_type, :contact)
+        |> Map.put(:text, contact.display_name)
+
+      %{kind: :event, value: event} ->
+        message_data
+        |> Map.put(:event, event)
+        |> Map.put(:content_type, :event)
+        |> Map.put(:text, event.name)
+
+      nil ->
+        message_data
     end
   end
 
@@ -108,6 +127,12 @@ defmodule ExWapp.Message.Handler.Wire do
     end
   end
 
+  @spec field_double(binary(), non_neg_integer()) :: float() | nil
+  def field_double(payload, field), do: do_find_fixed_field(payload, field, 1)
+
+  @spec field_float(binary(), non_neg_integer()) :: float() | nil
+  def field_float(payload, field), do: do_find_fixed_field(payload, field, 5)
+
   defp extract_list_message_content(
          _content,
          [%{enc_type: enc_type, enc_version: enc_version, ciphertext: ciphertext} | _] =
@@ -182,23 +207,70 @@ defmodule ExWapp.Message.Handler.Wire do
     do_extract_enc_candidates(rest, current_to_jid, acc)
   end
 
-  defp extract_media_ref(message_payload) do
+  defp extract_supported_content(message_payload),
+    do: extract_supported_content_recursive(message_payload, 0)
+
+  defp extract_supported_content_recursive(_message_payload, depth)
+       when depth > @max_message_decode_depth,
+       do: nil
+
+  defp extract_supported_content_recursive(message_payload, depth) do
+    extract_supported_content_shallow(message_payload) ||
+      extract_wrapped_supported_content(message_payload, depth)
+  end
+
+  defp extract_supported_content_shallow(message_payload) do
     cond do
       match?({:ok, _}, find_length_delimited_field(message_payload, 3)) ->
         {:ok, payload} = find_length_delimited_field(message_payload, 3)
         build_media_ref(:image, payload)
 
+      match?({:ok, _}, find_length_delimited_field(message_payload, 7)) ->
+        {:ok, payload} = find_length_delimited_field(message_payload, 7)
+        build_media_ref(:document, payload)
+
       match?({:ok, _}, find_length_delimited_field(message_payload, 8)) ->
         {:ok, payload} = find_length_delimited_field(message_payload, 8)
         build_media_ref(:audio, payload)
+
+      match?({:ok, _}, find_length_delimited_field(message_payload, 75)) ->
+        {:ok, payload} = find_length_delimited_field(message_payload, 75)
+        build_event(payload)
+
+      match?({:ok, _}, find_length_delimited_field(message_payload, 5)) ->
+        {:ok, payload} = find_length_delimited_field(message_payload, 5)
+        build_location(payload)
+
+      match?({:ok, _}, find_length_delimited_field(message_payload, 18)) ->
+        {:ok, payload} = find_length_delimited_field(message_payload, 18)
+        build_live_location(payload)
+
+      match?({:ok, _}, find_length_delimited_field(message_payload, 4)) ->
+        {:ok, payload} = find_length_delimited_field(message_payload, 4)
+        build_contact(payload)
 
       true ->
         nil
     end
   end
 
+  defp extract_wrapped_supported_content(message_payload, depth) do
+    wrapper_fields = [31, 37, 40, 53, 55, 59, 74]
+
+    Enum.find_value(wrapper_fields, fn field ->
+      with {:ok, wrapper} <- find_length_delimited_field(message_payload, field),
+           nested_field <- if(field == 31, do: 2, else: 1),
+           {:ok, nested_message} <- find_length_delimited_field(wrapper, nested_field) do
+        extract_supported_content_recursive(nested_message, depth + 1)
+      else
+        _ -> nil
+      end
+    end)
+  end
+
   defp build_media_ref(:image, payload) do
     %{
+      kind: :media,
       type: :image,
       caption: field_bytes(payload, 3),
       ref: %ExWapp.Media.Ref{
@@ -210,6 +282,7 @@ defmodule ExWapp.Message.Handler.Wire do
         media_key: field_bytes(payload, 8),
         file_enc_sha256: field_bytes(payload, 9),
         direct_path: field_bytes(payload, 11),
+        media_key_timestamp: field_varint(payload, 12),
         metadata: %{
           height: field_varint(payload, 6),
           width: field_varint(payload, 7),
@@ -222,6 +295,7 @@ defmodule ExWapp.Message.Handler.Wire do
 
   defp build_media_ref(:audio, payload) do
     %{
+      kind: :media,
       type: :audio,
       caption: nil,
       ref: %ExWapp.Media.Ref{
@@ -233,12 +307,115 @@ defmodule ExWapp.Message.Handler.Wire do
         media_key: field_bytes(payload, 7),
         file_enc_sha256: field_bytes(payload, 8),
         direct_path: field_bytes(payload, 9),
+        media_key_timestamp: field_varint(payload, 10),
         metadata: %{
           seconds: field_varint(payload, 5),
           ptt: field_bool(payload, 6),
           media_key_timestamp: field_varint(payload, 10),
           waveform: field_bytes(payload, 19)
         }
+      }
+    }
+  end
+
+  defp build_media_ref(:document, payload) do
+    %{
+      kind: :media,
+      type: :document,
+      caption: field_bytes(payload, 20),
+      ref: %ExWapp.Media.Ref{
+        type: :document,
+        url: field_bytes(payload, 1),
+        mimetype: field_bytes(payload, 2),
+        file_sha256: field_bytes(payload, 4),
+        file_length: field_varint(payload, 5),
+        media_key: field_bytes(payload, 7),
+        file_enc_sha256: field_bytes(payload, 9),
+        direct_path: field_bytes(payload, 10),
+        media_key_timestamp: field_varint(payload, 11),
+        metadata: %{
+          title: field_bytes(payload, 3),
+          page_count: field_varint(payload, 6),
+          file_name: field_bytes(payload, 8),
+          contact_vcard: field_bool(payload, 12),
+          thumbnail: field_bytes(payload, 16)
+        }
+      }
+    }
+  end
+
+  defp build_location(payload) do
+    %{
+      kind: :location,
+      value: %{
+        latitude: field_double(payload, 1),
+        longitude: field_double(payload, 2),
+        name: field_bytes(payload, 3),
+        address: field_bytes(payload, 4),
+        url: field_bytes(payload, 5),
+        is_live: field_bool(payload, 6),
+        accuracy: field_varint(payload, 7),
+        speed: field_float(payload, 8),
+        bearing: field_varint(payload, 9),
+        comment: field_bytes(payload, 11),
+        jpeg_thumbnail: field_bytes(payload, 16)
+      }
+    }
+  end
+
+  defp build_contact(payload) do
+    %{
+      kind: :contact,
+      value: %{
+        display_name: field_bytes(payload, 1),
+        vcard: field_bytes(payload, 16),
+        is_self_contact: field_bool(payload, 18)
+      }
+    }
+  end
+
+  defp build_live_location(payload) do
+    %{
+      kind: :location,
+      value: %{
+        latitude: field_double(payload, 1),
+        longitude: field_double(payload, 2),
+        is_live: true,
+        accuracy: field_varint(payload, 3),
+        speed: field_float(payload, 4),
+        bearing: field_varint(payload, 5),
+        comment: field_bytes(payload, 6),
+        sequence_number: field_varint(payload, 7),
+        time_offset: field_varint(payload, 8),
+        jpeg_thumbnail: field_bytes(payload, 16),
+        name: nil,
+        address: nil,
+        url: nil
+      }
+    }
+  end
+
+  defp build_event(payload) do
+    location =
+      case find_length_delimited_field(payload, 5) do
+        {:ok, location_payload} -> build_location(location_payload).value
+        _ -> nil
+      end
+
+    %{
+      kind: :event,
+      value: %{
+        canceled: field_bool(payload, 2),
+        name: field_bytes(payload, 3),
+        description: field_bytes(payload, 4),
+        location: location,
+        join_link: field_bytes(payload, 6),
+        start_time: field_varint(payload, 7),
+        end_time: field_varint(payload, 8),
+        extra_guests_allowed: field_bool(payload, 9),
+        scheduled_call: field_bool(payload, 10),
+        has_reminder: field_bool(payload, 11),
+        reminder_offset_seconds: field_varint(payload, 12)
       }
     }
   end
@@ -507,4 +684,56 @@ defmodule ExWapp.Message.Handler.Wire do
   end
 
   defp find_varint_by_wire_type(_wire_type, _rest, _field, _wanted_field), do: nil
+
+  defp do_find_fixed_field(<<>>, _wanted_field, _wanted_wire_type), do: nil
+
+  defp do_find_fixed_field(binary, wanted_field, wanted_wire_type) do
+    with {:ok, tag, rest} <- decode_varint(binary) do
+      wire_type = Bitwise.band(tag, 0x07)
+      field = Bitwise.bsr(tag, 3)
+      find_fixed_by_wire_type(wire_type, rest, field, wanted_field, wanted_wire_type)
+    else
+      _ -> nil
+    end
+  end
+
+  defp find_fixed_by_wire_type(0, rest, _field, wanted_field, wanted_wire_type) do
+    case decode_varint(rest) do
+      {:ok, _value, tail} -> do_find_fixed_field(tail, wanted_field, wanted_wire_type)
+      _ -> nil
+    end
+  end
+
+  defp find_fixed_by_wire_type(1, rest, field, wanted_field, wanted_wire_type) do
+    if byte_size(rest) >= 8 do
+      <<value::little-float-64, tail::binary>> = rest
+
+      if field == wanted_field and wanted_wire_type == 1,
+        do: value,
+        else: do_find_fixed_field(tail, wanted_field, wanted_wire_type)
+    end
+  end
+
+  defp find_fixed_by_wire_type(2, rest, _field, wanted_field, wanted_wire_type) do
+    with {:ok, len, tail} <- decode_varint(rest),
+         true <- byte_size(tail) >= len do
+      <<_value::binary-size(^len), next::binary>> = tail
+      do_find_fixed_field(next, wanted_field, wanted_wire_type)
+    else
+      _ -> nil
+    end
+  end
+
+  defp find_fixed_by_wire_type(5, rest, field, wanted_field, wanted_wire_type) do
+    if byte_size(rest) >= 4 do
+      <<value::little-float-32, tail::binary>> = rest
+
+      if field == wanted_field and wanted_wire_type == 5,
+        do: value,
+        else: do_find_fixed_field(tail, wanted_field, wanted_wire_type)
+    end
+  end
+
+  defp find_fixed_by_wire_type(_wire_type, _rest, _field, _wanted_field, _wanted_wire_type),
+    do: nil
 end
