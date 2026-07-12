@@ -36,30 +36,13 @@ defmodule ExWapp.Session.Worker.Outbound do
     if JID.group?(normalized_jid) do
       do_send_group_worker(session_pid, state, normalized_jid, text, opts)
     else
-      direct_jid = preferred_direct_jid(state.store, normalized_jid)
-
       send_direct_text_worker(
         session_pid,
         state,
-        normalize_jid_for_signal(direct_jid),
+        normalize_jid_for_signal(normalized_jid),
         text,
         opts
       )
-    end
-  end
-
-  @spec preferred_direct_jid(term(), String.t()) :: String.t()
-  defp preferred_direct_jid(store, jid) do
-    mapped_jid =
-      jid
-      |> JIDUtils.resolve_signal_encryption_jid(Account.load_lid_mapping(store))
-      |> normalize_jid_with_device()
-
-    if mapped_jid != "" and mapped_jid != jid do
-      Logger.debug("[SEND] Using mapped LID destination original=#{jid} destination=#{mapped_jid}")
-      mapped_jid
-    else
-      jid
     end
   end
 
@@ -941,10 +924,14 @@ defmodule ExWapp.Session.Worker.Outbound do
   defp discover_devices(state, recipient_base_jid, own_sender_jid, own_device_id) do
     lid_mapping = Account.load_lid_mapping(state.store)
 
-    # WhatsApp expects a single addressing family per direct-message fanout.
-    # `recipient_base_jid` and `own_sender_jid` are both LID when a PN-to-LID
-    # mapping is known, and both PN otherwise.
-    query_jids = JIDUtils.normalize_target_list([recipient_base_jid, own_sender_jid])
+    query_jids =
+      if own_sender_jid != "" and own_sender_jid != recipient_base_jid do
+        usync_query_bases(recipient_base_jid, lid_mapping) ++
+          usync_query_bases(own_sender_jid, lid_mapping)
+      else
+        usync_query_bases(recipient_base_jid, lid_mapping)
+      end
+      |> JIDUtils.normalize_target_list()
 
     device_map =
       case query_device_list_worker(state, query_jids) do
@@ -1006,6 +993,30 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   defp related_query_bases(base_jid, lid_mapping) do
     JIDUtils.related_bases(base_jid, lid_mapping)
+  end
+
+  defp usync_query_bases(base_jid, lid_mapping) do
+    base_jid =
+      base_jid
+      |> normalize_jid_with_device()
+      |> strip_device_from_jid()
+
+    cond do
+      base_jid == "" ->
+        []
+
+      JIDUtils.lid_jid?(base_jid) ->
+        mapped_pn =
+          lid_mapping
+          |> Map.get({:lid_to_pn, base_jid}, "")
+          |> normalize_jid_with_device()
+          |> strip_device_from_jid()
+
+        if mapped_pn == "", do: [base_jid], else: [mapped_pn]
+
+      true ->
+        [base_jid]
+    end
   end
 
   defp resolve_usync_devices_for_identity(device_map, base_jid, lid_mapping) do
