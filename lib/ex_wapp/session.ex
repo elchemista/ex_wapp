@@ -53,7 +53,11 @@ defmodule ExWapp.Session do
 
   @spec send_text(GenServer.server(), binary(), iodata()) :: :ok | {:error, term()}
   def send_text(server, jid, text) do
-    GenServer.call(server, {:send_text, jid, IO.iodata_to_binary(text)})
+    GenServer.call(
+      server,
+      {:send_text, jid, IO.iodata_to_binary(text)},
+      media_timeout([])
+    )
   end
 
   @spec send_typing(GenServer.server(), binary(), boolean()) :: :ok | {:error, term()}

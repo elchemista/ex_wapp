@@ -700,19 +700,34 @@ defmodule ExWapp.Session.Worker.Outbound do
   defp query_group_info_worker(%{conn: conn} = state, group_jid) do
     message_id = generate_request_id()
     query_node = build_group_info_query(group_jid, message_id)
+    timeout_ms = group_info_timeout_ms(state)
 
-    Logger.debug("[GROUP] Querying group info for #{group_jid}")
+    Logger.debug(
+      "[GROUP] Querying group info jid=#{group_jid} request_id=#{message_id} timeout_ms=#{timeout_ms}"
+    )
 
     case send_transport_node(state, conn, query_node) do
       :ok ->
         receive do
           {:prekey_response, ^message_id, response_node} ->
+            Logger.debug(
+              "[GROUP] Received group info response jid=#{group_jid} request_id=#{message_id} attrs=#{inspect(response_node.attrs || %{})}"
+            )
+
             parse_group_info_response(response_node, group_jid)
 
           {:prekey_error, ^message_id, error} ->
+            Logger.warning(
+              "[GROUP] Group info query error jid=#{group_jid} request_id=#{message_id} error=#{inspect(error)}"
+            )
+
             {:error, {:group_info_query_error, error}}
         after
-          group_info_timeout_ms(state) ->
+          timeout_ms ->
+            Logger.error(
+              "[GROUP] Group info query timed out jid=#{group_jid} request_id=#{message_id} timeout_ms=#{timeout_ms}"
+            )
+
             {:error, :group_info_timeout}
         end
 
