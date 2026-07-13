@@ -32,14 +32,16 @@ defmodule ExWapp.Store.Ets do
   @behaviour ExWapp.Store
   require Logger
   alias ExWapp.Signal.SessionStore
+  alias ExWapp.Store.MessageTable
 
-  defstruct [:path, :table, :signal_table, :device_cache_table]
+  defstruct [:path, :table, :signal_table, :device_cache_table, :message_table]
 
   @type t :: %__MODULE__{
           path: Path.t(),
           table: :ets.tid(),
           signal_table: :ets.tid(),
-          device_cache_table: :ets.tid()
+          device_cache_table: :ets.tid(),
+          message_table: MessageTable.t()
         }
 
   @default_path_segments [".cache", "ex_wapp", "session.etf"]
@@ -54,34 +56,40 @@ defmodule ExWapp.Store.Ets do
 
     :ok = path |> String.to_charlist() |> :filelib.ensure_dir()
 
-    # Always create new public tables (accessible from any process)
     table = :ets.new(:ex_wapp_store, [:set, :public, :compressed])
     signal_store = SessionStore.new_ets()
     signal_table = signal_store.table
     device_cache_table = :ets.new(:ex_wapp_device_cache, [:set, :public, :compressed])
 
-    # Load existing data from file if available
-    case load_file(path) do
-      {:ok, data} ->
-        {base_data, signal_sessions, device_cache} = split_specialized_data(data)
-        :ets.insert(table, {:data, base_data})
-        SessionStore.replace(signal_store, signal_sessions)
-        :ets.insert(device_cache_table, {:snapshot, normalize_device_cache(device_cache)})
+    {base_data, signal_sessions, device_cache, initial_messages} =
+      case load_file(path) do
+        {:ok, data} ->
+          split_specialized_data(data)
 
-      {:error, :enoent} ->
-        :ets.insert(table, {:data, %{}})
-        :ets.insert(device_cache_table, {:snapshot, %{}})
+        {:error, :enoent} ->
+          {%{}, SessionStore.new(), %{}, %{}}
 
-      {:error, reason} ->
-        raise "ExWapp.Store.Ets failed to load #{path}: #{inspect(reason)}"
-    end
+        {:error, reason} ->
+          raise "ExWapp.Store.Ets failed to load #{path}: #{inspect(reason)}"
+      end
 
-    %__MODULE__{
+    :ets.insert(table, {:data, base_data})
+    SessionStore.replace(signal_store, signal_sessions)
+    :ets.insert(device_cache_table, {:snapshot, normalize_device_cache(device_cache)})
+
+    store = %__MODULE__{
       path: path,
       table: table,
       signal_table: signal_table,
-      device_cache_table: device_cache_table
+      device_cache_table: device_cache_table,
+      message_table: MessageTable.new(initial_messages)
     }
+
+    if map_size(initial_messages) > 0 do
+      :ok = persist_snapshot(store)
+    end
+
+    store
   end
 
   @doc """
@@ -124,13 +132,13 @@ defmodule ExWapp.Store.Ets do
   @impl true
   @spec persist(t(), ExWapp.Store.data()) :: :ok | {:error, term()}
   def persist(%__MODULE__{} = store, data) when is_map(data) do
-    {base_data, signal_sessions, device_cache} = split_specialized_data(data)
+    {base_data, signal_sessions, device_cache, messages} = split_specialized_data(data)
 
     with :ok <- put_base_data(store.table, base_data),
          :ok <- put_signal_sessions(store.signal_table, signal_sessions),
          :ok <- put_device_cache(store.device_cache_table, device_cache),
-         {:ok, blob} <- ExWapp.Store.Codec.encode(merged_snapshot(store)),
-         :ok <- File.write(store.path, blob) do
+         :ok <- put_initial_messages(store.message_table, messages),
+         :ok <- persist_snapshot(store) do
       :ok
     else
       {:error, reason} -> {:error, reason}
@@ -143,13 +151,14 @@ defmodule ExWapp.Store.Ets do
         path: path,
         table: table,
         signal_table: signal_table,
-        device_cache_table: device_cache_table
+        device_cache_table: device_cache_table,
+        message_table: message_table
       }) do
     :ets.insert(table, {:data, %{}})
     :ets.delete_all_objects(signal_table)
     :ets.insert(device_cache_table, {:snapshot, %{}})
+    MessageTable.clear(message_table)
 
-    # Delete file if it exists
     case File.rm(path) do
       :ok -> :ok
       {:error, :enoent} -> :ok
@@ -173,6 +182,77 @@ defmodule ExWapp.Store.Ets do
           [] -> default
         end
     end
+  end
+
+  @impl true
+  @spec stream_messages(t(), String.t(), keyword()) :: Enumerable.t()
+  def stream_messages(%__MODULE__{message_table: message_table}, jid, opts) do
+    MessageTable.stream(message_table, jid, opts)
+  end
+
+  @impl true
+  @spec upsert_messages(t(), String.t(), [map()]) :: :ok | {:error, term()}
+  def upsert_messages(%__MODULE__{} = store, jid, messages) do
+    with :ok <- MessageTable.upsert(store.message_table, jid, messages),
+         :ok <- persist_snapshot(store) do
+      :ok
+    end
+  end
+
+  @impl true
+  @spec find_message(t(), String.t(), String.t()) :: map() | nil
+  def find_message(%__MODULE__{message_table: message_table}, jid, message_id) do
+    MessageTable.find(message_table, jid, message_id)
+  end
+
+  @impl true
+  @spec find_message_by_id(t(), String.t()) :: {String.t(), map()} | nil
+  def find_message_by_id(%__MODULE__{message_table: message_table}, message_id) do
+    MessageTable.find_by_id(message_table, message_id)
+  end
+
+  @impl true
+  @spec update_message_status(t(), String.t(), String.t(), atom()) ::
+          :ok | {:error, term()}
+  def update_message_status(%__MODULE__{} = store, jid, message_id, status) do
+    with :ok <- MessageTable.update_status(store.message_table, jid, message_id, status),
+         :ok <- persist_snapshot(store) do
+      :ok
+    end
+  end
+
+  @impl true
+  @spec update_message_status_by_id(t(), String.t(), atom()) ::
+          :ok | {:error, term()}
+  def update_message_status_by_id(%__MODULE__{} = store, message_id, status) do
+    with :ok <- MessageTable.update_status_by_id(store.message_table, message_id, status),
+         :ok <- persist_snapshot(store) do
+      :ok
+    end
+  end
+
+  @impl true
+  @spec delete_messages(t(), String.t(), [String.t()]) :: :ok | {:error, term()}
+  def delete_messages(%__MODULE__{} = store, jid, message_ids) do
+    with :ok <- MessageTable.delete(store.message_table, jid, message_ids),
+         :ok <- persist_snapshot(store) do
+      :ok
+    end
+  end
+
+  @impl true
+  @spec delete_chat_messages(t(), String.t()) :: :ok | {:error, term()}
+  def delete_chat_messages(%__MODULE__{} = store, jid) do
+    with :ok <- MessageTable.delete_chat(store.message_table, jid),
+         :ok <- persist_snapshot(store) do
+      :ok
+    end
+  end
+
+  @impl true
+  @spec snapshot_messages(t()) :: %{optional(String.t()) => [map()]}
+  def snapshot_messages(%__MODULE__{message_table: message_table}) do
+    MessageTable.snapshot(message_table)
   end
 
   @spec load_signal_sessions(t()) :: SessionStore.t()
@@ -212,17 +292,21 @@ defmodule ExWapp.Store.Ets do
   end
 
   defp split_specialized_data(data) when is_map(data) do
+    {base_data, messages} = MessageTable.extract(data)
+
     {
-      Map.drop(data, [:signal_sessions, :device_cache]),
+      Map.drop(base_data, [:signal_sessions, :device_cache]),
       SessionStore.snapshot(Map.get(data, :signal_sessions, SessionStore.new())),
-      normalize_device_cache(Map.get(data, :device_cache, %{}))
+      normalize_device_cache(Map.get(data, :device_cache, %{})),
+      messages
     }
   end
 
   defp merged_snapshot(%__MODULE__{
          table: table,
          signal_table: signal_table,
-         device_cache_table: device_cache_table
+         device_cache_table: device_cache_table,
+         message_table: message_table
        }) do
     base_data =
       case :ets.lookup(table, :data) do
@@ -233,6 +317,23 @@ defmodule ExWapp.Store.Ets do
     base_data
     |> Map.put(:signal_sessions, SessionStore.snapshot(SessionStore.attach(signal_table)))
     |> Map.put(:device_cache, load_device_cache_snapshot(device_cache_table))
+    |> Map.put(:chat_messages, MessageTable.snapshot(message_table))
+  end
+
+  defp persist_snapshot(%__MODULE__{} = store) do
+    with {:ok, blob} <- ExWapp.Store.Codec.encode(merged_snapshot(store)),
+         :ok <- File.write(store.path, blob) do
+      :ok
+    end
+  end
+
+  defp put_initial_messages(message_table, messages) when is_map(messages) do
+    Enum.reduce_while(messages, :ok, fn {jid, chat_messages}, :ok ->
+      case MessageTable.upsert(message_table, jid, chat_messages) do
+        :ok -> {:cont, :ok}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
   end
 
   defp put_base_data(table, data) when is_map(data) do
