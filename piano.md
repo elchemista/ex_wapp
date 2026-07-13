@@ -95,15 +95,17 @@ Criteri:
 
 Estrarre in questo ordine:
 
-1. risoluzione dell'envelope e dei candidati sender;
-2. decrypt Signal e aggiornamento sessioni;
-3. decoding del contenuto;
-4. history/app-state/placeholder sync;
-5. costruzione receipt e retry;
-6. persistenza e pubblicazione eventi.
+- [x] `Inbound.Envelope`: risoluzione dell'envelope, identità locali e candidati sender.
+- [x] `Inbound.Decryptor`: decrypt Signal/sender-key e aggiornamento sessioni.
+- [x] `Inbound.Content`: classificazione del plaintext e decoding dei contenuti.
+- [x] `Inbound.Sync`: history, app-state keys e placeholder resend.
+- [x] `Inbound.Receipts`: costruzione delivery receipt, retry e resend request.
+- [x] `Inbound.Publisher` e `Inbound.Projection`: persistenza chat e pubblicazione eventi.
+- [ ] Eseguire suite, Credo e Dialyzer fuori da questo ambiente.
 
-`Message.Handler.Inbound` deve coordinare risultati normalizzati, non
-contenere tutti i dettagli di ciascuna fase.
+`Message.Handler.Inbound` è ora un orchestratore sottile: conserva il
+contratto del router, coordina i risultati normalizzati e delega gli effetti ai
+boundary dedicati.
 
 ## Fase 4 — Contratto inbound canonico
 
