@@ -18,18 +18,20 @@ defmodule ExWapp.Store.CodecTest do
       chats: %{
         "12025550123@s.whatsapp.net" => %Chat{
           jid: "12025550123@s.whatsapp.net",
-          name: "Alice",
-          messages: [
-            %{
-              id: "wamid-1",
-              from_me: false,
-              timestamp: 1_773_760_867,
-              text: "hello",
-              status: :received,
-              raw: %{binary: <<1, 2, 3, 4>>}
-            }
-          ]
+          name: "Alice"
         }
+      },
+      chat_messages: %{
+        "12025550123@s.whatsapp.net" => [
+          %{
+            id: "wamid-1",
+            from_me: false,
+            timestamp: 1_773_760_867,
+            text: "hello",
+            status: :received,
+            raw: %{binary: <<1, 2, 3, 4>>}
+          }
+        ]
       },
       contacts: %{
         "12025550123@s.whatsapp.net" => %Contact{
