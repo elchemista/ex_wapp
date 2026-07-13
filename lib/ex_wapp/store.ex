@@ -423,7 +423,8 @@ defmodule ExWapp.Store do
       store.__struct__.delete_messages(store, jid, message_ids)
     else
       ids = MapSet.new(message_ids)
-      messages = Enum.reject(fallback_messages_for(store, jid), &MapSet.member?(ids, &1.id))
+      messages =
+        Enum.reject(fallback_messages_for(store, jid), &MapSet.member?(ids, Map.get(&1, :id)))
       persist_fallback_messages(store, jid, messages)
     end
   end
