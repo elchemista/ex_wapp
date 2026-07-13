@@ -12,14 +12,19 @@ defmodule ExWapp.Message.Handler.Inbound.Content do
   alias ExWapp.Media.Ref
   alias ExWapp.Message.Content, as: MessageContent
   alias ExWapp.Message.Handler.Inbound.Decryptor
-  alias ExWapp.Message.Handler.Wire
+  alias ExWapp.Message.Handler.Wire.{ContentDecoder, Fields}
 
   @doc """
   Classifies decrypted plaintext and merges canonical plus legacy fields.
   """
   @spec decode_decrypted(Decryptor.success()) :: map()
   def decode_decrypted(decrypt_result) do
-    canonical = decode_plaintext(decrypt_result)
+    canonical =
+      decode_plaintext(decrypt_result.plaintext,
+        sender_key_distribution_count: decrypt_result.sender_key_distribution_count,
+        enc_type: Map.get(decrypt_result.payload, :enc_type, decrypt_result.enc_type),
+        sender_jid: decrypt_result.sender_jid
+      )
     log_decrypted_message(canonical, decrypt_result)
 
     decrypt_result.message_data
@@ -41,24 +46,24 @@ defmodule ExWapp.Message.Handler.Inbound.Content do
     |> Map.put(:content, canonical)
   end
 
-  @spec decode_plaintext(Decryptor.success()) :: MessageContent.t()
-  defp decode_plaintext(decrypt_result) do
-    plaintext = decrypt_result.plaintext
+  @doc """
+  Decodes one plaintext protobuf payload to canonical inbound content.
+  """
+  @spec decode_plaintext(binary(), keyword()) :: MessageContent.t()
+  def decode_plaintext(plaintext, opts \\ []) when is_binary(plaintext) and is_list(opts) do
+    sender_key_distribution_count = Keyword.get(opts, :sender_key_distribution_count, 0)
+    enc_type = Keyword.get(opts, :enc_type, "msg")
+    sender_jid = Keyword.get(opts, :sender_jid, "")
 
     {content_type, decoded_text} =
-      Wire.classify_decrypted_content(
-        plaintext,
-        decrypt_result.sender_key_distribution_count
-      )
+      ContentDecoder.classify_decrypted_content(plaintext, sender_key_distribution_count)
 
-    fallback_text =
-      decoded_text ||
-        "(encrypted: #{Map.get(decrypt_result.payload, :enc_type, decrypt_result.enc_type)})"
+    fallback_text = decoded_text || "(encrypted: #{enc_type})"
 
     diagnostics = %{
-      enc_type: Map.get(decrypt_result.payload, :enc_type, decrypt_result.enc_type),
+      enc_type: enc_type,
       plaintext_size: byte_size(plaintext),
-      sender_jid: decrypt_result.sender_jid
+      sender_jid: sender_jid
     }
 
     case content_type do
@@ -71,7 +76,7 @@ defmodule ExWapp.Message.Handler.Inbound.Content do
 
       :user_message ->
         %{}
-        |> Wire.apply_media_from_plaintext(plaintext)
+        |> ContentDecoder.apply_media_from_plaintext(plaintext)
         |> canonical_user_content(decoded_text, fallback_text, diagnostics)
     end
   end
@@ -174,6 +179,6 @@ defmodule ExWapp.Message.Handler.Inbound.Content do
 
   @spec device_sent_message_payload?(binary()) :: boolean()
   defp device_sent_message_payload?(payload) do
-    match?({:ok, _wrapped}, Wire.find_length_delimited_field(payload, 31))
+    match?({:ok, _wrapped}, Fields.find_length_delimited(payload, 31))
   end
 end
