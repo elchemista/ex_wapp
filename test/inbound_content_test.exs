@@ -34,6 +34,8 @@ defmodule ExWapp.Message.Handler.Inbound.ContentTest do
     assert decoded.text == "hello from inbound"
     assert decoded.decrypt_status == :ok
     assert decoded.message_content_type == :user_message
+    assert decoded.content.kind == :text
+    assert decoded.content.text == "hello from inbound"
     refute decoded.from_me
   end
 
@@ -58,6 +60,8 @@ defmodule ExWapp.Message.Handler.Inbound.ContentTest do
     assert decoded.decrypt_status == :ok
     assert decoded.message_content_type == :protocol
     assert decoded.protocol_payload == plaintext
+    assert decoded.content.kind == :protocol
+    assert decoded.content.protocol_payload == plaintext
     refute decoded.from_me
   end
 end
