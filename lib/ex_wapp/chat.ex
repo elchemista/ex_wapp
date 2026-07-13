@@ -26,11 +26,8 @@ defmodule ExWapp.Chat do
 
   alias ExWapp.{Binary, JID, Store}
 
-  @max_messages_per_chat 1_000
-
   @type target :: pid() | struct()
   @type message_status :: :pending | :sent | :received | :delivered | :read | :failed
-  @type message_limit :: non_neg_integer() | :all
 
   @type message :: %{
           required(:id) => String.t(),
@@ -55,8 +52,7 @@ defmodule ExWapp.Chat do
           pinned: boolean(),
           muted_until: integer() | nil,
           archived: boolean(),
-          is_group: boolean(),
-          messages: [message()]
+          is_group: boolean()
         }
 
   defstruct [
@@ -67,8 +63,7 @@ defmodule ExWapp.Chat do
     pinned: false,
     muted_until: nil,
     archived: false,
-    is_group: false,
-    messages: []
+    is_group: false
   ]
 
   @doc """
@@ -81,11 +76,10 @@ defmodule ExWapp.Chat do
     store = resolve_store(target)
 
     if store do
-      data = Store.load!(store)
-
-      data
-      |> Map.get(:chats, %{})
+      store
+      |> Store.get(:chats, %{})
       |> Map.values()
+      |> Enum.map(&normalize_stored_chat(store, &1))
       |> Enum.sort_by(&(&1.last_message_timestamp || 0), :desc)
     else
       []
@@ -111,11 +105,9 @@ defmodule ExWapp.Chat do
     store = resolve_store(target)
 
     if store do
-      data = Store.load!(store)
-
-      case get_in(data, [:chats, jid_str]) do
+      case Store.get(store, :chats, %{}) |> Map.get(jid_str) do
         nil -> {:error, :not_found}
-        chat -> {:ok, chat}
+        chat -> {:ok, normalize_stored_chat(store, chat)}
       end
     else
       {:error, :not_found}
@@ -127,7 +119,6 @@ defmodule ExWapp.Chat do
   """
   @spec get_or_create(target(), String.t() | JID.t(), keyword()) :: chat()
   def get_or_create(target, jid, opts \\ []) do
-    # Normalize JID to string
     jid_str = normalize_jid(jid)
 
     case get(target, jid_str) do
@@ -150,73 +141,89 @@ defmodule ExWapp.Chat do
       jid: jid,
       name: Keyword.get(opts, :name),
       is_group: JID.group?(jid),
-      unread_count: 0,
-      messages: []
+      unread_count: 0
     }
   end
 
   @doc """
-  Gets locally retained messages for a chat, newest first.
+  Gets a materialized page of locally retained messages, newest first.
 
-  Use `:offset` and an integer `:limit` for pagination. Passing `limit: :all`
-  returns every message currently retained for the chat after the offset.
-  ExWapp keeps at most 1,000 messages per chat in its local store.
+  Message payloads live in the configured message store rather than in the
+  chat struct. Use stream_messages/3 for an unbounded, lazy traversal.
   """
   @spec messages(target(), String.t() | JID.t(), keyword()) :: [message()]
   def messages(target, jid, opts \\ []) do
-    limit = Keyword.get(opts, :limit, 50)
-    offset = Keyword.get(opts, :offset, 0)
-
-    case get(target, jid) do
-      {:ok, chat} ->
-        chat.messages
-        |> Enum.drop(offset)
-        |> take_messages(limit)
-
-      {:error, _} ->
+    case resolve_store(target) do
+      nil ->
         []
+
+      store ->
+        opts = opts |> Keyword.put_new(:order, :newest_first) |> Keyword.put_new(:limit, 50)
+        Store.list_messages(store, normalize_jid(jid), opts)
     end
   end
 
   @doc """
-  Returns every message currently retained for a chat, newest first.
+  Builds a lazy stream over locally retained messages.
 
-  This reads the local store; it does not request older history from WhatsApp.
+  The default order is oldest first so a wrapper can persist history in
+  chronological order. The stream reads one indexed record at a time and does
+  not first load the complete chat history.
+
+  This is local history only; it does not request older messages from WhatsApp.
   """
-  @spec all_messages(target(), String.t() | JID.t()) :: [message()]
-  def all_messages(target, jid), do: messages(target, jid, limit: :all)
+  @spec stream_messages(target(), String.t() | JID.t(), keyword()) :: Enumerable.t()
+  def stream_messages(target, jid, opts \\ []) do
+    case resolve_store(target) do
+      nil ->
+        Stream.iterate(nil, fn _ -> nil end) |> Stream.take(0)
+
+      store ->
+        opts = opts |> Keyword.put_new(:order, :oldest_first) |> Keyword.put_new(:limit, :all)
+        Store.stream_messages(store, normalize_jid(jid), opts)
+    end
+  end
+
+  @doc """
+  Returns a lazy stream over every locally retained message, oldest first.
+  """
+  @spec all_messages(target(), String.t() | JID.t(), keyword()) :: Enumerable.t()
+  def all_messages(target, jid, opts \\ []), do: stream_messages(target, jid, opts)
 
   @doc """
   Merges a batch of messages into a chat, deduplicating by message ID.
   """
   @spec merge_messages(target(), String.t() | JID.t(), [message()]) :: :ok
   def merge_messages(target, jid, messages) when is_list(messages) do
-    chat = get_or_create(target, jid)
+    jid_str = normalize_jid(jid)
+    chat = get_or_create(target, jid_str)
 
-    normalized_new_messages =
+    normalized_messages =
       messages
       |> Enum.map(&normalize_merged_message/1)
       |> Enum.reject(&is_nil/1)
 
-    merged_messages =
-      (chat.messages ++ normalized_new_messages)
-      |> Enum.uniq_by(&message_identity/1)
-      |> Enum.sort_by(&message_sort_key/1, :desc)
-      |> Enum.take(@max_messages_per_chat)
+    case resolve_store(target) do
+      nil ->
+        :ok
 
-    updated_chat =
-      case latest_message_timestamp(merged_messages) do
-        nil ->
-          %{chat | messages: merged_messages}
+      store ->
+        :ok = Store.upsert_messages(store, jid_str, normalized_messages)
 
-        latest when is_integer(latest) ->
-          current =
-            if(is_integer(chat.last_message_timestamp), do: chat.last_message_timestamp, else: 0)
+        updated_chat =
+          case latest_message_timestamp(normalized_messages) do
+            nil ->
+              chat
 
-          %{chat | messages: merged_messages, last_message_timestamp: max(current, latest)}
-      end
+            latest ->
+              current =
+                if(is_integer(chat.last_message_timestamp), do: chat.last_message_timestamp, else: 0)
 
-    save_chat(target, updated_chat)
+              %{chat | last_message_timestamp: max(current, latest)}
+          end
+
+        save_chat(target, updated_chat)
+    end
   end
 
   def merge_messages(_target, _jid, _messages), do: :ok
@@ -226,16 +233,24 @@ defmodule ExWapp.Chat do
   """
   @spec add_message(target(), String.t() | JID.t(), message()) :: :ok
   def add_message(target, jid, message) do
-    chat = get_or_create(target, jid)
+    jid_str = normalize_jid(jid)
+    chat = get_or_create(target, jid_str)
 
-    updated_chat = %{
-      chat
-      | messages: [message | chat.messages] |> Enum.take(@max_messages_per_chat),
-        last_message_timestamp: message.timestamp,
-        unread_count: if(message.from_me, do: chat.unread_count, else: chat.unread_count + 1)
-    }
+    case resolve_store(target) do
+      nil ->
+        :ok
 
-    save_chat(target, updated_chat)
+      store ->
+        :ok = Store.upsert_messages(store, jid_str, [message])
+
+        updated_chat = %{
+          chat
+          | last_message_timestamp: message.timestamp,
+            unread_count: if(message.from_me, do: chat.unread_count, else: chat.unread_count + 1)
+        }
+
+        save_chat(target, updated_chat)
+    end
   end
 
   @doc """
@@ -258,13 +273,9 @@ defmodule ExWapp.Chat do
   """
   @spec update_message_status(target(), String.t() | JID.t(), String.t(), message_status()) :: :ok
   def update_message_status(target, jid, message_id, status) do
-    case get(target, jid) do
-      {:ok, chat} ->
-        updated_messages = replace_message_status(chat.messages, message_id, status)
-        save_chat(target, %{chat | messages: updated_messages})
-
-      {:error, _} ->
-        :ok
+    case resolve_store(target) do
+      nil -> :ok
+      store -> Store.update_message_status(store, normalize_jid(jid), message_id, status)
     end
   end
 
@@ -275,9 +286,39 @@ defmodule ExWapp.Chat do
   """
   @spec update_message_status_by_id(target(), String.t(), message_status()) :: :ok
   def update_message_status_by_id(target, message_id, status) when is_binary(message_id) do
-    persist_status_by_id(resolve_store(target), message_id, status)
+    case resolve_store(target) do
+      nil -> :ok
+      store -> Store.update_message_status_by_id(store, message_id, status)
+    end
+  end
 
-    :ok
+  @doc "Finds one locally stored message in a chat."
+  @spec find_message(target(), String.t() | JID.t(), String.t()) :: message() | nil
+  def find_message(target, jid, message_id) do
+    case resolve_store(target) do
+      nil -> nil
+      store -> Store.find_message(store, normalize_jid(jid), message_id)
+    end
+  end
+
+  @doc "Finds one locally stored message by ID across all chats."
+  @spec find_message_by_id(target(), String.t()) :: {String.t(), message()} | nil
+  def find_message_by_id(target, message_id) do
+    case resolve_store(target) do
+      nil -> nil
+      store -> Store.find_message_by_id(store, message_id)
+    end
+  end
+
+  @doc """
+  Deletes selected local messages after they have been persisted elsewhere.
+  """
+  @spec delete_messages(target(), String.t() | JID.t(), [String.t()]) :: :ok
+  def delete_messages(target, jid, message_ids) when is_list(message_ids) do
+    case resolve_store(target) do
+      nil -> :ok
+      store -> Store.delete_messages(store, normalize_jid(jid), message_ids)
+    end
   end
 
   @doc """
@@ -286,12 +327,17 @@ defmodule ExWapp.Chat do
   @spec delete(target(), String.t()) :: :ok
   def delete(target, jid) do
     store = resolve_store(target)
+    jid_str = normalize_jid(jid)
 
     if store do
       data = Store.load!(store)
       chats = Map.get(data, :chats, %{})
-      updated_data = Map.put(data, :chats, Map.delete(chats, jid))
-      Store.persist(store, updated_data)
+      updated_data = Map.put(data, :chats, Map.delete(chats, jid_str))
+
+      with :ok <- Store.delete_chat_messages(store, jid_str),
+           :ok <- Store.persist(store, updated_data) do
+        :ok
+      end
     end
   end
 
@@ -618,47 +664,58 @@ defmodule ExWapp.Chat do
   defp normalize_raw_payload(value) when is_map(value), do: value
   defp normalize_raw_payload(_), do: nil
 
-  defp message_identity(%{id: id}) when is_binary(id), do: {:id, id}
-
-  defp message_identity(message),
-    do: {:fallback, message_sort_key(message), Map.get(message, :text)}
-
-  defp message_sort_key(%{timestamp: timestamp, id: id}) do
-    {normalized_timestamp(timestamp), normalize_sort_id(id)}
-  end
-
-  defp message_sort_key(_), do: {0, ""}
-
-  defp normalize_sort_id(value) when is_binary(value), do: value
-  defp normalize_sort_id(_), do: ""
-
-  @spec take_messages([message()], message_limit()) :: [message()]
-  defp take_messages(messages, :all), do: messages
-
-  defp take_messages(messages, limit) when is_integer(limit) and limit >= 0,
-    do: Enum.take(messages, limit)
-
-  defp take_messages(messages, _invalid_limit), do: Enum.take(messages, 50)
-
   defp latest_message_timestamp(messages) when is_list(messages) do
-    Enum.find_value(messages, fn
-      %{timestamp: timestamp} when is_integer(timestamp) and timestamp >= 0 -> timestamp
-      _ -> nil
+    Enum.reduce(messages, nil, fn
+      %{timestamp: timestamp}, nil when is_integer(timestamp) and timestamp >= 0 -> timestamp
+      %{timestamp: timestamp}, current when is_integer(timestamp) and timestamp >= 0 ->
+        max(current, timestamp)
+
+      _message, current ->
+        current
     end)
   end
 
   defp save_chat(target, chat) do
-    store = resolve_store(target)
+    case resolve_store(target) do
+      nil -> :ok
+      store -> save_chat_to_store(store, strip_legacy_messages(chat))
+    end
+  end
 
-    if store do
-      data = Store.load!(store)
-      chats = Map.get(data, :chats, %{})
-      updated_data = Map.put(data, :chats, Map.put(chats, chat.jid, chat))
-      Store.persist(store, updated_data)
+  defp save_chat_to_store(store, chat) do
+    data = Store.load!(store)
+    chats = Map.get(data, :chats, %{})
+    updated_data = Map.put(data, :chats, Map.put(chats, chat.jid, chat))
+    Store.persist(store, updated_data)
+  end
+
+  defp normalize_stored_chat(store, chat) when is_map(chat) do
+    legacy_messages = Map.get(chat, :messages, [])
+    clean_chat = strip_legacy_messages(chat)
+
+    if is_list(legacy_messages) and legacy_messages != [] do
+      normalized_messages =
+        legacy_messages
+        |> Enum.map(&normalize_merged_message/1)
+        |> Enum.reject(&is_nil/1)
+
+      :ok = Store.upsert_messages(store, clean_chat.jid, normalized_messages)
+      :ok = save_chat_to_store(store, clean_chat)
     end
 
-    :ok
+    clean_chat
   end
+
+  defp strip_legacy_messages(%{__struct__: __MODULE__} = chat) do
+    attrs =
+      chat
+      |> Map.delete(:__struct__)
+      |> Map.delete(:messages)
+
+    struct(__MODULE__, attrs)
+  end
+
+  defp strip_legacy_messages(chat) when is_map(chat), do: Map.delete(chat, :messages)
 
   defp update_chat(target, jid, update_fn) do
     case get(target, jid) do
@@ -670,24 +727,4 @@ defmodule ExWapp.Chat do
     end
   end
 
-  defp persist_status_by_id(nil, _message_id, _status), do: :ok
-
-  defp persist_status_by_id(store, message_id, status) do
-    data = Store.load!(store)
-    chats = Map.get(data, :chats, %{})
-
-    updated_chats =
-      Enum.into(chats, %{}, fn {jid, chat} ->
-        updated_messages = replace_message_status(chat.messages, message_id, status)
-        {jid, %{chat | messages: updated_messages}}
-      end)
-
-    Store.persist(store, Map.put(data, :chats, updated_chats))
-  end
-
-  defp replace_message_status(messages, message_id, status) when is_list(messages) do
-    Enum.map(messages, fn msg ->
-      if msg.id == message_id, do: %{msg | status: status}, else: msg
-    end)
-  end
 end
