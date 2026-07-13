@@ -12,7 +12,7 @@ defmodule ExWapp.Message.Handler.Inbound.Envelope do
   alias ExWapp.{MapPath, Store}
   alias ExWapp.Message.Handler.Common
   alias ExWapp.Session.{Account, DeviceCache, JIDUtils}
-  alias ExWapp.Signal.{SessionStore}
+  alias ExWapp.Signal.SessionStore
 
   @type payload_candidate :: %{
           optional(:enc_type) => term(),
