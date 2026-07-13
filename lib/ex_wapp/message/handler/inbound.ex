@@ -7,7 +7,7 @@ defmodule ExWapp.Message.Handler.Inbound do
   alias ExWapp.{Chat, JID, Store}
   alias ExWapp.Binary.Node
   alias ExWapp.Message.Handler.{Common, Wire}
-  alias ExWapp.Message.Handler.Inbound.{Decryptor, Envelope}
+  alias ExWapp.Message.Handler.Inbound.{Content, Decryptor, Envelope}
   alias ExWapp.Proto.{HistorySync, SyncAction}
   alias ExWapp.Session.DeviceCache
   alias ExWapp.Signal.SessionStore
@@ -118,7 +118,7 @@ defmodule ExWapp.Message.Handler.Inbound do
        ) do
     case Decryptor.decrypt(message_data, state, from, participant, attrs) do
       {:ok, decrypt_result, updated_state} ->
-        decode_decrypted_message(decrypt_result, updated_state)
+        {Content.decode_decrypted(decrypt_result), updated_state}
 
       {:error, updated_message_data, updated_state} ->
         {updated_message_data, updated_state}
@@ -127,78 +127,6 @@ defmodule ExWapp.Message.Handler.Inbound do
 
   defp maybe_decrypt_message(message_data, state, _from, _participant, _attrs),
     do: {message_data, state}
-
-  @spec decode_decrypted_message(Decryptor.success(), map()) :: {map(), map()}
-  defp decode_decrypted_message(decrypt_result, state) do
-    plaintext = decrypt_result.plaintext
-    payload = decrypt_result.payload
-
-    {content_type, decoded_text} =
-      Wire.classify_decrypted_content(
-        plaintext,
-        decrypt_result.sender_key_distribution_count
-      )
-
-    text = decoded_text || "(encrypted: #{Map.get(payload, :enc_type, decrypt_result.enc_type)})"
-
-    log_decrypted_message(
-      content_type,
-      decoded_text,
-      decrypt_result.sender_jid,
-      payload,
-      plaintext,
-      text
-    )
-
-    decoded_message_data =
-      build_decoded_message_data(
-        decrypt_result.message_data,
-        text,
-        content_type,
-        plaintext
-      )
-
-    {decoded_message_data, state}
-  end
-
-  defp log_decrypted_message(:protocol, _decoded_text, _sender_jid, payload, plaintext, _text) do
-    Logger.debug(
-      "[DECRYPT] Protocol message (#{Map.get(payload, :enc_type)}), plaintext_size=#{byte_size(plaintext)} — skipping chat display"
-    )
-  end
-
-  defp log_decrypted_message(_content_type, decoded_text, sender_jid, payload, plaintext, text) do
-    if is_nil(decoded_text) do
-      preview_size = min(byte_size(plaintext), 24)
-      preview = Base.encode16(binary_part(plaintext, 0, preview_size), case: :lower)
-
-      Logger.warning(
-        "[DECRYPT] Decrypted payload but could not extract text. sender_jid=#{sender_jid} enc_type=#{Map.get(payload, :enc_type)} plaintext_size=#{byte_size(plaintext)} preview=#{preview}"
-      )
-    end
-
-    Logger.debug(
-      "[DECRYPT] Success! sender_jid=#{sender_jid} enc_type=#{Map.get(payload, :enc_type)} plaintext_size=#{byte_size(plaintext)} text=#{inspect(String.slice(text || "", 0, 50))}"
-    )
-  end
-
-  defp build_decoded_message_data(message_data, text, :protocol, plaintext) do
-    message_data
-    |> Map.put(:text, text)
-    |> Map.put(:decrypt_status, :ok)
-    |> Map.put(:message_content_type, :protocol)
-    |> Map.put(:protocol_payload, plaintext)
-    |> Map.put(:from_me, device_sent_message_payload?(plaintext))
-  end
-
-  defp build_decoded_message_data(message_data, text, content_type, plaintext) do
-    message_data
-    |> Map.put(:text, text)
-    |> Map.put(:decrypt_status, :ok)
-    |> Map.put(:message_content_type, content_type)
-    |> Map.put(:from_me, device_sent_message_payload?(plaintext))
-    |> Wire.apply_media_from_plaintext(plaintext)
-  end
 
   defp transient_encrypted_placeholder?(%{encrypted: true, decrypt_status: {:error, _}}), do: true
   defp transient_encrypted_placeholder?(%{placeholder_unavailable: true}), do: true
@@ -214,10 +142,6 @@ defmodule ExWapp.Message.Handler.Inbound do
 
   defp maybe_log_suppressed_message(_is_protocol, _suppress_message?, _from, _id, _message_data),
     do: :ok
-
-  defp device_sent_message_payload?(payload) when is_binary(payload) do
-    match?({:ok, _wrapped}, Wire.find_length_delimited_field(payload, 31))
-  end
 
   defp maybe_ingest_history_sync(
          %{message_content_type: :protocol, protocol_payload: payload},
