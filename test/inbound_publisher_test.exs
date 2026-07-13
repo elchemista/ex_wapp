@@ -7,7 +7,6 @@ defmodule ExWapp.Message.Handler.Inbound.PublisherTest do
 
   test "persists and publishes a normalized user message" do
     store = Memory.new()
-    on_exit(fn -> Memory.stop(store) end)
 
     envelope = %{
       id: "message-1",
