@@ -73,7 +73,7 @@ defmodule ExWapp.Session.Outbound.Group do
           [term()],
           map(),
           term(),
-          non_neg_integer(),
+          non_neg_integer() | nil,
           String.t(),
           String.t(),
           term(),
