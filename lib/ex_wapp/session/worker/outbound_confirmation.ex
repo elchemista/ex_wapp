@@ -135,9 +135,7 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
     end
   end
 
-  # ============================================================================
-  # Internal helpers
-  # ============================================================================
+  # Silent-drop fallback helpers
 
   defp start_silent_drop_fallback(
          state,
