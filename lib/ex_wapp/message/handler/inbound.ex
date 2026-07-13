@@ -1,5 +1,13 @@
 defmodule ExWapp.Message.Handler.Inbound do
-  @moduledoc false
+  @moduledoc """
+  Coordinates the inbound message pipeline after a `<message>` node reaches a
+  session.
+
+  Sender resolution, decryption, canonical content decoding, synchronization,
+  persistence, publication, and receipt generation are delegated to focused
+  modules. Wrappers therefore receive normalized `ExWapp.Message.Content`
+  values instead of interpreting wire payloads themselves.
+  """
 
   require Logger
 
@@ -17,7 +25,7 @@ defmodule ExWapp.Message.Handler.Inbound do
 
   alias ExWapp.Session.DeviceCache
 
-  @doc false
+  @doc "Processes an inbound message node and returns updated state plus protocol actions."
   @spec handle_message(Node.t(), pid(), map()) :: {:ok, map(), [term()]}
   def handle_message(%Node{attrs: attrs, content: content}, session, state) do
     from =
@@ -62,7 +70,7 @@ defmodule ExWapp.Message.Handler.Inbound do
     {:ok, updated_state, actions}
   end
 
-  @doc false
+  @doc "Records device JIDs advertised by a notification in the session cache."
   @spec persist_notification_devices(map(), term()) :: :ok
   def persist_notification_devices(state, content) when is_map(state) and is_list(content) do
     store = Map.get(state, :store)
