@@ -5,7 +5,7 @@ defmodule ExWapp.Session.MessageNode do
 
   alias ExWapp.Binary
 
-  @doc false
+  @doc "Converts an internal Signal encryption type to its WhatsApp wire value."
   @spec enc_type_to_wire(atom() | String.t()) :: String.t()
   def enc_type_to_wire(:prekey), do: "pkmsg"
   def enc_type_to_wire(:whisper), do: "msg"
@@ -14,7 +14,7 @@ defmodule ExWapp.Session.MessageNode do
   def enc_type_to_wire("msg"), do: "msg"
   def enc_type_to_wire(_), do: "msg"
 
-  @doc false
+  @doc "Builds a participant node containing one encrypted payload."
   @spec build_participant_encrypted_node(String.t(), binary(), atom() | String.t()) ::
           Binary.Node.t()
   def build_participant_encrypted_node(jid, ciphertext, enc_type) do
@@ -34,7 +34,7 @@ defmodule ExWapp.Session.MessageNode do
     }
   end
 
-  @doc false
+  @doc "Extracts non-empty participant JIDs from encrypted participant nodes."
   @spec extract_participant_jids(term()) :: [String.t()]
   def extract_participant_jids(participant_nodes) when is_list(participant_nodes) do
     participant_nodes
@@ -47,7 +47,7 @@ defmodule ExWapp.Session.MessageNode do
 
   def extract_participant_jids(_), do: []
 
-  @doc false
+  @doc "Generates WhatsApp's version 2 participant hash for a recipient list."
   @spec generate_participant_hash_v2(list()) :: String.t() | nil
   def generate_participant_hash_v2([]), do: nil
 
@@ -118,7 +118,7 @@ defmodule ExWapp.Session.MessageNode do
     |> append_additional_nodes(Keyword.get(opts, :additional_message_nodes, []))
   end
 
-  @doc false
+  @doc "Adds a message attribute only when its value is present."
   @spec maybe_put_message_attr(map(), String.t(), term()) :: map()
   def maybe_put_message_attr(attrs, _key, nil), do: attrs
   def maybe_put_message_attr(attrs, key, value), do: Map.put(attrs, key, value)
