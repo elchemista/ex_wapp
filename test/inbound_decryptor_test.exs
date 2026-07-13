@@ -28,7 +28,6 @@ defmodule ExWapp.Message.Handler.Inbound.DecryptorTest do
 
   test "reports missing sender candidates before attempting Signal decrypt" do
     store = Memory.new()
-    on_exit(fn -> Memory.stop(store) end)
 
     message_data = %{
       encrypted: true,
@@ -46,7 +45,6 @@ defmodule ExWapp.Message.Handler.Inbound.DecryptorTest do
 
   test "reports missing ciphertext candidates before attempting Signal decrypt" do
     store = Memory.new()
-    on_exit(fn -> Memory.stop(store) end)
 
     message_data = %{
       encrypted: true,
