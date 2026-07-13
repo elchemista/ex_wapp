@@ -62,4 +62,57 @@ defmodule ExWapp.Session.Outbound.PrekeysTest do
              %{}
            ) == {:error, :no_sessions_created}
   end
+
+  test "falls back to a direct recipient fetch when the batch request fails" do
+    recipient = "15550001111@s.whatsapp.net"
+    signal_sessions = SessionStore.new()
+
+    fetch_many = fn [^recipient], ^signal_sessions ->
+      {:error, :batch_failed}
+    end
+
+    fetch_one = fn ^recipient, ^signal_sessions ->
+      {:ok, signal_sessions, %{recipient => %{registration_id: 42}}}
+    end
+
+    assert {^signal_sessions, bundles} =
+             Prekeys.fetch_direct(
+               [recipient],
+               signal_sessions,
+               recipient,
+               fetch_many,
+               fetch_one
+             )
+
+    assert Map.has_key?(bundles, recipient)
+  end
+
+  test "retries only group devices missing from the batch response" do
+    returned = "15550001111:5@s.whatsapp.net"
+    missing = "15550001111:7@s.whatsapp.net"
+    signal_sessions = SessionStore.new()
+    caller = self()
+
+    fetch_many = fn [^returned, ^missing], ^signal_sessions ->
+      {:ok, signal_sessions, %{returned => %{registration_id: 42}}}
+    end
+
+    fetch_one = fn target, ^signal_sessions ->
+      send(caller, {:fetched_prekey, target})
+      {:ok, signal_sessions, %{target => %{registration_id: 43}}}
+    end
+
+    assert {^signal_sessions, bundles} =
+             Prekeys.fetch_group(
+               [returned, missing],
+               signal_sessions,
+               "group",
+               fetch_many,
+               fetch_one
+             )
+
+    assert_receive {:fetched_prekey, ^missing}
+    refute_receive {:fetched_prekey, ^returned}
+    assert Map.keys(bundles) |> Enum.sort() == Enum.sort([returned, missing])
+  end
 end
