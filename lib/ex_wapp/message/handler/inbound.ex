@@ -38,6 +38,7 @@ defmodule ExWapp.Message.Handler.Inbound do
 
     message_data = Wire.extract_message_content(content, type)
     {message_data, state} = maybe_decrypt_message(message_data, state, from, participant, attrs)
+    message_data = Content.normalize(message_data)
     state = Sync.ingest(message_data, session, state, from, id)
     from_me = Envelope.from_me?(attrs, from, state, message_data)
 
