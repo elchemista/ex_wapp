@@ -56,6 +56,24 @@ defmodule ExWapp.ClientApiTest do
 
     @impl true
     def get_chat(_client, jid), do: {:ok, %ExWapp.Chat{jid: jid}}
+
+    @impl true
+    def get_messages(client, jid, opts) do
+      send(client.metadata.test_pid, {:adapter_get_messages, jid, opts})
+
+      {:ok,
+       [
+         %{
+           id: "m1",
+           from_me: false,
+           timestamp: 1,
+           text: "stored",
+           status: :received,
+           participant: nil,
+           raw: nil
+         }
+       ]}
+    end
   end
 
   defmodule TestEvents do
@@ -157,6 +175,17 @@ defmodule ExWapp.ClientApiTest do
     assert {:ok, [%ExWapp.Chat{}]} = ExWapp.list_chats(client)
     assert {:ok, [%ExWapp.Chat{is_group: true}]} = ExWapp.list_groups(client)
     assert {:ok, %ExWapp.Chat{jid: "123@g.us"}} = ExWapp.get_chat(client, "123@g.us")
+  end
+
+  test "message history APIs delegate through the high-level transport" do
+    client = new_client()
+    jid = "15550001111@s.whatsapp.net"
+
+    assert {:ok, [%{id: "m1"}]} = ExWapp.get_messages(client, jid, limit: 10, offset: 5)
+    assert_receive {:adapter_get_messages, ^jid, [limit: 10, offset: 5]}
+
+    assert {:ok, [%{id: "m1"}]} = ExWapp.all_messages(client, jid)
+    assert_receive {:adapter_get_messages, ^jid, [limit: :all]}
   end
 
   test "send_image/4 and send_audio/4 build high-level media messages" do
