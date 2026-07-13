@@ -179,9 +179,7 @@ defmodule ExWapp.Session.Worker do
           stats: map()
         }
 
-  # ============================================================================
-  # Public API
-  # ============================================================================
+  # Session API
 
   @doc """
   Starts the session process.
@@ -404,9 +402,7 @@ defmodule ExWapp.Session.Worker do
     )
   end
 
-  # ============================================================================
-  # GenServer Callbacks
-  # ============================================================================
+  # GenServer lifecycle
 
   @impl true
   def init(opts) do
@@ -1164,9 +1160,7 @@ defmodule ExWapp.Session.Worker do
     :ok
   end
 
-  # ============================================================================
-  # Connection Management
-  # ============================================================================
+  # Establishing and closing connections
 
   defp do_connect(%__MODULE__{status: status} = state)
        when status not in [:idle, :disconnected] do
@@ -1335,9 +1329,7 @@ defmodule ExWapp.Session.Worker do
     end
   end
 
-  # ============================================================================
-  # Reconnection with Exponential Backoff
-  # ============================================================================
+  # Reconnect scheduling and backoff
 
   defp schedule_connect(state, delay_ms) do
     Logger.debug("[SESSION] schedule_connect with delay=#{delay_ms}ms")
@@ -1394,9 +1386,7 @@ defmodule ExWapp.Session.Worker do
     end
   end
 
-  # ============================================================================
-  # Health Monitoring
-  # ============================================================================
+  # Periodic health checks
 
   defp schedule_health_check(state) do
     interval_ms = Config.get(state.runtime_cfg, [:health, :check_interval_ms], 30_000)
@@ -1456,9 +1446,7 @@ defmodule ExWapp.Session.Worker do
     end
   end
 
-  # ============================================================================
-  # Connection Event Handling
-  # ============================================================================
+  # Transport and authentication events
 
   defp handle_connection_event({:noise, :handshake_started}, state) do
     %{
@@ -1615,9 +1603,7 @@ defmodule ExWapp.Session.Worker do
     end
   end
 
-  # ============================================================================
-  # Message Sending
-  # ============================================================================
+  # Outbound message dispatch
 
   # Worker function - runs in a separate process so it can wait for IQ responses
   defp do_send_text_worker(session_pid, state, jid, text, opts \\ []) do
@@ -1864,9 +1850,7 @@ defmodule ExWapp.Session.Worker do
     end)
   end
 
-  # ============================================================================
-  # QR Subscriber Management
-  # ============================================================================
+  # QR subscriber delivery
 
   defp notify_qr(state, {:error, _} = event) do
     Subscribers.notify_qr(state, event, fn ->
@@ -1890,9 +1874,7 @@ defmodule ExWapp.Session.Worker do
 
   defp vext_managed_runtime?(_state), do: false
 
-  # ============================================================================
-  # Message Subscriber Management
-  # ============================================================================
+  # Message subscriber delivery
 
   defp notify_message_subscribers(state, jid, message),
     do: Subscribers.notify_message_subscribers(state, jid, message)
@@ -1900,9 +1882,7 @@ defmodule ExWapp.Session.Worker do
   defp remove_message_subscriber(state, ref),
     do: Subscribers.remove_message_subscriber(state, ref)
 
-  # ============================================================================
-  # Helpers
-  # ============================================================================
+  # Session state helpers
 
   defp load_persisted_signal_sessions(store) do
     store
@@ -2489,9 +2469,7 @@ defmodule ExWapp.Session.Worker do
 
   defp maybe_broadcast_pubsub_error(_event, _measurements, _extra_metadata, _state), do: :ok
 
-  # ============================================================================
-  # App State Sync
-  # ============================================================================
+  # Initial app-state synchronization
 
   defp maybe_schedule_initial_app_state_sync(state) do
     if initial_app_state_sync_enabled?(state) and has_app_state_keys?(state.store) do
