@@ -250,8 +250,10 @@ defmodule ExWapp.Client.API do
   Returns a lazy stream over every locally retained message.
   """
   @spec all_messages(Client.t(), String.t(), keyword()) :: read_result(Enumerable.t())
-  def all_messages(%Client{} = client, jid, opts \\ []),
-    do: stream_messages(client, jid, Keyword.put_new(opts, :limit, :all))
+  def all_messages(%Client{} = client, jid, opts \\ []) do
+    opts = opts |> Keyword.put_new(:order, :oldest_first) |> Keyword.put_new(:limit, :all)
+    stream_messages(client, jid, opts)
+  end
 
   @doc """
   Deletes selected local messages after durable wrapper persistence.
