@@ -30,7 +30,6 @@ defmodule ExWapp.Session.Outbound.DirectTest do
 
   test "builds the final direct multi-device message node" do
     store = Memory.new()
-    on_exit(fn -> Memory.stop(store) end)
 
     participant = %Binary.Node{
       tag: "to",
