@@ -1,5 +1,11 @@
 defmodule ExWapp.Session.Worker.Outbound do
-  @moduledoc false
+  @moduledoc """
+  Coordinates outbound sends from the session worker.
+
+  The module selects direct or group delivery, prepares Signal sessions, delegates
+  device discovery and encryption, sends protocol nodes, and records delivery
+  metadata. Message construction remains separate from the WebSocket transport.
+  """
 
   require Logger
 
@@ -26,7 +32,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   @typep worker_state :: map()
   @typep outbound_text :: iodata() | nil
-  @doc false
+  @doc "Sends text or an optional prebuilt protobuf payload through the session pipeline."
   @spec send_text_worker(pid(), map(), String.t(), outbound_text(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def send_text_worker(session_pid, state, jid, text, opts \\ [])
@@ -57,7 +63,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
-  @doc false
+  @doc "Sends a constructed WhatsApp protobuf message through the normal outbound pipeline."
   @spec send_proto_worker(pid(), map(), String.t(), ExWapp.Proto.Message.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def send_proto_worker(session_pid, state, jid, %Message{} = proto, opts \\ []) do
