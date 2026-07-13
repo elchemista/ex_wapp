@@ -174,11 +174,14 @@ eventi. Il mapping canonico resta separato dal parsing protobuf.
 
 ## Fase 7 — Namespace e struttura file
 
-- Allineare path e namespace dei moduli media.
-- Evitare directory `Domains` parzialmente adottate.
-- Mantenere un modulo per file.
-- Aggiornare README e documentazione architetturale.
-- Rimuovere compatibilità obsolete soltanto dopo una fase di deprecazione.
+- [x] verificare che i moduli `ExWapp.Media.*` siano già allineati a
+  `lib/ex_wapp/media/*`; nessun rename necessario;
+- [x] non introdurre una directory `Domains` parziale;
+- [x] mantenere un modulo per file nei boundary modificati ed estrarre
+  `Transport.WebSocket.State`;
+- [x] aggiornare README e documentazione architetturale;
+- [x] mantenere la compatibilità obsoleta solo come delega deprecata;
+- [ ] eseguire la validazione completa fuori da questo ambiente.
 
 ## Validazione richiesta per ogni tranche
 
