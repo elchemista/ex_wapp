@@ -1,9 +1,14 @@
 defmodule ExWapp.Client.Transport do
   @moduledoc """
-  Behaviour for high-level, runtime-neutral ExWapp transport adapters.
+  Behaviour for high-level, runtime-neutral ExWapp client adapters.
 
-  The adapter is owned by the host application. It may be backed by a GenServer,
-  GenStateMachine, direct WebSocket process, test double, or any other runtime.
+  The `Transport` name is retained for API compatibility, but this is not a
+  wire transport. The adapter is owned by the host application and connects the
+  public client API to a complete runtime, session, queue, or test double.
+
+  Production WhatsApp messaging should use `ExWapp.Client.Transport.Session`.
+  A raw WebSocket alone cannot implement this contract safely because it lacks
+  Signal sessions, device fanout, sender keys, retry, and synchronized state.
   """
 
   alias ExWapp.{Chat, Client, Contact, Media, Message}
