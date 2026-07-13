@@ -2,15 +2,259 @@ defmodule ExWapp.Session.Outbound.Prekeys do
   @moduledoc """
   Prekey target decisions and Signal-session bootstrap for outbound messages.
 
-  Network requests, response receives, retry scheduling, and persistence remain
-  in the outbound worker. This module owns deterministic target selection and
-  the transformation of parsed prekey bundles into Signal sessions.
+  Raw network requests, response receives, and persistence remain in the
+  outbound worker. This module owns deterministic target selection, batch and
+  individual fallback decisions, missing-bundle retries, and the transformation
+  of parsed prekey bundles into Signal sessions.
   """
 
   require Logger
 
   alias ExWapp.Session.JIDUtils
   alias ExWapp.Signal.SessionStore
+
+  @type fetch_result :: {:ok, SessionStore.t(), map()} | {:error, term()}
+  @type fetch_many_fun :: ([String.t()], SessionStore.t() -> fetch_result())
+  @type fetch_one_fun :: (String.t(), SessionStore.t() -> fetch_result())
+  @type fetch_state :: SessionStore.t() | {:error, term()}
+
+  @doc """
+  Fetches direct-message prekeys with batch fallback and missing-bundle retry.
+  """
+  @spec fetch_direct(
+          [String.t()],
+          SessionStore.t(),
+          String.t(),
+          fetch_many_fun(),
+          fetch_one_fun()
+        ) :: {fetch_state(), map()}
+  def fetch_direct(
+        devices_needing_prekeys,
+        signal_sessions,
+        recipient_base_jid,
+        fetch_many_fun,
+        fetch_one_fun
+      )
+      when is_list(devices_needing_prekeys) and is_function(fetch_many_fun, 2) and
+             is_function(fetch_one_fun, 2) do
+    {updated_sessions, prekey_bundles} =
+      fetch_needed(
+        devices_needing_prekeys,
+        signal_sessions,
+        recipient_base_jid,
+        fetch_many_fun,
+        fetch_one_fun
+      )
+
+    retry_missing(
+      devices_needing_prekeys,
+      updated_sessions,
+      prekey_bundles,
+      "dm",
+      fetch_one_fun
+    )
+  end
+
+  @doc """
+  Fetches group distribution prekeys with batch and individual fallback.
+
+  Missing bundles are retried individually after the initial result.
+  """
+  @spec fetch_group(
+          [String.t()],
+          SessionStore.t(),
+          term(),
+          fetch_many_fun(),
+          fetch_one_fun()
+        ) :: {fetch_state(), map()}
+  def fetch_group([], signal_sessions, _context, _fetch_many_fun, _fetch_one_fun) do
+    {signal_sessions, %{}}
+  end
+
+  def fetch_group(
+        devices_needing_prekeys,
+        signal_sessions,
+        context,
+        fetch_many_fun,
+        fetch_one_fun
+      )
+      when is_list(devices_needing_prekeys) and is_function(fetch_many_fun, 2) and
+             is_function(fetch_one_fun, 2) do
+    Logger.debug(
+      "[SEND] Fetching group prekeys for #{length(devices_needing_prekeys)} devices: #{inspect(devices_needing_prekeys)}"
+    )
+
+    {updated_sessions, prekey_bundles} =
+      case fetch_many_fun.(devices_needing_prekeys, signal_sessions) do
+        {:ok, sessions, bundles} ->
+          {sessions, bundles}
+
+        {:error, reason} ->
+          Logger.warning(
+            "[SEND] Group batch prekey fetch failed: #{inspect(reason)}, retrying individually"
+          )
+
+          case fetch_individually(devices_needing_prekeys, signal_sessions, fetch_one_fun) do
+            {:ok, sessions, bundles} -> {sessions, bundles}
+            {:error, fallback_reason} -> {{:error, fallback_reason}, %{}}
+          end
+      end
+
+    retry_missing(
+      devices_needing_prekeys,
+      updated_sessions,
+      prekey_bundles,
+      context,
+      fetch_one_fun
+    )
+  end
+
+  @spec fetch_needed(
+          [String.t()],
+          SessionStore.t(),
+          String.t(),
+          fetch_many_fun(),
+          fetch_one_fun()
+        ) :: {fetch_state(), map()}
+  defp fetch_needed([], signal_sessions, _recipient_base_jid, _fetch_many_fun, _fetch_one_fun) do
+    {signal_sessions, %{}}
+  end
+
+  defp fetch_needed(
+         devices_needing_prekeys,
+         signal_sessions,
+         recipient_base_jid,
+         fetch_many_fun,
+         fetch_one_fun
+       ) do
+    Logger.debug(
+      "[SEND] Fetching prekeys for #{length(devices_needing_prekeys)} devices: #{inspect(devices_needing_prekeys)}"
+    )
+
+    case fetch_many_fun.(devices_needing_prekeys, signal_sessions) do
+      {:ok, sessions, bundles} ->
+        {sessions, bundles}
+
+      {:error, reason} ->
+        Logger.warning("[SEND] Batch prekey fetch failed: #{inspect(reason)}, trying individual")
+
+        case fetch_one_fun.(recipient_base_jid, signal_sessions) do
+          {:ok, sessions, bundles} -> {sessions, bundles}
+          {:error, fallback_reason} -> {{:error, fallback_reason}, %{}}
+        end
+    end
+  end
+
+  @spec retry_missing([term()], fetch_state(), term(), term(), fetch_one_fun()) ::
+          {fetch_state(), map()}
+  defp retry_missing(
+         _requested_device_jids,
+         {:error, _reason} = error,
+         _prekey_bundles,
+         _context,
+         _fetch_one_fun
+       ) do
+    {error, %{}}
+  end
+
+  defp retry_missing(
+         requested_device_jids,
+         sessions,
+         prekey_bundles,
+         context,
+         fetch_one_fun
+       ) do
+    prekey_bundles = if is_map(prekey_bundles), do: prekey_bundles, else: %{}
+
+    if SessionStore.store?(sessions) do
+      retry_missing_from_store(
+        requested_device_jids,
+        sessions,
+        prekey_bundles,
+        context,
+        fetch_one_fun
+      )
+    else
+      {sessions, prekey_bundles}
+    end
+  end
+
+  @spec retry_missing_from_store(
+          [term()],
+          SessionStore.t(),
+          map(),
+          term(),
+          fetch_one_fun()
+        ) :: {SessionStore.t(), map()}
+  defp retry_missing_from_store(
+         requested_device_jids,
+         sessions,
+         prekey_bundles,
+         context,
+         fetch_one_fun
+       ) do
+    missing =
+      requested_device_jids
+      |> missing_bundle_targets(prekey_bundles)
+      |> Enum.sort()
+
+    if missing == [] do
+      {sessions, prekey_bundles}
+    else
+      fetch_missing_individually(
+        missing,
+        sessions,
+        prekey_bundles,
+        context,
+        fetch_one_fun
+      )
+    end
+  end
+
+  @spec fetch_missing_individually(
+          [String.t()],
+          SessionStore.t(),
+          map(),
+          term(),
+          fetch_one_fun()
+        ) :: {SessionStore.t(), map()}
+  defp fetch_missing_individually(
+         missing,
+         sessions,
+         prekey_bundles,
+         context,
+         fetch_one_fun
+       ) do
+    Logger.warning(
+      "[SEND] Missing #{context} prekey bundles for #{length(missing)} device(s), retrying individually: #{inspect(missing)}"
+    )
+
+    case fetch_individually(missing, sessions, fetch_one_fun) do
+      {:ok, retried_sessions, retried_bundles} ->
+        {retried_sessions, Map.merge(prekey_bundles, retried_bundles)}
+
+      {:error, reason} ->
+        Logger.warning("[SEND] Individual #{context} prekey retry failed: #{inspect(reason)}")
+        {sessions, prekey_bundles}
+    end
+  end
+
+  @spec fetch_individually([String.t()], SessionStore.t(), fetch_one_fun()) :: fetch_result()
+  defp fetch_individually(device_jids, signal_sessions, fetch_one_fun) do
+    Enum.reduce_while(
+      device_jids,
+      {:ok, signal_sessions, %{}},
+      fn device_jid, {:ok, sessions, bundles} ->
+        case fetch_one_fun.(device_jid, sessions) do
+          {:ok, updated_sessions, fetched_bundles} ->
+            {:cont, {:ok, updated_sessions, Map.merge(bundles, fetched_bundles)}}
+
+          {:error, reason} ->
+            {:halt, {:error, {:prekey_fetch_failed, device_jid, reason}}}
+        end
+      end
+    )
+  end
 
   @doc """
   Returns outbound devices that require a prekey bootstrap.
