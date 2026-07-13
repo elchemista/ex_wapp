@@ -143,14 +143,18 @@ Mantenere due concetti espliciti:
 
 Azioni previste:
 
-- documentare il confine tra `ExWapp.Transport` e
-  `ExWapp.Client.Transport`;
-- valutare un nome non ambiguo per l'adapter client;
-- deprecare o riallineare `Client.Transport.WebSocket`;
-- impedire al percorso WebSocket diretto di bypassare Signal, fanout e sessione;
-- mantenere `Client.Transport.Session` come percorso completo di produzione.
+- [x] documentare il confine tra `ExWapp.Transport` wire-level e
+  `ExWapp.Client.Transport` adapter high-level;
+- [x] introdurre il nome esplicito `Client.Transport.RawWebSocket`;
+- [x] deprecare `Client.Transport.WebSocket` mantenendo il modulo compatibile;
+- [x] impedire al percorso raw WebSocket di inviare messaggi high-level senza
+  Signal, fanout e sessione;
+- [x] mantenere `Client.Transport.Session` come percorso completo di produzione;
+- [x] aggiornare README con il percorso raccomandato;
+- [ ] eseguire i test transport fuori da questo ambiente.
 
-Qualsiasi rename pubblico deve avere una fase di deprecazione separata.
+Il rename pubblico usa un modulo compatibile deprecato; non rimuove ancora il
+vecchio nome.
 
 ## Fase 6 — Wire e decoder tipizzati
 
