@@ -27,9 +27,7 @@ defmodule ExWapp.Signal.WireFormat do
   # MAC length in bytes (first 8 bytes of HMAC-SHA256)
   @mac_length 8
 
-  # ============================================================================
-  # Public API
-  # ============================================================================
+  # Public wire-format operations
 
   @doc """
   Serializes a SignalMessage (whisper message).
@@ -189,9 +187,7 @@ defmodule ExWapp.Signal.WireFormat do
 
   def deserialize_public_key(_), do: {:error, :invalid_key_format}
 
-  # ============================================================================
-  # Protobuf Encoding (manual implementation to avoid dependency issues)
-  # ============================================================================
+  # Manual protobuf encoding for Signal payloads
 
   # SignalMessage protobuf fields:
   #   optional bytes  ratchetKey      = 1;
@@ -252,9 +248,7 @@ defmodule ExWapp.Signal.WireFormat do
     <<1::1, value::7, encode_varint(value >>> 7)::binary>>
   end
 
-  # ============================================================================
-  # MAC Calculation
-  # ============================================================================
+  # Signal MAC construction and verification
 
   defp calculate_mac(mac_key, sender_identity, receiver_identity, data) do
     # MAC is HMAC-SHA256 over: sender_identity_key || receiver_identity_key || data
@@ -272,9 +266,7 @@ defmodule ExWapp.Signal.WireFormat do
     binary_part(full_mac, 0, @mac_length)
   end
 
-  # ============================================================================
-  # Message Type Detection
-  # ============================================================================
+  # Serialized message type detection
 
   @doc """
   Returns the message type atom for the given serialized message.
@@ -437,9 +429,7 @@ defmodule ExWapp.Signal.WireFormat do
 
   def verify_signal_mac(_, _, _, _, _), do: :error
 
-  # ============================================================================
-  # Protobuf Decoding (minimal parser for required fields)
-  # ============================================================================
+  # Minimal protobuf decoding for required fields
 
   defp decode_fields(<<>>, acc), do: {:ok, acc, <<>>}
 
