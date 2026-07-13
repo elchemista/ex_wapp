@@ -274,7 +274,7 @@ defmodule ExWapp.Session.Worker.Outbound do
         context.store,
         context.include_identity
       )
-      |> apply_message_node_attrs(context.opts)
+      |> MessageNode.apply_outbound_options(context.opts)
 
     case send_transport_node(context.state, context.conn, node) do
       :ok ->
@@ -1375,7 +1375,7 @@ defmodule ExWapp.Session.Worker.Outbound do
               store,
               include_identity
             )
-            |> apply_message_node_attrs(opts)
+            |> MessageNode.apply_outbound_options(opts)
 
           send_encrypted_node(state, conn, store, jid, message_id, node, payloads)
 
@@ -1960,76 +1960,6 @@ defmodule ExWapp.Session.Worker.Outbound do
       content: content
     }
   end
-
-  defp apply_message_node_attrs(%Binary.Node{} = node, opts) do
-    attrs = Map.put(node.attrs, "type", Keyword.get(opts, :message_node_type, "text"))
-    node = %{node | attrs: Map.delete(attrs, "mediatype")}
-
-    node
-    |> maybe_put_encrypted_mediatype(Keyword.get(opts, :mediatype))
-    |> append_additional_message_nodes(Keyword.get(opts, :additional_message_nodes, []))
-  end
-
-  @spec maybe_put_encrypted_mediatype(Binary.Node.t(), term()) :: Binary.Node.t()
-  defp maybe_put_encrypted_mediatype(%Binary.Node{} = node, mediatype)
-       when is_binary(mediatype) and mediatype != "" do
-    content = node.content
-
-    updated_content =
-      if direct_encrypted_content?(content) do
-        Enum.map(content, &put_direct_encrypted_mediatype(&1, mediatype))
-      else
-        Enum.map(content, &put_participant_encrypted_mediatype(&1, mediatype))
-      end
-
-    %{node | content: updated_content}
-  end
-
-  defp maybe_put_encrypted_mediatype(%Binary.Node{} = node, _mediatype), do: node
-
-  @spec direct_encrypted_content?([term()]) :: boolean()
-  defp direct_encrypted_content?(content) do
-    Enum.any?(content, &match?(%Binary.Node{tag: "enc"}, &1))
-  end
-
-  @spec put_direct_encrypted_mediatype(term(), String.t()) :: term()
-  defp put_direct_encrypted_mediatype(%Binary.Node{tag: "enc"} = node, mediatype) do
-    %{node | attrs: Map.put(node.attrs || %{}, "mediatype", mediatype)}
-  end
-
-  defp put_direct_encrypted_mediatype(node, _mediatype), do: node
-
-  @spec put_participant_encrypted_mediatype(term(), String.t()) :: term()
-  defp put_participant_encrypted_mediatype(
-         %Binary.Node{tag: "participants", content: participants} = node,
-         mediatype
-       )
-       when is_list(participants) do
-    updated_participants =
-      Enum.map(participants, fn
-        %Binary.Node{tag: "to", content: encrypted_nodes} = participant
-        when is_list(encrypted_nodes) ->
-          updated_nodes =
-            Enum.map(encrypted_nodes, &put_direct_encrypted_mediatype(&1, mediatype))
-
-          %{participant | content: updated_nodes}
-
-        participant ->
-          participant
-      end)
-
-    %{node | content: updated_participants}
-  end
-
-  defp put_participant_encrypted_mediatype(node, _mediatype), do: node
-
-  @spec append_additional_message_nodes(Binary.Node.t(), term()) :: Binary.Node.t()
-  defp append_additional_message_nodes(%Binary.Node{} = node, additional_nodes)
-       when is_list(additional_nodes) do
-    %{node | content: node.content ++ additional_nodes}
-  end
-
-  defp append_additional_message_nodes(%Binary.Node{} = node, _additional_nodes), do: node
 
   defp query_device_list_worker(%{conn: conn} = state, jids) when is_list(jids) do
     message_id = generate_request_id()
