@@ -62,10 +62,14 @@ defmodule ExWapp.Store.MessageTable do
         }
       end)
 
+    clean_data = Map.delete(data, :chat_messages)
+
     clean_data =
-      data
-      |> Map.delete(:chat_messages)
-      |> Map.put(:chats, clean_chats)
+      if Map.has_key?(data, :chats) do
+        Map.put(clean_data, :chats, clean_chats)
+      else
+        clean_data
+      end
 
     {clean_data, Map.merge(persisted_messages, legacy_messages, &merge_message_lists/3)}
   end
