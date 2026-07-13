@@ -17,6 +17,7 @@ defmodule ExWapp.Message.Handler.Inbound do
 
   alias ExWapp.Session.DeviceCache
 
+  @doc false
   @spec handle_message(Node.t(), pid(), map()) :: {:ok, map(), [term()]}
   def handle_message(%Node{attrs: attrs, content: content}, session, state) do
     from =
@@ -129,10 +130,12 @@ defmodule ExWapp.Message.Handler.Inbound do
   defp maybe_decrypt_message(message_data, state, _from, _participant, _attrs),
     do: {message_data, state}
 
+  @spec transient_encrypted_placeholder?(map()) :: boolean()
   defp transient_encrypted_placeholder?(%{encrypted: true, decrypt_status: {:error, _}}), do: true
   defp transient_encrypted_placeholder?(%{placeholder_unavailable: true}), do: true
   defp transient_encrypted_placeholder?(_message_data), do: false
 
+  @spec maybe_log_suppressed_message(boolean(), boolean(), term(), term(), map()) :: :ok
   defp maybe_log_suppressed_message(true, _suppress_message?, _from, _id, _message_data), do: :ok
 
   defp maybe_log_suppressed_message(_is_protocol, true, from, id, message_data) do
@@ -143,5 +146,4 @@ defmodule ExWapp.Message.Handler.Inbound do
 
   defp maybe_log_suppressed_message(_is_protocol, _suppress_message?, _from, _id, _message_data),
     do: :ok
-
 end
