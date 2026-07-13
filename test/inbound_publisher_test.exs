@@ -1,6 +1,7 @@
 defmodule ExWapp.Message.Handler.Inbound.PublisherTest do
   use ExUnit.Case, async: true
 
+  alias ExWapp.Message.Content
   alias ExWapp.Message.Handler.Inbound.Publisher
   alias ExWapp.Store.Memory
 
@@ -20,13 +21,18 @@ defmodule ExWapp.Message.Handler.Inbound.PublisherTest do
 
     assert {:published, message} =
              Publisher.publish(
-               %{text: "hello", message_content_type: :user_message},
+               %{
+                 content: Content.new(:text, text: "hello"),
+                 text: "hello",
+                 message_content_type: :user_message
+               },
                envelope,
                self(),
                %{store: store}
              )
 
     assert message.text == "hello"
+    assert message.content.kind == :text
     assert message.status == :received
     assert message.raw.from_me == false
 
@@ -46,7 +52,11 @@ defmodule ExWapp.Message.Handler.Inbound.PublisherTest do
 
     assert {:suppressed, message} =
              Publisher.publish(
-               %{text: nil, message_content_type: :protocol},
+               %{
+                 content: Content.new(:protocol, protocol_payload: <<1>>),
+                 text: nil,
+                 message_content_type: :protocol
+               },
                envelope,
                self(),
                %{}
