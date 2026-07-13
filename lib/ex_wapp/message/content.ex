@@ -53,60 +53,94 @@ defmodule ExWapp.Message.Content do
   def from_legacy(%{content: %__MODULE__{} = content}), do: content
 
   def from_legacy(message_data) when is_map(message_data) do
-    cond do
-      Map.get(message_data, :message_content_type) == :protocol ->
-        new(:protocol,
-          text: Map.get(message_data, :text),
-          protocol_payload: Map.get(message_data, :protocol_payload),
-          diagnostics: legacy_diagnostics(message_data)
-        )
+    diagnostics = legacy_diagnostics(message_data)
 
-      match?({:error, _}, Map.get(message_data, :decrypt_status)) or
-          Map.get(message_data, :placeholder_unavailable) == true ->
-        new(:unsupported,
-          text: Map.get(message_data, :text),
-          diagnostics: legacy_diagnostics(message_data)
-        )
+    cond do
+      legacy_protocol?(message_data) ->
+        protocol_content(message_data, diagnostics)
+
+      legacy_unsupported?(message_data) ->
+        unsupported_content(message_data, diagnostics)
 
       match?(%Ref{}, Map.get(message_data, :media)) ->
         media = Map.fetch!(message_data, :media)
+        media_content(message_data, media, diagnostics)
 
-        new(:media,
-          text: Map.get(message_data, :text),
-          media: media,
-          media_type: Map.get(message_data, :media_type) || media.type,
-          diagnostics: legacy_diagnostics(message_data)
-        )
+      true ->
+        structured_content(message_data, diagnostics)
+    end
+  end
 
+  @spec legacy_protocol?(map()) :: boolean()
+  defp legacy_protocol?(message_data) do
+    Map.get(message_data, :message_content_type) == :protocol
+  end
+
+  @spec legacy_unsupported?(map()) :: boolean()
+  defp legacy_unsupported?(message_data) do
+    match?({:error, _}, Map.get(message_data, :decrypt_status)) or
+      Map.get(message_data, :placeholder_unavailable) == true
+  end
+
+  @spec protocol_content(map(), map()) :: t()
+  defp protocol_content(message_data, diagnostics) do
+    new(:protocol,
+      text: Map.get(message_data, :text),
+      protocol_payload: Map.get(message_data, :protocol_payload),
+      diagnostics: diagnostics
+    )
+  end
+
+  @spec unsupported_content(map(), map()) :: t()
+  defp unsupported_content(message_data, diagnostics) do
+    new(:unsupported,
+      text: Map.get(message_data, :text),
+      diagnostics: diagnostics
+    )
+  end
+
+  @spec media_content(map(), Ref.t(), map()) :: t()
+  defp media_content(message_data, media, diagnostics) do
+    new(:media,
+      text: Map.get(message_data, :text),
+      media: media,
+      media_type: Map.get(message_data, :media_type) || media.type,
+      diagnostics: diagnostics
+    )
+  end
+
+  @spec structured_content(map(), map()) :: t()
+  defp structured_content(message_data, diagnostics) do
+    cond do
       is_map(Map.get(message_data, :location)) ->
         new(:location,
           text: Map.get(message_data, :text),
           location: Map.get(message_data, :location),
-          diagnostics: legacy_diagnostics(message_data)
+          diagnostics: diagnostics
         )
 
       is_map(Map.get(message_data, :contact)) ->
         new(:contact,
           text: Map.get(message_data, :text),
           contact: Map.get(message_data, :contact),
-          diagnostics: legacy_diagnostics(message_data)
+          diagnostics: diagnostics
         )
 
       is_map(Map.get(message_data, :event)) ->
         new(:event,
           text: Map.get(message_data, :text),
           event: Map.get(message_data, :event),
-          diagnostics: legacy_diagnostics(message_data)
+          diagnostics: diagnostics
         )
 
       is_binary(Map.get(message_data, :text)) ->
         new(:text,
           text: Map.get(message_data, :text),
-          diagnostics: legacy_diagnostics(message_data)
+          diagnostics: diagnostics
         )
 
       true ->
-        new(:unsupported, diagnostics: legacy_diagnostics(message_data))
+        new(:unsupported, diagnostics: diagnostics)
     end
   end
 

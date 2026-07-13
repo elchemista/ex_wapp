@@ -14,8 +14,9 @@ defmodule ExWapp.Session.Outbound.IQRequests do
   alias ExWapp.Signal.SessionStore
 
   @type request_state :: %{
-          required(:store) => Store.t(),
-          optional(:runtime_cfg) => map() | nil
+          required(:store) => term(),
+          optional(:runtime_cfg) => map() | nil,
+          optional(atom()) => term()
         }
 
   @type send_node_fun :: (Binary.Node.t() -> :ok | {:error, term()})

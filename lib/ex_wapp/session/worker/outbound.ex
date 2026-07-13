@@ -221,9 +221,10 @@ defmodule ExWapp.Session.Worker.Outbound do
              updated_sessions,
              distribution_target_specs,
              %{recipient: distribution_payload},
-             prekey_bundles || %{}
+             prekey_bundles
            ) do
-      missing_targets = Encryptor.missing_expected_targets(distribution_target_specs, participant_nodes)
+      missing_targets =
+        Encryptor.missing_expected_targets(distribution_target_specs, participant_nodes)
 
       handle_group_distribution_result(
         missing_targets,
@@ -363,6 +364,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
     query_jids =
       Group.query_jids(participant_jids, addressing_mode, own_base_jid, own_lid_jid)
+
     device_map = fetch_group_device_map(state, group_jid, query_jids)
 
     {live_distribution_targets, cached_distribution_targets} =
@@ -530,9 +532,7 @@ defmodule ExWapp.Session.Worker.Outbound do
         lid_mapping: lid_mapping
       })
 
-    Logger.debug(
-      "[SEND] Discovered recipient devices: #{inspect(discovery.recipient_devices)}"
-    )
+    Logger.debug("[SEND] Discovered recipient devices: #{inspect(discovery.recipient_devices)}")
 
     Logger.debug(
       "[SEND] Cached recipient devices: #{inspect(discovery.recipient_cached_devices)}"
@@ -595,7 +595,7 @@ defmodule ExWapp.Session.Worker.Outbound do
              signal_sessions,
              target_specs,
              payloads,
-             prekey_bundles || %{}
+             prekey_bundles
            ) do
       case Encryptor.missing_expected_targets(target_specs, participant_nodes) do
         [] ->
@@ -693,24 +693,14 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
-  @spec normalize_jid_for_signal(term()) :: String.t()
-  defp normalize_jid_for_signal(jid) when is_binary(jid), do: JIDUtils.normalize_for_signal(jid)
+  @spec normalize_jid_for_signal(String.t()) :: String.t()
+  defp normalize_jid_for_signal(jid), do: JIDUtils.normalize_for_signal(jid)
 
-  defp normalize_jid_for_signal(_), do: ""
+  @spec normalize_jid_with_device(String.t()) :: String.t()
+  defp normalize_jid_with_device(jid), do: JIDUtils.normalize_with_device(jid)
 
-  @spec normalize_jid_with_device(term()) :: String.t()
-  defp normalize_jid_with_device(jid) when is_binary(jid), do: JIDUtils.normalize_with_device(jid)
-
-  defp normalize_jid_with_device(%ExWapp.JID{} = jid), do: JIDUtils.normalize_with_device(jid)
-
-  defp normalize_jid_with_device(_), do: ""
-
-  @spec strip_device_from_jid(term()) :: String.t()
-  defp strip_device_from_jid(jid) when is_binary(jid), do: JIDUtils.strip_device(jid)
-
-  defp strip_device_from_jid(%ExWapp.JID{} = jid), do: JIDUtils.strip_device(jid)
-
-  defp strip_device_from_jid(_), do: ""
+  @spec strip_device_from_jid(String.t()) :: String.t()
+  defp strip_device_from_jid(jid), do: JIDUtils.strip_device(jid)
 
   @spec maybe_record_outgoing_message(
           Store.t(),

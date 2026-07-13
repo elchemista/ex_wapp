@@ -260,11 +260,9 @@ defmodule ExWapp.Message.Handler.Inbound.Envelope do
         []
 
       device_id ->
-        Enum.flat_map(base_candidates, fn base_jid ->
-          if cross_family?(explicit_jid, base_jid),
-            do: [apply_device_to_base_jid(base_jid, device_id)],
-            else: []
-        end)
+        base_candidates
+        |> Enum.filter(&cross_family?(explicit_jid, &1))
+        |> Enum.map(&apply_device_to_base_jid(&1, device_id))
     end
   end
 

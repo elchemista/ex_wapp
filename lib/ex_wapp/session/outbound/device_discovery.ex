@@ -110,9 +110,10 @@ defmodule ExWapp.Session.Outbound.DeviceDiscovery do
       |> JIDUtils.normalize_target_list()
 
     own_cached_devices =
-      own_cached_devices
-      |> Enum.reject(&(&1 in own_devices_all))
-      |> Enum.reject(&JIDUtils.current_device_target?(&1, own_device_id))
+      Enum.reject(own_cached_devices, fn device_jid ->
+        device_jid in own_devices_all or
+          JIDUtils.current_device_target?(device_jid, own_device_id)
+      end)
 
     own_devices =
       Enum.reject(own_devices_all, &JIDUtils.current_device_target?(&1, own_device_id))

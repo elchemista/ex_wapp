@@ -23,8 +23,7 @@ defmodule ExWapp.Session.Outbound.Direct do
   alias ExWapp.Session.Outbound.{Fanout, Prekeys}
 
   @type discovery_result ::
-          {[String.t()], [String.t()], [String.t()], [String.t()], [String.t()],
-           [String.t()]}
+          {[String.t()], [String.t()], [String.t()], [String.t()], [String.t()], [String.t()]}
 
   @type discover_fun ::
           (String.t(), String.t(), non_neg_integer() | nil -> discovery_result())
@@ -221,10 +220,10 @@ defmodule ExWapp.Session.Outbound.Direct do
   @spec build_encrypted_message_node(
           String.t(),
           String.t(),
-          [%Binary.Node{}],
+          [Binary.Node.t()],
           term(),
           boolean()
-        ) :: %Binary.Node{}
+        ) :: Binary.Node.t()
   def build_encrypted_message_node(jid, message_id, participant_nodes, store, include_identity)
       when is_binary(jid) and is_binary(message_id) and is_list(participant_nodes) and
              is_boolean(include_identity) do
@@ -412,7 +411,7 @@ defmodule ExWapp.Session.Outbound.Direct do
     Logger.debug("[SEND] Self-chat target specs: #{inspect(resolution.target_specs)}")
   end
 
-  @spec identity_content(term(), boolean()) :: [%Binary.Node{}]
+  @spec identity_content(term(), boolean()) :: [Binary.Node.t()]
   defp identity_content(_store, false), do: []
 
   defp identity_content(store, true) do
@@ -426,10 +425,8 @@ defmodule ExWapp.Session.Outbound.Direct do
     end
   end
 
-  @spec normalize_jid(term()) :: String.t()
-  defp normalize_jid(jid) when is_binary(jid), do: JIDUtils.normalize_with_device(jid)
-  defp normalize_jid(%ExWapp.JID{} = jid), do: JIDUtils.normalize_with_device(jid)
-  defp normalize_jid(_), do: ""
+  @spec normalize_jid(String.t()) :: String.t()
+  defp normalize_jid(jid), do: JIDUtils.normalize_with_device(jid)
 
   @spec strip_device(term()) :: String.t()
   defp strip_device(jid) when is_binary(jid), do: JIDUtils.strip_device(jid)

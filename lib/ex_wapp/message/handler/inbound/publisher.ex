@@ -8,7 +8,7 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
 
   require Logger
 
-  alias ExWapp.Chat
+  alias ExWapp.{Chat, JID}
   alias ExWapp.Message.Handler.Common
   alias ExWapp.Message.Handler.Inbound.Projection
 
@@ -16,7 +16,7 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
           required(:id) => term(),
           required(:from) => term(),
           required(:from_me) => boolean(),
-          required(:timestamp) => integer(),
+          required(:timestamp) => term(),
           required(:participant) => term(),
           required(:type) => term(),
           required(:attrs) => map()
@@ -42,20 +42,21 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
     end
   end
 
-  @spec build_public_message(map(), envelope()) :: map()
+  @spec build_public_message(map(), envelope()) :: Chat.message()
   defp build_public_message(message_data, envelope) do
-    from_me = Map.fetch!(envelope, :from_me)
+    content = Map.fetch!(message_data, :content)
+    from_me = Map.fetch!(envelope, :from_me) == true
     type = Map.fetch!(envelope, :type)
     attrs = Map.fetch!(envelope, :attrs)
 
     %{
-      id: Map.fetch!(envelope, :id),
-      content: Map.fetch!(message_data, :content),
+      id: normalize_message_id(Map.fetch!(envelope, :id)),
+      content: content,
       from_me: from_me,
-      timestamp: Map.fetch!(envelope, :timestamp),
-      text: Map.get(message_data, :text),
+      timestamp: normalize_timestamp(Map.fetch!(envelope, :timestamp)),
+      text: Common.normalize_optional_text(Map.get(message_data, :text)),
       status: if(from_me, do: :sent, else: :received),
-      participant: Map.fetch!(envelope, :participant),
+      participant: normalize_participant(Map.fetch!(envelope, :participant)),
       media: Map.get(message_data, :media),
       location: Map.get(message_data, :location),
       contact: Map.get(message_data, :contact),
@@ -63,7 +64,7 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
       raw: %{
         type: type,
         attrs: attrs,
-        content: Map.fetch!(message_data, :content),
+        content: content,
         media: Map.get(message_data, :media),
         media_type: Map.get(message_data, :media_type),
         content_type: Map.get(message_data, :content_type),
@@ -82,13 +83,15 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
         :ok
 
       target ->
+        chat_jid = Common.normalize_jid(Map.fetch!(envelope, :from))
+
         Projection.update_chat_name(
           target,
-          Map.fetch!(envelope, :from),
+          chat_jid,
           Map.fetch!(envelope, :attrs)
         )
 
-        Chat.add_message(target, Map.fetch!(envelope, :from), message)
+        Chat.add_message(target, chat_jid, message)
     end
   end
 
@@ -117,4 +120,18 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
 
   defp log_suppressed_message(_is_protocol, _suppress_message?, _envelope, _message_data),
     do: :ok
+
+  @spec normalize_message_id(term()) :: String.t()
+  defp normalize_message_id(id) when is_binary(id), do: id
+  defp normalize_message_id(id) when is_integer(id), do: Integer.to_string(id)
+  defp normalize_message_id(_id), do: ""
+
+  @spec normalize_timestamp(term()) :: integer()
+  defp normalize_timestamp(timestamp) when is_integer(timestamp), do: timestamp
+  defp normalize_timestamp(_timestamp), do: System.system_time(:second)
+
+  @spec normalize_participant(term()) :: String.t() | JID.t() | nil
+  defp normalize_participant(%JID{} = jid), do: jid
+  defp normalize_participant(participant) when is_binary(participant), do: participant
+  defp normalize_participant(_participant), do: nil
 end

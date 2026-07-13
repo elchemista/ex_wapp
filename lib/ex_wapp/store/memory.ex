@@ -122,7 +122,10 @@ defmodule ExWapp.Store.Memory do
   """
   @spec stop(t()) :: :ok
   def stop(%__MODULE__{agent: agent}) do
-    Agent.stop(agent)
+    if Process.alive?(agent), do: Agent.stop(agent), else: :ok
     :ok
+  catch
+    :exit, {:noproc, _} -> :ok
+    :exit, :noproc -> :ok
   end
 end

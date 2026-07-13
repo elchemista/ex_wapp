@@ -176,12 +176,12 @@ defmodule ExWapp.Session.Outbound.Group do
   @spec build_encrypted_message_node(
           String.t(),
           String.t(),
-          [%Binary.Node{}],
+          [Binary.Node.t()],
           binary(),
           term(),
           term(),
           boolean()
-        ) :: %Binary.Node{}
+        ) :: Binary.Node.t()
   def build_encrypted_message_node(
         group_jid,
         message_id,
@@ -226,7 +226,7 @@ defmodule ExWapp.Session.Outbound.Group do
   @doc """
   Builds the IQ node used to request interactive group information.
   """
-  @spec build_info_query(String.t(), String.t()) :: %Binary.Node{}
+  @spec build_info_query(String.t(), String.t()) :: Binary.Node.t()
   def build_info_query(group_jid, message_id)
       when is_binary(group_jid) and is_binary(message_id) do
     %Binary.Node{
@@ -370,7 +370,7 @@ defmodule ExWapp.Session.Outbound.Group do
     |> MapSet.new()
   end
 
-  @spec participant_nodes_content([%Binary.Node{}]) :: [%Binary.Node{}]
+  @spec participant_nodes_content([Binary.Node.t()]) :: [Binary.Node.t()]
   defp participant_nodes_content([]), do: []
 
   defp participant_nodes_content(participant_nodes) do
@@ -383,7 +383,7 @@ defmodule ExWapp.Session.Outbound.Group do
     ]
   end
 
-  @spec identity_content(term(), boolean()) :: [%Binary.Node{}]
+  @spec identity_content(term(), boolean()) :: [Binary.Node.t()]
   defp identity_content(_store, false), do: []
 
   defp identity_content(store, true) do
@@ -397,10 +397,10 @@ defmodule ExWapp.Session.Outbound.Group do
   defp normalize_addressing_mode(mode) when mode in ["lid", "pn"], do: mode
   defp normalize_addressing_mode(_), do: nil
 
-  @spec parse_group_node(%Binary.Node{}, String.t()) ::
+  @spec parse_group_node(Binary.Node.t(), String.t()) ::
           {:ok, group_info()} | {:error, :empty_group_participants}
   defp parse_group_node(group_node, group_jid) do
-    addressing_mode = Map.get(group_node.attrs || %{}, "addressing_mode")
+    addressing_mode = Map.get(group_node.attrs, "addressing_mode")
 
     participants =
       (group_node.content || [])
@@ -433,7 +433,7 @@ defmodule ExWapp.Session.Outbound.Group do
 
   defp extract_participant_identity(_, _), do: ""
 
-  @spec find_child(term(), String.t()) :: %Binary.Node{} | nil
+  @spec find_child(term(), String.t()) :: Binary.Node.t() | nil
   defp find_child(content, tag) when is_list(content) do
     Enum.find(content, fn
       %Binary.Node{tag: ^tag} -> true

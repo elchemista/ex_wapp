@@ -199,7 +199,8 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
   defp decode_recovered_web_message_info(web_message_info) do
     with {:ok, fields} <- Fields.decode_safe(web_message_info),
          key_payload when is_binary(key_payload) <- Fields.first_length_delimited(fields, 1),
-         message_payload when is_binary(message_payload) <- Fields.first_length_delimited(fields, 2),
+         message_payload when is_binary(message_payload) <-
+           Fields.first_length_delimited(fields, 2),
          {:ok, key} <- decode_message_key_payload(key_payload) do
       timestamp = Fields.first_varint(fields, 3)
       participant = Fields.first_length_delimited(fields, 5) || Map.get(key, :participant)
@@ -248,15 +249,17 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
       :skip
     else
       legacy = MessageContent.to_legacy(canonical)
+      from_me = Map.get(key, :from_me) == true
+      participant = Common.normalize_optional_text(Map.get(recovered, :participant))
 
       message = %{
         id: id,
         content: canonical,
-        from_me: Map.get(key, :from_me, false),
-        timestamp: Map.get(recovered, :timestamp) || System.system_time(:second),
-        text: Map.get(legacy, :text),
-        status: if(Map.get(key, :from_me, false), do: :sent, else: :received),
-        participant: Map.get(recovered, :participant),
+        from_me: from_me,
+        timestamp: Common.parse_timestamp(Map.get(recovered, :timestamp)),
+        text: Common.normalize_optional_text(Map.get(legacy, :text)),
+        status: if(from_me, do: :sent, else: :received),
+        participant: participant,
         media: Map.get(legacy, :media),
         location: Map.get(legacy, :location),
         contact: Map.get(legacy, :contact),
@@ -264,7 +267,7 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
         raw: %{
           type: :placeholder_resend,
           content: canonical,
-          from_me: Map.get(key, :from_me, false),
+          from_me: from_me,
           media: Map.get(legacy, :media),
           media_type: Map.get(legacy, :media_type),
           content_type: Map.get(legacy, :content_type),

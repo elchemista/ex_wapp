@@ -37,10 +37,11 @@ defmodule ExWapp.Chat do
           required(:status) => message_status(),
           required(:participant) => String.t() | JID.t() | nil,
           required(:raw) => map() | nil,
-          optional(:media) => ExWapp.Media.Ref.t() | nil,
-          optional(:location) => map() | nil,
-          optional(:contact) => map() | nil,
-          optional(:event) => map() | nil
+          optional(:content) => term(),
+          optional(:media) => term(),
+          optional(:location) => term(),
+          optional(:contact) => term(),
+          optional(:event) => term()
         }
 
   @type chat :: %__MODULE__{
