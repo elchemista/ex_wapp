@@ -91,7 +91,7 @@ defmodule ExWapp.Session.Outbound.DeviceDiscovery do
     recipient_devices =
       [
         recipient_base_jid
-        | resolve_usync_devices_for_identity(device_map, recipient_base_jid, lid_mapping)
+        | resolve_identity_devices(device_map, recipient_base_jid, lid_mapping)
       ]
       |> JIDUtils.normalize_target_list()
 
@@ -141,8 +141,11 @@ defmodule ExWapp.Session.Outbound.DeviceDiscovery do
     JIDUtils.related_bases(base_jid, lid_mapping)
   end
 
-  @spec resolve_usync_devices_for_identity(map(), term(), map()) :: [String.t()]
-  defp resolve_usync_devices_for_identity(device_map, base_jid, lid_mapping) do
+  @doc """
+  Resolves USync devices for one identity, preferring its current JID family.
+  """
+  @spec resolve_identity_devices(map(), term(), map()) :: [String.t()]
+  def resolve_identity_devices(device_map, base_jid, lid_mapping) do
     aliases = related_query_bases(base_jid, lid_mapping)
     prefer_lid? = JIDUtils.lid_jid?(base_jid)
 
