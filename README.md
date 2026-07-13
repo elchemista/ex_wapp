@@ -18,7 +18,7 @@ Kept as library responsibilities:
 - high-level `ExWapp.new/1`, `connect/1`, `pair/1`, `send_message/2`,
   `receive_message/3`
 - built-in `ExWapp.Client.Transport.Session` for real WhatsApp send/receive
-- optional low-level `ExWapp.Client.Transport.WebSocket`
+- optional low-level `ExWapp.Transport.WebSocket` for protocol diagnostics
 - message builders via `ExWapp.Message`
 - store behaviour and built-in stores
 - event and transport behaviours
@@ -248,14 +248,14 @@ t ExWapp.Event.type
 ExWapp.Telemetry.events()
 ```
 
-ExWapp also ships a lower-level WebSocket transport layer:
+ExWapp also ships a raw diagnostic WebSocket adapter:
 
 ```elixir
 client =
   ExWapp.new(
     session_id: "account_1",
     store: {ExWapp.Store.Ets, path: "/tmp/ex_wapp/account_1.etf"},
-    transport: ExWapp.Client.Transport.WebSocket,
+    transport: ExWapp.Client.Transport.RawWebSocket,
     metadata: %{
       owner: self(),
       websocket: [
@@ -274,9 +274,12 @@ end
 ```
 
 `ExWapp.Transport.WebSocket` handles WebSocket framing, Noise handshake,
-transport encryption/decryption, and binary node encode/decode. It does not
-replace the full session send path; use `ExWapp.Client.Transport.Session` when
-you want complete sending and receiving.
+transport encryption/decryption, and binary node encode/decode. The diagnostic
+adapter deliberately rejects `ExWapp.send_message/2`: a raw socket does not
+provide Signal sessions, linked-device fanout, sender keys, retry, or state
+synchronization. Use `ExWapp.Client.Transport.Session` for complete sending
+and receiving. The old `ExWapp.Client.Transport.WebSocket` adapter name is
+deprecated in favor of `RawWebSocket`.
 
 ## Event Adapter
 
