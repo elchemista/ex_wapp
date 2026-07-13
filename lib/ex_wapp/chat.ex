@@ -30,13 +30,17 @@ defmodule ExWapp.Chat do
   @type message_status :: :pending | :sent | :received | :delivered | :read | :failed
 
   @type message :: %{
-          id: String.t(),
-          from_me: boolean(),
-          timestamp: integer(),
-          text: String.t() | nil,
-          status: message_status(),
-          participant: String.t() | JID.t() | nil,
-          raw: map() | nil
+          required(:id) => String.t(),
+          required(:from_me) => boolean(),
+          required(:timestamp) => integer(),
+          required(:text) => String.t() | nil,
+          required(:status) => message_status(),
+          required(:participant) => String.t() | JID.t() | nil,
+          required(:raw) => map() | nil,
+          optional(:media) => ExWapp.Media.Ref.t() | nil,
+          optional(:location) => map() | nil,
+          optional(:contact) => map() | nil,
+          optional(:event) => map() | nil
         }
 
   @type chat :: %__MODULE__{

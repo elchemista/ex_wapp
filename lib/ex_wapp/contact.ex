@@ -39,6 +39,28 @@ defmodule ExWapp.Contact do
     Map.values(contacts)
   end
 
+  @doc """
+  Builds a WhatsApp-compatible vCard 3.0 payload for `send_contact/5`.
+
+  The `waid` parameter is normalized to digits while the displayed telephone
+  number keeps its leading `+` when one was supplied.
+  """
+  @spec vcard(String.t(), String.t()) :: String.t()
+  def vcard(display_name, phone_number)
+      when is_binary(display_name) and is_binary(phone_number) do
+    phone_number = String.trim(phone_number)
+    waid = String.replace(phone_number, ~r/\D/, "")
+
+    [
+      "BEGIN:VCARD",
+      "VERSION:3.0",
+      "FN:#{escape_vcard(display_name)}",
+      "TEL;TYPE=CELL;TYPE=VOICE;waid=#{waid}:#{phone_number}",
+      "END:VCARD"
+    ]
+    |> Enum.join("\r\n")
+  end
+
   @doc "Get a contact by JID."
   @spec get(struct(), String.t()) :: t() | nil
   def get(store, jid) do
@@ -153,5 +175,15 @@ defmodule ExWapp.Contact do
       [user, _domain] when user != "" -> user
       _ -> nil
     end
+  end
+
+  @spec escape_vcard(String.t()) :: String.t()
+  defp escape_vcard(value) do
+    value
+    |> String.replace("\\", "\\\\")
+    |> String.replace("\r\n", "\\n")
+    |> String.replace("\n", "\\n")
+    |> String.replace(";", "\\;")
+    |> String.replace(",", "\\,")
   end
 end

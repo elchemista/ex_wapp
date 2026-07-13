@@ -256,6 +256,8 @@ defmodule ExWapp.Binary do
     alias ExWapp.Binary.Token
     alias ExWapp.JID
 
+    @jid_attribute_names ~w(author from jid participant peer_recipient recipient sender_lid sender_pn to)
+
     defstruct data: []
 
     @type t :: %__MODULE__{data: [iodata()]}
@@ -412,9 +414,19 @@ defmodule ExWapp.Binary do
         {key, value}, acc ->
           acc
           |> write_string(key)
-          |> write(value)
+          |> write_attribute_value(key, value)
       end)
     end
+
+    defp write_attribute_value(encoder, key, value)
+         when key in @jid_attribute_names and is_binary(value) do
+      case JID.parse(value) do
+        {:ok, jid} -> write_jid(encoder, jid)
+        {:error, :invalid_jid} -> write(encoder, value)
+      end
+    end
+
+    defp write_attribute_value(encoder, _key, value), do: write(encoder, value)
 
     defp count_attributes(attrs) do
       Enum.count(attrs, fn

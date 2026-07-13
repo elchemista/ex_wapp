@@ -30,12 +30,15 @@ defmodule ExWapp.Noise.ClientPayload do
     case resolve_login_jid(data) do
       %ExWapp.JID{} = jid ->
         # Already paired - use login payload
-        Logger.debug("[ClientPayload] Building LOGIN payload for #{inspect(jid)}")
+        Logger.debug(
+          "[ClientPayload] Building LOGIN payload for #{inspect(jid)} " <>
+            "client_version=#{version_string(runtime_cfg)}"
+        )
         build_login_payload(data, jid, runtime_cfg)
 
       other ->
         # Not paired - use registration payload
-        Logger.warning(
+        Logger.debug(
           "[ClientPayload] Building REGISTRATION payload — no JID found (got #{inspect(other)})"
         )
 
@@ -73,7 +76,10 @@ defmodule ExWapp.Noise.ClientPayload do
   end
 
   defp build_registration_payload(data, runtime_cfg) do
-    Logger.debug("[ClientPayload] Building REGISTRATION payload")
+    Logger.debug(
+      "[ClientPayload] Building REGISTRATION payload " <>
+        "client_version=#{version_string(runtime_cfg)}"
+    )
 
     with {:ok, signal_info, signal_state} <- ensure_signal_bundle(data) do
       info = resolve_client_info(data, runtime_cfg)

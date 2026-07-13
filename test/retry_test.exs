@@ -89,4 +89,48 @@ defmodule ExWapp.Session.Worker.RetryTest do
 
     assert next_state.retry_counters == %{"outbound_retry|270578829287645@lid|MID_2" => 1}
   end
+
+  test "uses cached original recipient when own device requests an outbound retry" do
+    parent = self()
+
+    state = %{
+      store: nil,
+      retry_counters: %{},
+      send_workers: %{},
+      send_worker_mons: %{}
+    }
+
+    start_worker = fn _state, jid, fun ->
+      pid =
+        spawn(fn ->
+          send(parent, {:retry_worker_started, jid})
+          fun.()
+        end)
+
+      {:ok, pid, Process.monitor(pid)}
+    end
+
+    send_fun = fn jid, text ->
+      send(parent, {:retry_send, jid, text})
+      {:ok, "NEW_ID"}
+    end
+
+    next_state =
+      Retry.maybe_retry_outgoing_message(state, "19995550202@lid", "MID_3",
+        max_attempts: 2,
+        normalize_jid: &JIDUtils.normalize_for_signal/1,
+        start_worker: start_worker,
+        send_fun: send_fun,
+        outgoing_payloads: %{
+          "MID_3" => %{jid: "19995550404@s.whatsapp.net", text: "retry original contact"}
+        }
+      )
+
+    assert_receive {:retry_worker_started, "19995550404@s.whatsapp.net"}
+    assert_receive {:retry_send, "19995550404@s.whatsapp.net", "retry original contact"}
+
+    assert next_state.retry_counters == %{
+             "outbound_retry|19995550404@s.whatsapp.net|MID_3" => 1
+           }
+  end
 end

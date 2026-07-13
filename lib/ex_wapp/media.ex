@@ -12,7 +12,7 @@ defmodule ExWapp.Media do
   @typedoc """
   Media kinds currently supported by the high-level API.
   """
-  @type media_type :: :image | :audio
+  @type media_type :: :image | :audio | :document
 
   @typedoc """
   Accepted media input values when sending a message.
@@ -49,6 +49,7 @@ defmodule ExWapp.Media do
       file_sha256: upload.file_sha256,
       file_enc_sha256: upload.file_enc_sha256,
       file_length: upload.file_length,
+      media_key_timestamp: upload.media_key_timestamp,
       mimetype: Keyword.get(opts, :mimetype),
       metadata: Keyword.get(opts, :metadata, %{})
     }

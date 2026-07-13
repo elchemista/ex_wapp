@@ -45,10 +45,19 @@ defmodule ExWapp.Message.Handler.Inbound do
       text: message_data[:text],
       status: if(from_me, do: :sent, else: :received),
       participant: participant,
+      media: message_data[:media],
+      location: message_data[:location],
+      contact: message_data[:contact],
+      event: message_data[:event],
       raw: %{
         type: type,
         attrs: attrs,
         media: message_data[:media],
+        media_type: message_data[:media_type],
+        content_type: message_data[:content_type],
+        location: message_data[:location],
+        contact: message_data[:contact],
+        event: message_data[:event],
         from_me: from_me
       }
     }

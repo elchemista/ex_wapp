@@ -53,7 +53,11 @@ defmodule ExWapp.Session do
 
   @spec send_text(GenServer.server(), binary(), iodata()) :: :ok | {:error, term()}
   def send_text(server, jid, text) do
-    GenServer.call(server, {:send_text, jid, IO.iodata_to_binary(text)})
+    GenServer.call(
+      server,
+      {:send_text, jid, IO.iodata_to_binary(text)},
+      media_timeout([])
+    )
   end
 
   @spec send_typing(GenServer.server(), binary(), boolean()) :: :ok | {:error, term()}
@@ -63,15 +67,49 @@ defmodule ExWapp.Session do
 
   @spec send_image(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
-  def send_image(_server, _jid, _source, _opts \\ []), do: {:error, :media_send_not_implemented}
+  def send_image(server, jid, source, opts \\ []),
+    do: GenServer.call(server, {:send_content, :image, jid, source, opts}, media_timeout(opts))
 
   @spec send_audio(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
-  def send_audio(_server, _jid, _source, _opts \\ []), do: {:error, :media_send_not_implemented}
+  def send_audio(server, jid, source, opts \\ []),
+    do: GenServer.call(server, {:send_content, :audio, jid, source, opts}, media_timeout(opts))
+
+  @spec send_document(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_document(server, jid, source, opts \\ []),
+    do: GenServer.call(server, {:send_content, :document, jid, source, opts}, media_timeout(opts))
+
+  @spec send_location(GenServer.server(), binary(), number(), number(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_location(server, jid, latitude, longitude, opts \\ []) do
+    body = %{latitude: latitude, longitude: longitude}
+    GenServer.call(server, {:send_content, :location, jid, body, opts}, media_timeout(opts))
+  end
+
+  @spec send_contact(GenServer.server(), binary(), String.t(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_contact(server, jid, display_name, vcard, opts \\ []) do
+    body = %{display_name: display_name, vcard: vcard}
+    GenServer.call(server, {:send_content, :contact, jid, body, opts}, media_timeout(opts))
+  end
+
+  @spec send_event(
+          GenServer.server(),
+          binary(),
+          String.t(),
+          integer() | DateTime.t(),
+          keyword()
+        ) :: {:ok, String.t()} | {:error, term()}
+  def send_event(server, jid, name, start_time, opts \\ []) do
+    body = %{name: name, start_time: start_time}
+    GenServer.call(server, {:send_content, :event, jid, body, opts}, media_timeout(opts))
+  end
 
   @spec download_media(GenServer.server(), ExWapp.Media.Ref.t(), keyword()) ::
           {:ok, ExWapp.Media.Download.t()} | {:error, term()}
-  def download_media(_server, _ref, _opts \\ []), do: {:error, :media_download_not_implemented}
+  def download_media(server, ref, opts \\ []),
+    do: GenServer.call(server, {:download_media, ref, opts}, media_timeout(opts))
 
   @spec flush_store(GenServer.server()) :: :ok | {:error, term()}
   def flush_store(server) do
@@ -156,4 +194,7 @@ defmodule ExWapp.Session do
   rescue
     exception -> {:error, exception}
   end
+
+  @spec media_timeout(keyword()) :: timeout()
+  defp media_timeout(opts), do: Keyword.get(opts, :timeout, 60_000)
 end

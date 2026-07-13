@@ -15,7 +15,8 @@ defmodule ExWapp.Media.Upload do
     :media_key,
     :file_sha256,
     :file_enc_sha256,
-    :file_length
+    :file_length,
+    :media_key_timestamp
   ]
 
   @type t :: %__MODULE__{
@@ -27,6 +28,7 @@ defmodule ExWapp.Media.Upload do
           media_key: binary(),
           file_sha256: binary(),
           file_enc_sha256: binary(),
-          file_length: non_neg_integer()
+          file_length: non_neg_integer(),
+          media_key_timestamp: non_neg_integer() | nil
         }
 end

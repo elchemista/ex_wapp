@@ -46,6 +46,13 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
+  @spec send_proto_worker(pid(), map(), String.t(), ExWapp.Proto.Message.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_proto_worker(session_pid, state, jid, %Message{} = proto, opts \\ []) do
+    chat_text = Keyword.get(opts, :chat_text)
+    send_text_worker(session_pid, state, jid, chat_text, Keyword.put(opts, :proto_message, proto))
+  end
+
   @spec send_direct_text_worker(pid(), map(), String.t(), iodata(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   defp send_direct_text_worker(session_pid, state, jid, text, opts) do
@@ -180,7 +187,7 @@ defmodule ExWapp.Session.Worker.Outbound do
              group_info.participants,
              group_info.addressing_mode
            ),
-         proto <- Messages.build_text_proto(text, []),
+         proto <- outbound_proto(text, opts),
          {:ok, payload} <- Message.encode(proto),
          {:ok, distribution_payload, skmsg_payload} <-
            build_group_sender_key_payloads(store, group_jid, payload),
@@ -252,7 +259,7 @@ defmodule ExWapp.Session.Worker.Outbound do
       text: context.text,
       status: :pending,
       participant: nil,
-      raw: nil
+      raw: Keyword.get(context.opts, :outgoing_raw)
     }
 
     Chat.add_message(context.store, context.group_jid, pending_message)
@@ -267,6 +274,7 @@ defmodule ExWapp.Session.Worker.Outbound do
         context.store,
         context.include_identity
       )
+      |> apply_message_node_attrs(context.opts)
 
     case send_transport_node(context.state, context.conn, node) do
       :ok ->
@@ -284,6 +292,10 @@ defmodule ExWapp.Session.Worker.Outbound do
         {:ok, context.message_id}
 
       error ->
+        Logger.error(
+          "[SEND] Group transport send failed for #{context.group_jid} id=#{context.message_id}: #{inspect(error)}"
+        )
+
         Chat.update_message_status(context.store, context.group_jid, context.message_id, :failed)
         error
     end
@@ -805,12 +817,9 @@ defmodule ExWapp.Session.Worker.Outbound do
       end
 
     own_target_candidates =
-      Targets.resolve_own_device_targets(
-        signal_sessions,
-        own_sender_jid,
-        own_device_id,
-        own_devices
-      )
+      own_devices
+      |> JIDUtils.normalize_target_list()
+      |> Enum.reject(&current_device_target?(&1, own_device_id))
 
     all_target_device_jids =
       JIDUtils.normalize_target_list(
@@ -890,11 +899,18 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   defp discover_devices(state, recipient_base_jid, own_sender_jid, own_device_id) do
     lid_mapping = Account.load_lid_mapping(state.store)
+    own_base_jid = Account.local_account_base_jid(state.store)
+    own_lid_jid = Account.local_account_lid_jid(state.store)
+
+    own_query_bases =
+      (related_query_bases(own_sender_jid, lid_mapping) ++
+         related_query_bases(own_base_jid, lid_mapping) ++
+         related_query_bases(own_lid_jid, lid_mapping))
+      |> JIDUtils.normalize_target_list()
 
     query_jids =
-      if own_sender_jid != "" and own_sender_jid != recipient_base_jid do
-        related_query_bases(recipient_base_jid, lid_mapping) ++
-          related_query_bases(own_sender_jid, lid_mapping)
+      if own_query_bases != [] and recipient_base_jid not in own_query_bases do
+        related_query_bases(recipient_base_jid, lid_mapping) ++ own_query_bases
       else
         related_query_bases(recipient_base_jid, lid_mapping)
       end
@@ -925,12 +941,19 @@ defmodule ExWapp.Session.Worker.Outbound do
       DeviceCache.resolve_recent_devices(state.store, recipient_base_jid, state.runtime_cfg)
       |> Enum.reject(&(&1 in recipient_devices))
 
+    own_preferred_jid = if own_base_jid != "", do: own_base_jid, else: own_sender_jid
+
     own_devices_all =
-      resolve_usync_devices_for_identity(device_map, own_sender_jid, lid_mapping)
+      resolve_own_usync_devices(
+        device_map,
+        [own_sender_jid, own_preferred_jid, own_lid_jid],
+        own_preferred_jid,
+        lid_mapping
+      )
       |> JIDUtils.normalize_target_list()
 
     own_cached_devices =
-      DeviceCache.resolve_recent_devices(state.store, own_sender_jid, state.runtime_cfg)
+      DeviceCache.resolve_recent_devices(state.store, own_preferred_jid, state.runtime_cfg)
       |> Enum.reject(&(&1 in own_devices_all))
 
     own_devices = Enum.reject(own_devices_all, &current_device_target?(&1, own_device_id))
@@ -979,6 +1002,56 @@ defmodule ExWapp.Session.Worker.Outbound do
     (preferred_devices ++ fallback_devices)
     |> Enum.map(&JIDUtils.map_to_preferred_family(&1, base_jid, lid_mapping))
     |> JIDUtils.normalize_target_list()
+  end
+
+  defp resolve_own_usync_devices(device_map, identity_jids, preferred_jid, lid_mapping)
+       when is_list(identity_jids) do
+    aliases =
+      identity_jids
+      |> Enum.flat_map(&related_query_bases(&1, lid_mapping))
+      |> JIDUtils.normalize_target_list()
+
+    aliases
+    |> Enum.flat_map(&Map.get(device_map, &1, []))
+    |> Enum.map(&map_own_device_to_preferred_family(&1, preferred_jid, lid_mapping))
+    |> JIDUtils.normalize_target_list()
+  end
+
+  defp map_own_device_to_preferred_family(target_jid, preferred_jid, lid_mapping) do
+    target_jid = JIDUtils.normalize_with_device(target_jid)
+    preferred_jid = preferred_jid |> JIDUtils.normalize_with_device() |> JIDUtils.strip_device()
+    mapped_jid = JIDUtils.map_to_preferred_family(target_jid, preferred_jid, lid_mapping)
+
+    if synthesize_preferred_own_device?(target_jid, mapped_jid, preferred_jid) do
+      apply_device_to_base(target_jid, preferred_jid)
+    else
+      mapped_jid
+    end
+  end
+
+  defp synthesize_preferred_own_device?(target_jid, mapped_jid, preferred_jid) do
+    target_base = JIDUtils.strip_device(target_jid)
+    mapped_base = JIDUtils.strip_device(mapped_jid)
+
+    preferred_jid != "" and
+      not JIDUtils.lid_jid?(preferred_jid) and
+      JIDUtils.lid_jid?(target_base) and
+      mapped_base == target_base
+  end
+
+  defp apply_device_to_base(source_jid, base_jid) do
+    base_jid = base_jid |> JIDUtils.normalize_with_device() |> JIDUtils.strip_device()
+
+    case {JIDUtils.device_id(source_jid), String.split(base_jid, "@", parts: 2)} do
+      {device_id, [user, server]} when is_integer(device_id) and device_id > 0 ->
+        "#{user}:#{device_id}@#{server}"
+
+      {_device_id, [_user, _server]} ->
+        base_jid
+
+      _ ->
+        source_jid
+    end
   end
 
   # Match whatsmeow: check existing sessions by BOTH wire JID and LID-mapped JID,
@@ -1045,7 +1118,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
         case fetch_prekeys_worker(state, recipient_base_jid, signal_sessions) do
           {:ok, sessions, bundles} -> {sessions, bundles}
-          {:error, reason2} -> {:error, reason2}
+          {:error, reason2} -> {{:error, reason2}, %{}}
         end
     end
   end
@@ -1280,7 +1353,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
     with {target_specs, _all_usync_devices} <-
            resolve_send_targets(store, signal_sessions, jid, prekey_bundles, target_hints, opts),
-         {:ok, payloads} <- build_send_payloads(jid, text),
+         {:ok, payloads} <- build_send_payloads(jid, text, opts),
          {:ok, participant_nodes, updated_sessions, include_identity} <-
            encrypt_for_targets(
              store,
@@ -1302,6 +1375,7 @@ defmodule ExWapp.Session.Worker.Outbound do
               store,
               include_identity
             )
+            |> apply_message_node_attrs(opts)
 
           send_encrypted_node(state, conn, store, jid, message_id, node, payloads)
 
@@ -1319,20 +1393,24 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
-  defp build_send_payloads(jid, text) do
-    proto = Messages.build_text_proto(text, [])
+  defp build_send_payloads(jid, text, opts) do
+    proto = outbound_proto(text, opts)
 
     case Message.encode(proto) do
       {:ok, payload} ->
         recipient_payload = Encryption.pad_message(payload)
+        own_device_destination = Keyword.get(opts, :own_device_destination_jid, jid)
 
         own_payload =
-          case build_own_devices_payload(proto, jid, nil) do
+          case build_own_devices_payload(proto, own_device_destination, nil) do
             {:ok, own_p} ->
               Encryption.pad_message(own_p)
 
             {:error, reason} ->
-              Logger.warning("[SEND] Own-device payload failed for #{jid}: #{inspect(reason)}")
+              Logger.warning(
+                "[SEND] Own-device payload failed for #{own_device_destination}: #{inspect(reason)}"
+              )
+
               recipient_payload
           end
 
@@ -1340,6 +1418,13 @@ defmodule ExWapp.Session.Worker.Outbound do
 
       {:error, reason} ->
         {:error, {:proto_encode, reason}}
+    end
+  end
+
+  defp outbound_proto(text, opts) do
+    case Keyword.get(opts, :proto_message) do
+      %Message{} = proto -> proto
+      _ -> Messages.build_text_proto(text, [])
     end
   end
 
@@ -1382,12 +1467,9 @@ defmodule ExWapp.Session.Worker.Outbound do
       )
 
     own_targets =
-      Targets.resolve_own_device_targets(
-        signal_sessions,
-        own_sender_jid,
-        own_device_id,
-        own_targets_hint
-      )
+      own_targets_hint
+      |> JIDUtils.normalize_target_list()
+      |> Enum.reject(&current_device_target?(&1, own_device_id))
 
     self_chat? = self_chat_destination?(store, jid, own_sender_jid)
 
@@ -1486,6 +1568,10 @@ defmodule ExWapp.Session.Worker.Outbound do
         {:ok, message_id}
 
       error ->
+        Logger.error(
+          "[SEND] Transport send failed for #{jid} id=#{message_id}: #{inspect(error)}"
+        )
+
         Chat.update_message_status(store, jid, message_id, :failed)
         error
     end
@@ -1819,10 +1905,11 @@ defmodule ExWapp.Session.Worker.Outbound do
   end
 
   defp maybe_alias_signal_session(signal_sessions, requested_jid, device_jid, session) do
-    requested_jid = normalize_jid_for_signal(requested_jid)
+    requested_jid = normalize_jid_with_device(requested_jid)
     device_jid = normalize_jid_with_device(device_jid)
 
-    if requested_jid != "" and device_jid != "" and requested_jid != device_jid do
+    if requested_jid != "" and device_jid != "" and requested_jid != device_jid and
+         not SessionStore.has_session?(signal_sessions, requested_jid) do
       Logger.debug("[PREKEY] Aliasing session #{requested_jid} -> #{device_jid}")
       SessionStore.put_session(signal_sessions, requested_jid, session)
     else
@@ -1873,6 +1960,76 @@ defmodule ExWapp.Session.Worker.Outbound do
       content: content
     }
   end
+
+  defp apply_message_node_attrs(%Binary.Node{} = node, opts) do
+    attrs = Map.put(node.attrs, "type", Keyword.get(opts, :message_node_type, "text"))
+    node = %{node | attrs: Map.delete(attrs, "mediatype")}
+
+    node
+    |> maybe_put_encrypted_mediatype(Keyword.get(opts, :mediatype))
+    |> append_additional_message_nodes(Keyword.get(opts, :additional_message_nodes, []))
+  end
+
+  @spec maybe_put_encrypted_mediatype(Binary.Node.t(), term()) :: Binary.Node.t()
+  defp maybe_put_encrypted_mediatype(%Binary.Node{} = node, mediatype)
+       when is_binary(mediatype) and mediatype != "" do
+    content = node.content
+
+    updated_content =
+      if direct_encrypted_content?(content) do
+        Enum.map(content, &put_direct_encrypted_mediatype(&1, mediatype))
+      else
+        Enum.map(content, &put_participant_encrypted_mediatype(&1, mediatype))
+      end
+
+    %{node | content: updated_content}
+  end
+
+  defp maybe_put_encrypted_mediatype(%Binary.Node{} = node, _mediatype), do: node
+
+  @spec direct_encrypted_content?([term()]) :: boolean()
+  defp direct_encrypted_content?(content) do
+    Enum.any?(content, &match?(%Binary.Node{tag: "enc"}, &1))
+  end
+
+  @spec put_direct_encrypted_mediatype(term(), String.t()) :: term()
+  defp put_direct_encrypted_mediatype(%Binary.Node{tag: "enc"} = node, mediatype) do
+    %{node | attrs: Map.put(node.attrs || %{}, "mediatype", mediatype)}
+  end
+
+  defp put_direct_encrypted_mediatype(node, _mediatype), do: node
+
+  @spec put_participant_encrypted_mediatype(term(), String.t()) :: term()
+  defp put_participant_encrypted_mediatype(
+         %Binary.Node{tag: "participants", content: participants} = node,
+         mediatype
+       )
+       when is_list(participants) do
+    updated_participants =
+      Enum.map(participants, fn
+        %Binary.Node{tag: "to", content: encrypted_nodes} = participant
+        when is_list(encrypted_nodes) ->
+          updated_nodes =
+            Enum.map(encrypted_nodes, &put_direct_encrypted_mediatype(&1, mediatype))
+
+          %{participant | content: updated_nodes}
+
+        participant ->
+          participant
+      end)
+
+    %{node | content: updated_participants}
+  end
+
+  defp put_participant_encrypted_mediatype(node, _mediatype), do: node
+
+  @spec append_additional_message_nodes(Binary.Node.t(), term()) :: Binary.Node.t()
+  defp append_additional_message_nodes(%Binary.Node{} = node, additional_nodes)
+       when is_list(additional_nodes) do
+    %{node | content: node.content ++ additional_nodes}
+  end
+
+  defp append_additional_message_nodes(%Binary.Node{} = node, _additional_nodes), do: node
 
   defp query_device_list_worker(%{conn: conn} = state, jids) when is_list(jids) do
     message_id = generate_request_id()
@@ -1958,7 +2115,7 @@ defmodule ExWapp.Session.Worker.Outbound do
         text: text,
         status: :pending,
         participant: nil,
-        raw: nil
+        raw: Keyword.get(opts, :outgoing_raw)
       })
     end
   end

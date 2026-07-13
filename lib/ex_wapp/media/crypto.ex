@@ -48,7 +48,8 @@ defmodule ExWapp.Media.Crypto do
       media_key: media_key,
       file_sha256: :crypto.hash(:sha256, plaintext),
       file_enc_sha256: :crypto.hash(:sha256, body),
-      file_length: byte_size(plaintext)
+      file_length: byte_size(plaintext),
+      media_key_timestamp: System.system_time(:second)
     }
 
     {:ok, upload, body}
@@ -59,7 +60,8 @@ defmodule ExWapp.Media.Crypto do
   """
   @spec decrypt_download(binary(), Media.Ref.t()) :: {:ok, binary()} | {:error, term()}
   def decrypt_download(body, %Media.Ref{} = ref) when is_binary(body) do
-    with :ok <- validate_body_size(body),
+    with :ok <- validate_ref(ref),
+         :ok <- validate_body_size(body),
          {:ok, ciphertext, mac} <- split_body(body),
          keys <- derive_keys(ref.media_key, ref.type),
          :ok <- validate_mac(keys.iv, ciphertext, keys.mac_key, mac),
@@ -71,12 +73,26 @@ defmodule ExWapp.Media.Crypto do
     end
   end
 
+  @spec validate_ref(Media.Ref.t()) ::
+          :ok | {:error, :missing_media_key | :invalid_media_key | :unsupported_media_type}
+  defp validate_ref(%Media.Ref{media_key: nil}), do: {:error, :missing_media_key}
+
+  defp validate_ref(%Media.Ref{media_key: key}) when not is_binary(key),
+    do: {:error, :invalid_media_key}
+
+  defp validate_ref(%Media.Ref{media_key: key}) when byte_size(key) != 32,
+    do: {:error, :invalid_media_key}
+
+  defp validate_ref(%Media.Ref{type: type}) when type in [:image, :audio, :document], do: :ok
+  defp validate_ref(%Media.Ref{}), do: {:error, :unsupported_media_type}
+
   @doc """
   Returns the WhatsApp HKDF context string for a media type.
   """
   @spec media_info(Media.media_type()) :: binary()
   def media_info(:image), do: "WhatsApp Image Keys"
   def media_info(:audio), do: "WhatsApp Audio Keys"
+  def media_info(:document), do: "WhatsApp Document Keys"
 
   @spec validate_body_size(binary()) :: :ok | {:error, :media_too_short}
   defp validate_body_size(body) do

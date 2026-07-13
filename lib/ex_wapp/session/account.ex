@@ -145,20 +145,16 @@ defmodule ExWapp.Session.Account do
   @spec local_account_sender_identity_for_destination(term(), String.t()) :: String.t()
   def local_account_sender_identity_for_destination(nil, _destination_jid), do: ""
 
-  def local_account_sender_identity_for_destination(store, destination_jid) do
-    destination_jid = JIDUtils.normalize_with_device(destination_jid)
+  def local_account_sender_identity_for_destination(store, _destination_jid) do
     own_base = local_account_base_jid(store)
     own_lid = local_account_lid_jid(store)
 
     cond do
-      JIDUtils.lid_jid?(destination_jid) and own_lid != "" ->
+      own_lid != "" ->
         own_lid
 
       own_base != "" ->
         own_base
-
-      own_lid != "" ->
-        own_lid
 
       true ->
         ""

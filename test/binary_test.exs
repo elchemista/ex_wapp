@@ -3,6 +3,7 @@ defmodule ExWapp.BinaryTest do
 
   alias ExWapp.Binary
   alias ExWapp.Binary.{Node, Raw}
+  alias ExWapp.JID
 
   test "encode/decode simple node" do
     node = {
@@ -40,5 +41,32 @@ defmodule ExWapp.BinaryTest do
     decoded = Binary.decode!(encoded)
 
     assert decoded.attrs == %{"number" => "12345"}
+  end
+
+  test "encodes jid-shaped protocol attributes as binary JIDs" do
+    node =
+      {"iq", %{"to" => "s.whatsapp.net", "type" => "get"},
+       [
+         {"key", %{},
+          [
+            {"user", %{"jid" => "19995550101@s.whatsapp.net", "reason" => "identity"},
+             nil}
+          ]}
+       ]}
+
+    decoded = node |> Binary.encode!() |> Binary.decode!()
+
+    assert %JID{user: "", server: "s.whatsapp.net"} = decoded.attrs["to"]
+    assert [key] = decoded.content
+    assert [user] = key.content
+    assert %JID{user: "19995550101", server: "s.whatsapp.net"} = user.attrs["jid"]
+    assert user.attrs["reason"] == "identity"
+  end
+
+  test "encodes linked-device jid attributes with the AD JID token" do
+    node = {"to", %{"jid" => "19995550101:32@s.whatsapp.net"}, nil}
+
+    assert %Node{attrs: %{"jid" => %JID{user: "19995550101", device: 32}}} =
+             node |> Binary.encode!() |> Binary.decode!()
   end
 end

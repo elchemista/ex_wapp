@@ -106,7 +106,8 @@ custom runtime.
 Common functions:
 
 - connection lifecycle: `new/1`, `connect/1`, `pair/1`, `disconnect/1`
-- sending: `send_message/2`, `send_image/4`, `send_audio/4`
+- sending: `send_message/2`, `send_image/4`, `send_audio/4`,
+  `send_document/4`, `send_location/5`, `send_contact/5`, `send_event/5`
 - inbound processing: `receive_message/3`
 - media download: `download_media/3`
 - local data access: `list_contacts/1`, `get_contact/2`, `sync_contacts/1`,
@@ -394,6 +395,25 @@ ExWapp.send_audio(client, jid, {:path, "voice.ogg"},
   mimetype: "audio/ogg; codecs=opus",
   ptt: true
 )
+
+ExWapp.send_document(client, jid, {:path, "contract.pdf"},
+  mimetype: "application/pdf",
+  caption: "Contract"
+)
+
+ExWapp.send_location(client, jid, 45.4642, 9.1900,
+  name: "Milano",
+  address: "Milano, Italy"
+)
+
+vcard = ExWapp.Contact.vcard("Mario Rossi", "+393331234567")
+ExWapp.send_contact(client, jid, "Mario Rossi", vcard)
+
+# EventMessage is supported by WhatsApp Web but is less stable than the other types.
+ExWapp.send_event(client, jid, "Project meeting", DateTime.utc_now(),
+  description: "Weekly review",
+  end_time: DateTime.add(DateTime.utc_now(), 3600, :second)
+)
 ```
 
 `ExWapp.Message` is the user-facing message builder module. It returns a small
@@ -404,6 +424,10 @@ runtime-neutral struct that adapters and transports can send later:
 - `ExWapp.Message.read_receipt/3`
 - `ExWapp.Message.image/3`
 - `ExWapp.Message.audio/3`
+- `ExWapp.Message.document/3`
+- `ExWapp.Message.location/4`
+- `ExWapp.Message.contact/4`
+- `ExWapp.Message.event/4`
 
 `ExWapp.Messages` is a lower-level helper used by the session worker. It builds
 protobuf payloads, message IDs, context info, resend requests, and binary nodes.
@@ -426,6 +450,7 @@ Most applications only need:
 
 - `ExWapp.send_image/4`
 - `ExWapp.send_audio/4`
+- `ExWapp.send_document/4`
 - `ExWapp.download_media/3`
 - `ExWapp.Media.read_source/1`
 - `ExWapp.Media.ref_from_upload/2`
@@ -444,6 +469,19 @@ Downloading inbound media:
 
 File.write!("/tmp/out.bin", download.bytes)
 ```
+
+Inbound messages expose decoded content directly on the stored message map:
+
+```elixir
+message.media     # %ExWapp.Media.Ref{} for image/audio/document
+message.location  # latitude, longitude, name, address, ...
+message.contact   # display_name, vcard, is_self_contact
+message.event     # name, start_time, end_time, location, ...
+```
+
+Pass `message.media` to `ExWapp.download_media/3` to fetch, verify, and decrypt
+the original bytes. ExWapp does not transcode audio: a WhatsApp voice note
+should normally be supplied as Opus in an OGG container.
 
 Media modules:
 

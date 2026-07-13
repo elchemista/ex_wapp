@@ -16,8 +16,8 @@ defmodule ExWapp.InboundDeviceSessionRestoreTest do
     bob_signed_prekey = Keys.generate_signed_prekey(bob_identity, signed_id)
     bob_one_time_prekey = Keys.generate_prekey(prekey_id)
 
-    sender_device_jid = "33625382846503:91@lid"
-    sender_base_jid = "33625382846503@lid"
+    sender_device_jid = "19995550202:91@lid"
+    sender_base_jid = "19995550202@lid"
     sender_pn_jid = "12025550123@s.whatsapp.net"
 
     bob_store =
