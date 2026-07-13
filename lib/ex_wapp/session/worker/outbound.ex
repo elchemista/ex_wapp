@@ -5,7 +5,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   alias ExWapp.{Binary, Chat, Config, JID, Messages, Store, Telemetry}
   alias ExWapp.Proto.Message
-  alias ExWapp.Signal.{Encryption, SenderKey, SessionStore}
+  alias ExWapp.Signal.{Encryption, SessionStore}
 
   alias ExWapp.Session.{
     Account,
@@ -15,7 +15,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     MessageNode
   }
 
-  alias ExWapp.Session.Outbound.{DeviceDiscovery, Fanout, Prekeys}
+  alias ExWapp.Session.Outbound.{DeviceDiscovery, Fanout, Group, Prekeys}
 
   @spec send_text_worker(pid(), map(), String.t(), iodata(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
@@ -166,6 +166,8 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
+  @spec do_send_group_worker(pid(), map(), String.t(), iodata(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
   defp do_send_group_worker(
          session_pid,
          %{conn: conn, store: store} = state,
@@ -191,7 +193,7 @@ defmodule ExWapp.Session.Worker.Outbound do
          proto <- outbound_proto(text, opts),
          {:ok, payload} <- Message.encode(proto),
          {:ok, distribution_payload, skmsg_payload} <-
-           build_group_sender_key_payloads(store, group_jid, payload),
+           Group.build_sender_key_payloads(store, group_jid, payload),
          distribution_target_specs <-
            Enum.map(distribution_targets, &%{jid: &1, payload_kind: :recipient}),
          {:ok, participant_nodes, persisted_sessions, include_identity} <-
@@ -266,7 +268,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     Chat.add_message(context.store, context.group_jid, pending_message)
 
     node =
-      build_group_encrypted_message_node(
+      Group.build_encrypted_message_node(
         context.group_jid,
         context.message_id,
         context.participant_nodes,
@@ -327,40 +329,8 @@ defmodule ExWapp.Session.Worker.Outbound do
     )
   end
 
-  defp build_group_sender_key_payloads(store, group_jid, message_payload) do
-    padded_group_payload = Encryption.pad_message(message_payload)
-    sender_identity = Account.local_account_sender_key_jid(store)
-
-    if sender_identity == "" do
-      {:error, :missing_sender_identity}
-    else
-      do_build_group_sender_key_payloads(
-        store,
-        group_jid,
-        sender_identity,
-        padded_group_payload
-      )
-    end
-  end
-
-  defp do_build_group_sender_key_payloads(store, group_jid, sender_identity, padded_payload) do
-    with {:ok, distribution_payload} <-
-           SenderKey.create_outbound_distribution_message(
-             store,
-             group_jid,
-             sender_identity
-           ),
-         {:ok, skmsg_payload} <-
-           SenderKey.encrypt_outbound_group_message(
-             store,
-             group_jid,
-             sender_identity,
-             padded_payload
-           ) do
-      {:ok, Encryption.pad_message(distribution_payload), skmsg_payload}
-    end
-  end
-
+  @spec ensure_group_sender_key_sessions_worker(map(), String.t(), [term()], term()) ::
+          {:ok, SessionStore.t(), map(), [String.t()]} | {:error, term()}
   defp ensure_group_sender_key_sessions_worker(
          state,
          group_jid,
@@ -372,12 +342,12 @@ defmodule ExWapp.Session.Worker.Outbound do
     own_lid_jid = Account.local_account_lid_jid(state.store)
     own_device_id = Account.local_account_device_id(state.store)
 
-    own_jids_for_query = own_jids_for_group_query(addressing_mode, own_base_jid, own_lid_jid)
-    query_jids = build_group_query_jids(participant_jids, own_jids_for_query)
+    query_jids =
+      Group.query_jids(participant_jids, addressing_mode, own_base_jid, own_lid_jid)
     device_map = fetch_group_device_map(state, group_jid, query_jids)
 
     {live_distribution_targets, cached_distribution_targets} =
-      build_group_distribution_targets(
+      Group.distribution_targets(
         query_jids,
         device_map,
         addressing_mode,
@@ -392,22 +362,23 @@ defmodule ExWapp.Session.Worker.Outbound do
       "[SEND] Group sender-key distribution targets for #{group_jid}: live=#{inspect(live_distribution_targets)} cached=#{inspect(cached_distribution_targets)}"
     )
 
-    own_identity_set = group_own_identity_set(own_base_jid, own_lid_jid)
     lid_mapping = Account.load_lid_mapping(state.store)
 
     devices_needing_prekeys =
-      find_group_devices_needing_prekeys(
+      Group.prekey_targets(
         JIDUtils.normalize_target_list(live_distribution_targets ++ cached_distribution_targets),
         state.runtime_cfg,
         signal_sessions,
         lid_mapping,
-        own_identity_set
+        own_base_jid,
+        own_lid_jid,
+        System.system_time(:millisecond)
       )
 
     {updated_sessions, prekey_bundles} =
       fetch_group_prekeys(state, devices_needing_prekeys, signal_sessions, "group")
 
-    finalize_group_sessions_result(
+    Group.finalize_sessions_result(
       updated_sessions,
       prekey_bundles,
       finalize_soft_targets(
@@ -420,18 +391,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     )
   end
 
-  # Only add the own JID variant that matches the group's addressing_mode.
-  # Mixing PN and LID in a LID-addressed message causes the server to drop it.
-  defp own_jids_for_group_query("lid", _own_base_jid, own_lid_jid), do: [own_lid_jid]
-  defp own_jids_for_group_query(_mode, own_base_jid, _own_lid_jid), do: [own_base_jid]
-
-  defp build_group_query_jids(participant_jids, own_jids_for_query) do
-    (participant_jids ++ own_jids_for_query)
-    |> Enum.reject(&(&1 in [nil, ""]))
-    |> Enum.map(&strip_device_from_jid/1)
-    |> Enum.uniq()
-  end
-
+  @spec fetch_group_device_map(map(), String.t(), [String.t()]) :: map()
   defp fetch_group_device_map(state, group_jid, query_jids) do
     case query_device_list_worker(state, query_jids) do
       {:ok, map} ->
@@ -444,140 +404,8 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
-  defp build_group_distribution_targets(
-         query_jids,
-         device_map,
-         addressing_mode,
-         own_device_id,
-         own_base_jid,
-         own_lid_jid,
-         store,
-         runtime_cfg
-       ) do
-    {live_targets, cached_targets} =
-      expand_group_distribution_targets(query_jids, device_map, store, runtime_cfg)
-
-    live_targets =
-      live_targets
-      |> JIDUtils.normalize_target_list()
-      |> filter_group_targets_for_addressing_mode(addressing_mode)
-      |> Enum.reject(
-        &group_current_device_target?(&1, own_device_id, [own_base_jid, own_lid_jid])
-      )
-      |> Enum.uniq()
-
-    cached_targets =
-      cached_targets
-      |> JIDUtils.normalize_target_list()
-      |> filter_group_targets_for_addressing_mode(addressing_mode)
-      |> Enum.reject(
-        &(group_current_device_target?(&1, own_device_id, [own_base_jid, own_lid_jid]) or
-            &1 in live_targets)
-      )
-      |> Enum.uniq()
-
-    {live_targets, cached_targets}
-  end
-
-  defp expand_group_distribution_targets(query_jids, device_map, store, runtime_cfg)
-       when is_list(query_jids) do
-    lid_mapping = Account.load_lid_mapping(store)
-
-    Enum.reduce(query_jids, {[], []}, fn participant, {live_acc, cached_acc} ->
-      base_participant = strip_device_from_jid(participant)
-
-      live_targets =
-        [
-          base_participant
-          | DeviceDiscovery.resolve_identity_devices(device_map, base_participant, lid_mapping)
-        ]
-        |> JIDUtils.normalize_target_list()
-
-      cached_targets =
-        DeviceCache.resolve_recent_devices(store, base_participant, runtime_cfg)
-        |> Enum.reject(&(&1 in live_targets))
-
-      {live_acc ++ live_targets, cached_acc ++ cached_targets}
-    end)
-  end
-
-  defp finalize_group_sessions_result({:error, reason}, _prekey_bundles, _distribution_targets),
-    do: {:error, reason}
-
-  defp finalize_group_sessions_result(sessions, prekey_bundles, distribution_targets) do
-    {:ok, sessions, prekey_bundles, distribution_targets}
-  end
-
-  defp group_current_device_target?(target_jid, own_device_id, own_identities) do
-    target_identity = JIDUtils.identity(target_jid)
-
-    own_identity_set =
-      own_identities
-      |> Enum.map(&JIDUtils.identity/1)
-      |> Enum.reject(fn {user, server} -> user == "" or server == "" end)
-      |> MapSet.new()
-
-    MapSet.member?(own_identity_set, target_identity) and
-      current_device_target?(target_jid, own_device_id)
-  end
-
-  defp filter_group_targets_for_addressing_mode(targets, "lid") when is_list(targets) do
-    {lid_targets, mismatched_targets} =
-      Enum.split_with(targets, fn target_jid ->
-        target_jid
-        |> strip_device_from_jid()
-        |> JIDUtils.lid_jid?()
-      end)
-
-    if mismatched_targets != [] do
-      Logger.warning(
-        "[SEND] Dropping non-LID targets in lid addressing mode: #{inspect(mismatched_targets)}"
-      )
-    end
-
-    lid_targets
-  end
-
-  defp filter_group_targets_for_addressing_mode(targets, _), do: targets
-
-  defp group_own_identity_set(own_base_jid, own_lid_jid) do
-    [own_base_jid, own_lid_jid]
-    |> Enum.map(&JIDUtils.identity/1)
-    |> Enum.reject(fn {user, server} -> user == "" or server == "" end)
-    |> MapSet.new()
-  end
-
-  @spec find_group_devices_needing_prekeys(
-          [term()],
-          map(),
-          SessionStore.t(),
-          map(),
-          MapSet.t({String.t(), String.t()})
-        ) :: [String.t()]
-  defp find_group_devices_needing_prekeys(
-         distribution_targets,
-         runtime_cfg,
-         signal_sessions,
-         lid_mapping,
-         own_identity_set
-       ) do
-    session_max_age_ms =
-      Config.get(
-        runtime_cfg || %{},
-        [:signal, :session_max_age_ms],
-        :timer.hours(12)
-      )
-
-    Prekeys.targets_needing_prekeys(
-      signal_sessions,
-      distribution_targets,
-      own_identity_set,
-      lid_mapping,
-      session_max_age_ms,
-      System.system_time(:millisecond)
-    )
-  end
-
+  @spec fetch_group_prekeys(map(), [String.t()], SessionStore.t(), term()) ::
+          {Prekeys.fetch_state(), map()}
   defp fetch_group_prekeys(state, devices_needing_prekeys, signal_sessions, context) do
     Prekeys.fetch_group(
       devices_needing_prekeys,
@@ -592,82 +420,11 @@ defmodule ExWapp.Session.Worker.Outbound do
     )
   end
 
-  defp build_group_encrypted_message_node(
-         group_jid,
-         message_id,
-         participant_nodes,
-         skmsg_payload,
-         addressing_mode,
-         store,
-         include_identity
-       ) do
-    attrs = %{
-      "id" => message_id,
-      "to" => strip_device_from_jid(group_jid),
-      "type" => "text"
-    }
-
-    attrs =
-      MessageNode.maybe_put_message_attr(
-        attrs,
-        "addressing_mode",
-        normalize_addressing_mode(addressing_mode)
-      )
-
-    participant_jids = MessageNode.extract_participant_jids(participant_nodes)
-
-    attrs =
-      MessageNode.maybe_put_message_attr(
-        attrs,
-        "phash",
-        MessageNode.generate_participant_hash_v2(participant_jids)
-      )
-
-    participants_content =
-      if participant_nodes == [] do
-        []
-      else
-        [
-          %Binary.Node{
-            tag: "participants",
-            attrs: %{},
-            content: participant_nodes
-          }
-        ]
-      end
-
-    skmsg_node = %Binary.Node{
-      tag: "enc",
-      attrs: %{"v" => "2", "type" => "skmsg"},
-      content: Binary.raw(skmsg_payload)
-    }
-
-    content =
-      if include_identity do
-        case Account.get_device_identity_node(store) do
-          {:ok, identity_node} ->
-            participants_content ++ [identity_node, skmsg_node]
-
-          _ ->
-            participants_content ++ [skmsg_node]
-        end
-      else
-        participants_content ++ [skmsg_node]
-      end
-
-    %Binary.Node{
-      tag: "message",
-      attrs: attrs,
-      content: content
-    }
-  end
-
-  defp normalize_addressing_mode(mode) when mode in ["lid", "pn"], do: mode
-  defp normalize_addressing_mode(_), do: nil
-
+  @spec query_group_info_worker(map(), String.t()) ::
+          {:ok, Group.group_info()} | {:error, term()}
   defp query_group_info_worker(%{conn: conn} = state, group_jid) do
     message_id = generate_request_id()
-    query_node = build_group_info_query(group_jid, message_id)
+    query_node = Group.build_info_query(group_jid, message_id)
 
     Logger.debug("[GROUP] Querying group info for #{group_jid}")
 
@@ -675,7 +432,7 @@ defmodule ExWapp.Session.Worker.Outbound do
       :ok ->
         receive do
           {:prekey_response, ^message_id, response_node} ->
-            parse_group_info_response(response_node, group_jid)
+            Group.parse_info_response(response_node, group_jid)
 
           {:prekey_error, ^message_id, error} ->
             {:error, {:group_info_query_error, error}}
@@ -688,74 +445,6 @@ defmodule ExWapp.Session.Worker.Outbound do
         {:error, {:group_info_send_failed, error}}
     end
   end
-
-  defp build_group_info_query(group_jid, message_id) do
-    %Binary.Node{
-      tag: "iq",
-      attrs: %{
-        "id" => message_id,
-        "xmlns" => "w:g2",
-        "type" => "get",
-        "to" => strip_device_from_jid(group_jid)
-      },
-      content: [
-        %Binary.Node{
-          tag: "query",
-          attrs: %{"request" => "interactive"},
-          content: nil
-        }
-      ]
-    }
-  end
-
-  defp parse_group_info_response(
-         %Binary.Node{tag: "iq", attrs: %{"type" => "result"}, content: content},
-         group_jid
-       )
-       when is_list(content) do
-    group_node = find_child(content, "group")
-
-    if is_nil(group_node) do
-      {:error, :missing_group_node}
-    else
-      addressing_mode = Map.get(group_node.attrs || %{}, "addressing_mode")
-
-      participants =
-        (group_node.content || [])
-        |> Enum.filter(&match?(%Binary.Node{tag: "participant"}, &1))
-        |> Enum.map(&extract_group_participant_identity(&1, addressing_mode))
-        |> Enum.reject(&(&1 == ""))
-        |> JIDUtils.normalize_target_list()
-        |> Enum.map(&strip_device_from_jid/1)
-        |> Enum.reject(&(&1 == group_jid))
-        |> Enum.uniq()
-
-      if participants == [] do
-        {:error, :empty_group_participants}
-      else
-        {:ok, %{participants: participants, addressing_mode: addressing_mode}}
-      end
-    end
-  end
-
-  defp parse_group_info_response(%Binary.Node{attrs: %{"type" => "error"}} = node, _group_jid),
-    do: {:error, {:group_info_error, node}}
-
-  defp parse_group_info_response(_response, _group_jid),
-    do: {:error, :invalid_group_info_response}
-
-  defp extract_group_participant_identity(%Binary.Node{attrs: attrs}, addressing_mode)
-       when is_map(attrs) do
-    lid = normalize_jid_with_device(attrs["lid"])
-    pn = normalize_jid_with_device(attrs["jid"] || attrs["pn"] || attrs["phone_number"])
-
-    case addressing_mode do
-      "lid" -> if lid != "", do: lid, else: pn
-      _ -> if pn != "", do: pn, else: lid
-    end
-  end
-
-  defp extract_group_participant_identity(_, _), do: ""
 
   defp ensure_signal_session_worker(state, jid) do
     signal_sessions = state.signal_sessions || SessionStore.new()
