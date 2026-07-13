@@ -38,6 +38,10 @@ defmodule ExWapp.Client.Transport do
   @callback get_chat(Client.t(), String.t()) :: {:ok, Chat.chat()} | {:error, term()}
   @callback get_messages(Client.t(), String.t(), keyword()) ::
               {:ok, [Chat.message()]} | {:error, term()}
+  @callback stream_messages(Client.t(), String.t(), keyword()) ::
+              {:ok, Enumerable.t()} | {:error, term()}
+  @callback delete_messages(Client.t(), String.t(), [String.t()]) ::
+              {:ok, Client.t()} | :ok | {:error, term()}
   @callback download_media(Client.t(), Media.Ref.t(), keyword()) ::
               {:ok, Client.t(), Media.Download.t()} | {:error, term()}
 
@@ -54,5 +58,7 @@ defmodule ExWapp.Client.Transport do
                       list_groups: 1,
                       get_chat: 2,
                       get_messages: 3,
+                      stream_messages: 3,
+                      delete_messages: 3,
                       download_media: 3
 end
