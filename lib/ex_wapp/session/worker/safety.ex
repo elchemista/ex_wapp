@@ -1,5 +1,10 @@
 defmodule ExWapp.Session.Worker.Safety do
-  @moduledoc false
+  @moduledoc """
+  Implements the session's outbound safety circuit breaker.
+
+  It records server-side risk signals, applies configurable cool-off windows, and
+  can lock sending after forbidden responses until the session is reset.
+  """
 
   alias ExWapp.Config
 
