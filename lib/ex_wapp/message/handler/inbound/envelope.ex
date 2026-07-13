@@ -375,8 +375,11 @@ defmodule ExWapp.Message.Handler.Inbound.Envelope do
       (normalized_from_with_device in local_jids or normalized_from in local_jids)
   end
 
+  @doc """
+  Returns normalized local PN/LID recipient identities from state and envelope attributes.
+  """
   @spec local_recipient_jids(map(), map()) :: [String.t()]
-  defp local_recipient_jids(state, attrs) do
+  def local_recipient_jids(state, attrs) do
     from_store =
       case Map.get(state, :store) do
         nil ->
