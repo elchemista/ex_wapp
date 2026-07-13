@@ -285,11 +285,19 @@ defmodule ExWapp.Session.Outbound.Encryptor do
     end
   end
 
-  @spec target_jid(target_spec() | String.t() | term()) :: String.t()
-  defp target_jid(%{jid: jid}), do: jid
+  @spec target_jid(term()) :: String.t() | ExWapp.JID.t()
+  defp target_jid(%{jid: jid}) when is_binary(jid), do: jid
+  defp target_jid(%{jid: %ExWapp.JID{} = jid}), do: jid
   defp target_jid(jid) when is_binary(jid), do: jid
+  defp target_jid(%ExWapp.JID{} = jid), do: jid
   defp target_jid(_target), do: ""
 
   @spec normalize_jid_with_device(term()) :: String.t()
-  defp normalize_jid_with_device(jid), do: JIDUtils.normalize_with_device(jid)
+  defp normalize_jid_with_device(jid) when is_binary(jid),
+    do: JIDUtils.normalize_with_device(jid)
+
+  defp normalize_jid_with_device(%ExWapp.JID{} = jid),
+    do: JIDUtils.normalize_with_device(jid)
+
+  defp normalize_jid_with_device(_jid), do: ""
 end
