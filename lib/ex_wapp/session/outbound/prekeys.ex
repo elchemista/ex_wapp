@@ -52,7 +52,7 @@ defmodule ExWapp.Session.Outbound.Prekeys do
   @spec targets_needing_prekeys(
           SessionStore.t(),
           [term()],
-          MapSet.t(),
+          MapSet.t({String.t(), String.t()}),
           map(),
           pos_integer(),
           integer()
@@ -159,7 +159,7 @@ defmodule ExWapp.Session.Outbound.Prekeys do
     |> finalize_bundle_session_creation()
   end
 
-  @spec identity_set([term()]) :: MapSet.t()
+  @spec identity_set([term()]) :: MapSet.t({String.t(), String.t()})
   defp identity_set(jids) do
     jids
     |> Enum.map(&JIDUtils.identity/1)
@@ -170,7 +170,7 @@ defmodule ExWapp.Session.Outbound.Prekeys do
   @spec target_needs_prekey?(
           term(),
           SessionStore.t(),
-          MapSet.t(),
+          MapSet.t({String.t(), String.t()}),
           map(),
           pos_integer(),
           integer()
