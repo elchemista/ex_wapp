@@ -15,7 +15,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     MessageNode
   }
 
-  alias ExWapp.Session.Outbound.Fanout
+  alias ExWapp.Session.Outbound.{DeviceDiscovery, Fanout}
 
   @spec send_text_worker(pid(), map(), String.t(), iodata(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
@@ -489,7 +489,7 @@ defmodule ExWapp.Session.Worker.Outbound do
       live_targets =
         [
           base_participant
-          | resolve_usync_devices_for_identity(device_map, base_participant, lid_mapping)
+          | DeviceDiscovery.resolve_identity_devices(device_map, base_participant, lid_mapping)
         ]
         |> JIDUtils.normalize_target_list()
 
@@ -903,19 +903,14 @@ defmodule ExWapp.Session.Worker.Outbound do
     own_base_jid = Account.local_account_base_jid(state.store)
     own_lid_jid = Account.local_account_lid_jid(state.store)
 
-    own_query_bases =
-      (related_query_bases(own_sender_jid, lid_mapping) ++
-         related_query_bases(own_base_jid, lid_mapping) ++
-         related_query_bases(own_lid_jid, lid_mapping))
-      |> JIDUtils.normalize_target_list()
-
     query_jids =
-      if own_query_bases != [] and recipient_base_jid not in own_query_bases do
-        related_query_bases(recipient_base_jid, lid_mapping) ++ own_query_bases
-      else
-        related_query_bases(recipient_base_jid, lid_mapping)
-      end
-      |> JIDUtils.normalize_target_list()
+      DeviceDiscovery.query_jids(
+        recipient_base_jid,
+        own_sender_jid,
+        own_base_jid,
+        own_lid_jid,
+        lid_mapping
+      )
 
     device_map =
       case query_device_list_worker(state, query_jids) do
@@ -931,128 +926,50 @@ defmodule ExWapp.Session.Worker.Outbound do
           %{}
       end
 
-    recipient_devices =
-      [
-        recipient_base_jid
-        | resolve_usync_devices_for_identity(device_map, recipient_base_jid, lid_mapping)
-      ]
-      |> JIDUtils.normalize_target_list()
+    own_preferred_jid =
+      DeviceDiscovery.own_preferred_jid(own_base_jid, own_sender_jid)
 
     recipient_cached_devices =
       DeviceCache.resolve_recent_devices(state.store, recipient_base_jid, state.runtime_cfg)
-      |> Enum.reject(&(&1 in recipient_devices))
-
-    own_preferred_jid = if own_base_jid != "", do: own_base_jid, else: own_sender_jid
-
-    own_devices_all =
-      resolve_own_usync_devices(
-        device_map,
-        [own_sender_jid, own_preferred_jid, own_lid_jid],
-        own_preferred_jid,
-        lid_mapping
-      )
-      |> JIDUtils.normalize_target_list()
 
     own_cached_devices =
       DeviceCache.resolve_recent_devices(state.store, own_preferred_jid, state.runtime_cfg)
-      |> Enum.reject(&(&1 in own_devices_all))
 
-    own_devices = Enum.reject(own_devices_all, &current_device_target?(&1, own_device_id))
+    discovery =
+      DeviceDiscovery.resolve(%{
+        device_map: device_map,
+        recipient_base_jid: recipient_base_jid,
+        recipient_cached_devices: recipient_cached_devices,
+        own_sender_jid: own_sender_jid,
+        own_base_jid: own_base_jid,
+        own_lid_jid: own_lid_jid,
+        own_cached_devices: own_cached_devices,
+        own_device_id: own_device_id,
+        lid_mapping: lid_mapping
+      })
 
-    own_cached_devices =
-      Enum.reject(own_cached_devices, &current_device_target?(&1, own_device_id))
+    Logger.debug(
+      "[SEND] Discovered recipient devices: #{inspect(discovery.recipient_devices)}"
+    )
 
-    # All usync devices INCLUDING current device — needed for phash (whatsmeow parity)
-    all_usync_devices = JIDUtils.normalize_target_list(recipient_devices ++ own_devices_all)
+    Logger.debug(
+      "[SEND] Cached recipient devices: #{inspect(discovery.recipient_cached_devices)}"
+    )
 
-    # Exclude current device from send targets.  For self-chat the recipient IS us,
-    # so device 40 appears in recipient_devices — must be filtered here.
-    all_device_jids =
-      JIDUtils.normalize_target_list(
-        recipient_devices ++ recipient_cached_devices ++ own_devices ++ own_cached_devices
-      )
-      |> Enum.reject(&current_device_target?(&1, own_device_id))
+    Logger.debug("[SEND] Discovered own devices (excl. self): #{inspect(discovery.own_devices)}")
 
-    Logger.debug("[SEND] Discovered recipient devices: #{inspect(recipient_devices)}")
-    Logger.debug("[SEND] Cached recipient devices: #{inspect(recipient_cached_devices)}")
-    Logger.debug("[SEND] Discovered own devices (excl. self): #{inspect(own_devices)}")
-    Logger.debug("[SEND] Cached own devices (excl. self): #{inspect(own_cached_devices)}")
+    Logger.debug(
+      "[SEND] Cached own devices (excl. self): #{inspect(discovery.own_cached_devices)}"
+    )
 
-    {recipient_devices, recipient_cached_devices, own_devices, own_cached_devices,
-     all_usync_devices, all_device_jids}
-  end
-
-  defp related_query_bases(base_jid, lid_mapping) do
-    JIDUtils.related_bases(base_jid, lid_mapping)
-  end
-
-  defp resolve_usync_devices_for_identity(device_map, base_jid, lid_mapping) do
-    aliases = related_query_bases(base_jid, lid_mapping)
-    prefer_lid? = JIDUtils.lid_jid?(base_jid)
-
-    preferred_devices =
-      aliases
-      |> Enum.filter(&(JIDUtils.lid_jid?(&1) == prefer_lid?))
-      |> Enum.flat_map(&Map.get(device_map, &1, []))
-
-    fallback_devices =
-      aliases
-      |> Enum.reject(&(JIDUtils.lid_jid?(&1) == prefer_lid?))
-      |> Enum.flat_map(&Map.get(device_map, &1, []))
-
-    (preferred_devices ++ fallback_devices)
-    |> Enum.map(&JIDUtils.map_to_preferred_family(&1, base_jid, lid_mapping))
-    |> JIDUtils.normalize_target_list()
-  end
-
-  defp resolve_own_usync_devices(device_map, identity_jids, preferred_jid, lid_mapping)
-       when is_list(identity_jids) do
-    aliases =
-      identity_jids
-      |> Enum.flat_map(&related_query_bases(&1, lid_mapping))
-      |> JIDUtils.normalize_target_list()
-
-    aliases
-    |> Enum.flat_map(&Map.get(device_map, &1, []))
-    |> Enum.map(&map_own_device_to_preferred_family(&1, preferred_jid, lid_mapping))
-    |> JIDUtils.normalize_target_list()
-  end
-
-  defp map_own_device_to_preferred_family(target_jid, preferred_jid, lid_mapping) do
-    target_jid = JIDUtils.normalize_with_device(target_jid)
-    preferred_jid = preferred_jid |> JIDUtils.normalize_with_device() |> JIDUtils.strip_device()
-    mapped_jid = JIDUtils.map_to_preferred_family(target_jid, preferred_jid, lid_mapping)
-
-    if synthesize_preferred_own_device?(target_jid, mapped_jid, preferred_jid) do
-      apply_device_to_base(target_jid, preferred_jid)
-    else
-      mapped_jid
-    end
-  end
-
-  defp synthesize_preferred_own_device?(target_jid, mapped_jid, preferred_jid) do
-    target_base = JIDUtils.strip_device(target_jid)
-    mapped_base = JIDUtils.strip_device(mapped_jid)
-
-    preferred_jid != "" and
-      not JIDUtils.lid_jid?(preferred_jid) and
-      JIDUtils.lid_jid?(target_base) and
-      mapped_base == target_base
-  end
-
-  defp apply_device_to_base(source_jid, base_jid) do
-    base_jid = base_jid |> JIDUtils.normalize_with_device() |> JIDUtils.strip_device()
-
-    case {JIDUtils.device_id(source_jid), String.split(base_jid, "@", parts: 2)} do
-      {device_id, [user, server]} when is_integer(device_id) and device_id > 0 ->
-        "#{user}:#{device_id}@#{server}"
-
-      {_device_id, [_user, _server]} ->
-        base_jid
-
-      _ ->
-        source_jid
-    end
+    {
+      discovery.recipient_devices,
+      discovery.recipient_cached_devices,
+      discovery.own_devices,
+      discovery.own_cached_devices,
+      discovery.all_usync_devices,
+      discovery.all_device_jids
+    }
   end
 
   # Match whatsmeow: check existing sessions by BOTH wire JID and LID-mapped JID,
