@@ -18,7 +18,7 @@ Kept as library responsibilities:
 - high-level `ExWapp.new/1`, `connect/1`, `pair/1`, `send_message/2`,
   `receive_message/3`
 - built-in `ExWapp.Client.Transport.Session` for real WhatsApp send/receive
-- optional low-level `ExWapp.Client.Transport.WebSocket`
+- optional low-level `ExWapp.Transport.WebSocket` for protocol diagnostics
 - message builders via `ExWapp.Message`
 - store behaviour and built-in stores
 - event and transport behaviours
@@ -112,7 +112,7 @@ Common functions:
 - media download: `download_media/3`
 - local data access: `list_contacts/1`, `get_contact/2`, `sync_contacts/1`,
   `create_contact/3`, `delete_contact/2`, `list_chats/1`, `list_groups/1`,
-  `get_chat/2`
+  `get_chat/2`, `get_messages/3`, `all_messages/2`
 - diagnostics: `status/1`, `last_error/1`, `diagnostics/1`
 
 Example:
@@ -136,6 +136,8 @@ client =
   )
 
 {:ok, chats} = ExWapp.list_chats(client)
+{:ok, recent_messages} =
+  ExWapp.get_messages(client, "393XXXXXXXXX@s.whatsapp.net", limit: 50)
 status = ExWapp.status(client)
 diag = ExWapp.diagnostics(client)
 ```
@@ -248,14 +250,14 @@ t ExWapp.Event.type
 ExWapp.Telemetry.events()
 ```
 
-ExWapp also ships a lower-level WebSocket transport layer:
+ExWapp also ships a raw diagnostic WebSocket adapter:
 
 ```elixir
 client =
   ExWapp.new(
     session_id: "account_1",
     store: {ExWapp.Store.Ets, path: "/tmp/ex_wapp/account_1.etf"},
-    transport: ExWapp.Client.Transport.WebSocket,
+    transport: ExWapp.Client.Transport.RawWebSocket,
     metadata: %{
       owner: self(),
       websocket: [
@@ -274,9 +276,12 @@ end
 ```
 
 `ExWapp.Transport.WebSocket` handles WebSocket framing, Noise handshake,
-transport encryption/decryption, and binary node encode/decode. It does not
-replace the full session send path; use `ExWapp.Client.Transport.Session` when
-you want complete sending and receiving.
+transport encryption/decryption, and binary node encode/decode. The diagnostic
+adapter deliberately rejects `ExWapp.send_message/2`: a raw socket does not
+provide Signal sessions, linked-device fanout, sender keys, retry, or state
+synchronization. Use `ExWapp.Client.Transport.Session` for complete sending
+and receiving. The old `ExWapp.Client.Transport.WebSocket` adapter name is
+deprecated in favor of `RawWebSocket`.
 
 ## Event Adapter
 
@@ -319,24 +324,30 @@ High-level operations also log at the client boundary:
 - `info` when it succeeds
 - `error` when it fails or raises
 
-## Wrapper Module
+## Application Wrapper
 
-You can define a small application wrapper with default adapters:
+`ExWapp.Client` is deliberately data-only and does not generate wrapper
+modules. Keep the client in a process owned by your application and expose the
+small API your domain needs:
 
 ```elixir
 defmodule MyApp.WhatsApp do
-  use ExWapp.Client,
-    store: {ExWapp.Store.Ets, path: "/tmp/ex_wapp/account_1.etf"},
-    transport: MyApp.WhatsAppTransport,
-    events: MyApp.WhatsAppEvents
+  def new(account_id) do
+    ExWapp.new(
+      session_id: account_id,
+      store: {ExWapp.Store.Ets, path: "/tmp/ex_wapp/#{account_id}.etf"},
+      transport: ExWapp.Client.Transport.Session,
+      events: MyApp.WhatsAppEvents
+    )
+  end
+
+  def send_text(client, jid, text) do
+    ExWapp.send_message(client, to: jid, text: text)
+  end
+
+  def all_messages(client, jid), do: ExWapp.all_messages(client, jid)
 end
-
-client = MyApp.WhatsApp.new(session_id: "account_1")
-{:ok, client} = MyApp.WhatsApp.connect(client)
-{:ok, client, id} = MyApp.WhatsApp.send_message(client, to: jid, text: "hello")
 ```
-
-The macro only generates thin forwarding helpers. It does not start processes.
 
 ## GenServer Example
 
@@ -470,7 +481,24 @@ Downloading inbound media:
 File.write!("/tmp/out.bin", download.bytes)
 ```
 
-Inbound messages expose decoded content directly on the stored message map:
+Inbound messages expose one canonical, already-decoded content value:
+
+```elixir
+case message.content do
+  %ExWapp.Message.Content{kind: :text, text: text} ->
+    {:text, text}
+
+  %ExWapp.Message.Content{kind: :media, media: media, media_type: type} ->
+    {:media, type, media}
+
+  %ExWapp.Message.Content{kind: kind} when kind in [:location, :contact, :event] ->
+    {kind, message.content}
+end
+```
+
+Wrappers should branch on `message.content.kind`; they do not need to parse
+protobuf or infer image, audio, document, location, contact, or event formats.
+The legacy projections remain available during migration:
 
 ```elixir
 message.media     # %ExWapp.Media.Ref{} for image/audio/document
@@ -479,9 +507,10 @@ message.contact   # display_name, vcard, is_self_contact
 message.event     # name, start_time, end_time, location, ...
 ```
 
-Pass `message.media` to `ExWapp.download_media/3` to fetch, verify, and decrypt
-the original bytes. ExWapp does not transcode audio: a WhatsApp voice note
-should normally be supplied as Opus in an OGG container.
+Pass `message.content.media` (or the compatible `message.media`) to
+`ExWapp.download_media/3` to fetch, verify, and decrypt the original bytes.
+ExWapp does not transcode audio: a WhatsApp voice note should normally be
+supplied as Opus in an OGG container.
 
 Media modules:
 
@@ -506,7 +535,31 @@ Contacts and chats are exposed through the runtime-neutral client facade:
 {:ok, chats} = ExWapp.list_chats(client)
 {:ok, groups} = ExWapp.list_groups(client)
 {:ok, group} = ExWapp.get_chat(client, "123456789@g.us")
+
+# Materialized pages are newest first.
+{:ok, page} = ExWapp.get_messages(client, group.jid, limit: 100, offset: 0)
+
+# Complete local history is a lazy, oldest-first stream.
+{:ok, history} = ExWapp.all_messages(client, group.jid)
+
+history
+|> Stream.chunk_every(250)
+|> Stream.each(&MyApp.MessageRepo.upsert_batch(group.jid, &1))
+|> Stream.run()
 ```
+
+`get_messages/3` materializes a bounded page. `stream_messages/3` and
+`all_messages/2` return an enumerable backed by the configured message store;
+they do not first load a message list from `%ExWapp.Chat{}`. The stream is
+oldest first by default and has no fixed retention cap. These APIs read local
+history only and do not start a remote history download.
+
+Chat structs contain conversation metadata only. They deliberately do not
+contain a message list, a function, or a stream reference: the chat JID is the
+stable lookup key, and `ExWapp.stream_messages/3` creates a fresh lazy cursor
+when enumeration starts. Message payloads are indexed separately by chat JID,
+timestamp, and message ID. Built-in stores implement that index with ETS; a
+custom store can implement the same callbacks with a database cursor.
 
 Implementation notes:
 
@@ -517,6 +570,70 @@ Implementation notes:
 
 When you use the built-in session transport, these modules read and write the
 configured store directly, so they are useful both at runtime and in tests.
+
+### Synchronization and wrapper persistence
+
+After authentication, the built-in session automatically runs app-state sync
+and consumes supported inline history-sync payloads delivered by WhatsApp.
+Contacts, chat metadata, and history messages found in those payloads are
+merged into the configured store. History notifications that require a
+separate blob download are currently detected and logged but are not imported.
+`ExWapp.sync_contacts/1` is an explicit contact refresh; it
+is not a command to download an account's complete message history.
+
+WhatsApp's user-facing "Export chat" action is not a stable WhatsApp Web
+protocol endpoint that a linked-device library can invoke. ExWapp therefore
+keeps local-history iteration separate from remote history synchronization:
+
+- `ExWapp.all_messages/2` streams everything currently retained locally
+- `ExWapp.Session.message_stream/1` delivers future inbound messages live
+- a wrapper should upsert both sources into its own database
+- history notifications requiring a separate blob download still need protocol
+  support before they can enter the local message store
+
+The built-in store has no automatic message-count cap. After a database
+transaction succeeds, a wrapper may explicitly delete only the imported IDs:
+
+```elixir
+{:ok, history} = ExWapp.all_messages(client, jid)
+
+history
+|> Stream.chunk_every(250)
+|> Enum.reduce_while(client, fn batch, current_client ->
+  case MyApp.MessageRepo.upsert_batch(jid, batch) do
+    :ok ->
+      ids = Enum.map(batch, & &1.id)
+
+      case ExWapp.delete_messages(current_client, jid, ids) do
+        {:ok, updated_client} -> {:cont, updated_client}
+        {:error, error, failed_client} -> {:halt, {:error, error, failed_client}}
+      end
+
+    {:error, reason} ->
+      {:halt, {:error, reason, current_client}}
+  end
+end)
+```
+
+Deletion is explicit rather than automatic: a failed wrapper write must never
+cause ExWapp to discard the only local copy.
+
+For a complete backup of the built-in session's current local state:
+
+```elixir
+session = client.metadata.session_pid
+{:ok, %{data: data, blob: blob, checksum: checksum}} =
+  ExWapp.Session.export_snapshot(session)
+
+local_chats = Map.get(data, :chats, %{})
+local_messages = Map.get(data, :chat_messages, %{})
+```
+
+Snapshot export is intentionally eager and materializes `:chat_messages`;
+normal history processing should use the stream API instead. The snapshot is
+local state, not a remote resynchronization. Continue consuming
+`ExWapp.Session.message_stream/1` or high-level inbound events for new
+messages after the snapshot.
 
 ## How It Works
 
@@ -565,7 +682,7 @@ Use this section as a map of the current codebase.
 Core public entry points:
 
 - `ExWapp`: runtime-neutral client facade
-- `ExWapp.Client`: client struct and `use ExWapp.Client` wrapper macro
+- `ExWapp.Client`: runtime-neutral client state struct
 - `ExWapp.Session`: direct built-in session API
 - `ExWapp.Message`: user-facing outbound message builders
 - `ExWapp.Media`: user-facing media helpers
@@ -576,9 +693,19 @@ Core public entry points:
 Built-in transport/runtime:
 
 - `ExWapp.Client.Transport.Session`: full WhatsApp session transport
-- `ExWapp.Client.Transport.WebSocket`: lower-level transport adapter
+- `ExWapp.Client.Transport.RawWebSocket`: raw diagnostic adapter; it rejects
+  high-level message sending
+- `ExWapp.Client.Transport.WebSocket`: deprecated compatibility name for the
+  raw diagnostic adapter
 - `ExWapp.Session.Worker`: main GenServer implementation
-- `ExWapp.Session.Worker.Outbound`: outgoing send path
+- `ExWapp.Session.Worker.Outbound`: thin coordinator for send, persistence,
+  retry, and telemetry effects
+- `ExWapp.Session.Outbound.Direct`, `Group`, `DeviceDiscovery`, `Prekeys`,
+  and `Fanout`: focused outbound planning and resolution helpers
+- `ExWapp.Session.Outbound.IQRequests`: USync, prekey, and group-info IQ
+  request/receive/timeout boundary
+- `ExWapp.Session.Outbound.Encryptor`: per-device Signal encryption, PN/LID
+  aliases, and encrypted fanout coverage
 - `ExWapp.Session.Worker.Inbound`: incoming message/event helpers
 - `ExWapp.Session.InboundRouter`, `ExWapp.Session.IQ`, `ExWapp.Session.MessageNode`,
   `ExWapp.Session.Targets`: focused helpers used by the worker
@@ -586,11 +713,15 @@ Built-in transport/runtime:
 Message parsing and routing:
 
 - `ExWapp.MessageHandler`: high-level inbound router
-- `ExWapp.Message.Handler.Inbound`: incoming message decode and persistence
+- `ExWapp.Message.Handler.Inbound`: thin incoming-message orchestrator
+- `ExWapp.Message.Handler.Inbound.Content`: maps decrypted plaintext to the
+  canonical `ExWapp.Message.Content` contract
 - `ExWapp.Message.Handler.Receipt`: delivery/read receipt handling
 - `ExWapp.Message.Handler.Notification`: notification and sync events
 - `ExWapp.Message.Handler.Status`: presence and chat-state handling
-- `ExWapp.Message.Handler.Wire`: low-level protobuf wire decoding helpers
+- `ExWapp.Message.Handler.Wire`: compatible facade for envelope and wire helpers
+- `ExWapp.Message.Handler.Wire.Fields`: generic protobuf primitives
+- `ExWapp.Message.Handler.Wire.ContentDecoder`: pure supported-content decoder
 - `ExWapp.Message.Handler.Ack`, `ExWapp.Message.Handler.Common`: shared handler utilities
 
 Protocol internals:
@@ -612,8 +743,9 @@ Server-synced app state:
 
 Storage:
 
-- `ExWapp.Store`: store behaviour and adapter entry point
+- `ExWapp.Store`: session-state and cursor-based message-store contract
 - `ExWapp.Store.Ets`, `ExWapp.Store.Memory`: built-in stores
+- `ExWapp.Store.MessageTable`: indexed message backend used by built-in stores
 - `ExWapp.Store.Codec`: on-disk codec helpers for persisted store data
 
 ## Diagnostics

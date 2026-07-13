@@ -118,12 +118,19 @@ defmodule ExWapp.Session do
     |> flush_store_adapter()
   end
 
+  @doc """
+  Flushes the session store and exports its complete local snapshot.
+
+  The result includes decoded `:data`, the serialized `:blob`, and a SHA-256
+  `:checksum`. This is useful for backups or wrapper-level database imports.
+  It reflects local state only and does not request additional server history.
+  """
   @spec export_snapshot(GenServer.server()) :: {:ok, map()} | {:error, term()}
   def export_snapshot(server) do
     store = GenServer.call(server, :get_store)
 
     with :ok <- flush_store_adapter(store),
-         {:ok, data} <- ExWapp.Store.load(store) do
+         {:ok, data} <- ExWapp.Store.snapshot(store) do
       blob = :erlang.term_to_binary(data)
 
       {:ok,
@@ -170,12 +177,20 @@ defmodule ExWapp.Session do
   @spec delete_contact(GenServer.server(), String.t()) :: :ok | {:error, term()}
   defdelegate delete_contact(server, jid), to: Worker
 
+  @doc """
+  Refreshes contact-related app-state data from the server.
+
+  This operation updates contacts only; it does not request complete chat
+  history.
+  """
   @spec sync_contacts(GenServer.server()) :: :ok | {:error, term()}
   defdelegate sync_contacts(server), to: Worker
 
+  @doc "Lists contacts currently present in the session store."
   @spec list_contacts(GenServer.server()) :: [ExWapp.Contact.t()]
   defdelegate list_contacts(server), to: Worker
 
+  @doc "Gets one contact from the session store, or `nil` when it is unknown."
   @spec get_contact(GenServer.server(), String.t()) :: ExWapp.Contact.t() | nil
   defdelegate get_contact(server, jid), to: Worker
 

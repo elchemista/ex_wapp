@@ -329,7 +329,7 @@ defmodule ExWapp do
   ## Example
 
       {:ok, chat} = ExWapp.get_chat(session, "1234567890@s.whatsapp.net")
-      IO.inspect(chat.messages)
+      IO.inspect(ExWapp.get_messages(session, chat.jid, limit: 20))
   """
   @spec get_chat(Client.t() | GenServer.server(), String.t()) ::
           {:ok, Chat.chat()} | {:error, Error.t(), Client.t()} | {:error, :not_found}
@@ -337,20 +337,81 @@ defmodule ExWapp do
   def get_chat(session, jid), do: Chat.get(session, jid)
 
   @doc """
-  Gets messages for a chat with optional pagination.
+  Gets locally retained messages for a chat, newest first.
+
+  With a high-level client this returns `{:ok, messages}` (or a structured
+  client error); with a direct session it returns the message list.
 
   ## Options
 
-    * `:limit` - Maximum messages to return (default: 50)
+    * `:limit` - Maximum messages to return (default: 50), or `:all`
     * `:offset` - Number of messages to skip (default: 0)
 
-  ## Example
+  `limit: :all` reads every message retained locally for that chat. It does
+  not trigger an on-demand download of older WhatsApp history.
 
-      # Get last 20 messages
-      messages = ExWapp.get_messages(session, jid, limit: 20)
+  ## Examples
+
+      {:ok, recent} = ExWapp.get_messages(client, jid, limit: 20)
+      all_local = ExWapp.get_messages(session, jid, limit: :all)
   """
-  @spec get_messages(GenServer.server(), String.t(), keyword()) :: [Chat.message()]
-  def get_messages(session, jid, opts \\ []), do: Chat.messages(session, jid, opts)
+  @spec get_messages(Client.t() | GenServer.server(), String.t(), keyword()) ::
+          {:ok, [Chat.message()]} | {:error, Error.t(), Client.t()} | [Chat.message()]
+  def get_messages(target, jid, opts \\ [])
+  def get_messages(%Client{} = client, jid, opts), do: Client.API.get_messages(client, jid, opts)
+  def get_messages(session, jid, opts), do: Chat.messages(session, jid, opts)
+
+  @doc """
+  Builds a lazy stream over locally retained messages.
+
+  The default order is oldest first, which is suitable for inserting history
+  into a wrapper database. Message payloads are read from the dedicated message
+  store one at a time; the complete history is not stored in or loaded through
+  the chat struct.
+
+  ## Options
+
+    * `:order` - `:oldest_first` (default) or `:newest_first`
+    * `:offset` - Number of records to skip (default: 0)
+    * `:limit` - Optional maximum; defaults to `:all`
+
+  This stream represents local history and does not request older messages
+  from WhatsApp.
+  """
+  @spec stream_messages(Client.t() | GenServer.server(), String.t(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, Error.t(), Client.t()} | Enumerable.t()
+  def stream_messages(target, jid, opts \\ [])
+  def stream_messages(%Client{} = client, jid, opts), do: Client.API.stream_messages(client, jid, opts)
+  def stream_messages(session, jid, opts), do: Chat.stream_messages(session, jid, opts)
+
+  @doc """
+  Returns the unbounded local message stream for a chat.
+
+  This is the explicit convenience form of stream_messages/3.
+  """
+  @spec all_messages(Client.t() | GenServer.server(), String.t(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, Error.t(), Client.t()} | Enumerable.t()
+  def all_messages(target, jid, opts \\ [])
+  def all_messages(%Client{} = client, jid, opts), do: Client.API.all_messages(client, jid, opts)
+  def all_messages(session, jid, opts), do: Chat.all_messages(session, jid, opts)
+
+  @doc """
+  Deletes selected local messages after they have been persisted elsewhere.
+
+  Delete only IDs that the wrapper has committed successfully. With a client,
+  the updated client is returned; with a direct session/store the result is
+  `:ok` or a store error.
+  """
+  @spec delete_messages(
+          Client.t() | GenServer.server(),
+          String.t(),
+          [String.t()]
+        ) :: {:ok, Client.t()} | {:error, Error.t(), Client.t()} | :ok | {:error, term()}
+  def delete_messages(%Client{} = client, jid, message_ids),
+    do: Client.API.delete_messages(client, jid, message_ids)
+
+  def delete_messages(session, jid, message_ids),
+    do: Chat.delete_messages(session, jid, message_ids)
 
   @doc """
   Marks all messages in a chat as read.

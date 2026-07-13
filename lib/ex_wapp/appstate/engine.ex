@@ -42,9 +42,7 @@ defmodule ExWapp.AppState.Engine do
   @media_conn_cache_ttl_ms :timer.minutes(5)
   @media_conn_cache_table :ex_wapp_media_conn_cache
 
-  # ============================================================================
-  # Collection names (matching whatsmeow appstate/keys.go)
-  # ============================================================================
+  # WhatsApp app-state collection names
 
   @collection_critical_block "critical_block"
   @collection_critical_unblock_low "critical_unblock_low"
@@ -60,9 +58,7 @@ defmodule ExWapp.AppState.Engine do
     @collection_regular
   ]
 
-  # ============================================================================
-  # Types
-  # ============================================================================
+  # Public app-state types
 
   @type mutation_info :: %{
           required(:index) => [String.t()],
@@ -93,9 +89,7 @@ defmodule ExWapp.AppState.Engine do
           value_mac: binary()
         }
 
-  # ============================================================================
-  # Mutation Builders
-  # ============================================================================
+  # Building app-state mutations
 
   @doc "Build a contact creation/update patch."
   @spec build_contact(String.t(), String.t(), String.t() | nil) :: patch_info()
@@ -281,9 +275,7 @@ defmodule ExWapp.AppState.Engine do
     }
   end
 
-  # ============================================================================
-  # Encode Patch
-  # ============================================================================
+  # Encoding app-state patches
 
   @doc """
   Encode a patch_info into a binary SyncdPatch protobuf, ready to send to the server.
@@ -411,9 +403,7 @@ defmodule ExWapp.AppState.Engine do
     |> SyncAction.encode_syncd_patch()
   end
 
-  # ============================================================================
-  # Decode Mutations
-  # ============================================================================
+  # Decoding app-state mutations
 
   @doc """
   Decode a list of SyncdMutation structs into decoded mutations.
@@ -581,9 +571,7 @@ defmodule ExWapp.AppState.Engine do
     end
   end
 
-  # ============================================================================
-  # Send Mutation via IQ
-  # ============================================================================
+  # Sending app-state IQ mutations
 
   @doc """
   Send an app state mutation to the WhatsApp server.
@@ -802,9 +790,7 @@ defmodule ExWapp.AppState.Engine do
     end
   end
 
-  # ============================================================================
-  # Collection State Management
-  # ============================================================================
+  # Persisting collection versions and MACs
 
   @doc "Get all collection names."
   @spec all_collections() :: [String.t()]
@@ -841,9 +827,7 @@ defmodule ExWapp.AppState.Engine do
     Store.persist(store, data)
   end
 
-  # ============================================================================
-  # Dispatch Incoming Mutations
-  # ============================================================================
+  # Applying decoded mutations locally
 
   @doc """
   Dispatch a decoded mutation to update local state (contacts, chats).
@@ -974,9 +958,7 @@ defmodule ExWapp.AppState.Engine do
     :ok
   end
 
-  # ============================================================================
-  # Helpers
-  # ============================================================================
+  # App-state request helpers
 
   defp send_collection_fetch_iq(session, collection_name, version, return_snapshot?) do
     message_id = generate_request_id()

@@ -1,5 +1,10 @@
 defmodule ExWapp.Noise.ClientPayload do
-  @moduledoc false
+  @moduledoc """
+  Builds the protobuf client payload encrypted into the Noise handshake.
+
+  It selects registration or login fields from persisted pairing state and
+  returns updated client or Signal data when key material is initialized.
+  """
 
   require Logger
 

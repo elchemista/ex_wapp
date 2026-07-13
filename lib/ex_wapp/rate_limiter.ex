@@ -1,5 +1,10 @@
 defmodule ExWapp.RateLimiter do
-  @moduledoc false
+  @moduledoc """
+  Applies configurable token-bucket throttling before outbound sends.
+
+  Global, per-recipient, per-group, and minimum-delay limits are combined into an
+  updated worker state with actionable retry information.
+  """
 
   alias ExWapp.Config
 

@@ -101,6 +101,33 @@ defmodule ExWapp.StoreTest do
       assert {:ok, %{}} = Store.load(store)
     end
 
+    test "message streams survive reload outside chat metadata" do
+      path = Path.join(@tmp_dir, "message_stream_test.etf")
+      jid = "15550001111@s.whatsapp.net"
+      store1 = Store.Ets.new(path: path)
+
+      message = %{
+        id: "persisted-message-1",
+        from_me: false,
+        timestamp: 10,
+        text: "stored",
+        status: :received,
+        participant: nil,
+        raw: nil
+      }
+
+      assert :ok = Store.upsert_messages(store1, jid, [message])
+      assert {:ok, loaded} = Store.load(store1)
+      refute Map.has_key?(loaded, :chat_messages)
+
+      store2 = Store.Ets.new(path: path)
+
+      assert [%{id: "persisted-message-1"}] =
+               store2
+               |> Store.stream_messages(jid, order: :oldest_first)
+               |> Enum.to_list()
+    end
+
     test "persists to file and survives reload" do
       path = Path.join(@tmp_dir, "persist_test.etf")
 

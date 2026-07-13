@@ -1,5 +1,11 @@
 defmodule ExWapp.Quota do
-  @moduledoc false
+  @moduledoc """
+  Tracks configurable daily outbound-message quotas.
+
+  The counter state lives in the session worker and is split across the whole
+  session, individual JIDs, and groups. `check_and_increment/2` returns the
+  updated worker state and an explicit error when a blocking limit is hit.
+  """
 
   alias ExWapp.Config
 

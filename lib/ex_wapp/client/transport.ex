@@ -1,9 +1,14 @@
 defmodule ExWapp.Client.Transport do
   @moduledoc """
-  Behaviour for high-level, runtime-neutral ExWapp transport adapters.
+  Behaviour for high-level, runtime-neutral ExWapp client adapters.
 
-  The adapter is owned by the host application. It may be backed by a GenServer,
-  GenStateMachine, direct WebSocket process, test double, or any other runtime.
+  The `Transport` name is retained for API compatibility, but this is not a
+  wire transport. The adapter is owned by the host application and connects the
+  public client API to a complete runtime, session, queue, or test double.
+
+  Production WhatsApp messaging should use `ExWapp.Client.Transport.Session`.
+  A raw WebSocket alone cannot implement this contract safely because it lacks
+  Signal sessions, device fanout, sender keys, retry, and synchronized state.
   """
 
   alias ExWapp.{Chat, Client, Contact, Media, Message}
@@ -31,6 +36,12 @@ defmodule ExWapp.Client.Transport do
   @callback list_chats(Client.t()) :: {:ok, [Chat.chat()]} | {:error, term()}
   @callback list_groups(Client.t()) :: {:ok, [Chat.chat()]} | {:error, term()}
   @callback get_chat(Client.t(), String.t()) :: {:ok, Chat.chat()} | {:error, term()}
+  @callback get_messages(Client.t(), String.t(), keyword()) ::
+              {:ok, [Chat.message()]} | {:error, term()}
+  @callback stream_messages(Client.t(), String.t(), keyword()) ::
+              {:ok, Enumerable.t()} | {:error, term()}
+  @callback delete_messages(Client.t(), String.t(), [String.t()]) ::
+              {:ok, Client.t()} | :ok | {:error, term()}
   @callback download_media(Client.t(), Media.Ref.t(), keyword()) ::
               {:ok, Client.t(), Media.Download.t()} | {:error, term()}
 
@@ -46,5 +57,8 @@ defmodule ExWapp.Client.Transport do
                       list_chats: 1,
                       list_groups: 1,
                       get_chat: 2,
+                      get_messages: 3,
+                      stream_messages: 3,
+                      delete_messages: 3,
                       download_media: 3
 end

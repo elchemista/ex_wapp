@@ -1,5 +1,10 @@
 defmodule ExWapp.Noise.Certificate do
-  @moduledoc false
+  @moduledoc """
+  Validates the WhatsApp Noise certificate chain presented during handshake.
+
+  Verification anchors the intermediate certificate to WhatsApp's public key and
+  checks that the leaf certificate binds the expected server static key.
+  """
 
   import Bitwise
 

@@ -178,6 +178,22 @@ defmodule ExWapp.Client.Transport.Session do
   def get_chat(%Client{} = client, jid), do: ExWapp.Chat.get(client.store, jid)
 
   @impl true
+  def get_messages(%Client{} = client, jid, opts),
+    do: {:ok, ExWapp.Chat.messages(client.store, jid, opts)}
+
+  @impl true
+  def stream_messages(%Client{} = client, jid, opts),
+    do: {:ok, ExWapp.Chat.stream_messages(client.store, jid, opts)}
+
+  @impl true
+  def delete_messages(%Client{} = client, jid, message_ids) do
+    case ExWapp.Chat.delete_messages(client.store, jid, message_ids) do
+      :ok -> {:ok, client}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
   def download_media(%Client{} = client, %ExWapp.Media.Ref{} = ref, opts) do
     with {:ok, client, session} <- ensure_session(client),
          {:ok, download} <- Session.download_media(session, ref, opts) do

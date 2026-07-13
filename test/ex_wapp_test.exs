@@ -381,6 +381,31 @@ defmodule ExWappTest do
       GenServer.stop(session)
     end
 
+    test "get_messages supports pagination and all locally retained messages" do
+      {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
+      jid = "999000111@s.whatsapp.net"
+
+      for {id, timestamp} <- [{"m1", 1}, {"m2", 2}, {"m3", 3}] do
+        :ok =
+          ExWapp.Chat.add_message(session, jid, %{
+            id: id,
+            from_me: false,
+            timestamp: timestamp,
+            text: id,
+            status: :received,
+            participant: nil,
+            raw: nil
+          })
+      end
+
+      assert [%{id: "m2"}, %{id: "m1"}] =
+               ExWapp.get_messages(session, jid, limit: 2, offset: 1)
+
+      assert Enum.map(ExWapp.all_messages(session, jid), & &1.id) == ["m1", "m2", "m3"]
+
+      GenServer.stop(session)
+    end
+
     test "list_groups returns only group chats" do
       {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
 
@@ -650,9 +675,73 @@ defmodule ExWappTest do
       chats = ExWapp.list_chats(session)
       assert length(chats) == 1
       assert hd(chats).jid == "15550001111@s.whatsapp.net"
-      assert hd(chats).messages |> hd() |> Map.get(:id) == "MSG_2"
+      refute Map.has_key?(hd(chats), :messages)
+
+      assert [%{id: "MSG_2"}] =
+               ExWapp.get_messages(session, "15550001111@s.whatsapp.net", limit: 1)
 
       GenServer.stop(session)
+    end
+
+    test "message history is streamed outside the chat struct without a retention cap" do
+      store = ExWapp.Store.Memory.new()
+      jid = "15550001111@s.whatsapp.net"
+
+      messages =
+        Enum.map(1..1_001, fn number ->
+          %{
+            id: "history-#{number}",
+            from_me: false,
+            timestamp: number,
+            text: "message #{number}",
+            status: :received,
+            participant: nil,
+            raw: nil
+          }
+        end)
+
+      assert :ok = ExWapp.Chat.merge_messages(store, jid, messages)
+      assert {:ok, chat} = ExWapp.Chat.get(store, jid)
+      refute Map.has_key?(chat, :messages)
+
+      stream = ExWapp.all_messages(store, jid)
+      assert %Stream{} = stream
+      assert Enum.count(stream) == 1_001
+      assert [%{id: "history-1"}] = Enum.take(stream, 1)
+
+      assert :ok = ExWapp.delete_messages(store, jid, ["history-1"])
+      assert Enum.count(ExWapp.all_messages(store, jid)) == 1_000
+    end
+
+    test "history streams preserve decoded typed content" do
+      store = ExWapp.Store.Memory.new()
+      jid = "15550001111@s.whatsapp.net"
+
+      typed_content = %{
+        content: %{kind: :image, value: %{caption: "photo"}},
+        media: %{direct_path: "/media/image"},
+        location: %{latitude: 45.4642, longitude: 9.19},
+        contact: %{display_name: "Alice"},
+        event: %{name: "Meeting"}
+      }
+
+      message =
+        Map.merge(
+          %{
+            id: "typed-history-1",
+            from_me: false,
+            timestamp: 10,
+            text: nil,
+            status: :received,
+            participant: nil,
+            raw: nil
+          },
+          typed_content
+        )
+
+      assert :ok = ExWapp.Chat.merge_messages(store, jid, [message])
+      assert [stored] = Enum.to_list(ExWapp.all_messages(store, jid))
+      assert Map.take(stored, Map.keys(typed_content)) == typed_content
     end
   end
 

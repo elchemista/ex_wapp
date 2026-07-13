@@ -1,9 +1,12 @@
 defmodule ExWapp.Debug do
   @moduledoc """
-  Debug module that mimics Go's wsdebug to test WebSocket handshake.
+  Provides interactive diagnostics for the WhatsApp WebSocket and Noise handshake.
 
-  Usage:
-      iex -S mix
+  These helpers expose handshake frames and protocol transitions while debugging.
+  Normal applications should connect and send through `ExWapp.Session`.
+
+  ## Usage
+
       iex> ExWapp.Debug.test_handshake()
       iex> ExWapp.Debug.test_full_handshake()
   """
@@ -77,7 +80,10 @@ defmodule ExWapp.Debug do
   defmodule FullClient do
     use WebSockex
     require Logger
-    @moduledoc false
+    @moduledoc """
+    WebSockex callback process that drives a complete diagnostic Noise handshake
+    for `ExWapp.Debug`.
+    """
 
     def handle_connect(_conn, state) do
       Logger.info("Connected, will send client hello...")
@@ -492,7 +498,10 @@ defmodule ExWapp.Debug do
   # Simple WebSockex client for debugging
   defmodule DebugClient do
     use WebSockex
-    @moduledoc false
+    @moduledoc """
+    WebSockex callback process used internally by `ExWapp.Debug` to inspect
+    handshake frames.
+    """
 
     def handle_connect(_conn, state) do
       send(state.parent, {:ws_connected})

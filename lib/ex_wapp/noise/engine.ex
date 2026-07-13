@@ -16,7 +16,12 @@ defmodule ExWapp.Noise.Engine do
   @prologue "Noise_XX_25519_AESGCM_SHA256\x00\x00\x00\x00"
 
   defmodule State do
-    @moduledoc false
+    @moduledoc """
+    Mutable state passed between Noise XX handshake steps.
+
+    It keeps ephemeral and static key pairs, the transcript state, and the server
+    identity material required to derive transport keys.
+    """
     defstruct [
       :noise,
       :e_kp,

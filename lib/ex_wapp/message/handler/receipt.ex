@@ -1,5 +1,10 @@
 defmodule ExWapp.Message.Handler.Receipt do
-  @moduledoc false
+  @moduledoc """
+  Handles inbound delivery/read receipts and message acknowledgements.
+
+  It updates persisted chat status, emits receipt acknowledgements, and translates
+  retry or server errors into session actions without decoding message content.
+  """
 
   require Logger
 

@@ -1,11 +1,17 @@
 defmodule ExWapp.Domains.Contacts.Repository do
-  @moduledoc false
+  @moduledoc """
+  Persists normalized contacts in an `ExWapp.Store`.
+
+  Every lookup and write canonicalizes the JID and removes legacy aliases, so
+  consumers see one contact record regardless of the identifier form received
+  from the wire.
+  """
 
   alias ExWapp.Contact
   alias ExWapp.Domains.Contacts.JID
   alias ExWapp.Store
 
-  @doc false
+  @doc "Lists all normalized contacts currently stored."
   @spec list(struct()) :: [Contact.t()]
   def list(store) do
     store
@@ -14,7 +20,7 @@ defmodule ExWapp.Domains.Contacts.Repository do
     |> Map.values()
   end
 
-  @doc false
+  @doc "Fetches a contact by JID, including records stored under legacy aliases."
   @spec get(struct(), String.t()) :: Contact.t() | nil
   def get(store, jid) do
     data = Store.load!(store)
@@ -24,7 +30,7 @@ defmodule ExWapp.Domains.Contacts.Repository do
     Map.get(contacts, normalized) || find_legacy_contact(contacts, normalized)
   end
 
-  @doc false
+  @doc "Stores a contact under its canonical JID and removes duplicate aliases."
   @spec put(struct(), String.t(), Contact.t()) :: :ok
   def put(store, jid, %Contact{} = contact) do
     normalized = JID.normalize(jid)
@@ -34,7 +40,7 @@ defmodule ExWapp.Domains.Contacts.Repository do
     end)
   end
 
-  @doc false
+  @doc "Deletes a contact and every legacy alias for the same JID."
   @spec delete(struct(), String.t()) :: :ok
   def delete(store, jid) do
     data = Store.load!(store)
@@ -43,7 +49,7 @@ defmodule ExWapp.Domains.Contacts.Repository do
     Store.persist(store, Map.put(data, :contacts, contacts))
   end
 
-  @doc false
+  @doc "Updates the push name associated with a contact."
   @spec update_push_name(struct(), String.t(), String.t()) :: :ok
   def update_push_name(store, jid, name) when is_binary(name) and name != "" do
     normalized = JID.normalize(jid)
@@ -55,7 +61,7 @@ defmodule ExWapp.Domains.Contacts.Repository do
 
   def update_push_name(_store, _jid, _name), do: :ok
 
-  @doc false
+  @doc "Merges contact fields decoded from app-state synchronization."
   @spec merge_from_sync(struct(), String.t(), map()) :: :ok
   def merge_from_sync(store, jid, contact_action) when is_map(contact_action) do
     normalized = JID.normalize(jid)

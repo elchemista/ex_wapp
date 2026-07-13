@@ -20,7 +20,12 @@ defmodule ExWapp.Conn do
   @origin "https://web.whatsapp.com"
 
   defmodule State do
-    @moduledoc false
+    @moduledoc """
+    Runtime state owned by `ExWapp.Conn`.
+
+    It keeps the session and store references together with the Noise handshake and
+    partial WebSocket frame buffers used while the connection is active.
+    """
     defstruct session: nil,
               store: nil,
               noise: nil,

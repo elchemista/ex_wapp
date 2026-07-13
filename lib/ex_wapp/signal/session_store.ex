@@ -14,7 +14,12 @@ defmodule ExWapp.Signal.SessionStore do
   require Logger
 
   defmodule Ref do
-    @moduledoc false
+    @moduledoc """
+    Reference to an ETS-backed Signal session store.
+
+    Wrapping the table identifier lets the same API support persistent maps and
+    concurrent runtime storage without leaking ETS details to callers.
+    """
     defstruct [:table]
 
     @type t :: %__MODULE__{table: term()}

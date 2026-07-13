@@ -135,9 +135,7 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
     end
   end
 
-  # ============================================================================
-  # Internal helpers
-  # ============================================================================
+  # Silent-drop fallback helpers
 
   defp start_silent_drop_fallback(
          state,
@@ -241,13 +239,10 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
   defp find_outgoing_message_in_chat(_store, _jid, _message_id), do: nil
 
   defp find_outgoing_message_any_chat(store, message_id) when is_binary(message_id) do
-    store
-    |> Chat.list()
-    |> Enum.find_value(fn chat ->
-      Enum.find(chat.messages, fn message ->
-        Map.get(message, :id) == message_id and Map.get(message, :from_me) == true
-      end)
-    end)
+    case Chat.find_message_by_id(store, message_id) do
+      {_jid, %{from_me: true} = message} -> message
+      _ -> nil
+    end
   end
 
   defp find_outgoing_message_any_chat(_store, _message_id), do: nil

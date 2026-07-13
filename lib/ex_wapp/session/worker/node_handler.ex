@@ -20,9 +20,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     Subscribers
   }
 
-  # ============================================================================
-  # Public
-  # ============================================================================
+  # Safe node entry point
 
   @doc """
   Safely handles a node, catching any exceptions.
@@ -68,9 +66,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
       Logger.error("Exit handling action #{inspect(action)}: #{inspect(reason)}")
   end
 
-  # ============================================================================
-  # Node dispatch
-  # ============================================================================
+  # Dispatch by node type
 
   defp handle_connection_node(%Binary.Node{tag: "iq", attrs: attrs} = node, state) do
     xmlns = Map.get(attrs, "xmlns", "")
@@ -286,9 +282,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     {update_stats(state, :messages_received), []}
   end
 
-  # ============================================================================
-  # IQ helpers
-  # ============================================================================
+  # IQ routing and pending-request handling
 
   defp forward_iq_to_workers(state, iq_type, iq_id, node)
        when iq_type in ["result", "error"] and iq_id != nil do
@@ -489,9 +483,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   defp maybe_handle_post_auth_iq(_state, _node, _iq_type, _iq_id), do: :unhandled
 
-  # ============================================================================
-  # Node builders
-  # ============================================================================
+  # Protocol response builders
 
   defp build_iq_result(attrs) do
     result_attrs = %{"type" => "result"}
@@ -570,9 +562,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     |> Integer.to_string()
   end
 
-  # ============================================================================
-  # Action dispatch
-  # ============================================================================
+  # Executing pairing and session actions
 
   defp handle_pairing_action({:send_node, node}, %{outbound_queue: outbound_queue})
        when is_pid(outbound_queue) do
@@ -624,9 +614,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   defp handle_pairing_action(_action, _state), do: :ok
 
-  # ============================================================================
-  # Internal helpers
-  # ============================================================================
+  # Subscriber and state helpers
 
   defp notify_qr(state, event) do
     Subscribers.notify_qr(state, event, fn -> :ok end)

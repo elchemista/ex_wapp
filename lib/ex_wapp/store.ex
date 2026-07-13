@@ -104,7 +104,58 @@ defmodule ExWapp.Store do
   """
   @callback clear(store :: t()) :: :ok | {:error, term()}
 
-  @optional_callbacks [clear: 1]
+  @doc "Returns a lazy cursor over messages stored for one chat."
+  @callback stream_messages(store :: t(), jid :: String.t(), opts :: keyword()) ::
+              Enumerable.t()
+
+  @doc "Upserts messages without embedding them in chat metadata."
+  @callback upsert_messages(store :: t(), jid :: String.t(), messages :: [map()]) ::
+              :ok | {:error, term()}
+
+  @doc "Finds one message in a chat by ID."
+  @callback find_message(store :: t(), jid :: String.t(), message_id :: String.t()) ::
+              map() | nil
+
+  @doc "Finds one message by ID across all chats."
+  @callback find_message_by_id(store :: t(), message_id :: String.t()) ::
+              {String.t(), map()} | nil
+
+  @doc "Updates the status of one message in a chat."
+  @callback update_message_status(
+              store :: t(),
+              jid :: String.t(),
+              message_id :: String.t(),
+              status :: atom()
+            ) :: :ok | {:error, term()}
+
+  @doc "Updates the status of every message matching an ID."
+  @callback update_message_status_by_id(
+              store :: t(),
+              message_id :: String.t(),
+              status :: atom()
+            ) :: :ok | {:error, term()}
+
+  @doc "Deletes selected messages after durable application persistence."
+  @callback delete_messages(store :: t(), jid :: String.t(), message_ids :: [String.t()]) ::
+              :ok | {:error, term()}
+
+  @doc "Deletes every message associated with one chat."
+  @callback delete_chat_messages(store :: t(), jid :: String.t()) ::
+              :ok | {:error, term()}
+
+  @doc "Materializes all messages for an explicit backup operation."
+  @callback snapshot_messages(store :: t()) :: %{optional(String.t()) => [map()]}
+
+  @optional_callbacks clear: 1,
+                      stream_messages: 3,
+                      upsert_messages: 3,
+                      find_message: 3,
+                      find_message_by_id: 2,
+                      update_message_status: 4,
+                      update_message_status_by_id: 3,
+                      delete_messages: 3,
+                      delete_chat_messages: 2,
+                      snapshot_messages: 1
 
   # Default adapter
   @default_adapter ExWapp.Store.Ets
@@ -269,6 +320,145 @@ defmodule ExWapp.Store do
   end
 
   @doc """
+  Builds a lazy message stream for a chat.
+
+  Built-in adapters keep message payloads outside chat metadata. Custom
+  adapters can implement stream_messages/3 with a database cursor; adapters
+  that do not implement it use a compatibility fallback over :chat_messages.
+  """
+  @spec stream_messages(t(), String.t(), keyword()) :: Enumerable.t()
+  def stream_messages(store, jid, opts \\ []) when is_binary(jid) do
+    if function_exported?(store.__struct__, :stream_messages, 3) do
+      store.__struct__.stream_messages(store, jid, opts)
+    else
+      fallback_message_stream(store, jid, opts)
+    end
+  end
+
+  @doc """
+  Materializes a single page from the message stream.
+  """
+  @spec list_messages(t(), String.t(), keyword()) :: [map()]
+  def list_messages(store, jid, opts \\ []) do
+    opts = Keyword.put_new(opts, :limit, 50)
+    store |> stream_messages(jid, opts) |> Enum.to_list()
+  end
+
+  @doc """
+  Inserts or replaces messages by ID in the dedicated message store.
+  """
+  @spec upsert_messages(t(), String.t(), [map()]) :: :ok | {:error, term()}
+  def upsert_messages(store, jid, messages) when is_binary(jid) and is_list(messages) do
+    if function_exported?(store.__struct__, :upsert_messages, 3) do
+      store.__struct__.upsert_messages(store, jid, messages)
+    else
+      fallback_upsert_messages(store, jid, messages)
+    end
+  end
+
+  @doc "Finds one stored message in a chat."
+  @spec find_message(t(), String.t(), String.t()) :: map() | nil
+  def find_message(store, jid, message_id) do
+    if function_exported?(store.__struct__, :find_message, 3) do
+      store.__struct__.find_message(store, jid, message_id)
+    else
+      store
+      |> fallback_messages_for(jid)
+      |> Enum.find(&(Map.get(&1, :id) == message_id))
+    end
+  end
+
+  @doc "Finds one stored message by ID across all chats."
+  @spec find_message_by_id(t(), String.t()) :: {String.t(), map()} | nil
+  def find_message_by_id(store, message_id) do
+    if function_exported?(store.__struct__, :find_message_by_id, 2) do
+      store.__struct__.find_message_by_id(store, message_id)
+    else
+      fallback_message_map(store)
+      |> Enum.find_value(&message_with_jid(&1, message_id))
+    end
+  end
+
+  @doc "Updates one stored message status."
+  @spec update_message_status(t(), String.t(), String.t(), atom()) ::
+          :ok | {:error, term()}
+  def update_message_status(store, jid, message_id, status) do
+    if function_exported?(store.__struct__, :update_message_status, 4) do
+      store.__struct__.update_message_status(store, jid, message_id, status)
+    else
+      messages =
+        store
+        |> fallback_messages_for(jid)
+        |> replace_status(message_id, status)
+
+      persist_fallback_messages(store, jid, messages)
+    end
+  end
+
+  @doc "Updates message status by ID across all chats."
+  @spec update_message_status_by_id(t(), String.t(), atom()) :: :ok | {:error, term()}
+  def update_message_status_by_id(store, message_id, status) do
+    if function_exported?(store.__struct__, :update_message_status_by_id, 3) do
+      store.__struct__.update_message_status_by_id(store, message_id, status)
+    else
+      messages =
+        Enum.into(fallback_message_map(store), %{}, fn {jid, chat_messages} ->
+          {jid, replace_status(chat_messages, message_id, status)}
+        end)
+
+      persist_fallback_message_map(store, messages)
+    end
+  end
+
+  @doc """
+  Deletes selected messages after the caller has persisted them durably.
+  """
+  @spec delete_messages(t(), String.t(), [String.t()]) :: :ok | {:error, term()}
+  def delete_messages(store, jid, message_ids) when is_list(message_ids) do
+    if function_exported?(store.__struct__, :delete_messages, 3) do
+      store.__struct__.delete_messages(store, jid, message_ids)
+    else
+      ids = MapSet.new(message_ids)
+
+      messages =
+        Enum.reject(fallback_messages_for(store, jid), &MapSet.member?(ids, Map.get(&1, :id)))
+
+      persist_fallback_messages(store, jid, messages)
+    end
+  end
+
+  @doc "Deletes all messages associated with one chat."
+  @spec delete_chat_messages(t(), String.t()) :: :ok | {:error, term()}
+  def delete_chat_messages(store, jid) do
+    if function_exported?(store.__struct__, :delete_chat_messages, 2) do
+      store.__struct__.delete_chat_messages(store, jid)
+    else
+      messages = Map.delete(fallback_message_map(store), jid)
+      persist_fallback_message_map(store, messages)
+    end
+  end
+
+  @doc """
+  Returns a complete local snapshot including separately stored messages.
+
+  This is intentionally eager and should only be used for explicit backups.
+  Normal consumers should use stream_messages/3.
+  """
+  @spec snapshot(t()) :: {:ok, data()} | {:error, term()}
+  def snapshot(store) do
+    with {:ok, data} <- load(store) do
+      messages =
+        if function_exported?(store.__struct__, :snapshot_messages, 1) do
+          store.__struct__.snapshot_messages(store)
+        else
+          fallback_message_map(store)
+        end
+
+      {:ok, put_message_snapshot(data, messages)}
+    end
+  end
+
+  @doc """
   Clears all data from the store.
 
   Only available if the adapter implements the optional `clear/1` callback.
@@ -281,4 +471,122 @@ defmodule ExWapp.Store do
       {:error, :not_implemented}
     end
   end
+
+  defp fallback_message_stream(store, jid, opts) do
+    store
+    |> fallback_resource_stream(jid, opts)
+    |> Stream.map(& &1)
+  end
+
+  defp fallback_resource_stream(store, jid, opts) do
+    Stream.resource(
+      fn ->
+        messages =
+          store
+          |> fallback_messages_for(jid)
+          |> Enum.sort_by(&message_sort_key/1, message_order(opts))
+          |> Enum.drop(valid_offset(opts))
+          |> take_messages(Keyword.get(opts, :limit, :all))
+
+        messages
+      end,
+      fn
+        [] -> {:halt, []}
+        [message | rest] -> {[message], rest}
+      end,
+      fn _messages -> :ok end
+    )
+  end
+
+  defp fallback_upsert_messages(store, jid, messages) do
+    merged =
+      (fallback_messages_for(store, jid) ++ messages)
+      |> Enum.filter(&is_map/1)
+      |> Enum.uniq_by(&Map.get(&1, :id))
+      |> Enum.sort_by(&message_sort_key/1, :desc)
+
+    persist_fallback_messages(store, jid, merged)
+  end
+
+  defp fallback_message_map(store) do
+    data = load!(store)
+    current = Map.get(data, :chat_messages, %{})
+
+    legacy =
+      data
+      |> Map.get(:chats, %{})
+      |> Enum.reduce(%{}, &put_legacy_messages/2)
+
+    Map.merge(current, legacy, fn _jid, left, right -> left ++ right end)
+  end
+
+  defp message_with_jid({jid, messages}, message_id) do
+    case Enum.find(messages, &(Map.get(&1, :id) == message_id)) do
+      nil -> nil
+      message -> {jid, message}
+    end
+  end
+
+  defp put_message_snapshot(data, messages) when map_size(messages) == 0,
+    do: Map.delete(data, :chat_messages)
+
+  defp put_message_snapshot(data, messages), do: Map.put(data, :chat_messages, messages)
+
+  defp put_legacy_messages({jid, chat}, acc) do
+    case legacy_chat_messages(chat) do
+      messages when is_list(messages) and messages != [] -> Map.put(acc, jid, messages)
+      _ -> acc
+    end
+  end
+
+  defp legacy_chat_messages(chat) when is_map(chat), do: Map.get(chat, :messages, [])
+  defp legacy_chat_messages(_chat), do: []
+
+  defp fallback_messages_for(store, jid) do
+    store
+    |> fallback_message_map()
+    |> Map.get(jid, [])
+  end
+
+  defp persist_fallback_messages(store, jid, messages) do
+    store
+    |> fallback_message_map()
+    |> Map.put(jid, messages)
+    |> then(&persist_fallback_message_map(store, &1))
+  end
+
+  defp persist_fallback_message_map(store, messages) do
+    store
+    |> load!()
+    |> Map.put(:chat_messages, messages)
+    |> then(&persist(store, &1))
+  end
+
+  defp replace_status(messages, message_id, status) do
+    Enum.map(messages, fn message ->
+      if Map.get(message, :id) == message_id, do: Map.put(message, :status, status), else: message
+    end)
+  end
+
+  defp message_sort_key(message) do
+    {Map.get(message, :timestamp, 0), Map.get(message, :id, "")}
+  end
+
+  defp message_order(opts) do
+    if Keyword.get(opts, :order, :newest_first) == :oldest_first, do: :asc, else: :desc
+  end
+
+  defp valid_offset(opts) do
+    case Keyword.get(opts, :offset, 0) do
+      offset when is_integer(offset) and offset >= 0 -> offset
+      _ -> 0
+    end
+  end
+
+  defp take_messages(messages, :all), do: messages
+
+  defp take_messages(messages, limit) when is_integer(limit) and limit >= 0,
+    do: Enum.take(messages, limit)
+
+  defp take_messages(messages, _invalid), do: messages
 end

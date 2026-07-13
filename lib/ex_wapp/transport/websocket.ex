@@ -1,10 +1,15 @@
 defmodule ExWapp.Transport.WebSocket do
   @moduledoc """
-  Optional WebSocket transport helpers and process for WhatsApp Web.
+  Optional wire-level WebSocket/Noise process for WhatsApp Web.
 
-  This module is pluggable: applications can use it directly, wrap it in their
-  own `ExWapp.Client.Transport`, or ignore it and provide another transport.
-  It does not own session supervision or reconnect policy.
+  This module exchanges already-prepared binary nodes and frames. It does not
+  own session supervision, Signal sessions, device fanout, sender keys,
+  synchronized state, retry, or reconnect policy. It therefore must not be
+  used as a shortcut for high-level message sending.
+
+  Use `ExWapp.Client.Transport.Session` for production messaging. Use this
+  module directly only for protocol tooling or as the wire layer underneath a
+  complete session implementation.
   """
 
   use WebSockex
@@ -13,32 +18,10 @@ defmodule ExWapp.Transport.WebSocket do
   alias ExWapp.{Binary, Client, Noise, Store}
   alias ExWapp.Noise.ClientPayload
   alias ExWapp.Transport.Frame
+  alias ExWapp.Transport.WebSocket.State
 
   @url "wss://web.whatsapp.com/ws/chat"
   @origin "https://web.whatsapp.com"
-
-  defmodule State do
-    @moduledoc false
-    defstruct client: nil,
-              owner: nil,
-              store: nil,
-              noise: nil,
-              noise_opts: [],
-              buffer: <<>>,
-              header_seen?: false,
-              header_sent?: false
-
-    @type t :: %__MODULE__{
-            client: Client.t(),
-            owner: pid(),
-            store: Store.t(),
-            noise: Noise.t() | nil,
-            noise_opts: keyword(),
-            buffer: binary(),
-            header_seen?: boolean(),
-            header_sent?: boolean()
-          }
-  end
 
   @type event ::
           {:connected, pid()}
@@ -81,7 +64,9 @@ defmodule ExWapp.Transport.WebSocket do
   end
 
   @doc """
-  Sends a binary node through a running WebSocket transport process.
+  Sends an already-prepared binary node through the wire transport.
+
+  The caller is responsible for all required session and Signal processing.
   """
   @spec send_node(pid(), Binary.binary_node() | tuple()) :: :ok
   def send_node(pid, node), do: WebSockex.cast(pid, {:send_node, node})
@@ -175,6 +160,8 @@ defmodule ExWapp.Transport.WebSocket do
     end
   end
 
+  @spec process_decoded_frames(State.t(), binary()) ::
+          {:ok, State.t(), [event()]} | {:error, term()}
   defp process_decoded_frames(state, buffer) do
     {frames, rest} = Frame.decode(buffer)
     state = %{state | buffer: rest}
@@ -187,7 +174,10 @@ defmodule ExWapp.Transport.WebSocket do
     end)
   end
 
+  @doc false
   @impl true
+  @spec handle_connect(term(), State.t()) ::
+          {:reply, {:binary, binary()}, State.t()} | {:ok, State.t()}
   def handle_connect(_conn, %State{} = state) do
     notify_owner(state, {:connected, self()})
 
@@ -197,7 +187,9 @@ defmodule ExWapp.Transport.WebSocket do
     end
   end
 
+  @doc false
   @impl true
+  @spec handle_disconnect(term(), State.t()) :: {:ok, State.t()}
   def handle_disconnect(reason, %State{} = state) do
     Logger.info("[ExWapp.Transport.WebSocket] disconnected reason=#{inspect(reason)}")
     notify_owner(state, {:disconnected, reason})
@@ -210,7 +202,11 @@ defmodule ExWapp.Transport.WebSocket do
     {:ok, state}
   end
 
+  @doc false
   @impl true
+  @spec handle_frame(term(), State.t()) ::
+          {:ok, State.t()}
+          | {:reply, {:binary, binary()} | [{:binary, binary()}], State.t()}
   def handle_frame({:binary, bytes}, %State{} = state) do
     case receive_bytes(state, bytes) do
       {:ok, next_state, events} ->
@@ -238,7 +234,12 @@ defmodule ExWapp.Transport.WebSocket do
     {:ok, state}
   end
 
+  @doc false
   @impl true
+  @spec handle_cast(
+          {:send_node, Binary.binary_node() | tuple()} | {:send_payload, binary()},
+          State.t()
+        ) :: {:reply, {:binary, binary()}, State.t()} | {:ok, State.t()}
   def handle_cast({:send_node, node}, %State{} = state) do
     case encode_node(state, node) do
       {:ok, next_state, payload} -> {:reply, {:binary, payload}, next_state}

@@ -218,9 +218,7 @@ defmodule ExWapp.Signal.Encryption do
 
   defp parse_enc_version(_), do: nil
 
-  # ============================================================================
-  # Private Helpers
-  # ============================================================================
+  # Encryption internals
 
   defp do_encrypt_for_recipient(
          session,
