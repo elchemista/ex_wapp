@@ -5,37 +5,27 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   alias ExWapp.{Binary, Chat, Config, JID, Messages, Store, Telemetry}
   alias ExWapp.Proto.Message
-  alias ExWapp.Signal.{Encryption, SessionStore}
+  alias ExWapp.Signal.SessionStore
 
   alias ExWapp.Session.{
     Account,
     DeviceCache,
-    IQ,
     JIDUtils,
     MessageNode
   }
 
-  alias ExWapp.Session.Outbound.{DeviceDiscovery, Direct, Fanout, Group, Prekeys}
+  alias ExWapp.Session.Outbound.{
+    DeviceDiscovery,
+    Direct,
+    Encryptor,
+    Fanout,
+    Group,
+    IQRequests,
+    Prekeys
+  }
 
   @typep worker_state :: map()
   @typep outbound_text :: iodata() | nil
-  @typep target_spec :: %{
-           required(:jid) => String.t(),
-           required(:payload_kind) => atom()
-         }
-  @typep encrypted_payloads ::
-           Direct.payloads() | %{required(:recipient) => binary()}
-  @typep prekey_bundle_map :: %{optional(String.t()) => map()}
-  @typep encryption_acc :: %{
-           required(:nodes) => [Binary.Node.t()],
-           required(:sessions) => SessionStore.t(),
-           required(:include_identity) => boolean(),
-           required(:errors) => [{String.t(), term()}]
-         }
-  @typep encryption_result ::
-           {:ok, [Binary.Node.t()], SessionStore.t(), boolean()}
-           | {:error, {:no_encrypted_targets, [{String.t(), term()}]}}
-
   @doc false
   @spec send_text_worker(pid(), map(), String.t(), outbound_text(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
@@ -155,7 +145,7 @@ defmodule ExWapp.Session.Worker.Outbound do
           String.t(),
           outbound_text(),
           keyword(),
-          [target_spec()]
+          [Encryptor.target_spec()]
         ) ::
           {:ok, String.t()} | {:error, term()}
   defp retry_recipient_fanout(
@@ -174,7 +164,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     retry_state = %{
       state
       | signal_sessions:
-          clear_cached_signal_sessions_for_targets(updated_sessions, missing_targets, state.store)
+          Encryptor.clear_sessions_for_targets(updated_sessions, missing_targets, state.store)
     }
 
     case ensure_signal_session_worker(retry_state, jid) do
@@ -211,7 +201,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     message_id = Messages.generate_id(own_jid)
     timestamp = System.system_time(:second)
 
-    with {:ok, group_info} <- query_group_info_worker(state, group_jid),
+    with {:ok, group_info} <- IQRequests.query_group_info(state, group_jid, send_node_fun(state)),
          {:ok, updated_sessions, prekey_bundles, distribution_targets} <-
            ensure_group_sender_key_sessions_worker(
              state,
@@ -226,14 +216,14 @@ defmodule ExWapp.Session.Worker.Outbound do
          distribution_target_specs <-
            Enum.map(distribution_targets, &%{jid: &1, payload_kind: :recipient}),
          {:ok, participant_nodes, persisted_sessions, include_identity} <-
-           encrypt_for_targets(
+           Encryptor.encrypt_for_targets(
              store,
              updated_sessions,
              distribution_target_specs,
              %{recipient: distribution_payload},
              prekey_bundles || %{}
            ) do
-      missing_targets = missing_expected_targets(distribution_target_specs, participant_nodes)
+      missing_targets = Encryptor.missing_expected_targets(distribution_target_specs, participant_nodes)
 
       handle_group_distribution_result(
         missing_targets,
@@ -342,7 +332,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     retry_state = %{
       context.state
       | signal_sessions:
-          clear_cached_signal_sessions_for_targets(
+          Encryptor.clear_sessions_for_targets(
             context.persisted_sessions,
             missing_targets,
             context.state.store
@@ -422,7 +412,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   @spec fetch_group_device_map(map(), String.t(), [String.t()]) :: map()
   defp fetch_group_device_map(state, group_jid, query_jids) do
-    case query_device_list_worker(state, query_jids) do
+    case IQRequests.query_devices(state, query_jids, send_node_fun(state)) do
       {:ok, map} ->
         Logger.debug("[SEND] Group usync device map for #{group_jid}: #{inspect(map)}")
         map
@@ -441,38 +431,22 @@ defmodule ExWapp.Session.Worker.Outbound do
       signal_sessions,
       context,
       fn target_jids, current_sessions ->
-        fetch_prekeys_batch_worker(state, target_jids, current_sessions)
+        IQRequests.fetch_prekeys_batch(
+          state,
+          target_jids,
+          current_sessions,
+          send_node_fun(state)
+        )
       end,
       fn target_jid, current_sessions ->
-        fetch_prekeys_worker(state, target_jid, current_sessions)
+        IQRequests.fetch_prekey(
+          state,
+          target_jid,
+          current_sessions,
+          send_node_fun(state)
+        )
       end
     )
-  end
-
-  @spec query_group_info_worker(map(), String.t()) ::
-          {:ok, Group.group_info()} | {:error, term()}
-  defp query_group_info_worker(%{conn: conn} = state, group_jid) do
-    message_id = generate_request_id()
-    query_node = Group.build_info_query(group_jid, message_id)
-
-    Logger.debug("[GROUP] Querying group info for #{group_jid}")
-
-    case send_transport_node(state, conn, query_node) do
-      :ok ->
-        receive do
-          {:prekey_response, ^message_id, response_node} ->
-            Group.parse_info_response(response_node, group_jid)
-
-          {:prekey_error, ^message_id, error} ->
-            {:error, {:group_info_query_error, error}}
-        after
-          group_info_timeout_ms(state) ->
-            {:error, :group_info_timeout}
-        end
-
-      error ->
-        {:error, {:group_info_send_failed, error}}
-    end
   end
 
   @spec ensure_signal_session_worker(map(), String.t()) ::
@@ -486,10 +460,20 @@ defmodule ExWapp.Session.Worker.Outbound do
         discover_devices(state, recipient_base_jid, own_sender_jid, own_device_id)
       end,
       fn target_jids, current_sessions ->
-        fetch_prekeys_batch_worker(state, target_jids, current_sessions)
+        IQRequests.fetch_prekeys_batch(
+          state,
+          target_jids,
+          current_sessions,
+          send_node_fun(state)
+        )
       end,
       fn target_jid, current_sessions ->
-        fetch_prekeys_worker(state, target_jid, current_sessions)
+        IQRequests.fetch_prekey(
+          state,
+          target_jid,
+          current_sessions,
+          send_node_fun(state)
+        )
       end
     )
   end
@@ -511,7 +495,7 @@ defmodule ExWapp.Session.Worker.Outbound do
       )
 
     device_map =
-      case query_device_list_worker(state, query_jids) do
+      case IQRequests.query_devices(state, query_jids, send_node_fun(state)) do
         {:ok, map} ->
           Logger.debug("[SEND] USync device map: #{inspect(map)}")
           map
@@ -570,107 +554,6 @@ defmodule ExWapp.Session.Worker.Outbound do
     }
   end
 
-  # Fetch prekeys for multiple device JIDs in a single IQ request
-  @spec fetch_prekeys_batch_worker(
-          worker_state(),
-          nonempty_list(String.t()),
-          SessionStore.t()
-        ) :: Prekeys.fetch_result()
-  defp fetch_prekeys_batch_worker(
-         %{conn: conn, store: store} = state,
-         device_jids,
-         signal_sessions
-       )
-       when is_list(device_jids) and device_jids != [] do
-    message_id = generate_request_id()
-    request_node = IQ.build_prekey_request(device_jids, message_id)
-
-    Logger.debug("[PREKEY] Sending batch prekey request for #{length(device_jids)} devices")
-
-    case send_transport_node(state, conn, request_node) do
-      :ok ->
-        receive do
-          {:prekey_response, ^message_id, response_node} ->
-            Logger.debug("[PREKEY] Got batch prekey response")
-            process_prekey_response(store, response_node, nil, signal_sessions)
-
-          {:prekey_error, ^message_id, error} ->
-            {:error, {:prekey_fetch_error, error}}
-        after
-          prekey_timeout_ms(state) ->
-            {:error, :prekey_timeout}
-        end
-
-      error ->
-        {:error, {:send_failed, error}}
-    end
-  end
-
-  @spec fetch_prekeys_worker(worker_state(), String.t(), SessionStore.t()) ::
-          Prekeys.fetch_result()
-  defp fetch_prekeys_worker(%{conn: conn, store: store} = state, jid, signal_sessions) do
-    message_id = generate_request_id()
-    request_node = IQ.build_prekey_request(jid, message_id)
-
-    Logger.debug("[PREKEY] Sending prekey request for #{jid}")
-
-    # Send the IQ - we'll receive the response directly since we're not a GenServer
-    case send_transport_node(state, conn, request_node) do
-      :ok ->
-        # Wait for response - the session will forward it to us
-        receive do
-          {:prekey_response, ^message_id, response_node} ->
-            Logger.debug("[PREKEY] Got prekey response")
-            process_prekey_response(store, response_node, jid, signal_sessions)
-
-          {:prekey_error, ^message_id, error} ->
-            {:error, {:prekey_fetch_error, error}}
-        after
-          prekey_timeout_ms(state) ->
-            {:error, :prekey_timeout}
-        end
-
-      error ->
-        {:error, {:send_failed, error}}
-    end
-  end
-
-  @spec process_prekey_response(
-          Store.t(),
-          Binary.Node.t(),
-          String.t() | nil,
-          SessionStore.t()
-        ) :: Prekeys.fetch_result()
-  defp process_prekey_response(store, response_node, requested_jid, signal_sessions) do
-    case IQ.parse_prekey_response(response_node) do
-      {:ok, bundles} ->
-        Logger.debug("[PREKEY] Parsed #{length(bundles)} prekey bundles, creating sessions")
-
-        # Get local identity
-        data = Store.load!(store)
-        signal_data = Map.get(data, :signal, %{})
-        local_identity = Map.get(signal_data, :identity_key)
-        local_reg_id = Map.get(signal_data, :registration_id, 0)
-        lid_mapping = Account.load_lid_mapping(store)
-
-        if local_identity do
-          Prekeys.create_sessions_for_bundles(
-            signal_sessions,
-            requested_jid,
-            bundles,
-            local_identity,
-            local_reg_id,
-            lid_mapping
-          )
-        else
-          {:error, :no_local_identity}
-        end
-
-      {:error, reason} ->
-        {:error, {:prekey_parse_failed, reason}}
-    end
-  end
-
   @spec do_send_encrypted(
           pid(),
           map(),
@@ -707,14 +590,14 @@ defmodule ExWapp.Session.Worker.Outbound do
          proto <- outbound_proto(text, opts),
          {:ok, payloads} <- Direct.build_payloads(proto, jid, opts),
          {:ok, participant_nodes, updated_sessions, include_identity} <-
-           encrypt_for_targets(
+           Encryptor.encrypt_for_targets(
              store,
              signal_sessions,
              target_specs,
              payloads,
              prekey_bundles || %{}
            ) do
-      case missing_expected_targets(target_specs, participant_nodes) do
+      case Encryptor.missing_expected_targets(target_specs, participant_nodes) do
         [] ->
           persist_signal_sessions(session_pid, updated_sessions, state)
           maybe_record_outgoing_message(store, jid, message_id, timestamp, text, opts)
@@ -810,249 +693,6 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
-  @spec encrypt_for_targets(
-          Store.t(),
-          SessionStore.t(),
-          [target_spec()],
-          encrypted_payloads(),
-          prekey_bundle_map()
-        ) :: encryption_result()
-  defp encrypt_for_targets(store, signal_sessions, target_specs, payloads, prekey_bundles) do
-    lid_mapping = Account.load_lid_mapping(store)
-    init_acc = %{nodes: [], sessions: signal_sessions, include_identity: false, errors: []}
-
-    result =
-      Enum.reduce(target_specs, init_acc, fn spec, acc ->
-        encrypt_single_target(store, acc, spec, payloads, prekey_bundles, lid_mapping)
-      end)
-
-    if result.nodes == [] do
-      {:error, {:no_encrypted_targets, Enum.reverse(result.errors)}}
-    else
-      {:ok, Enum.reverse(result.nodes), result.sessions, result.include_identity}
-    end
-  end
-
-  @spec encrypt_single_target(
-          Store.t(),
-          encryption_acc(),
-          target_spec(),
-          encrypted_payloads(),
-          prekey_bundle_map(),
-          map()
-        ) :: encryption_acc()
-  defp encrypt_single_target(
-         store,
-         acc,
-         %{jid: raw_jid, payload_kind: kind},
-         payloads,
-         bundles,
-         lid_mapping
-       ) do
-    target_jid = normalize_jid_with_device(raw_jid)
-    mapped_jid = JIDUtils.resolve_signal_encryption_jid(target_jid, lid_mapping)
-
-    signal_jid =
-      if mapped_jid == "" or mapped_jid == target_jid,
-        do: target_jid,
-        else: mapped_jid
-
-    sessions =
-      if signal_jid != target_jid,
-        do: ensure_signal_session_alias(acc.sessions, signal_jid, target_jid),
-        else: acc.sessions
-
-    if signal_jid != target_jid do
-      Logger.debug("[SEND] Encrypting wire_jid=#{target_jid} using signal_jid=#{signal_jid}")
-    end
-
-    padded_payload = Map.get(payloads, kind, Map.get(payloads, :recipient))
-    bundle = Map.get(bundles, target_jid) || Map.get(bundles, signal_jid) || %{}
-    bundle_for_encrypt = if is_binary(Map.get(bundle, :base_key)), do: bundle, else: %{}
-
-    if is_binary(padded_payload) do
-      do_encrypt_and_accumulate(
-        store,
-        acc,
-        sessions,
-        target_jid,
-        signal_jid,
-        padded_payload,
-        bundle_for_encrypt
-      )
-    else
-      Logger.warning("[SEND] Missing payload for target=#{target_jid} kind=#{kind}")
-      %{acc | errors: [{target_jid, :missing_payload} | acc.errors]}
-    end
-  end
-
-  @spec do_encrypt_and_accumulate(
-          Store.t(),
-          encryption_acc(),
-          SessionStore.t(),
-          String.t(),
-          String.t(),
-          binary(),
-          map()
-        ) :: encryption_acc()
-  defp do_encrypt_and_accumulate(store, acc, sessions, target_jid, signal_jid, payload, bundle) do
-    case encrypt_for_target_with_fallback(
-           store,
-           sessions,
-           target_jid,
-           signal_jid,
-           payload,
-           bundle
-         ) do
-      {:ok, ciphertext, enc_type, updated_sessions} ->
-        accumulate_encrypted_target(
-          acc,
-          target_jid,
-          signal_jid,
-          ciphertext,
-          enc_type,
-          updated_sessions
-        )
-
-      {:error, reason} ->
-        Logger.warning("[SEND] Failed to encrypt for wire_jid=#{target_jid}: #{inspect(reason)}")
-        %{acc | errors: [{target_jid, reason} | acc.errors]}
-    end
-  end
-
-  @spec encrypt_for_target_with_fallback(
-          Store.t(),
-          SessionStore.t(),
-          String.t(),
-          String.t(),
-          binary(),
-          map()
-        ) ::
-          {:ok, binary(), :prekey | :whisper, SessionStore.t()} | {:error, term()}
-  defp encrypt_for_target_with_fallback(store, sessions, target_jid, signal_jid, payload, bundle) do
-    case Encryption.encrypt_for_recipient_sync(store, sessions, signal_jid, payload, bundle) do
-      {:error, :missing_bundle} when signal_jid != target_jid ->
-        Logger.debug("[SEND] No session for signal_jid=#{signal_jid}, retrying with wire jid")
-        Encryption.encrypt_for_recipient_sync(store, sessions, target_jid, payload, bundle)
-
-      other ->
-        other
-    end
-  end
-
-  @spec accumulate_encrypted_target(
-          encryption_acc(),
-          String.t(),
-          String.t(),
-          binary(),
-          :prekey | :whisper,
-          SessionStore.t()
-        ) :: encryption_acc()
-  defp accumulate_encrypted_target(
-         acc,
-         target_jid,
-         signal_jid,
-         ciphertext,
-         enc_type,
-         updated_sessions
-       ) do
-    maybe_log_prekey_wire_fields(target_jid, enc_type, ciphertext)
-
-    updated_sessions =
-      if signal_jid != target_jid,
-        do: ensure_signal_session_alias(updated_sessions, signal_jid, target_jid),
-        else: updated_sessions
-
-    node = MessageNode.build_participant_encrypted_node(target_jid, ciphertext, enc_type)
-
-    %{
-      acc
-      | nodes: [node | acc.nodes],
-        sessions: updated_sessions,
-        include_identity: acc.include_identity or enc_type == :prekey
-    }
-  end
-
-  @spec maybe_log_prekey_wire_fields(String.t(), :prekey | :whisper, binary()) :: :ok
-  defp maybe_log_prekey_wire_fields(_target_jid, enc_type, _ciphertext) when enc_type != :prekey,
-    do: :ok
-
-  defp maybe_log_prekey_wire_fields(target_jid, :prekey, ciphertext) do
-    case ExWapp.Signal.WireFormat.parse_prekey_signal_message(ciphertext) do
-      {:ok, parsed} ->
-        Logger.debug(
-          "[SEND] pkmsg wire fields target=#{target_jid} reg_id=#{parsed.registration_id} signed_prekey_id=#{parsed.signed_prekey_id} prekey_id=#{inspect(parsed.prekey_id)} base_key_size=#{byte_size(parsed.base_key)} inner_size=#{byte_size(parsed.message)}"
-        )
-
-      {:error, reason} ->
-        Logger.warning(
-          "[SEND] pkmsg wire parse failed for target=#{target_jid}: #{inspect(reason)}"
-        )
-    end
-  end
-
-  @spec ensure_signal_session_alias(SessionStore.t(), String.t(), String.t()) ::
-          SessionStore.t()
-  defp ensure_signal_session_alias(signal_sessions, alias_jid, source_jid) do
-    alias_jid = normalize_jid_with_device(alias_jid)
-    source_jid = normalize_jid_with_device(source_jid)
-
-    cond do
-      alias_jid == "" or source_jid == "" or alias_jid == source_jid ->
-        signal_sessions
-
-      SessionStore.has_session?(signal_sessions, alias_jid) ->
-        signal_sessions
-
-      true ->
-        case SessionStore.get_session(signal_sessions, source_jid) do
-          {:ok, session} ->
-            Logger.debug("[SEND] Migrating session #{source_jid} -> #{alias_jid}")
-            SessionStore.put_session(signal_sessions, alias_jid, session)
-
-          :not_found ->
-            signal_sessions
-        end
-    end
-  end
-
-  @spec query_device_list_worker(worker_state(), [String.t()]) ::
-          {:ok, map()} | {:error, term()}
-  defp query_device_list_worker(%{conn: conn} = state, jids) when is_list(jids) do
-    message_id = generate_request_id()
-    query_node = IQ.build_usync_device_query(jids, message_id)
-
-    Logger.debug("[USYNC] Querying device list for #{inspect(jids)}")
-
-    case send_transport_node(state, conn, query_node) do
-      :ok ->
-        receive do
-          {:prekey_response, ^message_id, response_node} ->
-            Logger.debug("[USYNC] Got device list response")
-
-            case IQ.parse_usync_device_response(response_node) do
-              {:ok, device_map} = ok ->
-                DeviceCache.persist_usync_map(state.store, device_map)
-                ok
-
-              other ->
-                other
-            end
-
-          {:prekey_error, ^message_id, error} ->
-            Logger.warning("[USYNC] Device list query error: #{inspect(error)}")
-            {:error, {:usync_query_error, error}}
-        after
-          usync_timeout_ms(state) ->
-            Logger.warning("[USYNC] Device list query timed out")
-            {:error, :usync_timeout}
-        end
-
-      error ->
-        {:error, {:usync_send_failed, error}}
-    end
-  end
-
   @spec normalize_jid_for_signal(term()) :: String.t()
   defp normalize_jid_for_signal(jid) when is_binary(jid), do: JIDUtils.normalize_for_signal(jid)
 
@@ -1071,11 +711,6 @@ defmodule ExWapp.Session.Worker.Outbound do
   defp strip_device_from_jid(%ExWapp.JID{} = jid), do: JIDUtils.strip_device(jid)
 
   defp strip_device_from_jid(_), do: ""
-
-  @spec generate_request_id() :: String.t()
-  defp generate_request_id do
-    :crypto.strong_rand_bytes(16) |> Base.encode64() |> String.slice(0, 16)
-  end
 
   @spec maybe_record_outgoing_message(
           Store.t(),
@@ -1101,6 +736,11 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
+  @spec send_node_fun(worker_state()) :: IQRequests.send_node_fun()
+  defp send_node_fun(state) do
+    fn node -> send_transport_node(state, state.conn, node) end
+  end
+
   @spec send_transport_node(worker_state(), pid() | nil, Binary.Node.t()) ::
           :ok | {:error, term()}
   defp send_transport_node(%{transport_mod: transport_mod}, conn, node) when is_pid(conn) do
@@ -1124,57 +764,6 @@ defmodule ExWapp.Session.Worker.Outbound do
   @spec iq_timeout_ms(worker_state()) :: non_neg_integer()
   defp iq_timeout_ms(state),
     do: Config.get(state.runtime_cfg || %{}, [:iq, :default_timeout_ms], 30_000)
-
-  @spec prekey_timeout_ms(worker_state()) :: non_neg_integer()
-  defp prekey_timeout_ms(state),
-    do: Config.get(state.runtime_cfg || %{}, [:iq, :prekey_timeout_ms], 30_000)
-
-  @spec usync_timeout_ms(worker_state()) :: non_neg_integer()
-  defp usync_timeout_ms(state),
-    do: Config.get(state.runtime_cfg || %{}, [:iq, :usync_timeout_ms], 15_000)
-
-  @spec group_info_timeout_ms(worker_state()) :: non_neg_integer()
-  defp group_info_timeout_ms(state),
-    do: Config.get(state.runtime_cfg || %{}, [:iq, :group_info_timeout_ms], 15_000)
-
-  @spec clear_cached_signal_sessions_for_targets(
-          SessionStore.t(),
-          list(target_spec() | String.t()),
-          Store.t()
-        ) :: SessionStore.t()
-  defp clear_cached_signal_sessions_for_targets(signal_sessions, targets, store) do
-    if SessionStore.store?(signal_sessions) do
-      lid_mapping = Account.load_lid_mapping(store)
-
-      targets
-      |> Enum.map(fn
-        %{jid: jid} -> jid
-        jid when is_binary(jid) -> jid
-        _ -> ""
-      end)
-      |> Enum.reject(&(&1 == ""))
-      |> Enum.reduce(signal_sessions, &SessionStore.delete_sessions_for_user(&2, &1, lid_mapping))
-    else
-      signal_sessions
-    end
-  end
-
-  @spec missing_expected_targets([target_spec()], [Binary.Node.t()]) :: [target_spec()]
-  defp missing_expected_targets(target_specs, participant_nodes) do
-    encrypted_targets =
-      participant_nodes
-      |> MessageNode.extract_participant_jids()
-      |> MapSet.new()
-
-    target_specs
-    |> Enum.map(fn spec ->
-      %{
-        jid: normalize_jid_with_device(Map.get(spec, :jid, "")),
-        payload_kind: Map.get(spec, :payload_kind)
-      }
-    end)
-    |> Enum.reject(fn %{jid: jid} -> jid == "" or MapSet.member?(encrypted_targets, jid) end)
-  end
 
   @spec emit_telemetry(atom(), map(), worker_state(), map()) :: :ok
   defp emit_telemetry(event, measurements, state, extra_metadata) do
