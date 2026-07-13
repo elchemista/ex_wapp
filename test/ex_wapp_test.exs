@@ -401,7 +401,7 @@ defmodule ExWappTest do
       assert [%{id: "m2"}, %{id: "m1"}] =
                ExWapp.get_messages(session, jid, limit: 2, offset: 1)
 
-      assert Enum.map(ExWapp.all_messages(session, jid), & &1.id) == ["m3", "m2", "m1"]
+      assert Enum.map(ExWapp.all_messages(session, jid), & &1.id) == ["m1", "m2", "m3"]
 
       GenServer.stop(session)
     end
@@ -711,6 +711,37 @@ defmodule ExWappTest do
 
       assert :ok = ExWapp.delete_messages(store, jid, ["history-1"])
       assert Enum.count(ExWapp.all_messages(store, jid)) == 1_000
+    end
+
+    test "history streams preserve decoded typed content" do
+      store = ExWapp.Store.Memory.new()
+      jid = "15550001111@s.whatsapp.net"
+
+      typed_content = %{
+        content: %{kind: :image, value: %{caption: "photo"}},
+        media: %{direct_path: "/media/image"},
+        location: %{latitude: 45.4642, longitude: 9.19},
+        contact: %{display_name: "Alice"},
+        event: %{name: "Meeting"}
+      }
+
+      message =
+        Map.merge(
+          %{
+            id: "typed-history-1",
+            from_me: false,
+            timestamp: 10,
+            text: nil,
+            status: :received,
+            participant: nil,
+            raw: nil
+          },
+          typed_content
+        )
+
+      assert :ok = ExWapp.Chat.merge_messages(store, jid, [message])
+      assert [stored] = Enum.to_list(ExWapp.all_messages(store, jid))
+      assert Map.take(stored, Map.keys(typed_content)) == typed_content
     end
   end
 
