@@ -36,6 +36,7 @@ defmodule ExWapp.Session.Worker.Outbound do
            {:ok, [Binary.Node.t()], SessionStore.t(), boolean()}
            | {:error, {:no_encrypted_targets, [{String.t(), term()}]}}
 
+  @doc false
   @spec send_text_worker(pid(), map(), String.t(), outbound_text(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def send_text_worker(session_pid, state, jid, text, opts \\ [])
@@ -66,6 +67,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
+  @doc false
   @spec send_proto_worker(pid(), map(), String.t(), ExWapp.Proto.Message.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def send_proto_worker(session_pid, state, jid, %Message{} = proto, opts \\ []) do
