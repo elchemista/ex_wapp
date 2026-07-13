@@ -209,7 +209,7 @@ validazione Elixir/Erlang elencata sotto.
 La cronologia non deve più gonfiare `%ExWapp.Chat{}` o obbligare i wrapper a
 materializzare liste complete.
 
-- [x] rimuovere `messages` dalla struttura chat;
+- [x] mantenere `%ExWapp.Chat{}` come soli metadati, senza liste, funzioni o riferimenti a stream;
 - [x] introdurre uno store messaggi indicizzato separato per JID, timestamp e ID;
 - [x] migrare automaticamente snapshot legacy con messaggi incorporati;
 - [x] mantenere `get_messages/3` come lettura paginata e materializzata;
