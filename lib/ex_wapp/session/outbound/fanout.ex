@@ -21,7 +21,7 @@ defmodule ExWapp.Session.Outbound.Fanout do
           target_hints: map(),
           own_base_jid: String.t(),
           own_lid_jid: String.t(),
-          own_device_id: term(),
+          own_device_id: integer(),
           lid_mapping: map(),
           self_chat_mode: term()
         }
@@ -178,14 +178,14 @@ defmodule ExWapp.Session.Outbound.Fanout do
     end
   end
 
-  @spec split_reachable_cached_targets([String.t()], term(), map()) ::
+  @spec split_reachable_cached_targets([String.t()], map(), map()) ::
           {[String.t()], [String.t()]}
   defp split_reachable_cached_targets(targets, prekey_bundles, lid_mapping) do
     Enum.split_with(targets, fn target_jid ->
       signal_jid = JIDUtils.resolve_signal_encryption_jid(target_jid, lid_mapping)
 
-      Map.has_key?(prekey_bundles || %{}, target_jid) or
-        Map.has_key?(prekey_bundles || %{}, signal_jid)
+      Map.has_key?(prekey_bundles, target_jid) or
+        Map.has_key?(prekey_bundles, signal_jid)
     end)
   end
 
