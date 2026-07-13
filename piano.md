@@ -60,10 +60,10 @@ Obiettivo: lasciare al worker l'orchestrazione e spostare la trasformazione pura
 dei message node in `ExWapp.Session.MessageNode`.
 
 - [x] Identificare il comportamento già coperto dai contract test.
-- [ ] Estrarre applicazione di `message_node_type`.
-- [ ] Estrarre propagazione di `mediatype` sugli `enc`.
-- [ ] Estrarre append dei nodi metadata aggiuntivi.
-- [ ] Aggiungere test unitari del nuovo confine.
+- [x] Estrarre applicazione di `message_node_type`.
+- [x] Estrarre propagazione di `mediatype` sugli `enc`.
+- [x] Estrarre append dei nodi metadata aggiuntivi.
+- [x] Aggiungere test unitari del nuovo confine.
 - [ ] Eseguire la suite completa fuori da questo ambiente.
 
 ## Fase 2 — Suddividere Outbound per responsabilità
