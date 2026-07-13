@@ -11,18 +11,6 @@ defmodule ExWapp.Message.Content do
 
   @type kind :: :text | :media | :location | :contact | :event | :protocol | :unsupported
 
-  @type t :: %__MODULE__{
-          kind: kind(),
-          text: binary() | nil,
-          media: Ref.t() | nil,
-          media_type: atom() | nil,
-          location: map() | nil,
-          contact: map() | nil,
-          event: map() | nil,
-          protocol_payload: binary() | nil,
-          diagnostics: map()
-        }
-
   @enforce_keys [:kind]
   defstruct [
     :kind,
@@ -35,6 +23,18 @@ defmodule ExWapp.Message.Content do
     :protocol_payload,
     diagnostics: %{}
   ]
+
+  @type t :: %__MODULE__{
+          kind: kind(),
+          text: binary() | nil,
+          media: Ref.t() | nil,
+          media_type: atom() | nil,
+          location: map() | nil,
+          contact: map() | nil,
+          event: map() | nil,
+          protocol_payload: binary() | nil,
+          diagnostics: map()
+        }
 
   @doc """
   Builds a canonical content value from one supported kind and its fields.
