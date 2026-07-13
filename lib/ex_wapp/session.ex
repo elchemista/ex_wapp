@@ -130,7 +130,7 @@ defmodule ExWapp.Session do
     store = GenServer.call(server, :get_store)
 
     with :ok <- flush_store_adapter(store),
-         {:ok, data} <- ExWapp.Store.load(store) do
+         {:ok, data} <- ExWapp.Store.snapshot(store) do
       blob = :erlang.term_to_binary(data)
 
       {:ok,
