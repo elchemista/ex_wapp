@@ -37,7 +37,6 @@ defmodule ExWapp.Message.Handler.Inbound.EnvelopeTest do
 
   test "persists PN and LID pairs observed on the envelope" do
     store = Memory.new()
-    on_exit(fn -> Memory.stop(store) end)
 
     state = %{store: store}
     lid = "90000000001@lid"
