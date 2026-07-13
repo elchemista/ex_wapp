@@ -337,20 +337,39 @@ defmodule ExWapp do
   def get_chat(session, jid), do: Chat.get(session, jid)
 
   @doc """
-  Gets messages for a chat with optional pagination.
+  Gets locally retained messages for a chat, newest first.
+
+  With a high-level client this returns `{:ok, messages}` (or a structured
+  client error); with a direct session it returns the message list.
 
   ## Options
 
-    * `:limit` - Maximum messages to return (default: 50)
+    * `:limit` - Maximum messages to return (default: 50), or `:all`
     * `:offset` - Number of messages to skip (default: 0)
 
-  ## Example
+  `limit: :all` reads every message retained locally for that chat. It does
+  not trigger an on-demand download of older WhatsApp history.
 
-      # Get last 20 messages
-      messages = ExWapp.get_messages(session, jid, limit: 20)
+  ## Examples
+
+      {:ok, recent} = ExWapp.get_messages(client, jid, limit: 20)
+      all_local = ExWapp.get_messages(session, jid, limit: :all)
   """
-  @spec get_messages(GenServer.server(), String.t(), keyword()) :: [Chat.message()]
-  def get_messages(session, jid, opts \\ []), do: Chat.messages(session, jid, opts)
+  @spec get_messages(Client.t() | GenServer.server(), String.t(), keyword()) ::
+          {:ok, [Chat.message()]} | {:error, Error.t(), Client.t()} | [Chat.message()]
+  def get_messages(target, jid, opts \\ [])
+  def get_messages(%Client{} = client, jid, opts), do: Client.API.get_messages(client, jid, opts)
+  def get_messages(session, jid, opts), do: Chat.messages(session, jid, opts)
+
+  @doc """
+  Returns every message currently retained for a chat, newest first.
+
+  This is a convenience form of `get_messages(target, jid, limit: :all)`.
+  """
+  @spec all_messages(Client.t() | GenServer.server(), String.t()) ::
+          {:ok, [Chat.message()]} | {:error, Error.t(), Client.t()} | [Chat.message()]
+  def all_messages(%Client{} = client, jid), do: Client.API.all_messages(client, jid)
+  def all_messages(session, jid), do: Chat.all_messages(session, jid)
 
   @doc """
   Marks all messages in a chat as read.
