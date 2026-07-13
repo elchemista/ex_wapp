@@ -331,7 +331,7 @@ defmodule ExWapp.Chat do
   @doc """
   Deletes a chat.
   """
-  @spec delete(target(), String.t()) :: :ok
+  @spec delete(target(), String.t()) :: :ok | {:error, term()}
   def delete(target, jid) do
     store = resolve_store(target)
     jid_str = normalize_jid(jid)
