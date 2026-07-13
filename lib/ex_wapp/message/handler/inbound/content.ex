@@ -70,8 +70,8 @@ defmodule ExWapp.Message.Handler.Inbound.Content do
         )
 
       :user_message ->
-        plaintext
-        |> Wire.apply_media_from_plaintext(%{})
+        %{}
+        |> Wire.apply_media_from_plaintext(plaintext)
         |> canonical_user_content(decoded_text, fallback_text, diagnostics)
     end
   end
