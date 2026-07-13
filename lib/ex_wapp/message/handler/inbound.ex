@@ -7,10 +7,10 @@ defmodule ExWapp.Message.Handler.Inbound do
   alias ExWapp.{Chat, JID, Store}
   alias ExWapp.Binary.Node
   alias ExWapp.Message.Handler.{Common, Wire}
-  alias ExWapp.Message.Handler.Inbound.Envelope
+  alias ExWapp.Message.Handler.Inbound.{Decryptor, Envelope}
   alias ExWapp.Proto.{HistorySync, SyncAction}
-  alias ExWapp.Session.{Account, DeviceCache, JIDUtils}
-  alias ExWapp.Signal.{Encryption, SenderKey, SessionStore}
+  alias ExWapp.Session.DeviceCache
+  alias ExWapp.Signal.SessionStore
 
   @max_retry_receipt_count 2
 
@@ -108,153 +108,57 @@ defmodule ExWapp.Message.Handler.Inbound do
 
   def persist_notification_devices(_state, _content), do: :ok
 
+  @spec maybe_decrypt_message(map(), map(), term(), term(), map()) :: {map(), map()}
   defp maybe_decrypt_message(
-         %{encrypted: true, enc_type: enc_type} = message_data,
+         %{encrypted: true} = message_data,
          state,
          from,
          participant,
          attrs
        ) do
-    decrypt_ctx = Envelope.decrypt_context(message_data, state, from, participant, attrs)
-    log_decrypt_attempt(enc_type, decrypt_ctx, from)
+    case Decryptor.decrypt(message_data, state, from, participant, attrs) do
+      {:ok, decrypt_result, updated_state} ->
+        decode_decrypted_message(decrypt_result, updated_state)
 
-    case validate_decrypt_context(state, decrypt_ctx) do
-      {:ok, store} ->
-        decrypt_and_decode_message(store, state, from, message_data, enc_type, decrypt_ctx)
-
-      {:error, reason} ->
-        decrypt_error_result(message_data, state, reason)
+      {:error, updated_message_data, updated_state} ->
+        {updated_message_data, updated_state}
     end
   end
 
   defp maybe_decrypt_message(message_data, state, _from, _participant, _attrs),
     do: {message_data, state}
 
-  defp log_decrypt_attempt(enc_type, decrypt_ctx, from) do
-    Logger.debug(
-      "[DECRYPT] Attempting decrypt: enc_type=#{inspect(enc_type)} payload_candidates=#{length(decrypt_ctx.payload_candidates)} decryptable_payloads=#{length(decrypt_ctx.decryptable_payloads)} from=#{inspect(from)} sender_candidates=#{inspect(decrypt_ctx.sender_candidates)}"
-    )
-  end
-
-  defp validate_decrypt_context(state, decrypt_ctx) do
-    cond do
-      is_nil(Map.get(state, :store)) ->
-        Logger.warning("[DECRYPT] Missing store in state, cannot decrypt")
-        {:error, :missing_store}
-
-      decrypt_ctx.sender_candidates == [] ->
-        Logger.warning(
-          "[DECRYPT] No sender candidates found from from/participant/sender_lid attrs"
-        )
-
-        {:error, :no_sender_candidates}
-
-      decrypt_ctx.decryptable_payloads == [] ->
-        Logger.warning(
-          "[DECRYPT] Skipping decrypt: no binary ciphertext candidates. first_candidate=#{inspect(List.first(decrypt_ctx.payload_candidates))}"
-        )
-
-        {:error, :no_ciphertext_candidates}
-
-      true ->
-        {:ok, Map.get(state, :store)}
-    end
-  end
-
-  defp decrypt_and_decode_message(store, state, from, message_data, enc_type, decrypt_ctx) do
-    case decrypt_with_payload_candidates(
-           store,
-           Map.get(state, :signal_sessions),
-           decrypt_ctx.sender_candidates,
-           decrypt_ctx.decryptable_payloads,
-           from
-         ) do
-      {:ok, padded_plaintext, updated_sessions, sender_jid, payload} ->
-        decode_decrypted_message(
-          message_data,
-          state,
-          from,
-          enc_type,
-          padded_plaintext,
-          updated_sessions,
-          sender_jid,
-          payload
-        )
-
-      {:error, reason} ->
-        log_decrypt_failure(state, from, enc_type, reason, decrypt_ctx)
-        decrypt_error_result(message_data, state, reason, decrypt_ctx.sender_candidates)
-    end
-  end
-
-  defp log_decrypt_failure(state, from, enc_type, reason, decrypt_ctx) do
-    signal_sessions = Map.get(state, :signal_sessions)
-    sender_candidates = Map.get(decrypt_ctx, :sender_candidates, [])
-    payloads = Map.get(decrypt_ctx, :decryptable_payloads, [])
-    lid_mapping = Account.load_lid_mapping(Map.get(state, :store))
-
-    candidate_identities =
-      sender_candidates
-      |> Enum.map(&JIDUtils.identity/1)
-      |> MapSet.new()
-
-    stored_session_targets =
-      signal_sessions
-      |> SessionStore.list_sessions()
-      |> Enum.filter(&MapSet.member?(candidate_identities, JIDUtils.identity(&1)))
-      |> Enum.sort()
-      |> Enum.take(12)
-
-    related_bases =
-      sender_candidates
-      |> Enum.flat_map(&JIDUtils.related_bases(&1, lid_mapping))
-      |> Enum.uniq()
-      |> Enum.sort()
-
-    Logger.error(
-      "[DECRYPT] Failed to decrypt message: enc_type=#{inspect(enc_type)} from=#{Common.normalize_jid_with_device(from)} reason=#{inspect(reason)} sender_candidates=#{inspect(sender_candidates)} related_bases=#{inspect(related_bases)} payload_count=#{length(payloads)} payload_types=#{inspect(Enum.map(payloads, &Map.get(&1, :enc_type)))} stored_session_targets=#{inspect(stored_session_targets)}"
-    )
-  rescue
-    error ->
-      Logger.error(
-        "[DECRYPT] Failed to decrypt message and diagnostics logging raised: reason=#{inspect(reason)} logging_error=#{inspect(error)}"
-      )
-  end
-
-  defp decode_decrypted_message(
-         message_data,
-         state,
-         from,
-         enc_type,
-         padded_plaintext,
-         updated_sessions,
-         sender_jid,
-         payload
-       ) do
-    plaintext =
-      Encryption.unpad_message(
-        padded_plaintext,
-        Map.get(payload, :enc_version) || Map.get(message_data, :enc_version)
-      )
-
-    {sender_key_dist_count, state} =
-      maybe_process_sender_key_distributions(state, from, sender_jid, plaintext)
+  @spec decode_decrypted_message(Decryptor.success(), map()) :: {map(), map()}
+  defp decode_decrypted_message(decrypt_result, state) do
+    plaintext = decrypt_result.plaintext
+    payload = decrypt_result.payload
 
     {content_type, decoded_text} =
-      Wire.classify_decrypted_content(plaintext, sender_key_dist_count)
+      Wire.classify_decrypted_content(
+        plaintext,
+        decrypt_result.sender_key_distribution_count
+      )
 
-    text = decoded_text || "(encrypted: #{Map.get(payload, :enc_type, enc_type)})"
+    text = decoded_text || "(encrypted: #{Map.get(payload, :enc_type, decrypt_result.enc_type)})"
 
-    log_decrypted_message(content_type, decoded_text, sender_jid, payload, plaintext, text)
-
-    updated_state = Map.put(state, :signal_sessions, updated_sessions)
+    log_decrypted_message(
+      content_type,
+      decoded_text,
+      decrypt_result.sender_jid,
+      payload,
+      plaintext,
+      text
+    )
 
     decoded_message_data =
-      message_data
-      |> build_decoded_message_data(text, content_type, plaintext)
-      |> maybe_put_signal_sessions_update(updated_sessions)
+      build_decoded_message_data(
+        decrypt_result.message_data,
+        text,
+        content_type,
+        plaintext
+      )
 
-    {decoded_message_data, updated_state}
+    {decoded_message_data, state}
   end
 
   defp log_decrypted_message(:protocol, _decoded_text, _sender_jid, payload, plaintext, _text) do
@@ -296,18 +200,6 @@ defmodule ExWapp.Message.Handler.Inbound do
     |> Wire.apply_media_from_plaintext(plaintext)
   end
 
-  defp decrypt_error_result(message_data, state, reason, sender_candidates \\ []) do
-    {updated_state, maybe_updated_sessions} =
-      maybe_reset_signal_sessions_for_decrypt_failure(state, reason, sender_candidates)
-
-    updated_message_data =
-      message_data
-      |> Map.put(:decrypt_status, {:error, reason})
-      |> maybe_put_signal_sessions_update(maybe_updated_sessions)
-
-    {updated_message_data, updated_state}
-  end
-
   defp transient_encrypted_placeholder?(%{encrypted: true, decrypt_status: {:error, _}}), do: true
   defp transient_encrypted_placeholder?(%{placeholder_unavailable: true}), do: true
   defp transient_encrypted_placeholder?(_message_data), do: false
@@ -322,59 +214,6 @@ defmodule ExWapp.Message.Handler.Inbound do
 
   defp maybe_log_suppressed_message(_is_protocol, _suppress_message?, _from, _id, _message_data),
     do: :ok
-
-  defp maybe_put_signal_sessions_update(message_data, nil), do: message_data
-
-  defp maybe_put_signal_sessions_update(message_data, sessions) do
-    if SessionStore.store?(sessions),
-      do: Map.put(message_data, :signal_sessions_update, sessions),
-      else: message_data
-  end
-
-  defp maybe_reset_signal_sessions_for_decrypt_failure(state, reason, sender_candidates) do
-    reset_candidates = decrypt_failure_session_reset_candidates(reason, sender_candidates)
-
-    case clear_signal_sessions_for_candidates(
-           Map.get(state, :signal_sessions),
-           state,
-           reset_candidates
-         ) do
-      nil -> {state, nil}
-      updated_sessions -> {%{state | signal_sessions: updated_sessions}, updated_sessions}
-    end
-  end
-
-  defp decrypt_failure_session_reset_candidates(
-         {:decrypt_failed_for_payload, _, {:decrypt_failed_for_candidate, _candidate, reason}},
-         sender_candidates
-       )
-       when reason in [:invalid_mac, :no_session, :unknown_signed_prekey] do
-    sender_candidates
-    |> Enum.map(&Common.normalize_jid_with_device/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.uniq()
-  end
-
-  defp decrypt_failure_session_reset_candidates(_reason, _sender_candidates), do: []
-
-  defp clear_signal_sessions_for_candidates(_signal_sessions, _state, []), do: nil
-  defp clear_signal_sessions_for_candidates(nil, _state, _candidates), do: nil
-
-  defp clear_signal_sessions_for_candidates(signal_sessions, state, candidates) do
-    if SessionStore.store?(signal_sessions) do
-      lid_mapping = ExWapp.Session.Account.load_lid_mapping(Map.get(state, :store))
-
-      Enum.reduce(candidates, signal_sessions, fn candidate, sessions ->
-        SessionStore.delete_sessions_for_user(sessions, candidate, lid_mapping)
-      end)
-    else
-      nil
-    end
-  rescue
-    error ->
-      Logger.warning("[DECRYPT] Failed clearing stale signal sessions: #{inspect(error)}")
-      nil
-  end
 
   defp device_sent_message_payload?(payload) when is_binary(payload) do
     match?({:ok, _wrapped}, Wire.find_length_delimited_field(payload, 31))
@@ -888,113 +727,6 @@ defmodule ExWapp.Message.Handler.Inbound do
         _ ->
           :ok
       end
-    end
-  end
-
-  defp decrypt_with_payload_candidates(_store, _signal_sessions, _candidates, [], _chat_jid),
-    do: {:error, :no_payload_candidates}
-
-  defp decrypt_with_payload_candidates(
-         store,
-         signal_sessions,
-         candidates,
-         [payload | rest],
-         chat_jid
-       ) do
-    ciphertext = Map.get(payload, :ciphertext)
-    enc_type = Map.get(payload, :enc_type, "msg")
-
-    case decrypt_with_candidates(
-           store,
-           signal_sessions,
-           candidates,
-           ciphertext,
-           enc_type,
-           chat_jid
-         ) do
-      {:ok, plaintext, updated_sessions, sender_jid} ->
-        {:ok, plaintext, updated_sessions, sender_jid, payload}
-
-      {:error, reason} ->
-        case decrypt_with_payload_candidates(store, signal_sessions, candidates, rest, chat_jid) do
-          {:ok, _plaintext, _updated_sessions, _sender_jid, _payload} = success -> success
-          {:error, _other} -> {:error, {:decrypt_failed_for_payload, enc_type, reason}}
-        end
-    end
-  end
-
-  defp decrypt_with_candidates(_store, _signal_sessions, [], _ciphertext, _enc_type, _chat_jid),
-    do: {:error, :no_sender_candidates}
-
-  defp decrypt_with_candidates(
-         store,
-         signal_sessions,
-         [candidate | rest],
-         ciphertext,
-         enc_type,
-         chat_jid
-       ) do
-    decrypt_result =
-      if sender_key_message?(enc_type, chat_jid) do
-        case SenderKey.decrypt_group_message(store, chat_jid, candidate, ciphertext) do
-          {:ok, plaintext} -> {:ok, plaintext, signal_sessions}
-          {:error, reason} -> {:error, reason}
-        end
-      else
-        Encryption.decrypt_from_sender_sync(
-          store,
-          signal_sessions,
-          candidate,
-          ciphertext,
-          enc_type
-        )
-      end
-
-    case decrypt_result do
-      {:ok, plaintext, updated_sessions} ->
-        {:ok, plaintext, updated_sessions, candidate}
-
-      {:error, reason} ->
-        case decrypt_with_candidates(store, signal_sessions, rest, ciphertext, enc_type, chat_jid) do
-          {:ok, _plaintext, _updated_sessions, _candidate} = success -> success
-          {:error, _} -> {:error, {:decrypt_failed_for_candidate, candidate, reason}}
-        end
-    end
-  end
-
-  defp sender_key_message?(enc_type, chat_jid) do
-    enc_type in [:skmsg, "skmsg"] and group_jid?(chat_jid)
-  end
-
-  defp group_jid?(jid) do
-    jid
-    |> Common.normalize_jid()
-    |> JID.group?()
-  end
-
-  defp maybe_process_sender_key_distributions(state, from, sender_jid, plaintext)
-       when is_binary(plaintext) do
-    store = Map.get(state, :store)
-
-    cond do
-      is_nil(store) ->
-        {0, state}
-
-      not group_jid?(from) ->
-        {0, state}
-
-      true ->
-        case SenderKey.process_distributions_from_plaintext(store, from, sender_jid, plaintext) do
-          {:ok, count} ->
-            {count, state}
-
-          {:error, reason} ->
-            Logger.warning(
-              "[SENDER_KEY] Failed processing sender key distribution: #{inspect(reason)}"
-            )
-
-            {0, state}
-        end
     end
   end
 
