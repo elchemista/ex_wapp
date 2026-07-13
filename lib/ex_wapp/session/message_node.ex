@@ -5,6 +5,7 @@ defmodule ExWapp.Session.MessageNode do
 
   alias ExWapp.Binary
 
+  @doc false
   @spec enc_type_to_wire(atom() | String.t()) :: String.t()
   def enc_type_to_wire(:prekey), do: "pkmsg"
   def enc_type_to_wire(:whisper), do: "msg"
@@ -13,6 +14,7 @@ defmodule ExWapp.Session.MessageNode do
   def enc_type_to_wire("msg"), do: "msg"
   def enc_type_to_wire(_), do: "msg"
 
+  @doc false
   @spec build_participant_encrypted_node(String.t(), binary(), atom() | String.t()) ::
           Binary.Node.t()
   def build_participant_encrypted_node(jid, ciphertext, enc_type) do
@@ -32,6 +34,7 @@ defmodule ExWapp.Session.MessageNode do
     }
   end
 
+  @doc false
   @spec extract_participant_jids(term()) :: [String.t()]
   def extract_participant_jids(participant_nodes) when is_list(participant_nodes) do
     participant_nodes
@@ -44,6 +47,7 @@ defmodule ExWapp.Session.MessageNode do
 
   def extract_participant_jids(_), do: []
 
+  @doc false
   @spec generate_participant_hash_v2(list()) :: String.t() | nil
   def generate_participant_hash_v2([]), do: nil
 
@@ -83,6 +87,7 @@ defmodule ExWapp.Session.MessageNode do
 
   def jid_to_ad_string(jid), do: to_string(jid)
 
+  @spec parse_ad_user_and_device(String.t()) :: {String.t(), non_neg_integer()}
   defp parse_ad_user_and_device(user_part) do
     case String.split(user_part, ":", parts: 2) do
       [user, device_str] ->
@@ -96,7 +101,84 @@ defmodule ExWapp.Session.MessageNode do
     end
   end
 
+  @doc """
+  Applies the stanza options shared by encrypted direct and group messages.
+
+  Message type remains a stanza attribute. Media type is attached to each
+  encrypted payload, and additional metadata nodes are appended after the
+  encrypted content.
+  """
+  @spec apply_outbound_options(Binary.Node.t(), keyword()) :: Binary.Node.t()
+  def apply_outbound_options(%Binary.Node{} = node, opts) when is_list(opts) do
+    attrs = Map.put(node.attrs, "type", Keyword.get(opts, :message_node_type, "text"))
+    node = %{node | attrs: Map.delete(attrs, "mediatype")}
+
+    node
+    |> put_encrypted_mediatype(Keyword.get(opts, :mediatype))
+    |> append_additional_nodes(Keyword.get(opts, :additional_message_nodes, []))
+  end
+
+  @doc false
   @spec maybe_put_message_attr(map(), String.t(), term()) :: map()
   def maybe_put_message_attr(attrs, _key, nil), do: attrs
   def maybe_put_message_attr(attrs, key, value), do: Map.put(attrs, key, value)
+
+  @spec put_encrypted_mediatype(Binary.Node.t(), term()) :: Binary.Node.t()
+  defp put_encrypted_mediatype(%Binary.Node{} = node, mediatype)
+       when is_binary(mediatype) and mediatype != "" do
+    updated_content =
+      if direct_encrypted_content?(node.content) do
+        Enum.map(node.content, &put_direct_encrypted_mediatype(&1, mediatype))
+      else
+        Enum.map(node.content, &put_participant_encrypted_mediatype(&1, mediatype))
+      end
+
+    %{node | content: updated_content}
+  end
+
+  defp put_encrypted_mediatype(%Binary.Node{} = node, _mediatype), do: node
+
+  @spec direct_encrypted_content?([term()]) :: boolean()
+  defp direct_encrypted_content?(content) do
+    Enum.any?(content, &match?(%Binary.Node{tag: "enc"}, &1))
+  end
+
+  @spec put_direct_encrypted_mediatype(term(), String.t()) :: term()
+  defp put_direct_encrypted_mediatype(%Binary.Node{tag: "enc"} = node, mediatype) do
+    %{node | attrs: Map.put(node.attrs || %{}, "mediatype", mediatype)}
+  end
+
+  defp put_direct_encrypted_mediatype(node, _mediatype), do: node
+
+  @spec put_participant_encrypted_mediatype(term(), String.t()) :: term()
+  defp put_participant_encrypted_mediatype(
+         %Binary.Node{tag: "participants", content: participants} = node,
+         mediatype
+       )
+       when is_list(participants) do
+    updated_participants =
+      Enum.map(participants, fn
+        %Binary.Node{tag: "to", content: encrypted_nodes} = participant
+        when is_list(encrypted_nodes) ->
+          updated_nodes =
+            Enum.map(encrypted_nodes, &put_direct_encrypted_mediatype(&1, mediatype))
+
+          %{participant | content: updated_nodes}
+
+        participant ->
+          participant
+      end)
+
+    %{node | content: updated_participants}
+  end
+
+  defp put_participant_encrypted_mediatype(node, _mediatype), do: node
+
+  @spec append_additional_nodes(Binary.Node.t(), term()) :: Binary.Node.t()
+  defp append_additional_nodes(%Binary.Node{} = node, additional_nodes)
+       when is_list(additional_nodes) do
+    %{node | content: node.content ++ additional_nodes}
+  end
+
+  defp append_additional_nodes(%Binary.Node{} = node, _additional_nodes), do: node
 end
