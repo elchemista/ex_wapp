@@ -1,10 +1,15 @@
 defmodule ExWapp.Transport.WebSocket do
   @moduledoc """
-  Optional WebSocket transport helpers and process for WhatsApp Web.
+  Optional wire-level WebSocket/Noise process for WhatsApp Web.
 
-  This module is pluggable: applications can use it directly, wrap it in their
-  own `ExWapp.Client.Transport`, or ignore it and provide another transport.
-  It does not own session supervision or reconnect policy.
+  This module exchanges already-prepared binary nodes and frames. It does not
+  own session supervision, Signal sessions, device fanout, sender keys,
+  synchronized state, retry, or reconnect policy. It therefore must not be
+  used as a shortcut for high-level message sending.
+
+  Use `ExWapp.Client.Transport.Session` for production messaging. Use this
+  module directly only for protocol tooling or as the wire layer underneath a
+  complete session implementation.
   """
 
   use WebSockex
@@ -81,7 +86,9 @@ defmodule ExWapp.Transport.WebSocket do
   end
 
   @doc """
-  Sends a binary node through a running WebSocket transport process.
+  Sends an already-prepared binary node through the wire transport.
+
+  The caller is responsible for all required session and Signal processing.
   """
   @spec send_node(pid(), Binary.binary_node() | tuple()) :: :ok
   def send_node(pid, node), do: WebSockex.cast(pid, {:send_node, node})
