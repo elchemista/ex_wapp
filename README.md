@@ -473,7 +473,24 @@ Downloading inbound media:
 File.write!("/tmp/out.bin", download.bytes)
 ```
 
-Inbound messages expose decoded content directly on the stored message map:
+Inbound messages expose one canonical, already-decoded content value:
+
+```elixir
+case message.content do
+  %ExWapp.Message.Content{kind: :text, text: text} ->
+    {:text, text}
+
+  %ExWapp.Message.Content{kind: :media, media: media, media_type: type} ->
+    {:media, type, media}
+
+  %ExWapp.Message.Content{kind: kind} when kind in [:location, :contact, :event] ->
+    {kind, message.content}
+end
+```
+
+Wrappers should branch on `message.content.kind`; they do not need to parse
+protobuf or infer image, audio, document, location, contact, or event formats.
+The legacy projections remain available during migration:
 
 ```elixir
 message.media     # %ExWapp.Media.Ref{} for image/audio/document
@@ -482,9 +499,10 @@ message.contact   # display_name, vcard, is_self_contact
 message.event     # name, start_time, end_time, location, ...
 ```
 
-Pass `message.media` to `ExWapp.download_media/3` to fetch, verify, and decrypt
-the original bytes. ExWapp does not transcode audio: a WhatsApp voice note
-should normally be supplied as Opus in an OGG container.
+Pass `message.content.media` (or the compatible `message.media`) to
+`ExWapp.download_media/3` to fetch, verify, and decrypt the original bytes.
+ExWapp does not transcode audio: a WhatsApp voice note should normally be
+supplied as Opus in an OGG container.
 
 Media modules:
 
@@ -579,7 +597,10 @@ Core public entry points:
 Built-in transport/runtime:
 
 - `ExWapp.Client.Transport.Session`: full WhatsApp session transport
-- `ExWapp.Client.Transport.WebSocket`: lower-level transport adapter
+- `ExWapp.Client.Transport.RawWebSocket`: raw diagnostic adapter; it rejects
+  high-level message sending
+- `ExWapp.Client.Transport.WebSocket`: deprecated compatibility name for the
+  raw diagnostic adapter
 - `ExWapp.Session.Worker`: main GenServer implementation
 - `ExWapp.Session.Worker.Outbound`: outgoing send path
 - `ExWapp.Session.Worker.Inbound`: incoming message/event helpers
@@ -589,11 +610,15 @@ Built-in transport/runtime:
 Message parsing and routing:
 
 - `ExWapp.MessageHandler`: high-level inbound router
-- `ExWapp.Message.Handler.Inbound`: incoming message decode and persistence
+- `ExWapp.Message.Handler.Inbound`: thin incoming-message orchestrator
+- `ExWapp.Message.Handler.Inbound.Content`: maps decrypted plaintext to the
+  canonical `ExWapp.Message.Content` contract
 - `ExWapp.Message.Handler.Receipt`: delivery/read receipt handling
 - `ExWapp.Message.Handler.Notification`: notification and sync events
 - `ExWapp.Message.Handler.Status`: presence and chat-state handling
-- `ExWapp.Message.Handler.Wire`: low-level protobuf wire decoding helpers
+- `ExWapp.Message.Handler.Wire`: compatible facade for envelope and wire helpers
+- `ExWapp.Message.Handler.Wire.Fields`: generic protobuf primitives
+- `ExWapp.Message.Handler.Wire.ContentDecoder`: pure supported-content decoder
 - `ExWapp.Message.Handler.Ack`, `ExWapp.Message.Handler.Common`: shared handler utilities
 
 Protocol internals:
