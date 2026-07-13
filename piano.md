@@ -109,25 +109,30 @@ boundary dedicati.
 
 ## Fase 4 — Contratto inbound canonico
 
-Introdurre un contratto interno tipizzato per i contenuti:
+È stato introdotto `ExWapp.Message.Content`, il contratto interno tipizzato:
 
-- text;
-- media con `ExWapp.Media.Ref`;
-- location;
-- contact/vCard;
-- calendar event;
-- protocol/sync;
-- unsupported con metadati diagnostici.
+- [x] text;
+- [x] media con `ExWapp.Media.Ref`;
+- [x] location;
+- [x] contact/vCard;
+- [x] calendar event;
+- [x] protocol/sync;
+- [x] unsupported con metadati diagnostici.
+- [x] adattamento bidirezionale ai campi legacy.
+- [x] pubblicazione del valore canonico nel campo `message.content`.
+- [ ] Eseguire i test dei formati supportati fuori da questo ambiente.
 
-Il contratto deve essere convertito nell'attuale mappa pubblica al boundary,
-così la migrazione non rompe wrapper esistenti.
+`Inbound.Content` è l'unico punto che riconosce il plaintext decifrato. Il
+publisher espone sia `message.content` sia gli attuali campi `text`,
+`media`, `location`, `contact` ed `event`, così la migrazione non rompe
+i wrapper esistenti.
 
 Criteri:
 
-- un solo punto riconosce i formati supportati;
-- i wrapper non analizzano il wire;
-- i campi comuni hanno sempre la stessa forma;
-- i formati sconosciuti non vengono persi silenziosamente.
+- [x] un solo punto riconosce i formati supportati;
+- [x] i wrapper non devono analizzare il wire;
+- [x] i campi comuni hanno sempre la stessa forma;
+- [x] i formati sconosciuti diventano `:unsupported` con diagnostica.
 
 ## Fase 5 — Chiarire i transport
 
