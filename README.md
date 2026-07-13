@@ -602,7 +602,14 @@ Built-in transport/runtime:
 - `ExWapp.Client.Transport.WebSocket`: deprecated compatibility name for the
   raw diagnostic adapter
 - `ExWapp.Session.Worker`: main GenServer implementation
-- `ExWapp.Session.Worker.Outbound`: outgoing send path
+- `ExWapp.Session.Worker.Outbound`: thin coordinator for send, persistence,
+  retry, and telemetry effects
+- `ExWapp.Session.Outbound.Direct`, `Group`, `DeviceDiscovery`, `Prekeys`,
+  and `Fanout`: focused outbound planning and resolution helpers
+- `ExWapp.Session.Outbound.IQRequests`: USync, prekey, and group-info IQ
+  request/receive/timeout boundary
+- `ExWapp.Session.Outbound.Encryptor`: per-device Signal encryption, PN/LID
+  aliases, and encrypted fanout coverage
 - `ExWapp.Session.Worker.Inbound`: incoming message/event helpers
 - `ExWapp.Session.InboundRouter`, `ExWapp.Session.IQ`, `ExWapp.Session.MessageNode`,
   `ExWapp.Session.Targets`: focused helpers used by the worker
