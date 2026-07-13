@@ -12,9 +12,10 @@ defmodule ExWapp.Session.Worker.Outbound do
     DeviceCache,
     IQ,
     JIDUtils,
-    MessageNode,
-    Targets
+    MessageNode
   }
+
+  alias ExWapp.Session.Outbound.Fanout
 
   @spec send_text_worker(pid(), map(), String.t(), iodata(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
@@ -1428,129 +1429,57 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
-  defp resolve_send_targets(store, signal_sessions, jid, prekey_bundles, target_hints, opts) do
-    all_prekey_bundles = prekey_bundles
-    hints = target_hints
+  defp resolve_send_targets(
+         store,
+         signal_sessions,
+         jid,
+         prekey_bundles,
+         target_hints,
+         opts
+       ) do
     self_chat_mode = Keyword.get(opts, :self_chat_mode, :dsm_all_non_current)
 
-    recipient_targets_hint =
-      finalize_soft_targets(
-        store,
-        signal_sessions,
-        all_prekey_bundles,
-        Map.get(hints, :recipient_devices, []),
-        Map.get(hints, :recipient_cached_devices, [])
-      )
+    resolution =
+      Fanout.resolve(%{
+        signal_sessions: signal_sessions,
+        jid: jid,
+        prekey_bundles: prekey_bundles,
+        target_hints: target_hints,
+        own_base_jid: Account.local_account_base_jid(store),
+        own_lid_jid: Account.local_account_lid_jid(store),
+        own_device_id: Account.local_account_device_id(store),
+        lid_mapping: Account.load_lid_mapping(store),
+        self_chat_mode: self_chat_mode
+      })
 
-    recipient_prekey_bundles = filter_prekey_bundles_for_identity(all_prekey_bundles, jid)
+    Enum.each(resolution.cached_eviction_batches, &DeviceCache.evict_devices(store, &1))
 
-    recipient_targets =
-      Targets.resolve_encryption_targets(
-        signal_sessions,
-        jid,
-        recipient_prekey_bundles,
-        recipient_targets_hint
-      )
+    if resolution.self_chat? do
+      case self_chat_mode do
+        :recipient_primary ->
+          Logger.warning("[SEND] Self-chat fallback mode: recipient payload primary")
 
-    own_base_jid = Account.local_account_base_jid(store)
-    own_sender_jid = Map.get(hints, :own_identity_jid, own_base_jid)
-    own_device_id = Account.local_account_device_id(store)
-    all_usync_devices = Map.get(hints, :all_usync_devices, [])
-
-    own_targets_hint =
-      finalize_soft_targets(
-        store,
-        signal_sessions,
-        all_prekey_bundles,
-        Map.get(hints, :own_devices, []),
-        Map.get(hints, :own_cached_devices, [])
-      )
-
-    own_targets =
-      own_targets_hint
-      |> JIDUtils.normalize_target_list()
-      |> Enum.reject(&current_device_target?(&1, own_device_id))
-
-    self_chat? = self_chat_destination?(store, jid, own_sender_jid)
-
-    recipient_targets =
-      if self_chat? do
-        recipient_targets
-        |> JIDUtils.normalize_target_list()
-        |> Enum.reject(&current_device_target?(&1, own_device_id))
-      else
-        recipient_targets
+        _ ->
+          Logger.debug("[SEND] Self-chat detected: DSM payload for all non-current targets")
       end
 
-    target_specs =
-      if self_chat? do
-        specs =
-          case self_chat_mode do
-            :recipient_primary ->
-              Logger.warning("[SEND] Self-chat fallback mode: recipient payload primary")
-              JIDUtils.build_self_chat_fallback_target_specs(recipient_targets, own_targets, jid)
-
-            _ ->
-              Logger.debug("[SEND] Self-chat detected: DSM payload for all non-current targets")
-              JIDUtils.build_self_chat_target_specs(recipient_targets, own_targets, jid)
-          end
-
-        Logger.debug("[SEND] Self-chat target specs: #{inspect(specs)}")
-        specs
-      else
-        JIDUtils.build_dm_target_specs(recipient_targets, own_targets)
-      end
-
-    Logger.debug("[SEND] Recipient targets for #{jid}: #{inspect(recipient_targets)}")
-    Logger.debug("[SEND] Own-device targets: #{inspect(own_targets)}")
-    Logger.debug("[SEND] Final fanout targets: #{inspect(target_specs)}")
-
-    {target_specs, all_usync_devices}
-  end
-
-  defp finalize_soft_targets(store, signal_sessions, prekey_bundles, live_targets, cached_targets) do
-    if SessionStore.store?(signal_sessions) do
-      live_targets = JIDUtils.normalize_target_list(live_targets)
-      cached_targets = JIDUtils.normalize_target_list(cached_targets)
-
-      {reachable_cached_targets, unreachable_cached_targets} =
-        cached_targets
-        |> Enum.reject(&(&1 in live_targets))
-        |> split_reachable_cached_targets(store, prekey_bundles)
-
-      if unreachable_cached_targets != [] do
-        DeviceCache.evict_devices(store, unreachable_cached_targets)
-      end
-
-      JIDUtils.normalize_target_list(live_targets ++ reachable_cached_targets)
-    else
-      JIDUtils.normalize_target_list(live_targets)
+      Logger.debug("[SEND] Self-chat target specs: #{inspect(resolution.target_specs)}")
     end
-  end
 
-  defp split_reachable_cached_targets(targets, store, prekey_bundles) do
-    lid_mapping = Account.load_lid_mapping(store)
+    Logger.debug("[SEND] Recipient targets for #{jid}: #{inspect(resolution.recipient_targets)}")
+    Logger.debug("[SEND] Own-device targets: #{inspect(resolution.own_targets)}")
+    Logger.debug("[SEND] Final fanout targets: #{inspect(resolution.target_specs)}")
 
-    Enum.split_with(targets, fn target_jid ->
-      signal_jid = JIDUtils.resolve_signal_encryption_jid(target_jid, lid_mapping)
-
-      Map.has_key?(prekey_bundles || %{}, target_jid) or
-        Map.has_key?(prekey_bundles || %{}, signal_jid)
-    end)
+    {resolution.target_specs, resolution.all_usync_devices}
   end
 
   defp self_chat_destination?(store, jid, own_sender_jid) do
-    own_base_jid = Account.local_account_base_jid(store)
-    own_lid_jid = Account.local_account_lid_jid(store)
-
-    own_user_parts =
-      [own_base_jid, own_sender_jid, own_lid_jid]
-      |> Enum.map(&jid_user_part/1)
-      |> Enum.reject(&(&1 == ""))
-      |> MapSet.new()
-
-    dest_user = jid_user_part(jid)
-    dest_user != "" and MapSet.member?(own_user_parts, dest_user)
+    Fanout.self_chat_destination?(
+      jid,
+      own_sender_jid,
+      Account.local_account_base_jid(store),
+      Account.local_account_lid_jid(store)
+    )
   end
 
   defp send_encrypted_node(state, conn, store, jid, message_id, node, payloads) do
@@ -1716,13 +1645,6 @@ defmodule ExWapp.Session.Worker.Outbound do
   end
 
   defp maybe_put_bundle_alias(bundle_map, _alias_jid, _source_jid, _bundle), do: bundle_map
-
-  defp filter_prekey_bundles_for_identity(prekey_bundles, jid)
-       when is_map(prekey_bundles) and map_size(prekey_bundles) > 0 do
-    Targets.filter_prekey_bundles_for_identity(prekey_bundles, jid)
-  end
-
-  defp filter_prekey_bundles_for_identity(_prekey_bundles, _jid), do: %{}
 
   defp current_device_target?(jid, own_device_id)
        when is_integer(own_device_id) and own_device_id >= 0,
@@ -2018,10 +1940,6 @@ defmodule ExWapp.Session.Worker.Outbound do
   defp strip_device_from_jid(%ExWapp.JID{} = jid), do: JIDUtils.strip_device(jid)
 
   defp strip_device_from_jid(_), do: ""
-
-  defp jid_user_part(jid) when is_binary(jid), do: JIDUtils.user_part(jid)
-
-  defp jid_user_part(_), do: ""
 
   defp generate_request_id do
     :crypto.strong_rand_bytes(16) |> Base.encode64() |> String.slice(0, 16)
