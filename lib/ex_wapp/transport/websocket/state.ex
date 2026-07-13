@@ -1,5 +1,10 @@
 defmodule ExWapp.Transport.WebSocket.State do
-  @moduledoc false
+  @moduledoc """
+  Holds runtime state for the WhatsApp WebSocket transport.
+
+  The struct keeps the owner, store, Noise state, and incremental frame buffer
+  used by `ExWapp.Transport.WebSocket` callbacks.
+  """
 
   alias ExWapp.{Client, Noise, Store}
 
