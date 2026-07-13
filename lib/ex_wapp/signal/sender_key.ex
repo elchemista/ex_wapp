@@ -210,9 +210,7 @@ defmodule ExWapp.Signal.SenderKey do
   def encrypt_outbound_group_message(_store, _group_jid, _sender_jid, _plaintext),
     do: {:error, :invalid_plaintext}
 
-  # ============================================================================
-  # Sender key record persistence
-  # ============================================================================
+  # Sender-key record persistence
 
   defp get_sender_key_state(store, group_jid, sender_jid, key_id) do
     {record, sender_state} =
@@ -356,9 +354,7 @@ defmodule ExWapp.Signal.SenderKey do
     {data, signal, sender_keys}
   end
 
-  # ============================================================================
-  # Sender key message decrypt
-  # ============================================================================
+  # Sender-key message decryption
 
   defp normalize_outbound_sender_key_ids(group_jid, sender_jid) do
     normalized_group = normalize_jid(group_jid)
@@ -538,9 +534,7 @@ defmodule ExWapp.Signal.SenderKey do
     Enum.reduce(to_drop, cache, &Map.delete(&2, &1))
   end
 
-  # ============================================================================
-  # Sender key distribution parsing
-  # ============================================================================
+  # Sender-key distribution decoding
 
   defp parse_sender_key_distributions(payload) do
     case collect_length_delimited_fields(payload, [2, 15]) do
@@ -627,9 +621,7 @@ defmodule ExWapp.Signal.SenderKey do
 
   defp parse_sender_key_message(_), do: {:error, :invalid_sender_key_message}
 
-  # ============================================================================
-  # Minimal protobuf decode helpers
-  # ============================================================================
+  # Minimal protobuf field decoding
 
   defp collect_length_delimited_fields(<<>>, _field_nums), do: {:ok, []}
 
@@ -768,9 +760,7 @@ defmodule ExWapp.Signal.SenderKey do
     <<(value &&& 0x7F) ||| 0x80, encode_varint(value >>> 7)::binary>>
   end
 
-  # ============================================================================
-  # JID normalization
-  # ============================================================================
+  # Group and sender JID normalization
 
   defp normalize_group_jid(group_jid_from_msg, fallback_group_jid) do
     normalized = normalize_jid(group_jid_from_msg)
