@@ -14,14 +14,10 @@ defmodule ExWapp.Store.MessageTable do
 
   @max_timestamp 18_446_744_073_709_551_615
 
-  defstruct [:table, :index_table, :log_path]
+  defstruct [:table, :index_table]
 
   @type order :: :newest_first | :oldest_first
-  @type t :: %__MODULE__{
-          table: :ets.tid(),
-          index_table: :ets.tid(),
-          log_path: Path.t() | nil
-        }
+  @type t :: %__MODULE__{table: :ets.tid(), index_table: :ets.tid()}
 
   @doc """
   Creates an empty message table and imports optional initial messages.
@@ -29,21 +25,15 @@ defmodule ExWapp.Store.MessageTable do
   Initial data is a map keyed by chat JID. Duplicate message IDs are replaced
   by the last value imported.
   """
-  @spec new(map(), keyword()) :: t()
-  def new(initial_messages \\ %{}, opts \\ []) do
+  @spec new(map()) :: t()
+  def new(initial_messages \\ %{}) do
     message_store = %__MODULE__{
       table: :ets.new(:ex_wapp_messages, [:ordered_set, :public, :compressed]),
-      index_table: :ets.new(:ex_wapp_message_index, [:set, :public, :compressed]),
-      log_path: Keyword.get(opts, :log_path)
+      index_table: :ets.new(:ex_wapp_message_index, [:set, :public, :compressed])
     }
 
-    :ok = replay_log(message_store)
-
     Enum.each(normalize_initial_messages(initial_messages), fn {jid, messages} ->
-      case upsert(message_store, jid, messages) do
-        :ok -> :ok
-        {:error, reason} -> raise "failed to migrate message history: #{inspect(reason)}"
-      end
+      upsert(message_store, jid, messages)
     end)
 
     message_store
@@ -87,13 +77,11 @@ defmodule ExWapp.Store.MessageTable do
   @doc """
   Inserts or replaces messages for a chat by message ID.
   """
-  @spec upsert(t(), String.t(), [map()]) :: :ok | {:error, term()}
+  @spec upsert(t(), String.t(), [map()]) :: :ok
   def upsert(%__MODULE__{} = message_store, jid, messages)
       when is_binary(jid) and is_list(messages) do
-    valid_messages = Enum.filter(messages, &valid_message?/1)
-    Enum.each(valid_messages, &upsert_one(message_store, jid, &1))
-
-    append_event(message_store, {:upsert, jid, valid_messages})
+    Enum.each(messages, &upsert_one(message_store, jid, &1))
+    :ok
   end
 
   def upsert(%__MODULE__{}, _jid, _messages), do: :ok
@@ -164,7 +152,7 @@ defmodule ExWapp.Store.MessageTable do
   @doc """
   Updates the status of one stored message.
   """
-  @spec update_status(t(), String.t(), String.t(), atom()) :: :ok | {:error, term()}
+  @spec update_status(t(), String.t(), String.t(), atom()) :: :ok
   def update_status(%__MODULE__{} = message_store, jid, message_id, status) do
     case find(message_store, jid, message_id) do
       nil -> :ok
@@ -175,26 +163,19 @@ defmodule ExWapp.Store.MessageTable do
   @doc """
   Updates every stored message matching an ID.
   """
-  @spec update_status_by_id(t(), String.t(), atom()) :: :ok | {:error, term()}
+  @spec update_status_by_id(t(), String.t(), atom()) :: :ok
   def update_status_by_id(%__MODULE__{} = message_store, message_id, status)
       when is_binary(message_id) do
     message_store.index_table
     |> :ets.select([{{{:"$1", message_id}, :"$2"}, [], [:"$_"]}])
-    |> Enum.reduce_while(:ok, fn {{jid, ^message_id}, key}, :ok ->
-      result =
-        case :ets.lookup(message_store.table, key) do
-          [{^key, message}] ->
-            upsert(message_store, jid, [Map.put(message, :status, status)])
-
-          _ ->
-            :ok
-        end
-
-      case result do
-        :ok -> {:cont, :ok}
-        {:error, _reason} = error -> {:halt, error}
+    |> Enum.each(fn {{jid, ^message_id}, key} ->
+      case :ets.lookup(message_store.table, key) do
+        [{^key, message}] -> upsert(message_store, jid, [Map.put(message, :status, status)])
+        _ -> :ok
       end
     end)
+
+    :ok
   end
 
   def update_status_by_id(%__MODULE__{}, _message_id, _status), do: :ok
@@ -202,7 +183,7 @@ defmodule ExWapp.Store.MessageTable do
   @doc """
   Deletes selected messages after an application has durably persisted them.
   """
-  @spec delete(t(), String.t(), [String.t()]) :: :ok | {:error, term()}
+  @spec delete(t(), String.t(), [String.t()]) :: :ok
   def delete(%__MODULE__{} = message_store, jid, message_ids)
       when is_binary(jid) and is_list(message_ids) do
     Enum.each(message_ids, fn message_id ->
@@ -212,7 +193,7 @@ defmodule ExWapp.Store.MessageTable do
       end
     end)
 
-    append_event(message_store, {:delete, jid, message_ids})
+    :ok
   end
 
   def delete(%__MODULE__{}, _jid, _message_ids), do: :ok
@@ -220,7 +201,7 @@ defmodule ExWapp.Store.MessageTable do
   @doc """
   Deletes all messages for one chat.
   """
-  @spec delete_chat(t(), String.t()) :: :ok | {:error, term()}
+  @spec delete_chat(t(), String.t()) :: :ok
   def delete_chat(%__MODULE__{} = message_store, jid) when is_binary(jid) do
     message_store.index_table
     |> :ets.select([{{{jid, :"$1"}, :"$2"}, [], [:"$_"]}])
@@ -229,7 +210,7 @@ defmodule ExWapp.Store.MessageTable do
       :ets.delete(message_store.table, key)
     end)
 
-    append_event(message_store, {:delete_chat, jid})
+    :ok
   end
 
   def delete_chat(%__MODULE__{}, _jid), do: :ok
@@ -258,48 +239,8 @@ defmodule ExWapp.Store.MessageTable do
   def clear(%__MODULE__{} = message_store) do
     :ets.delete_all_objects(message_store.table)
     :ets.delete_all_objects(message_store.index_table)
-    remove_log(message_store.log_path)
+    :ok
   end
-
-  @doc """
-  Rewrites the append-only log from active indexed records.
-
-  Compaction is streaming: records are written one at a time and a complete
-  message list is never built on the caller heap.
-  """
-  @spec compact(t()) :: :ok | {:error, term()}
-  def compact(%__MODULE__{log_path: nil}), do: :ok
-
-  def compact(%__MODULE__{} = message_store) do
-    temporary_path = message_store.log_path <> ".tmp"
-    File.rm(temporary_path)
-
-    result =
-      File.open(temporary_path, [:write, :binary], fn io ->
-        :ets.foldl(
-          fn {{jid, _timestamp, _id}, message}, :ok ->
-            IO.binwrite(io, encode_event({:upsert, jid, [message]}))
-          end,
-          :ok,
-          message_store.table
-        )
-      end)
-
-    case result do
-      {:ok, :ok} -> File.rename(temporary_path, message_store.log_path)
-      {:ok, {:error, reason}} -> {:error, reason}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp valid_message?(message) when is_map(message) do
-    case Map.get(message, :id) do
-      message_id when is_binary(message_id) and message_id != "" -> true
-      _ -> false
-    end
-  end
-
-  defp valid_message?(_message), do: false
 
   defp upsert_one(message_store, jid, message) when is_map(message) do
     with message_id when is_binary(message_id) and message_id != "" <- Map.get(message, :id) do
@@ -394,85 +335,6 @@ defmodule ExWapp.Store.MessageTable do
   end
 
   defp normalize_initial_messages(_), do: %{}
-
-  defp append_event(%__MODULE__{log_path: nil}, _event), do: :ok
-
-  defp append_event(%__MODULE__{log_path: path}, event) do
-    File.write(path, encode_event(event), [:append, :binary])
-  end
-
-  defp encode_event(event) do
-    payload = :erlang.term_to_binary(event, compressed: 1)
-    <<byte_size(payload)::unsigned-big-32, payload::binary>>
-  end
-
-  defp replay_log(%__MODULE__{log_path: nil}), do: :ok
-
-  defp replay_log(%__MODULE__{log_path: path} = message_store) do
-    case File.open(path, [:read, :binary], &read_log_frames(&1, message_store)) do
-      {:ok, :ok} -> :ok
-      {:error, :enoent} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp read_log_frames(io, message_store) do
-    case IO.binread(io, 4) do
-      :eof ->
-        :ok
-
-      <<size::unsigned-big-32>> ->
-        case IO.binread(io, size) do
-          payload when is_binary(payload) and byte_size(payload) == size ->
-            payload
-            |> :erlang.binary_to_term([:safe])
-            |> apply_log_event(message_store)
-
-            read_log_frames(io, message_store)
-
-          _incomplete_frame ->
-            :ok
-        end
-
-      _incomplete_header ->
-        :ok
-    end
-  end
-
-  defp apply_log_event({:upsert, jid, messages}, message_store)
-       when is_binary(jid) and is_list(messages) do
-    Enum.each(messages, &upsert_one(message_store, jid, &1))
-  end
-
-  defp apply_log_event({:delete, jid, message_ids}, message_store) do
-    Enum.each(message_ids, fn message_id ->
-      case :ets.take(message_store.index_table, {jid, message_id}) do
-        [{{^jid, ^message_id}, key}] -> :ets.delete(message_store.table, key)
-        _ -> :ok
-      end
-    end)
-  end
-
-  defp apply_log_event({:delete_chat, jid}, message_store) do
-    message_store.index_table
-    |> :ets.select([{{{jid, :"$1"}, :"$2"}, [], [:"$_"]}])
-    |> Enum.each(fn {{^jid, message_id}, key} ->
-      :ets.delete(message_store.index_table, {jid, message_id})
-      :ets.delete(message_store.table, key)
-    end)
-  end
-
-  defp apply_log_event(_unknown_event, _message_store), do: :ok
-
-  defp remove_log(nil), do: :ok
-
-  defp remove_log(path) do
-    case File.rm(path) do
-      :ok -> :ok
-      {:error, :enoent} -> :ok
-      {:error, _reason} -> :ok
-    end
-  end
 
   defp maybe_put_initial_messages(acc, jid, messages)
        when is_binary(jid) and is_list(messages) and messages != [],
