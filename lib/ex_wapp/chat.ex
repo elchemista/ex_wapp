@@ -412,9 +412,7 @@ defmodule ExWapp.Chat do
     save_chat(target, updated_chat)
   end
 
-  # ============================================================================
-  # Message Parsing
-  # ============================================================================
+  # Message parsing
 
   @doc """
   Parses a received message node into a message struct.
@@ -459,9 +457,7 @@ defmodule ExWapp.Chat do
 
   defp extract_text(_, _), do: nil
 
-  # ============================================================================
-  # Internal Helpers
-  # ============================================================================
+  # Store and lookup helpers
 
   defp resolve_store(target) when is_pid(target), do: get_store(target)
 
