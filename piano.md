@@ -70,19 +70,24 @@ dei message node in `ExWapp.Session.MessageNode`.
 
 Estrarre gradualmente moduli interni, senza dividerli per tipo di messaggio:
 
-- [x] `Outbound.Direct`: orchestrazione DM/self-chat.
-  - USync, prekey IQ, cifratura, persistenza e send restano nel worker come effetti.
-- [x] `Outbound.Group`: sender-key e distribuzione gruppi.
-  - Query/receive group-info, retry, persistenza e send restano nel worker come effetti.
-- [x] `Outbound.DeviceDiscovery`: USync e cache device.
-- [x] `Outbound.Prekeys`: recupero bundle e creazione sessioni.
-  - [x] Selezione target, bundle mancanti e bootstrap sessioni Signal.
-  - [x] Fallback batch/individuale e retry dei bundle mancanti.
-  - Le richieste IQ, i receive e i timeout restano nel worker come boundary di effetto.
+- [x] `Outbound.Direct`: preparazione sessioni, target e payload DM/self-chat.
+- [x] `Outbound.Group`: sender-key, partecipanti e distribuzione gruppi.
+- [x] `Outbound.DeviceDiscovery`: risoluzione USync e cache device.
+- [x] `Outbound.Prekeys`: selezione bundle, bootstrap sessioni e fallback
+  batch/individuale.
+- [x] `Outbound.IQRequests`: boundary di effetto per invio, receive e timeout
+  delle richieste USync, prekey e group-info.
+- [x] `Outbound.Encryptor`: cifratura Signal per-device, alias PN/LID,
+  diagnostica prekey, copertura fanout e invalidazione sessioni di retry.
 - [x] `Outbound.Fanout`: risoluzione target e verifica copertura.
 - [x] `MessageNode`: composizione finale dei nodi cifrati.
+- [x] Ridurre `Session.Worker.Outbound` a coordinamento esplicito di invio,
+  persistenza, retry e telemetria.
+- [x] Aggiungere test unitari dei boundary IQ e della verifica fanout.
+- [ ] Eseguire suite, Credo e Dialyzer fuori da questo ambiente.
 
-`Session.Worker.Outbound` deve diventare un coordinatore sottile.
+`Session.Worker.Outbound` coordina ora moduli focalizzati e conserva soltanto
+gli effetti che devono restare visibili nel flusso della sessione.
 
 Criteri:
 
@@ -182,6 +187,22 @@ eventi. Il mapping canonico resta separato dal parsing protobuf.
 - [x] aggiornare README e documentazione architetturale;
 - [x] mantenere la compatibilità obsoleta solo come delega deprecata;
 - [ ] eseguire la validazione completa fuori da questo ambiente.
+
+## Stato dell'implementazione
+
+Le estrazioni architetturali pianificate sono complete:
+
+- outbound separato in pianificazione direct/group, device discovery, prekey,
+  fanout, richieste IQ, cifratura e costruzione nodi;
+- inbound separato in envelope, decrypt, contenuti, sync, receipt, projection e
+  publisher;
+- contratto canonico `ExWapp.Message.Content` disponibile ai wrapper;
+- transport wire-level distinto dagli adapter client;
+- decoder wire generico separato dal decoder dei contenuti supportati;
+- namespace e file dei boundary modificati allineati a un modulo per file.
+
+Resta intenzionalmente esterna a questo ambiente soltanto l'esecuzione della
+validazione Elixir/Erlang elencata sotto.
 
 ## Validazione richiesta per ogni tranche
 
