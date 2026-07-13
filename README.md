@@ -554,10 +554,12 @@ they do not first load a message list from `%ExWapp.Chat{}`. The stream is
 oldest first by default and has no fixed retention cap. These APIs read local
 history only and do not start a remote history download.
 
-Chat structs contain conversation metadata only. Message payloads are indexed
-separately by chat JID, timestamp, and message ID. Built-in stores implement
-that index with ETS; a custom store can implement the same callbacks with a
-database cursor.
+Chat structs contain conversation metadata only. They deliberately do not
+contain a message list, a function, or a stream reference: the chat JID is the
+stable lookup key, and `ExWapp.stream_messages/3` creates a fresh lazy cursor
+when enumeration starts. Message payloads are indexed separately by chat JID,
+timestamp, and message ID. Built-in stores implement that index with ETS; a
+custom store can implement the same callbacks with a database cursor.
 
 Implementation notes:
 
@@ -575,7 +577,8 @@ After authentication, the built-in session automatically runs app-state sync
 and consumes supported inline history-sync payloads delivered by WhatsApp.
 Contacts, chat metadata, and history messages found in those payloads are
 merged into the configured store. History notifications that require a
-separate blob download are currently detected and logged but are not imported. `ExWapp.sync_contacts/1` is an explicit contact refresh; it
+separate blob download are currently detected and logged but are not imported.
+`ExWapp.sync_contacts/1` is an explicit contact refresh; it
 is not a command to download an account's complete message history.
 
 WhatsApp's user-facing "Export chat" action is not a stable WhatsApp Web
