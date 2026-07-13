@@ -17,9 +17,7 @@ defmodule ExWapp.AppState.EngineTest do
     DeleteChatAction
   }
 
-  # ============================================================================
-  # Mutation Builders
-  # ============================================================================
+  # Contact mutation builders
 
   describe "build_contact/3" do
     test "builds a contact patch for critical_unblock_low" do
@@ -163,9 +161,7 @@ defmodule ExWapp.AppState.EngineTest do
     end
   end
 
-  # ============================================================================
-  # Encode Patch
-  # ============================================================================
+  # Patch encoding
 
   describe "encode_patch/5" do
     test "encodes a contact patch into valid protobuf" do
@@ -242,9 +238,7 @@ defmodule ExWapp.AppState.EngineTest do
     end
   end
 
-  # ============================================================================
-  # Decode Mutations
-  # ============================================================================
+  # Mutation decoding
 
   describe "decode_mutations/3" do
     test "decodes encrypted mutations correctly" do
@@ -372,9 +366,7 @@ defmodule ExWapp.AppState.EngineTest do
     end
   end
 
-  # ============================================================================
-  # Collection State
-  # ============================================================================
+  # Collection state
 
   describe "all_collections/0" do
     test "returns all five collection names" do
@@ -388,9 +380,7 @@ defmodule ExWapp.AppState.EngineTest do
     end
   end
 
-  # ============================================================================
-  # Dispatch Mutations
-  # ============================================================================
+  # Mutation dispatch
 
   describe "dispatch_mutation/3" do
     setup do
