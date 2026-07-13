@@ -1,11 +1,25 @@
 defmodule ExWapp.Message.Handler.Wire do
-  @moduledoc false
+  @moduledoc """
+  Compatibility façade for inbound XML-envelope and protobuf wire helpers.
+
+  XML envelope extraction remains here. Generic protobuf primitives live in
+  `Wire.Fields`; supported WhatsApp content decoding lives in
+  `Wire.ContentDecoder`.
+  """
 
   alias ExWapp.Binary.Node
   alias ExWapp.Message.Handler.Common
+  alias ExWapp.Message.Handler.Wire.{ContentDecoder, Fields}
 
-  @max_message_decode_depth 6
+  @typep enc_candidate :: %{
+           enc_type: binary(),
+           enc_version: term(),
+           enc_count: non_neg_integer() | nil,
+           ciphertext: binary() | nil,
+           to_jid: binary()
+         }
 
+  @doc false
   @spec extract_message_content(term(), term()) :: map()
   def extract_message_content(nil, _type), do: %{text: nil, media: nil}
 
@@ -19,120 +33,62 @@ defmodule ExWapp.Message.Handler.Wire do
 
   def extract_message_content(_, _), do: %{text: nil, media: nil}
 
+  @doc false
   @spec apply_media_from_plaintext(map(), binary()) :: map()
-  def apply_media_from_plaintext(message_data, plaintext) when is_binary(plaintext) do
-    case extract_supported_content(plaintext) do
-      %{kind: :media, type: type, ref: ref, caption: caption} ->
-        message_data
-        |> Map.put(:media, ref)
-        |> Map.put(:media_type, type)
-        |> Map.put(:content_type, type)
-        |> Map.put(:text, caption)
-
-      %{kind: :location, value: location} ->
-        message_data
-        |> Map.put(:location, location)
-        |> Map.put(:content_type, :location)
-        |> Map.put(:text, location.comment || location.name || location.address)
-
-      %{kind: :contact, value: contact} ->
-        message_data
-        |> Map.put(:contact, contact)
-        |> Map.put(:content_type, :contact)
-        |> Map.put(:text, contact.display_name)
-
-      %{kind: :event, value: event} ->
-        message_data
-        |> Map.put(:event, event)
-        |> Map.put(:content_type, :event)
-        |> Map.put(:text, event.name)
-
-      nil ->
-        message_data
-    end
+  def apply_media_from_plaintext(message_data, plaintext) do
+    ContentDecoder.apply_media_from_plaintext(message_data, plaintext)
   end
 
+  @doc false
   @spec classify_decrypted_content(binary(), non_neg_integer()) ::
           {:protocol | :user_message, binary() | nil}
-  def classify_decrypted_content(_payload, sender_key_distribution_count)
-      when sender_key_distribution_count > 0 do
-    {:protocol, nil}
+  def classify_decrypted_content(payload, sender_key_distribution_count) do
+    ContentDecoder.classify_decrypted_content(payload, sender_key_distribution_count)
   end
 
-  def classify_decrypted_content(payload, _sender_key_distribution_count)
-      when is_binary(payload) do
-    case find_length_delimited_field(payload, 12) do
-      {:ok, _protocol_msg} ->
-        {:protocol, nil}
+  @doc false
+  @spec decode_wire_fields_safe(binary()) :: {:ok, [Fields.wire_field()]} | {:error, term()}
+  def decode_wire_fields_safe(binary), do: Fields.decode_safe(binary)
 
-      _ ->
-        case decode_message_text_recursive(payload, 0) do
-          {:ok, text} -> {:user_message, text}
-          :error -> {:user_message, nil}
-        end
-    end
-  end
+  @doc false
+  @spec find_first_ld_field([Fields.wire_field()], non_neg_integer()) :: binary() | nil
+  def find_first_ld_field(fields, field_num), do: Fields.first_length_delimited(fields, field_num)
 
-  @spec decode_wire_fields_safe(binary()) :: {:ok, list()} | {:error, term()}
-  def decode_wire_fields_safe(binary) when is_binary(binary),
-    do: decode_wire_fields_acc(binary, [])
+  @doc false
+  @spec find_all_ld_fields([Fields.wire_field()], non_neg_integer()) :: [binary()]
+  def find_all_ld_fields(fields, field_num), do: Fields.all_length_delimited(fields, field_num)
 
-  @spec find_first_ld_field(list(), non_neg_integer()) :: binary() | nil
-  def find_first_ld_field(fields, field_num) when is_list(fields) do
-    Enum.find_value(fields, fn
-      {^field_num, 2, value} when is_binary(value) -> value
-      _ -> nil
-    end)
-  end
+  @doc false
+  @spec find_first_varint_field([Fields.wire_field()], non_neg_integer()) :: integer() | nil
+  def find_first_varint_field(fields, field_num), do: Fields.first_varint(fields, field_num)
 
-  @spec find_all_ld_fields(list(), non_neg_integer()) :: [binary()]
-  def find_all_ld_fields(fields, field_num) when is_list(fields) do
-    Enum.flat_map(fields, fn
-      {^field_num, 2, value} when is_binary(value) -> [value]
-      _ -> []
-    end)
-  end
-
-  @spec find_first_varint_field(list(), non_neg_integer()) :: integer() | nil
-  def find_first_varint_field(fields, field_num) when is_list(fields) do
-    Enum.find_value(fields, fn
-      {^field_num, 0, value} when is_integer(value) -> value
-      _ -> nil
-    end)
-  end
-
+  @doc false
   @spec find_length_delimited_field(binary(), non_neg_integer()) ::
           {:ok, binary()} | {:error, term()}
-  def find_length_delimited_field(binary, field_num) when is_binary(binary) do
-    do_find_length_delimited_field(binary, field_num)
-  end
+  def find_length_delimited_field(binary, field_num),
+    do: Fields.find_length_delimited(binary, field_num)
 
+  @doc false
   @spec field_bytes(binary(), non_neg_integer()) :: binary() | nil
-  def field_bytes(payload, field) do
-    case find_length_delimited_field(payload, field) do
-      {:ok, value} -> value
-      _ -> nil
-    end
-  end
+  def field_bytes(payload, field), do: Fields.bytes(payload, field)
 
+  @doc false
   @spec field_varint(binary(), non_neg_integer()) :: integer() | nil
-  def field_varint(payload, wanted_field), do: do_find_varint_field(payload, wanted_field)
+  def field_varint(payload, field), do: Fields.varint(payload, field)
 
+  @doc false
   @spec field_bool(binary(), non_neg_integer()) :: boolean() | nil
-  def field_bool(payload, field) do
-    case field_varint(payload, field) do
-      0 -> false
-      1 -> true
-      _ -> nil
-    end
-  end
+  def field_bool(payload, field), do: Fields.bool(payload, field)
 
+  @doc false
   @spec field_double(binary(), non_neg_integer()) :: float() | nil
-  def field_double(payload, field), do: do_find_fixed_field(payload, field, 1)
+  def field_double(payload, field), do: Fields.double(payload, field)
 
+  @doc false
   @spec field_float(binary(), non_neg_integer()) :: float() | nil
-  def field_float(payload, field), do: do_find_fixed_field(payload, field, 5)
+  def field_float(payload, field), do: Fields.float(payload, field)
 
+  @spec extract_list_message_content(term(), [enc_candidate()]) :: map()
   defp extract_list_message_content(
          _content,
          [%{enc_type: enc_type, enc_version: enc_version, ciphertext: ciphertext} | _] =
@@ -165,6 +121,7 @@ defmodule ExWapp.Message.Handler.Wire do
     end
   end
 
+  @spec extract_plain_body_content(term()) :: map()
   defp extract_plain_body_content(content) do
     case Common.find_child_node(content, "body") do
       %Node{content: body} when is_binary(body) -> %{text: body, media: nil}
@@ -172,11 +129,13 @@ defmodule ExWapp.Message.Handler.Wire do
     end
   end
 
+  @spec extract_enc_candidates(list()) :: [enc_candidate()]
   defp extract_enc_candidates(content) when is_list(content) do
     do_extract_enc_candidates(content, nil, [])
     |> Enum.reverse()
   end
 
+  @spec do_extract_enc_candidates(list(), term(), [enc_candidate()]) :: [enc_candidate()]
   defp do_extract_enc_candidates([], _current_to_jid, acc), do: acc
 
   defp do_extract_enc_candidates([node | rest], current_to_jid, acc) do
@@ -207,544 +166,4 @@ defmodule ExWapp.Message.Handler.Wire do
     do_extract_enc_candidates(rest, current_to_jid, acc)
   end
 
-  defp extract_supported_content(message_payload),
-    do: extract_supported_content_recursive(message_payload, 0)
-
-  defp extract_supported_content_recursive(_message_payload, depth)
-       when depth > @max_message_decode_depth,
-       do: nil
-
-  defp extract_supported_content_recursive(message_payload, depth) do
-    extract_supported_content_shallow(message_payload) ||
-      extract_wrapped_supported_content(message_payload, depth)
-  end
-
-  defp extract_supported_content_shallow(message_payload) do
-    cond do
-      match?({:ok, _}, find_length_delimited_field(message_payload, 3)) ->
-        {:ok, payload} = find_length_delimited_field(message_payload, 3)
-        build_media_ref(:image, payload)
-
-      match?({:ok, _}, find_length_delimited_field(message_payload, 7)) ->
-        {:ok, payload} = find_length_delimited_field(message_payload, 7)
-        build_media_ref(:document, payload)
-
-      match?({:ok, _}, find_length_delimited_field(message_payload, 8)) ->
-        {:ok, payload} = find_length_delimited_field(message_payload, 8)
-        build_media_ref(:audio, payload)
-
-      match?({:ok, _}, find_length_delimited_field(message_payload, 75)) ->
-        {:ok, payload} = find_length_delimited_field(message_payload, 75)
-        build_event(payload)
-
-      match?({:ok, _}, find_length_delimited_field(message_payload, 5)) ->
-        {:ok, payload} = find_length_delimited_field(message_payload, 5)
-        build_location(payload)
-
-      match?({:ok, _}, find_length_delimited_field(message_payload, 18)) ->
-        {:ok, payload} = find_length_delimited_field(message_payload, 18)
-        build_live_location(payload)
-
-      match?({:ok, _}, find_length_delimited_field(message_payload, 4)) ->
-        {:ok, payload} = find_length_delimited_field(message_payload, 4)
-        build_contact(payload)
-
-      true ->
-        nil
-    end
-  end
-
-  defp extract_wrapped_supported_content(message_payload, depth) do
-    wrapper_fields = [31, 37, 40, 53, 55, 59, 74]
-
-    Enum.find_value(
-      wrapper_fields,
-      &extract_wrapped_supported_content(message_payload, depth, &1)
-    )
-  end
-
-  defp extract_wrapped_supported_content(message_payload, depth, field) do
-    with {:ok, wrapper} <- find_length_delimited_field(message_payload, field),
-         {:ok, nested_message} <-
-           find_length_delimited_field(wrapper, nested_message_field(field)) do
-      extract_supported_content_recursive(nested_message, depth + 1)
-    else
-      _ -> nil
-    end
-  end
-
-  defp nested_message_field(31), do: 2
-  defp nested_message_field(_field), do: 1
-
-  defp build_media_ref(:image, payload) do
-    %{
-      kind: :media,
-      type: :image,
-      caption: field_bytes(payload, 3),
-      ref: %ExWapp.Media.Ref{
-        type: :image,
-        url: field_bytes(payload, 1),
-        mimetype: field_bytes(payload, 2),
-        file_sha256: field_bytes(payload, 4),
-        file_length: field_varint(payload, 5),
-        media_key: field_bytes(payload, 8),
-        file_enc_sha256: field_bytes(payload, 9),
-        direct_path: field_bytes(payload, 11),
-        media_key_timestamp: field_varint(payload, 12),
-        metadata: %{
-          height: field_varint(payload, 6),
-          width: field_varint(payload, 7),
-          media_key_timestamp: field_varint(payload, 12),
-          thumbnail: field_bytes(payload, 16)
-        }
-      }
-    }
-  end
-
-  defp build_media_ref(:audio, payload) do
-    %{
-      kind: :media,
-      type: :audio,
-      caption: nil,
-      ref: %ExWapp.Media.Ref{
-        type: :audio,
-        url: field_bytes(payload, 1),
-        mimetype: field_bytes(payload, 2),
-        file_sha256: field_bytes(payload, 3),
-        file_length: field_varint(payload, 4),
-        media_key: field_bytes(payload, 7),
-        file_enc_sha256: field_bytes(payload, 8),
-        direct_path: field_bytes(payload, 9),
-        media_key_timestamp: field_varint(payload, 10),
-        metadata: %{
-          seconds: field_varint(payload, 5),
-          ptt: field_bool(payload, 6),
-          media_key_timestamp: field_varint(payload, 10),
-          waveform: field_bytes(payload, 19)
-        }
-      }
-    }
-  end
-
-  defp build_media_ref(:document, payload) do
-    %{
-      kind: :media,
-      type: :document,
-      caption: field_bytes(payload, 20),
-      ref: %ExWapp.Media.Ref{
-        type: :document,
-        url: field_bytes(payload, 1),
-        mimetype: field_bytes(payload, 2),
-        file_sha256: field_bytes(payload, 4),
-        file_length: field_varint(payload, 5),
-        media_key: field_bytes(payload, 7),
-        file_enc_sha256: field_bytes(payload, 9),
-        direct_path: field_bytes(payload, 10),
-        media_key_timestamp: field_varint(payload, 11),
-        metadata: %{
-          title: field_bytes(payload, 3),
-          page_count: field_varint(payload, 6),
-          file_name: field_bytes(payload, 8),
-          contact_vcard: field_bool(payload, 12),
-          thumbnail: field_bytes(payload, 16)
-        }
-      }
-    }
-  end
-
-  defp build_location(payload) do
-    %{
-      kind: :location,
-      value: %{
-        latitude: field_double(payload, 1),
-        longitude: field_double(payload, 2),
-        name: field_bytes(payload, 3),
-        address: field_bytes(payload, 4),
-        url: field_bytes(payload, 5),
-        is_live: field_bool(payload, 6),
-        accuracy: field_varint(payload, 7),
-        speed: field_float(payload, 8),
-        bearing: field_varint(payload, 9),
-        comment: field_bytes(payload, 11),
-        jpeg_thumbnail: field_bytes(payload, 16)
-      }
-    }
-  end
-
-  defp build_contact(payload) do
-    %{
-      kind: :contact,
-      value: %{
-        display_name: field_bytes(payload, 1),
-        vcard: field_bytes(payload, 16),
-        is_self_contact: field_bool(payload, 18)
-      }
-    }
-  end
-
-  defp build_live_location(payload) do
-    %{
-      kind: :location,
-      value: %{
-        latitude: field_double(payload, 1),
-        longitude: field_double(payload, 2),
-        is_live: true,
-        accuracy: field_varint(payload, 3),
-        speed: field_float(payload, 4),
-        bearing: field_varint(payload, 5),
-        comment: field_bytes(payload, 6),
-        sequence_number: field_varint(payload, 7),
-        time_offset: field_varint(payload, 8),
-        jpeg_thumbnail: field_bytes(payload, 16),
-        name: nil,
-        address: nil,
-        url: nil
-      }
-    }
-  end
-
-  defp build_event(payload) do
-    location =
-      case find_length_delimited_field(payload, 5) do
-        {:ok, location_payload} -> build_location(location_payload).value
-        _ -> nil
-      end
-
-    %{
-      kind: :event,
-      value: %{
-        canceled: field_bool(payload, 2),
-        name: field_bytes(payload, 3),
-        description: field_bytes(payload, 4),
-        location: location,
-        join_link: field_bytes(payload, 6),
-        start_time: field_varint(payload, 7),
-        end_time: field_varint(payload, 8),
-        extra_guests_allowed: field_bool(payload, 9),
-        scheduled_call: field_bool(payload, 10),
-        has_reminder: field_bool(payload, 11),
-        reminder_offset_seconds: field_varint(payload, 12)
-      }
-    }
-  end
-
-  defp decode_message_text_recursive(_payload, depth) when depth > @max_message_decode_depth,
-    do: :error
-
-  defp decode_message_text_recursive(payload, depth) do
-    case decode_message_text_shallow(payload) do
-      {:ok, text} -> {:ok, text}
-      :error -> decode_nested_message_text(payload, depth)
-    end
-  end
-
-  defp decode_nested_message_text(payload, depth) do
-    case collect_length_delimited_fields(payload) do
-      {:ok, nested_values} ->
-        Enum.reduce_while(nested_values, :error, fn nested, _acc ->
-          reduce_nested_message_text(nested, depth)
-        end)
-
-      {:error, _reason} ->
-        :error
-    end
-  end
-
-  defp reduce_nested_message_text(nested, depth) do
-    case decode_message_text_recursive(nested, depth + 1) do
-      {:ok, text} -> {:halt, {:ok, text}}
-      :error -> {:cont, :error}
-    end
-  end
-
-  defp decode_message_text_shallow(payload) do
-    with {:ok, conversation} <- find_length_delimited_field(payload, 1),
-         true <- valid_text_payload?(conversation) do
-      {:ok, conversation}
-    else
-      _ ->
-        with {:ok, extended} <- find_length_delimited_field(payload, 6),
-             {:ok, text} <- find_length_delimited_field(extended, 1),
-             true <- valid_text_payload?(text) do
-          {:ok, text}
-        else
-          _ -> :error
-        end
-    end
-  end
-
-  defp valid_text_payload?(value) when is_binary(value), do: value != "" and String.valid?(value)
-
-  defp decode_wire_fields_acc(<<>>, acc), do: {:ok, Enum.reverse(acc)}
-
-  defp decode_wire_fields_acc(binary, acc) when is_binary(binary) do
-    with {:ok, tag, rest} <- decode_varint_safe(binary),
-         wire_type <- Bitwise.band(tag, 0x07),
-         field_num <- Bitwise.bsr(tag, 3) do
-      decode_wire_field_acc(wire_type, rest, field_num, acc)
-    end
-  end
-
-  defp decode_wire_field_acc(0, rest, field_num, acc) do
-    with {:ok, value, tail} <- decode_varint_safe(rest) do
-      decode_wire_fields_acc(tail, [{field_num, 0, value} | acc])
-    end
-  end
-
-  defp decode_wire_field_acc(1, rest, field_num, acc) do
-    if byte_size(rest) >= 8 do
-      <<_skip::binary-size(8), tail::binary>> = rest
-      decode_wire_fields_acc(tail, [{field_num, 1, :fixed64} | acc])
-    else
-      {:error, :invalid_fixed64}
-    end
-  end
-
-  defp decode_wire_field_acc(2, rest, field_num, acc) do
-    with {:ok, len, tail} <- decode_varint_safe(rest),
-         true <- byte_size(tail) >= len do
-      <<value::binary-size(^len), next::binary>> = tail
-      decode_wire_fields_acc(next, [{field_num, 2, value} | acc])
-    else
-      false -> {:error, :invalid_length}
-    end
-  end
-
-  defp decode_wire_field_acc(5, rest, field_num, acc) do
-    if byte_size(rest) >= 4 do
-      <<_skip::binary-size(4), tail::binary>> = rest
-      decode_wire_fields_acc(tail, [{field_num, 5, :fixed32} | acc])
-    else
-      {:error, :invalid_fixed32}
-    end
-  end
-
-  defp decode_wire_field_acc(wire_type, _rest, _field_num, _acc),
-    do: {:error, {:unsupported_wire_type, wire_type}}
-
-  defp decode_varint_safe(binary), do: decode_varint_safe(binary, 0, 0)
-  defp decode_varint_safe(_, _, shift) when shift > 63, do: {:error, :invalid_varint}
-  defp decode_varint_safe(<<>>, _, _), do: {:error, :invalid_varint}
-
-  defp decode_varint_safe(<<byte, rest::binary>>, acc, shift) do
-    value = Bitwise.bor(acc, Bitwise.bsl(Bitwise.band(byte, 0x7F), shift))
-
-    if Bitwise.band(byte, 0x80) == 0 do
-      {:ok, value, rest}
-    else
-      decode_varint_safe(rest, value, shift + 7)
-    end
-  end
-
-  defp do_find_length_delimited_field(<<>>, _field_num), do: {:error, :not_found}
-
-  defp do_find_length_delimited_field(binary, field_num) do
-    with {:ok, tag, rest} <- decode_varint(binary),
-         wire_type <- Bitwise.band(tag, 0x07),
-         field <- Bitwise.bsr(tag, 3) do
-      find_length_delimited_by_wire_type(wire_type, rest, field, field_num)
-    end
-  end
-
-  defp find_length_delimited_by_wire_type(0, rest, _field, field_num) do
-    with {:ok, _value, tail} <- decode_varint(rest) do
-      do_find_length_delimited_field(tail, field_num)
-    end
-  end
-
-  defp find_length_delimited_by_wire_type(1, rest, _field, field_num) do
-    if byte_size(rest) >= 8 do
-      <<_skip::binary-size(8), tail::binary>> = rest
-      do_find_length_delimited_field(tail, field_num)
-    else
-      {:error, :invalid_fixed64}
-    end
-  end
-
-  defp find_length_delimited_by_wire_type(2, rest, field, field_num) do
-    with {:ok, len, tail} <- decode_varint(rest),
-         true <- byte_size(tail) >= len do
-      <<value::binary-size(^len), next::binary>> = tail
-
-      if field == field_num,
-        do: {:ok, value},
-        else: do_find_length_delimited_field(next, field_num)
-    else
-      false -> {:error, :invalid_length}
-    end
-  end
-
-  defp find_length_delimited_by_wire_type(5, rest, _field, field_num) do
-    if byte_size(rest) >= 4 do
-      <<_skip::binary-size(4), tail::binary>> = rest
-      do_find_length_delimited_field(tail, field_num)
-    else
-      {:error, :invalid_fixed32}
-    end
-  end
-
-  defp find_length_delimited_by_wire_type(wire_type, _rest, _field, _field_num),
-    do: {:error, {:unsupported_wire_type, wire_type}}
-
-  defp decode_varint(binary), do: decode_varint(binary, 0, 0)
-  defp decode_varint(_, _, shift) when shift > 63, do: {:error, :invalid_varint}
-  defp decode_varint(<<>>, _, _), do: {:error, :invalid_varint}
-
-  defp decode_varint(<<byte, rest::binary>>, acc, shift) do
-    value = Bitwise.bor(acc, Bitwise.bsl(Bitwise.band(byte, 0x7F), shift))
-
-    if Bitwise.band(byte, 0x80) == 0,
-      do: {:ok, value, rest},
-      else: decode_varint(rest, value, shift + 7)
-  end
-
-  defp collect_length_delimited_fields(binary), do: collect_length_delimited_fields(binary, [])
-  defp collect_length_delimited_fields(<<>>, acc), do: {:ok, Enum.reverse(acc)}
-
-  defp collect_length_delimited_fields(binary, acc) do
-    with {:ok, tag, rest} <- decode_varint(binary),
-         wire_type <- Bitwise.band(tag, 0x07) do
-      collect_length_delimited_by_wire_type(wire_type, rest, acc)
-    end
-  end
-
-  defp collect_length_delimited_by_wire_type(0, rest, acc) do
-    with {:ok, _value, tail} <- decode_varint(rest) do
-      collect_length_delimited_fields(tail, acc)
-    end
-  end
-
-  defp collect_length_delimited_by_wire_type(1, rest, acc) do
-    if byte_size(rest) >= 8 do
-      <<_skip::binary-size(8), tail::binary>> = rest
-      collect_length_delimited_fields(tail, acc)
-    else
-      {:error, :invalid_fixed64}
-    end
-  end
-
-  defp collect_length_delimited_by_wire_type(2, rest, acc) do
-    with {:ok, len, tail} <- decode_varint(rest),
-         true <- byte_size(tail) >= len do
-      <<value::binary-size(^len), next::binary>> = tail
-      collect_length_delimited_fields(next, [value | acc])
-    else
-      false -> {:error, :invalid_length}
-    end
-  end
-
-  defp collect_length_delimited_by_wire_type(5, rest, acc) do
-    if byte_size(rest) >= 4 do
-      <<_skip::binary-size(4), tail::binary>> = rest
-      collect_length_delimited_fields(tail, acc)
-    else
-      {:error, :invalid_fixed32}
-    end
-  end
-
-  defp collect_length_delimited_by_wire_type(wire_type, _rest, _acc),
-    do: {:error, {:unsupported_wire_type, wire_type}}
-
-  defp do_find_varint_field(<<>>, _wanted_field), do: nil
-
-  defp do_find_varint_field(binary, wanted_field) do
-    with {:ok, tag, rest} <- decode_varint(binary),
-         wire_type <- Bitwise.band(tag, 0x07),
-         field <- Bitwise.bsr(tag, 3) do
-      find_varint_by_wire_type(wire_type, rest, field, wanted_field)
-    else
-      _ -> nil
-    end
-  end
-
-  defp find_varint_by_wire_type(0, rest, field, wanted_field) do
-    case decode_varint(rest) do
-      {:ok, value, tail} ->
-        if field == wanted_field, do: value, else: do_find_varint_field(tail, wanted_field)
-
-      _ ->
-        nil
-    end
-  end
-
-  defp find_varint_by_wire_type(1, rest, _field, wanted_field) do
-    if byte_size(rest) >= 8 do
-      <<_skip::binary-size(8), tail::binary>> = rest
-      do_find_varint_field(tail, wanted_field)
-    end
-  end
-
-  defp find_varint_by_wire_type(2, rest, _field, wanted_field) do
-    with {:ok, len, tail} <- decode_varint(rest),
-         true <- byte_size(tail) >= len do
-      <<_skip::binary-size(^len), next::binary>> = tail
-      do_find_varint_field(next, wanted_field)
-    else
-      _ -> nil
-    end
-  end
-
-  defp find_varint_by_wire_type(5, rest, _field, wanted_field) do
-    if byte_size(rest) >= 4 do
-      <<_skip::binary-size(4), tail::binary>> = rest
-      do_find_varint_field(tail, wanted_field)
-    end
-  end
-
-  defp find_varint_by_wire_type(_wire_type, _rest, _field, _wanted_field), do: nil
-
-  @spec do_find_fixed_field(binary(), non_neg_integer(), 1 | 5) :: float() | nil
-  defp do_find_fixed_field(<<>>, _wanted_field, _wanted_wire_type), do: nil
-
-  defp do_find_fixed_field(binary, wanted_field, wanted_wire_type) do
-    case decode_varint(binary) do
-      {:ok, tag, rest} ->
-        wire_type = Bitwise.band(tag, 0x07)
-        field = Bitwise.bsr(tag, 3)
-        find_fixed_by_wire_type(wire_type, rest, field, wanted_field, wanted_wire_type)
-
-      _ ->
-        nil
-    end
-  end
-
-  defp find_fixed_by_wire_type(0, rest, _field, wanted_field, wanted_wire_type) do
-    case decode_varint(rest) do
-      {:ok, _value, tail} -> do_find_fixed_field(tail, wanted_field, wanted_wire_type)
-      _ -> nil
-    end
-  end
-
-  defp find_fixed_by_wire_type(1, rest, field, wanted_field, wanted_wire_type) do
-    if byte_size(rest) >= 8 do
-      <<value::little-float-64, tail::binary>> = rest
-
-      if field == wanted_field and wanted_wire_type == 1,
-        do: value,
-        else: do_find_fixed_field(tail, wanted_field, wanted_wire_type)
-    end
-  end
-
-  defp find_fixed_by_wire_type(2, rest, _field, wanted_field, wanted_wire_type) do
-    with {:ok, len, tail} <- decode_varint(rest),
-         true <- byte_size(tail) >= len do
-      <<_value::binary-size(^len), next::binary>> = tail
-      do_find_fixed_field(next, wanted_field, wanted_wire_type)
-    else
-      _ -> nil
-    end
-  end
-
-  defp find_fixed_by_wire_type(5, rest, field, wanted_field, wanted_wire_type) do
-    if byte_size(rest) >= 4 do
-      <<value::little-float-32, tail::binary>> = rest
-
-      if field == wanted_field and wanted_wire_type == 5,
-        do: value,
-        else: do_find_fixed_field(tail, wanted_field, wanted_wire_type)
-    end
-  end
-
-  defp find_fixed_by_wire_type(_wire_type, _rest, _field, _wanted_field, _wanted_wire_type),
-    do: nil
 end
