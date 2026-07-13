@@ -73,9 +73,10 @@ Estrarre gradualmente moduli interni, senza dividerli per tipo di messaggio:
 - [ ] `Outbound.Direct`: orchestrazione DM/self-chat.
 - [ ] `Outbound.Group`: sender-key e distribuzione gruppi.
 - [x] `Outbound.DeviceDiscovery`: USync e cache device.
-- [ ] `Outbound.Prekeys`: recupero bundle e creazione sessioni.
+- [x] `Outbound.Prekeys`: recupero bundle e creazione sessioni.
   - [x] Selezione target, bundle mancanti e bootstrap sessioni Signal.
-  - [ ] IQ, timeout e retry individuali restano da estrarre dal worker.
+  - [x] Fallback batch/individuale e retry dei bundle mancanti.
+  - Le richieste IQ, i receive e i timeout restano nel worker come boundary di effetto.
 - [x] `Outbound.Fanout`: risoluzione target e verifica copertura.
 - [x] `MessageNode`: composizione finale dei nodi cifrati.
 
