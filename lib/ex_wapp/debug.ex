@@ -80,6 +80,7 @@ defmodule ExWapp.Debug do
   defmodule FullClient do
     use WebSockex
     require Logger
+
     @moduledoc """
     WebSockex callback process that drives a complete diagnostic Noise handshake
     for `ExWapp.Debug`.
@@ -498,6 +499,7 @@ defmodule ExWapp.Debug do
   # Simple WebSockex client for debugging
   defmodule DebugClient do
     use WebSockex
+
     @moduledoc """
     WebSockex callback process used internally by `ExWapp.Debug` to inspect
     handshake frames.

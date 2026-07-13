@@ -1711,7 +1711,10 @@ defmodule ExWapp.Session.Worker do
         |> Keyword.put(:additional_message_nodes, [
           %Binary.Node{tag: "meta", attrs: %{"event_type" => "creation"}, content: nil}
         ])
-        |> Keyword.put(:outgoing_raw, %{content_type: :event, event: Map.merge(body, Map.new(opts))})
+        |> Keyword.put(:outgoing_raw, %{
+          content_type: :event,
+          event: Map.merge(body, Map.new(opts))
+        })
 
       Outbound.send_proto_worker(session_pid, state, jid, proto, send_opts)
     else
@@ -1758,6 +1761,7 @@ defmodule ExWapp.Session.Worker do
 
   defp media_stanza_type(:image, _opts), do: "image"
   defp media_stanza_type(:document, _opts), do: "document"
+
   defp media_stanza_type(:audio, opts),
     do: if(Keyword.get(opts, :ptt, false), do: "ptt", else: "audio")
 

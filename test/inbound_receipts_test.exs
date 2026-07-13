@@ -22,6 +22,7 @@ defmodule ExWapp.Message.Handler.Inbound.ReceiptsTest do
 
   test "plans one placeholder resend with the first retry receipt" do
     from = "15550001111:7@s.whatsapp.net"
+
     message_data = %{
       encrypted: true,
       decrypt_status: {:error, :no_ciphertext_candidates}

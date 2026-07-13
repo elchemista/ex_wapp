@@ -113,8 +113,7 @@ defmodule ExWapp.Session.Outbound.Fanout do
       recipient_targets: recipient_targets,
       own_targets: own_targets,
       all_usync_devices: Map.get(hints, :all_usync_devices, []),
-      cached_eviction_batches:
-        Enum.reject([recipient_evictions, own_evictions], &(&1 == [])),
+      cached_eviction_batches: Enum.reject([recipient_evictions, own_evictions], &(&1 == [])),
       self_chat?: self_chat?
     }
   end

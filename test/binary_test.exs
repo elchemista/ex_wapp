@@ -49,8 +49,7 @@ defmodule ExWapp.BinaryTest do
        [
          {"key", %{},
           [
-            {"user", %{"jid" => "19995550101@s.whatsapp.net", "reason" => "identity"},
-             nil}
+            {"user", %{"jid" => "19995550101@s.whatsapp.net", "reason" => "identity"}, nil}
           ]}
        ]}
 

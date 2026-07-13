@@ -598,12 +598,12 @@ defmodule ExWapp.Messages do
     do: encode_varint_field(acc, field_num, if(value, do: 1, else: 0))
 
   defp encode_double_field(acc, field_num, value) when is_number(value),
-    do: [acc, encode_varint(Bitwise.bsl(field_num, 3) + 1), <<(value * 1.0)::little-float-64>>]
+    do: [acc, encode_varint(Bitwise.bsl(field_num, 3) + 1), <<value * 1.0::little-float-64>>]
 
   defp encode_optional_float_field(acc, _field_num, nil), do: acc
 
   defp encode_optional_float_field(acc, field_num, value) when is_number(value),
-    do: [acc, encode_varint(Bitwise.bsl(field_num, 3) + 5), <<(value * 1.0)::little-float-32>>]
+    do: [acc, encode_varint(Bitwise.bsl(field_num, 3) + 5), <<value * 1.0::little-float-32>>]
 
   defp unix_seconds(%DateTime{} = value), do: DateTime.to_unix(value, :second)
   defp unix_seconds(value) when is_integer(value) and value >= 0, do: value

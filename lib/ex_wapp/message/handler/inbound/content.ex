@@ -25,6 +25,7 @@ defmodule ExWapp.Message.Handler.Inbound.Content do
         enc_type: Map.get(decrypt_result.payload, :enc_type, decrypt_result.enc_type),
         sender_jid: decrypt_result.sender_jid
       )
+
     log_decrypted_message(canonical, decrypt_result)
 
     decrypt_result.message_data

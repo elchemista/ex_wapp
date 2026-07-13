@@ -381,7 +381,10 @@ defmodule ExWapp do
   @spec stream_messages(Client.t() | GenServer.server(), String.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, Error.t(), Client.t()} | Enumerable.t()
   def stream_messages(target, jid, opts \\ [])
-  def stream_messages(%Client{} = client, jid, opts), do: Client.API.stream_messages(client, jid, opts)
+
+  def stream_messages(%Client{} = client, jid, opts),
+    do: Client.API.stream_messages(client, jid, opts)
+
   def stream_messages(session, jid, opts), do: Chat.stream_messages(session, jid, opts)
 
   @doc """
@@ -476,6 +479,7 @@ defmodule ExWapp do
           | {:ok, String.t()}
           | {:error, term()}
   def send_image(target, to, source, opts \\ [])
+
   def send_image(%Client{} = client, to, source, opts),
     do: Client.API.send_image(client, to, source, opts)
 
@@ -490,6 +494,7 @@ defmodule ExWapp do
           | {:ok, String.t()}
           | {:error, term()}
   def send_audio(target, to, source, opts \\ [])
+
   def send_audio(%Client{} = client, to, source, opts),
     do: Client.API.send_audio(client, to, source, opts)
 
@@ -507,6 +512,7 @@ defmodule ExWapp do
           | {:ok, String.t()}
           | {:error, term()}
   def send_document(target, to, source, opts \\ [])
+
   def send_document(%Client{} = client, to, source, opts),
     do: Client.API.send_document(client, to, source, opts)
 
@@ -526,6 +532,7 @@ defmodule ExWapp do
           | {:ok, String.t()}
           | {:error, term()}
   def send_location(target, to, latitude, longitude, opts \\ [])
+
   def send_location(%Client{} = client, to, latitude, longitude, opts),
     do: Client.API.send_location(client, to, latitude, longitude, opts)
 
@@ -545,6 +552,7 @@ defmodule ExWapp do
           | {:ok, String.t()}
           | {:error, term()}
   def send_contact(target, to, display_name, vcard, opts \\ [])
+
   def send_contact(%Client{} = client, to, display_name, vcard, opts),
     do: Client.API.send_contact(client, to, display_name, vcard, opts)
 
@@ -564,6 +572,7 @@ defmodule ExWapp do
           | {:ok, String.t()}
           | {:error, term()}
   def send_event(target, to, name, start_time, opts \\ [])
+
   def send_event(%Client{} = client, to, name, start_time, opts),
     do: Client.API.send_event(client, to, name, start_time, opts)
 
@@ -581,6 +590,7 @@ defmodule ExWapp do
           | {:ok, ExWapp.Media.Download.t()}
           | {:error, term()}
   def download_media(target, ref, opts \\ [])
+
   def download_media(%Client{} = client, ref, opts),
     do: Client.API.download_media(client, ref, opts)
 

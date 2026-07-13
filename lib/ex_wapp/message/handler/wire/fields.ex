@@ -159,6 +159,7 @@ defmodule ExWapp.Message.Handler.Wire.Fields do
   @spec decode_varint_safe(binary()) ::
           {:ok, non_neg_integer(), binary()} | {:error, atom()}
   defp decode_varint_safe(binary), do: decode_varint_safe(binary, 0, 0)
+
   @spec decode_varint_safe(binary(), non_neg_integer(), non_neg_integer()) ::
           {:ok, non_neg_integer(), binary()} | {:error, atom()}
   defp decode_varint_safe(_, _, shift) when shift > 63, do: {:error, :invalid_varint}
@@ -235,6 +236,7 @@ defmodule ExWapp.Message.Handler.Wire.Fields do
   @spec decode_varint(binary()) ::
           {:ok, non_neg_integer(), binary()} | {:error, atom()}
   defp decode_varint(binary), do: decode_varint(binary, 0, 0)
+
   @spec decode_varint(binary(), non_neg_integer(), non_neg_integer()) ::
           {:ok, non_neg_integer(), binary()} | {:error, atom()}
   defp decode_varint(_, _, shift) when shift > 63, do: {:error, :invalid_varint}
@@ -251,6 +253,7 @@ defmodule ExWapp.Message.Handler.Wire.Fields do
   @spec collect_length_delimited_fields(binary()) ::
           {:ok, [binary()]} | {:error, term()}
   defp collect_length_delimited_fields(binary), do: collect_length_delimited_fields(binary, [])
+
   @spec collect_length_delimited_fields(binary(), [binary()]) ::
           {:ok, [binary()]} | {:error, term()}
   defp collect_length_delimited_fields(<<>>, acc), do: {:ok, Enum.reverse(acc)}

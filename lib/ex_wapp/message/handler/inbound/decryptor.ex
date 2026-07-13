@@ -59,7 +59,8 @@ defmodule ExWapp.Message.Handler.Inbound.Decryptor do
   end
 
   @spec validate_context(map(), Envelope.decrypt_context()) ::
-          {:ok, term()} | {:error, :missing_store | :no_sender_candidates | :no_ciphertext_candidates}
+          {:ok, term()}
+          | {:error, :missing_store | :no_sender_candidates | :no_ciphertext_candidates}
   defp validate_context(state, decrypt_ctx) do
     cond do
       is_nil(Map.get(state, :store)) ->

@@ -39,6 +39,7 @@ defmodule ExWapp.Noise.ClientPayload do
           "[ClientPayload] Building LOGIN payload for #{inspect(jid)} " <>
             "client_version=#{version_string(runtime_cfg)}"
         )
+
         build_login_payload(data, jid, runtime_cfg)
 
       other ->

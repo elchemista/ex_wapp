@@ -358,5 +358,4 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
 
   @spec valid_text_payload?(binary()) :: boolean()
   defp valid_text_payload?(value) when is_binary(value), do: value != "" and String.valid?(value)
-
 end

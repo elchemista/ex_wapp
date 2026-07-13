@@ -165,5 +165,4 @@ defmodule ExWapp.Message.Handler.Wire do
 
     do_extract_enc_candidates(rest, current_to_jid, acc)
   end
-
 end

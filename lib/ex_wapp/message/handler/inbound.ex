@@ -14,6 +14,7 @@ defmodule ExWapp.Message.Handler.Inbound do
   alias ExWapp.JID
   alias ExWapp.Binary.Node
   alias ExWapp.Message.Handler.{Common, Wire}
+
   alias ExWapp.Message.Handler.Inbound.{
     Content,
     Decryptor,
@@ -113,5 +114,4 @@ defmodule ExWapp.Message.Handler.Inbound do
 
   defp maybe_decrypt_message(message_data, state, _from, _participant, _attrs),
     do: {message_data, state}
-
 end

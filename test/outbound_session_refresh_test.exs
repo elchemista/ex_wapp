@@ -168,8 +168,7 @@ defmodule ExWapp.OutboundSessionRefreshTest do
                additional_message_nodes: [meta]
              )
 
-    assert_receive {:message_send,
-                    %Binary.Node{tag: "message", attrs: attrs, content: content}}
+    assert_receive {:message_send, %Binary.Node{tag: "message", attrs: attrs, content: content}}
 
     assert attrs["type"] == "event"
     assert List.last(content) == meta

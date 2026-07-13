@@ -594,9 +594,8 @@ defmodule ExWapp.Session.Outbound.Prekeys do
     {:ok, updated_sessions, bundle_map}
   end
 
-  @spec finalize_bundle_session_creation(
+  @spec finalize_bundle_session_creation({:ok, SessionStore.t(), map()} | {:error, term()}) ::
           {:ok, SessionStore.t(), map()} | {:error, term()}
-        ) :: {:ok, SessionStore.t(), map()} | {:error, term()}
   defp finalize_bundle_session_creation({:ok, updated_sessions, bundle_map})
        when map_size(bundle_map) > 0,
        do: {:ok, updated_sessions, bundle_map}
