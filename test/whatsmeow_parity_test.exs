@@ -397,6 +397,53 @@ defmodule ExWapp.WhatsmeowParityTest do
     GenServer.stop(session)
   end
 
+  test "contact notifications are acknowledged and exposed as typed session actions" do
+    notification = %Node{
+      tag: "notification",
+      attrs: %{
+        "id" => "CONTACTS_1",
+        "type" => "contacts",
+        "from" => "105716408963194@lid",
+        "t" => "1730000300"
+      },
+      content: [
+        %Node{
+          tag: "update",
+          attrs: %{"jid" => "105716408963194@lid"},
+          content: [
+            %Node{
+              tag: "device",
+              attrs: %{"jid" => "105716408963194:32@lid"},
+              content: nil
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, %{}, actions} = MessageHandler.handle_node(notification, self(), %{})
+
+    assert [
+             {:send_node,
+              %Node{
+                tag: "ack",
+                attrs: %{
+                  "class" => "notification",
+                  "id" => "CONTACTS_1",
+                  "to" => "105716408963194@lid",
+                  "type" => "contacts"
+                }
+              }},
+             {:contacts_changed,
+              %{
+                from: "105716408963194@lid",
+                jids: ["105716408963194@lid"],
+                notification_id: "CONTACTS_1",
+                timestamp: "1730000300"
+              }}
+           ] = actions
+  end
+
   test "protocol history sync inline payload populates chat and group metadata" do
     alice_identity = Keys.generate_key_pair()
     bob_identity = Keys.generate_key_pair()

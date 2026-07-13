@@ -612,6 +612,16 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     end
   end
 
+  defp handle_pairing_action({:contacts_changed, payload}, state) do
+    Subscribers.broadcast_lifecycle(
+      Map.get(state, :session_id),
+      {:ex_wapp_session, :contacts_changed, payload}
+    )
+
+    send(self(), {:app_state_sync_collections, ["critical_unblock_low"]})
+    :ok
+  end
+
   defp handle_pairing_action(_action, _state), do: :ok
 
   # Subscriber and state helpers

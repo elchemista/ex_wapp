@@ -203,4 +203,25 @@ defmodule ExWapp.Session.Worker.NodeHandlerTest do
 
     refute_receive {:transport_send, %Binary.Node{tag: "ib"}}, 100
   end
+
+  test "contact-change action broadcasts a typed event and schedules contact sync" do
+    session_id = "contacts-#{System.unique_integer([:positive])}"
+    :ok = Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
+
+    payload = %{
+      from: "105716408963194@lid",
+      jids: ["105716408963194@lid"],
+      notification_id: "CONTACTS_1",
+      timestamp: "1730000300"
+    }
+
+    assert :ok =
+             NodeHandler.safe_handle_action(
+               {:contacts_changed, payload},
+               %{session_id: session_id}
+             )
+
+    assert_receive {:ex_wapp_session, :contacts_changed, ^payload}
+    assert_receive {:app_state_sync_collections, ["critical_unblock_low"]}
+  end
 end

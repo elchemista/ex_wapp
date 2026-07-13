@@ -12,6 +12,11 @@ defmodule ExWapp.Media.HTTP do
 
   @origin "https://web.whatsapp.com"
 
+  # WhatsApp media CDNs routinely close pooled HTTPS sockets after a short
+  # idle period. Request errors are still returned by :httpc; this only avoids
+  # an alarming SSL process report for a normal close_notify alert.
+  @http_options [ssl: [log_level: :none]]
+
   @doc """
   Encrypts plaintext media and uploads it to the best available media host.
   """
@@ -96,7 +101,7 @@ defmodule ExWapp.Media.HTTP do
       {~c"content-type", ~c"application/octet-stream"}
     ]
 
-    case :httpc.request(:post, {url, headers, ~c"application/octet-stream", body}, [],
+    case :httpc.request(:post, {url, headers, ~c"application/octet-stream", body}, @http_options,
            body_format: :binary
          ) do
       {:ok, {{_, status, _}, _headers, response_body}} when status in 200..299 ->
@@ -154,7 +159,9 @@ defmodule ExWapp.Media.HTTP do
       {~c"referer", String.to_charlist(@origin <> "/")}
     ]
 
-    case :httpc.request(:get, {String.to_charlist(url), headers}, [], body_format: :binary) do
+    case :httpc.request(:get, {String.to_charlist(url), headers}, @http_options,
+           body_format: :binary
+         ) do
       {:ok, {{_, status, _}, _headers, body}} when status in 200..299 -> {:ok, body}
       {:ok, {{_, status, _}, _headers, body}} -> {:error, {:download_http_error, status, body}}
       {:error, reason} -> {:error, {:download_failed, reason}}

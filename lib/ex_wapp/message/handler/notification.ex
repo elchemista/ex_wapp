@@ -1,5 +1,11 @@
 defmodule ExWapp.Message.Handler.Notification do
-  @moduledoc false
+  @moduledoc """
+  Handles server notifications and translates them into session actions.
+
+  Notifications are acknowledged here. Notifications that invalidate local
+  state also emit a focused action so the session can refresh that state and
+  notify wrappers without making them parse protocol nodes.
+  """
 
   require Logger
 
@@ -48,6 +54,9 @@ defmodule ExWapp.Message.Handler.Notification do
   defp handle_notification_type("devices", _attrs, content, session, state),
     do: handle_devices_notification(content, session, state)
 
+  defp handle_notification_type("contacts", attrs, content, _session, state),
+    do: handle_contacts_notification(attrs, content, state)
+
   defp handle_notification_type("privacy_token", attrs, content, _session, state),
     do: handle_privacy_token_notification(attrs, content, state)
 
@@ -62,6 +71,9 @@ defmodule ExWapp.Message.Handler.Notification do
   end
 
   defp append_actions({:ok, state}, extra_actions), do: {:ok, state, extra_actions}
+
+  defp append_actions({:ok, state, actions}, extra_actions),
+    do: {:ok, state, extra_actions ++ actions}
 
   defp handle_encrypt_notification(_content, _session, state) do
     Logger.debug("Received encryption notification (identity key change)")
@@ -130,6 +142,40 @@ defmodule ExWapp.Message.Handler.Notification do
     ExWapp.Message.Handler.Inbound.persist_notification_devices(state, content)
     {:ok, state}
   end
+
+  defp handle_contacts_notification(attrs, content, state) do
+    from = Common.normalize_jid(Map.get(attrs, "from"))
+
+    jids =
+      [from | contact_jids(content)]
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
+    payload = %{
+      from: from,
+      jids: jids,
+      notification_id: Map.get(attrs, "id", ""),
+      timestamp: Map.get(attrs, "t")
+    }
+
+    {:ok, state, [{:contacts_changed, payload}]}
+  end
+
+  defp contact_jids(content) when is_list(content) do
+    Enum.flat_map(content, &contact_jids/1)
+  end
+
+  defp contact_jids(%Node{attrs: attrs, content: content}) do
+    current =
+      case Common.normalize_jid(Map.get(attrs, "jid")) do
+        "" -> []
+        jid -> [jid]
+      end
+
+    current ++ contact_jids(content)
+  end
+
+  defp contact_jids(_content), do: []
 
   defp handle_group_notification(attrs, content, session, state) do
     group_jid = Common.normalize_jid(Map.get(attrs, "from", ""))
