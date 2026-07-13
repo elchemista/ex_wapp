@@ -49,9 +49,7 @@ defmodule ExWapp.Signal.Session do
           ciphertext: binary()
         }
 
-  # ============================================================================
-  # Session Creation (X3DH)
-  # ============================================================================
+  # X3DH session bootstrap
 
   @doc """
   Creates a new session using X3DH key agreement.
@@ -144,9 +142,7 @@ defmodule ExWapp.Signal.Session do
     end
   end
 
-  # ============================================================================
-  # Message Encryption
-  # ============================================================================
+  # Encrypting outbound Signal messages
 
   @doc """
   Encrypts a message using the session.
@@ -210,9 +206,7 @@ defmodule ExWapp.Signal.Session do
     end
   end
 
-  # ============================================================================
-  # Message Decryption
-  # ============================================================================
+  # Decrypting inbound Signal messages
 
   @doc """
   Decrypts a regular Signal message.
@@ -387,9 +381,7 @@ defmodule ExWapp.Signal.Session do
     end
   end
 
-  # ============================================================================
-  # Double Ratchet
-  # ============================================================================
+  # Double-ratchet state transitions
 
   defp decrypt_prekey_inner_with_compat(
          local_identity,
@@ -572,9 +564,7 @@ defmodule ExWapp.Signal.Session do
     end
   end
 
-  # ============================================================================
-  # Cryptographic Primitives
-  # ============================================================================
+  # Low-level cryptographic primitives
 
   defp x25519_shared_secret(private_key, public_key) do
     :crypto.compute_key(:ecdh, public_key, private_key, :x25519)
@@ -656,9 +646,7 @@ defmodule ExWapp.Signal.Session do
     }
   end
 
-  # ============================================================================
-  # Message Parsing/Building
-  # ============================================================================
+  # Signal message parsing and construction
 
   defp parse_signal_message(payload) do
     WireFormat.parse_signal_message(payload)
