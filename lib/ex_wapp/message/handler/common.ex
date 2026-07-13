@@ -1,5 +1,10 @@
 defmodule ExWapp.Message.Handler.Common do
-  @moduledoc false
+  @moduledoc """
+  Provides shared normalization and lookup helpers for inbound node handlers.
+
+  JID, timestamp, node-attribute, chat-target, and sync metadata handling live
+  here so individual handlers apply the same wire conventions.
+  """
 
   alias ExWapp.{Binary, Chat, JID}
   alias ExWapp.Binary.Node
