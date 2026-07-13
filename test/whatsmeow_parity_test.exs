@@ -128,7 +128,7 @@ defmodule ExWapp.WhatsmeowParityTest do
   end
 
   test "marks self messages as from_me when the sender matches the local identity" do
-    own_jid = "180178928033960@lid"
+    own_jid = "19995550303@lid"
 
     store =
       ExWapp.Store.Memory.new(

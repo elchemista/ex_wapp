@@ -116,22 +116,21 @@ defmodule ExWapp.Session.Worker.RetryTest do
     end
 
     next_state =
-      Retry.maybe_retry_outgoing_message(state, "33625382846503@lid", "MID_3",
+      Retry.maybe_retry_outgoing_message(state, "19995550202@lid", "MID_3",
         max_attempts: 2,
         normalize_jid: &JIDUtils.normalize_for_signal/1,
         start_worker: start_worker,
         send_fun: send_fun,
         outgoing_payloads: %{
-          "MID_3" => %{jid: "393277726137@s.whatsapp.net", text: "retry original contact"}
+          "MID_3" => %{jid: "19995550404@s.whatsapp.net", text: "retry original contact"}
         }
       )
 
-    assert_receive {:retry_worker_started, "393277726137@s.whatsapp.net"}
-    assert_receive {:retry_send, "393277726137@s.whatsapp.net", "retry original contact"}
+    assert_receive {:retry_worker_started, "19995550404@s.whatsapp.net"}
+    assert_receive {:retry_send, "19995550404@s.whatsapp.net", "retry original contact"}
 
     assert next_state.retry_counters == %{
-             "outbound_retry|393277726137@s.whatsapp.net|MID_3" => 1
+             "outbound_retry|19995550404@s.whatsapp.net|MID_3" => 1
            }
   end
 end
-

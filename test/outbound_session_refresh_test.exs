@@ -101,7 +101,7 @@ defmodule ExWapp.OutboundSessionRefreshTest do
     assert_receive {:message_send, %Binary.Node{tag: "message"}}
   end
 
-  test "direct media puts mediatype on participant enc nodes instead of the message node" do
+  test "direct media puts every supported mediatype on participant enc nodes" do
     local_jid = "55555555555@s.whatsapp.net"
     recipient_jid = "66666666666@s.whatsapp.net"
 
@@ -117,26 +117,29 @@ defmodule ExWapp.OutboundSessionRefreshTest do
       })
 
     state = outbound_state(store, conn, signal_sessions)
-    proto = %ExWapp.Proto.Message{conversation: "media payload"}
 
-    assert {:ok, _message_id} =
-             Outbound.send_proto_worker(session_pid, state, recipient_jid, proto,
-               chat_text: "media payload",
-               message_node_type: "media",
-               mediatype: "image"
-             )
+    for mediatype <- ~w(image ptt document vcard) do
+      proto = %ExWapp.Proto.Message{conversation: "#{mediatype} payload"}
 
-    assert_receive {:message_send,
-                    %Binary.Node{tag: "message", attrs: attrs, content: content} = node}
+      assert {:ok, _message_id} =
+               Outbound.send_proto_worker(session_pid, state, recipient_jid, proto,
+                 chat_text: "#{mediatype} payload",
+                 message_node_type: "media",
+                 mediatype: mediatype
+               )
 
-    assert attrs["type"] == "media"
-    refute Map.has_key?(attrs, "mediatype")
+      assert_receive {:message_send,
+                      %Binary.Node{tag: "message", attrs: attrs, content: content} = node}
 
-    assert Enum.all?(encrypted_participant_nodes(node), fn %Binary.Node{content: [enc]} ->
-             enc.attrs["mediatype"] == "image"
-           end)
+      assert attrs["type"] == "media"
+      refute Map.has_key?(attrs, "mediatype")
 
-    refute Enum.any?(content, &match?(%Binary.Node{tag: "meta"}, &1))
+      assert Enum.all?(encrypted_participant_nodes(node), fn %Binary.Node{content: [enc]} ->
+               enc.attrs["mediatype"] == mediatype
+             end)
+
+      refute Enum.any?(content, &match?(%Binary.Node{tag: "meta"}, &1))
+    end
   end
 
   test "additional message nodes are appended for event metadata" do
@@ -173,15 +176,15 @@ defmodule ExWapp.OutboundSessionRefreshTest do
   end
 
   test "encrypted DM fans out to recipient devices and own PN devices" do
-    local_pn_device_jid = "393519534944:5@s.whatsapp.net"
-    local_lid_device_jid = "33625382846503:5@lid"
-    local_pn_base_jid = "393519534944@s.whatsapp.net"
-    local_pn_linked_jid = "393519534944:91@s.whatsapp.net"
-    local_lid_base_jid = "33625382846503@lid"
-    local_lid_linked_jid = "33625382846503:91@lid"
+    local_pn_device_jid = "19995550101:5@s.whatsapp.net"
+    local_lid_device_jid = "19995550202:5@lid"
+    local_pn_base_jid = "19995550101@s.whatsapp.net"
+    local_pn_linked_jid = "19995550101:91@s.whatsapp.net"
+    local_lid_base_jid = "19995550202@lid"
+    local_lid_linked_jid = "19995550202:91@lid"
 
-    recipient_base_jid = "393277726137@s.whatsapp.net"
-    recipient_linked_jid = "393277726137:45@s.whatsapp.net"
+    recipient_base_jid = "19995550404@s.whatsapp.net"
+    recipient_linked_jid = "19995550404:45@s.whatsapp.net"
 
     %{store: store, local_signal: local_signal} =
       build_local_store(local_pn_device_jid, local_lid_device_jid)
@@ -271,12 +274,12 @@ defmodule ExWapp.OutboundSessionRefreshTest do
   end
 
   test "self-send fans out to all non-current own devices with own-device payloads" do
-    local_pn_device_jid = "393519534944:5@s.whatsapp.net"
-    local_lid_device_jid = "33625382846503:5@lid"
-    local_pn_base_jid = "393519534944@s.whatsapp.net"
-    local_pn_linked_jid = "393519534944:91@s.whatsapp.net"
-    local_lid_base_jid = "33625382846503@lid"
-    local_lid_linked_jid = "33625382846503:91@lid"
+    local_pn_device_jid = "19995550101:5@s.whatsapp.net"
+    local_lid_device_jid = "19995550202:5@lid"
+    local_pn_base_jid = "19995550101@s.whatsapp.net"
+    local_pn_linked_jid = "19995550101:91@s.whatsapp.net"
+    local_lid_base_jid = "19995550202@lid"
+    local_lid_linked_jid = "19995550202:91@lid"
 
     %{store: store} = build_local_store(local_pn_device_jid, local_lid_device_jid)
 
@@ -465,7 +468,7 @@ defmodule ExWapp.OutboundSessionRefreshTest do
     {:ok, padded_plaintext, _sessions} =
       SessionStore.decrypt_message(
         SessionStore.new(),
-        "393519534944:5@s.whatsapp.net",
+        "19995550101:5@s.whatsapp.net",
         ciphertext,
         is_prekey?,
         signal_state.identity_key,

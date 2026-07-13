@@ -1,9 +1,8 @@
 name: Tests
 
 on:
-  push:
   pull_request:
-  workflow_dispatch:
+    types: [closed]
 
 permissions:
   contents: read
@@ -14,6 +13,7 @@ concurrency:
 
 jobs:
   test:
+    if: github.event.pull_request.merged == true
     name: Compile and test
     runs-on: ubuntu-24.04
     timeout-minutes: 20
