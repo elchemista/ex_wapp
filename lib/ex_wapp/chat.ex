@@ -26,8 +26,11 @@ defmodule ExWapp.Chat do
 
   alias ExWapp.{Binary, JID, Store}
 
+  @max_messages_per_chat 1_000
+
   @type target :: pid() | struct()
   @type message_status :: :pending | :sent | :received | :delivered | :read | :failed
+  @type message_limit :: non_neg_integer() | :all
 
   @type message :: %{
           required(:id) => String.t(),
@@ -153,7 +156,11 @@ defmodule ExWapp.Chat do
   end
 
   @doc """
-  Gets messages for a chat, optionally with pagination.
+  Gets locally retained messages for a chat, newest first.
+
+  Use `:offset` and an integer `:limit` for pagination. Passing `limit: :all`
+  returns every message currently retained for the chat after the offset.
+  ExWapp keeps at most 1,000 messages per chat in its local store.
   """
   @spec messages(target(), String.t() | JID.t(), keyword()) :: [message()]
   def messages(target, jid, opts \\ []) do
@@ -164,12 +171,20 @@ defmodule ExWapp.Chat do
       {:ok, chat} ->
         chat.messages
         |> Enum.drop(offset)
-        |> Enum.take(limit)
+        |> take_messages(limit)
 
       {:error, _} ->
         []
     end
   end
+
+  @doc """
+  Returns every message currently retained for a chat, newest first.
+
+  This reads the local store; it does not request older history from WhatsApp.
+  """
+  @spec all_messages(target(), String.t() | JID.t()) :: [message()]
+  def all_messages(target, jid), do: messages(target, jid, limit: :all)
 
   @doc """
   Merges a batch of messages into a chat, deduplicating by message ID.
@@ -187,7 +202,7 @@ defmodule ExWapp.Chat do
       (chat.messages ++ normalized_new_messages)
       |> Enum.uniq_by(&message_identity/1)
       |> Enum.sort_by(&message_sort_key/1, :desc)
-      |> Enum.take(1000)
+      |> Enum.take(@max_messages_per_chat)
 
     updated_chat =
       case latest_message_timestamp(merged_messages) do
@@ -215,7 +230,7 @@ defmodule ExWapp.Chat do
 
     updated_chat = %{
       chat
-      | messages: [message | chat.messages] |> Enum.take(1000),
+      | messages: [message | chat.messages] |> Enum.take(@max_messages_per_chat),
         last_message_timestamp: message.timestamp,
         unread_count: if(message.from_me, do: chat.unread_count, else: chat.unread_count + 1)
     }
@@ -616,6 +631,14 @@ defmodule ExWapp.Chat do
 
   defp normalize_sort_id(value) when is_binary(value), do: value
   defp normalize_sort_id(_), do: ""
+
+  @spec take_messages([message()], message_limit()) :: [message()]
+  defp take_messages(messages, :all), do: messages
+
+  defp take_messages(messages, limit) when is_integer(limit) and limit >= 0,
+    do: Enum.take(messages, limit)
+
+  defp take_messages(messages, _invalid_limit), do: Enum.take(messages, 50)
 
   defp latest_message_timestamp(messages) when is_list(messages) do
     Enum.find_value(messages, fn
