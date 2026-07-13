@@ -58,7 +58,7 @@ defmodule ExWapp.Session.Outbound.Fanout do
     prekey_bundles = if is_map(prekey_bundles), do: prekey_bundles, else: %{}
 
     {recipient_targets_hint, recipient_evictions} =
-      finalize_soft_targets(
+      resolve_soft_targets(
         signal_sessions,
         prekey_bundles,
         Map.get(hints, :recipient_devices, []),
@@ -80,7 +80,7 @@ defmodule ExWapp.Session.Outbound.Fanout do
     own_sender_jid = Map.get(hints, :own_identity_jid, own_base_jid)
 
     {own_targets_hint, own_evictions} =
-      finalize_soft_targets(
+      resolve_soft_targets(
         signal_sessions,
         prekey_bundles,
         Map.get(hints, :own_devices, []),
@@ -137,20 +137,29 @@ defmodule ExWapp.Session.Outbound.Fanout do
     destination_user != "" and MapSet.member?(own_user_parts, destination_user)
   end
 
-  @spec finalize_soft_targets(
+  @doc """
+  Resolves live and cached target candidates without applying cache effects.
+
+  The second tuple element contains cached targets that the caller should
+  evict. Returning that decision keeps persistence outside this module.
+  """
+  @spec resolve_soft_targets(
           SessionStore.t() | nil,
           term(),
           term(),
           term(),
-          map()
+          term()
         ) :: {[String.t()], [String.t()]}
-  defp finalize_soft_targets(
-         signal_sessions,
-         prekey_bundles,
-         live_targets,
-         cached_targets,
-         lid_mapping
-       ) do
+  def resolve_soft_targets(
+        signal_sessions,
+        prekey_bundles,
+        live_targets,
+        cached_targets,
+        lid_mapping
+      ) do
+    prekey_bundles = if is_map(prekey_bundles), do: prekey_bundles, else: %{}
+    lid_mapping = if is_map(lid_mapping), do: lid_mapping, else: %{}
+
     if SessionStore.store?(signal_sessions) do
       live_targets = JIDUtils.normalize_target_list(live_targets)
       cached_targets = JIDUtils.normalize_target_list(cached_targets)
