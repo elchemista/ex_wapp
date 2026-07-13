@@ -381,6 +381,31 @@ defmodule ExWappTest do
       GenServer.stop(session)
     end
 
+    test "get_messages supports pagination and all locally retained messages" do
+      {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
+      jid = "999000111@s.whatsapp.net"
+
+      for {id, timestamp} <- [{"m1", 1}, {"m2", 2}, {"m3", 3}] do
+        :ok =
+          ExWapp.Chat.add_message(session, jid, %{
+            id: id,
+            from_me: false,
+            timestamp: timestamp,
+            text: id,
+            status: :received,
+            participant: nil,
+            raw: nil
+          })
+      end
+
+      assert [%{id: "m2"}, %{id: "m1"}] =
+               ExWapp.get_messages(session, jid, limit: 2, offset: 1)
+
+      assert Enum.map(ExWapp.all_messages(session, jid), & &1.id) == ["m3", "m2", "m1"]
+
+      GenServer.stop(session)
+    end
+
     test "list_groups returns only group chats" do
       {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
 
