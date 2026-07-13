@@ -1,9 +1,13 @@
 defmodule ExWapp.Transport do
   @moduledoc """
-  Behaviour for WhatsApp transport adapters.
+  Behaviour for wire-level WhatsApp protocol transports.
 
-  A transport adapter owns the socket connection and raw frame exchange.
-  `ExWapp.Conn` is the default implementation.
+  A protocol transport owns socket lifecycle and raw node/frame exchange below
+  the session engine. It must not build high-level message types or bypass
+  Signal/fanout. `ExWapp.Conn` is the production implementation.
+
+  Do not confuse this layer with `ExWapp.Client.Transport`, whose historical
+  name describes a high-level client runtime adapter.
   """
 
   @type wa_node :: term()
