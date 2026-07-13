@@ -70,8 +70,10 @@ dei message node in `ExWapp.Session.MessageNode`.
 
 Estrarre gradualmente moduli interni, senza dividerli per tipo di messaggio:
 
-- [ ] `Outbound.Direct`: orchestrazione DM/self-chat.
-- [ ] `Outbound.Group`: sender-key e distribuzione gruppi.
+- [x] `Outbound.Direct`: orchestrazione DM/self-chat.
+  - USync, prekey IQ, cifratura, persistenza e send restano nel worker come effetti.
+- [x] `Outbound.Group`: sender-key e distribuzione gruppi.
+  - Query/receive group-info, retry, persistenza e send restano nel worker come effetti.
 - [x] `Outbound.DeviceDiscovery`: USync e cache device.
 - [x] `Outbound.Prekeys`: recupero bundle e creazione sessioni.
   - [x] Selezione target, bundle mancanti e bootstrap sessioni Signal.
