@@ -56,6 +56,7 @@ defmodule ExWapp.Session.Outbound.IQRequestsTest do
     assert_receive {:outbound_iq, %Binary.Node{tag: "iq"}}
   end
 
+  @spec failing_send_node(pid()) :: IQRequests.send_node_fun()
   defp failing_send_node(test_pid) do
     fn node ->
       send(test_pid, {:outbound_iq, node})
