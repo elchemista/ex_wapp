@@ -50,9 +50,7 @@ defmodule ExWapp.Session.Supervisor do
   @registry ExWapp.Session.Registry
   @supervisor __MODULE__
 
-  # ============================================================================
-  # Supervisor API
-  # ============================================================================
+  # Supervisor lifecycle
 
   @doc """
   Starts the session supervisor.
@@ -81,9 +79,7 @@ defmodule ExWapp.Session.Supervisor do
     }
   end
 
-  # ============================================================================
-  # Session Management
-  # ============================================================================
+  # Starting and locating sessions
 
   @doc """
   Starts a new session with the given ID.
