@@ -24,7 +24,9 @@ defmodule ExWapp.Store.Ets do
 
   ## Implementation Notes
 
-  - ETS table is created with `:public` access to allow cross-process reads
+  - ETS tables use `:public` access to allow cross-process reads
+  - Chat metadata and message payloads use separate tables
+  - Message streams traverse the ordered message table lazily by JID and cursor
   - Data is persisted synchronously on each `persist/2` call
   - File is loaded on `new/1` if it exists
   """
