@@ -193,7 +193,8 @@ defmodule ExWapp.Chat do
   @doc """
   Merges a batch of messages into a chat, deduplicating by message ID.
   """
-  @spec merge_messages(target(), String.t() | JID.t(), [message()]) ::\n          :ok | {:error, term()}
+  @spec merge_messages(target(), String.t() | JID.t(), [message()]) ::
+          :ok | {:error, term()}
   def merge_messages(target, jid, messages) when is_list(messages) do
     jid_str = normalize_jid(jid)
     chat = get_or_create(target, jid_str)
@@ -232,7 +233,8 @@ defmodule ExWapp.Chat do
   @doc """
   Adds a message to a chat.
   """
-  @spec add_message(target(), String.t() | JID.t(), message()) ::\n          :ok | {:error, term()}
+  @spec add_message(target(), String.t() | JID.t(), message()) ::
+          :ok | {:error, term()}
   def add_message(target, jid, message) do
     jid_str = normalize_jid(jid)
     chat = get_or_create(target, jid_str)
@@ -273,7 +275,8 @@ defmodule ExWapp.Chat do
   @doc """
   Updates a message status.
   """
-  @spec update_message_status(target(), String.t() | JID.t(), String.t(), message_status()) ::\n          :ok | {:error, term()}
+  @spec update_message_status(target(), String.t() | JID.t(), String.t(), message_status()) ::
+          :ok | {:error, term()}
   def update_message_status(target, jid, message_id, status) do
     case resolve_store(target) do
       nil -> :ok
@@ -286,7 +289,8 @@ defmodule ExWapp.Chat do
 
   Useful for ACK nodes that do not provide a chat JID we can trust.
   """
-  @spec update_message_status_by_id(target(), String.t(), message_status()) ::\n          :ok | {:error, term()}
+  @spec update_message_status_by_id(target(), String.t(), message_status()) ::
+          :ok | {:error, term()}
   def update_message_status_by_id(target, message_id, status) when is_binary(message_id) do
     case resolve_store(target) do
       nil -> :ok
@@ -315,7 +319,8 @@ defmodule ExWapp.Chat do
   @doc """
   Deletes selected local messages after they have been persisted elsewhere.
   """
-  @spec delete_messages(target(), String.t() | JID.t(), [String.t()]) ::\n          :ok | {:error, term()}
+  @spec delete_messages(target(), String.t() | JID.t(), [String.t()]) ::
+          :ok | {:error, term()}
   def delete_messages(target, jid, message_ids) when is_list(message_ids) do
     case resolve_store(target) do
       nil -> :ok
