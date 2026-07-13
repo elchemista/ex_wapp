@@ -240,10 +240,8 @@ defmodule ExWapp.Session.Outbound.Direct do
       content: participant_nodes
     }
 
-    content =
-      [participants_node] ++
-        identity_content(store, include_identity)
-        |> Account.maybe_append_tctoken(strip_device(jid), store)
+    content = [participants_node] ++ identity_content(store, include_identity)
+    content = Account.maybe_append_tctoken(content, strip_device(jid), store)
 
     %Binary.Node{tag: "message", attrs: attrs, content: content}
   end
