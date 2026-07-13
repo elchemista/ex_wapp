@@ -257,16 +257,24 @@ defmodule ExWapp.Message.Handler.Wire do
   defp extract_wrapped_supported_content(message_payload, depth) do
     wrapper_fields = [31, 37, 40, 53, 55, 59, 74]
 
-    Enum.find_value(wrapper_fields, fn field ->
-      with {:ok, wrapper} <- find_length_delimited_field(message_payload, field),
-           nested_field <- if(field == 31, do: 2, else: 1),
-           {:ok, nested_message} <- find_length_delimited_field(wrapper, nested_field) do
-        extract_supported_content_recursive(nested_message, depth + 1)
-      else
-        _ -> nil
-      end
-    end)
+    Enum.find_value(
+      wrapper_fields,
+      &extract_wrapped_supported_content(message_payload, depth, &1)
+    )
   end
+
+  defp extract_wrapped_supported_content(message_payload, depth, field) do
+    with {:ok, wrapper} <- find_length_delimited_field(message_payload, field),
+         {:ok, nested_message} <-
+           find_length_delimited_field(wrapper, nested_message_field(field)) do
+      extract_supported_content_recursive(nested_message, depth + 1)
+    else
+      _ -> nil
+    end
+  end
+
+  defp nested_message_field(31), do: 2
+  defp nested_message_field(_field), do: 1
 
   defp build_media_ref(:image, payload) do
     %{

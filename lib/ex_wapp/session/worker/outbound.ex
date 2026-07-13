@@ -1467,18 +1467,9 @@ defmodule ExWapp.Session.Worker.Outbound do
       )
 
     own_targets =
-      if Map.has_key?(hints, :own_devices) or Map.has_key?(hints, :own_cached_devices) do
-        own_targets_hint
-        |> JIDUtils.normalize_target_list()
-        |> Enum.reject(&current_device_target?(&1, own_device_id))
-      else
-        Targets.resolve_own_device_targets(
-          signal_sessions,
-          own_sender_jid,
-          own_device_id,
-          own_targets_hint
-        )
-      end
+      own_targets_hint
+      |> JIDUtils.normalize_target_list()
+      |> Enum.reject(&current_device_target?(&1, own_device_id))
 
     self_chat? = self_chat_destination?(store, jid, own_sender_jid)
 
@@ -1982,7 +1973,7 @@ defmodule ExWapp.Session.Worker.Outbound do
   @spec maybe_put_encrypted_mediatype(Binary.Node.t(), term()) :: Binary.Node.t()
   defp maybe_put_encrypted_mediatype(%Binary.Node{} = node, mediatype)
        when is_binary(mediatype) and mediatype != "" do
-    content = node.content || []
+    content = node.content
 
     updated_content =
       if direct_encrypted_content?(content) do
@@ -1996,12 +1987,10 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   defp maybe_put_encrypted_mediatype(%Binary.Node{} = node, _mediatype), do: node
 
-  @spec direct_encrypted_content?(term()) :: boolean()
-  defp direct_encrypted_content?(content) when is_list(content) do
+  @spec direct_encrypted_content?([term()]) :: boolean()
+  defp direct_encrypted_content?(content) do
     Enum.any?(content, &match?(%Binary.Node{tag: "enc"}, &1))
   end
-
-  defp direct_encrypted_content?(_content), do: false
 
   @spec put_direct_encrypted_mediatype(term(), String.t()) :: term()
   defp put_direct_encrypted_mediatype(%Binary.Node{tag: "enc"} = node, mediatype) do
@@ -2037,7 +2026,7 @@ defmodule ExWapp.Session.Worker.Outbound do
   @spec append_additional_message_nodes(Binary.Node.t(), term()) :: Binary.Node.t()
   defp append_additional_message_nodes(%Binary.Node{} = node, additional_nodes)
        when is_list(additional_nodes) do
-    %{node | content: (node.content || []) ++ additional_nodes}
+    %{node | content: node.content ++ additional_nodes}
   end
 
   defp append_additional_message_nodes(%Binary.Node{} = node, _additional_nodes), do: node

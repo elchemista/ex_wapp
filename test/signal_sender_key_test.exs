@@ -139,7 +139,7 @@ defmodule ExWapp.SignalSenderKeyTest do
 
     group_jid = "120363043214477337@g.us"
     sender_jid = "199316597694686@lid"
-    receiver_jid = "33625382846503@lid"
+    receiver_jid = "19995550202@lid"
 
     assert {:ok, distribution_payload} =
              SenderKey.create_outbound_distribution_message(sender_store, group_jid, sender_jid)

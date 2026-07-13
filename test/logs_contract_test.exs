@@ -15,7 +15,7 @@ defmodule ExWapp.LogsContractTest do
     {:encrypted, ~r/\[ENCRYPTION\] Encrypted!/},
     {:sent_message, ~r/\[SEND\] Sent encrypted message/},
     {:message_node, ~r/Sending node: <message /},
-    {:ack_message, ~r/\[ACK\] id=.*class=message/}
+    {:ack_message, ~r/\[ACK\].*(?:class=message.*id=|id=.*class=message)/}
   ]
 
   @simulated_send_call_log """
@@ -27,7 +27,7 @@ defmodule ExWapp.LogsContractTest do
   [ENCRYPTION] Encrypted! type=prekey, size=217
   [SEND] Sent encrypted message to <JID_BASE> id=<MESSAGE_ID>
   Sending node: <message id="<MESSAGE_ID>" to="<JID_BASE>" type="text"><participants>...</participants></message>
-  [ACK] id=<MESSAGE_ID> class=message type= from=<JID_BASE> to=
+  [ACK] class=message type= id=<MESSAGE_ID> from=<JID_BASE> to=
   """
 
   test "tracked source/docs/tests do not leak sensitive phone identifiers from logs" do
