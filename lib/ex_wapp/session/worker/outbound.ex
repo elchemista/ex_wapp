@@ -1482,6 +1482,30 @@ defmodule ExWapp.Session.Worker.Outbound do
     )
   end
 
+  @spec finalize_soft_targets(term(), term(), term(), term(), term()) :: [String.t()]
+  defp finalize_soft_targets(
+         store,
+         signal_sessions,
+         prekey_bundles,
+         live_targets,
+         cached_targets
+       ) do
+    {targets, unreachable_cached_targets} =
+      Fanout.resolve_soft_targets(
+        signal_sessions,
+        prekey_bundles,
+        live_targets,
+        cached_targets,
+        Account.load_lid_mapping(store)
+      )
+
+    if unreachable_cached_targets != [] do
+      DeviceCache.evict_devices(store, unreachable_cached_targets)
+    end
+
+    targets
+  end
+
   defp send_encrypted_node(state, conn, store, jid, message_id, node, payloads) do
     case send_transport_node(state, conn, node) do
       :ok ->
