@@ -60,19 +60,39 @@ defmodule ExWapp.ClientApiTest do
     @impl true
     def get_messages(client, jid, opts) do
       send(client.metadata.test_pid, {:adapter_get_messages, jid, opts})
+      {:ok, [stored_message()]}
+    end
 
-      {:ok,
-       [
-         %{
-           id: "m1",
-           from_me: false,
-           timestamp: 1,
-           text: "stored",
-           status: :received,
-           participant: nil,
-           raw: nil
-         }
-       ]}
+    @impl true
+    def stream_messages(client, jid, opts) do
+      test_pid = client.metadata.test_pid
+      send(test_pid, {:adapter_stream_messages, jid, opts})
+
+      stream =
+        Stream.map([stored_message()], fn message ->
+          send(test_pid, {:adapter_stream_item, message.id})
+          message
+        end)
+
+      {:ok, stream}
+    end
+
+    @impl true
+    def delete_messages(client, jid, message_ids) do
+      send(client.metadata.test_pid, {:adapter_delete_messages, jid, message_ids})
+      {:ok, client}
+    end
+
+    defp stored_message do
+      %{
+        id: "m1",
+        from_me: false,
+        timestamp: 1,
+        text: "stored",
+        status: :received,
+        participant: nil,
+        raw: nil
+      }
     end
   end
 
@@ -184,8 +204,15 @@ defmodule ExWapp.ClientApiTest do
     assert {:ok, [%{id: "m1"}]} = ExWapp.get_messages(client, jid, limit: 10, offset: 5)
     assert_receive {:adapter_get_messages, ^jid, [limit: 10, offset: 5]}
 
-    assert {:ok, [%{id: "m1"}]} = ExWapp.all_messages(client, jid)
-    assert_receive {:adapter_get_messages, ^jid, [limit: :all]}
+    assert {:ok, stream} = ExWapp.all_messages(client, jid)
+    assert_receive {:adapter_stream_messages, ^jid, [limit: :all]}
+    refute_receive {:adapter_stream_item, _}
+
+    assert [%{id: "m1"}] = Enum.to_list(stream)
+    assert_receive {:adapter_stream_item, "m1"}
+
+    assert {:ok, _client} = ExWapp.delete_messages(client, jid, ["m1"])
+    assert_receive {:adapter_delete_messages, ^jid, ["m1"]}
   end
 
   test "send_image/4 and send_audio/4 build high-level media messages" do
