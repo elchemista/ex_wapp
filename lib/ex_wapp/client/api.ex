@@ -399,15 +399,22 @@ defmodule ExWapp.Client.API do
 
   @spec client_mutation(Client.t(), atom(), [term()], atom()) :: mutation_result()
   defp client_mutation(%Client{} = client, function, args, event_type) do
-    case apply(client.transport, function, [client | args]) do
-      {:ok, %Client{} = updated_client} ->
-        finish_client_mutation(updated_client, function, event_type)
+    arity = length(args) + 1
 
-      :ok ->
-        finish_client_mutation(client, function, event_type)
+    if Code.ensure_loaded?(client.transport) and
+         function_exported?(client.transport, function, arity) do
+      case apply(client.transport, function, [client | args]) do
+        {:ok, %Client{} = updated_client} ->
+          finish_client_mutation(updated_client, function, event_type)
 
-      {:error, reason} ->
-        client_error(client, function, :transport, reason)
+        :ok ->
+          finish_client_mutation(client, function, event_type)
+
+        {:error, reason} ->
+          client_error(client, function, :transport, reason)
+      end
+    else
+      client_error(client, function, :transport, :unsupported_operation)
     end
   end
 
