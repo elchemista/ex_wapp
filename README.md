@@ -536,15 +536,28 @@ Contacts and chats are exposed through the runtime-neutral client facade:
 {:ok, groups} = ExWapp.list_groups(client)
 {:ok, group} = ExWapp.get_chat(client, "123456789@g.us")
 
-# Results are newest first.
+# Materialized pages are newest first.
 {:ok, page} = ExWapp.get_messages(client, group.jid, limit: 100, offset: 0)
-{:ok, all_local} = ExWapp.all_messages(client, group.jid)
+
+# Complete local history is a lazy, oldest-first stream.
+{:ok, history} = ExWapp.all_messages(client, group.jid)
+
+history
+|> Stream.chunk_every(250)
+|> Stream.each(&MyApp.MessageRepo.upsert_batch(group.jid, &1))
+|> Stream.run()
 ```
 
-`get_messages/3` supports integer pagination and `limit: :all`.
-`all_messages/2` is the explicit convenience form. Both read messages already
-present in the configured store; they do not start a remote history download.
-The built-in chat store retains the newest 1,000 messages per chat.
+`get_messages/3` materializes a bounded page. `stream_messages/3` and
+`all_messages/2` return an enumerable backed by the configured message store;
+they do not first load a message list from `%ExWapp.Chat{}`. The stream is
+oldest first by default and has no fixed retention cap. These APIs read local
+history only and do not start a remote history download.
+
+Chat structs contain conversation metadata only. Message payloads are indexed
+separately by chat JID, timestamp, and message ID. Built-in stores implement
+that index with ETS; a custom store can implement the same callbacks with a
+database cursor.
 
 Implementation notes:
 
@@ -565,21 +578,42 @@ merged into the configured store. History notifications that require a
 separate blob download are currently detected and logged but are not imported. `ExWapp.sync_contacts/1` is an explicit contact refresh; it
 is not a command to download an account's complete message history.
 
-WhatsApp does not expose a reliable public command here for fetching every
-historical message on demand. Therefore:
+WhatsApp's user-facing "Export chat" action is not a stable WhatsApp Web
+protocol endpoint that a linked-device library can invoke. ExWapp therefore
+keeps local-history iteration separate from remote history synchronization:
 
-- `ExWapp.all_messages/2` means all messages currently retained locally
-- a wrapper that needs durable, unbounded history should upsert inbound
-  messages into its database as they arrive
-- the local result can be used as a bootstrap or catch-up source
+- `ExWapp.all_messages/2` streams everything currently retained locally
+- `ExWapp.Session.message_stream/1` delivers future inbound messages live
+- a wrapper should upsert both sources into its own database
+- history notifications requiring a separate blob download still need protocol
+  support before they can enter the local message store
+
+The built-in store has no automatic message-count cap. After a database
+transaction succeeds, a wrapper may explicitly delete only the imported IDs:
 
 ```elixir
-{:ok, messages} = ExWapp.all_messages(client, jid)
+{:ok, history} = ExWapp.all_messages(client, jid)
 
-Enum.each(messages, fn message ->
-  MyApp.MessageRepo.upsert(jid, message)
+history
+|> Stream.chunk_every(250)
+|> Enum.reduce_while(client, fn batch, current_client ->
+  case MyApp.MessageRepo.upsert_batch(jid, batch) do
+    :ok ->
+      ids = Enum.map(batch, & &1.id)
+
+      case ExWapp.delete_messages(current_client, jid, ids) do
+        {:ok, updated_client} -> {:cont, updated_client}
+        {:error, error, failed_client} -> {:halt, {:error, error, failed_client}}
+      end
+
+    {:error, reason} ->
+      {:halt, {:error, reason, current_client}}
+  end
 end)
 ```
+
+Deletion is explicit rather than automatic: a failed wrapper write must never
+cause ExWapp to discard the only local copy.
 
 For a complete backup of the built-in session's current local state:
 
@@ -589,9 +623,12 @@ session = client.metadata.session_pid
   ExWapp.Session.export_snapshot(session)
 
 local_chats = Map.get(data, :chats, %{})
+local_messages = Map.get(data, :chat_messages, %{})
 ```
 
-The snapshot is local state, not a remote resynchronization. Continue consuming
+Snapshot export is intentionally eager and materializes `:chat_messages`;
+normal history processing should use the stream API instead. The snapshot is
+local state, not a remote resynchronization. Continue consuming
 `ExWapp.Session.message_stream/1` or high-level inbound events for new
 messages after the snapshot.
 
@@ -703,8 +740,9 @@ Server-synced app state:
 
 Storage:
 
-- `ExWapp.Store`: store behaviour and adapter entry point
+- `ExWapp.Store`: session-state and cursor-based message-store contract
 - `ExWapp.Store.Ets`, `ExWapp.Store.Memory`: built-in stores
+- `ExWapp.Store.MessageTable`: indexed message backend used by built-in stores
 - `ExWapp.Store.Codec`: on-disk codec helpers for persisted store data
 
 ## Diagnostics
