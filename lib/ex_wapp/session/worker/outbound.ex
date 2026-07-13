@@ -1168,7 +1168,7 @@ defmodule ExWapp.Session.Worker.Outbound do
         lid_mapping = Account.load_lid_mapping(store)
 
         if local_identity do
-          create_sessions_for_bundles(
+          Prekeys.create_sessions_for_bundles(
             signal_sessions,
             requested_jid,
             bundles,
@@ -1377,146 +1377,6 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
-  defp create_sessions_for_bundles(
-         signal_sessions,
-         requested_jid,
-         bundles,
-         local_identity,
-         local_reg_id,
-         lid_mapping
-       ) do
-    requested_jid = normalize_jid_for_signal(requested_jid)
-
-    bundles
-    |> Enum.reduce_while({:ok, signal_sessions, %{}}, fn bundle, acc ->
-      create_session_for_bundle(
-        bundle,
-        requested_jid,
-        acc,
-        local_identity,
-        local_reg_id,
-        lid_mapping
-      )
-    end)
-    |> finalize_bundle_session_creation()
-  end
-
-  defp create_session_for_bundle(
-         bundle,
-         requested_jid,
-         {:ok, sessions, bundle_map},
-         local_identity,
-         local_reg_id,
-         lid_mapping
-       ) do
-    {device_jid, signal_jid} = resolve_bundle_jids(bundle, requested_jid, lid_mapping)
-
-    if device_jid == "" do
-      {:halt, {:error, :invalid_device_jid}}
-    else
-      Logger.debug(
-        "[PREKEY] Creating session for wire_jid=#{device_jid} signal_jid=#{signal_jid} (request_jid=#{requested_jid})"
-      )
-
-      case SessionStore.get_or_create_session(
-             sessions,
-             signal_jid,
-             local_identity,
-             bundle,
-             local_reg_id,
-             force: true
-           ) do
-        {:ok, created_session, base_key, updated_sessions} ->
-          {:cont,
-           finalize_created_bundle_session(
-             bundle,
-             requested_jid,
-             signal_jid,
-             device_jid,
-             created_session,
-             base_key,
-             updated_sessions,
-             bundle_map
-           )}
-
-        {:error, reason} ->
-          {:halt, {:error, {:session_create_failed, device_jid, reason}}}
-      end
-    end
-  end
-
-  defp resolve_bundle_jids(bundle, requested_jid, lid_mapping) do
-    device_jid =
-      bundle
-      |> Map.get(:device_jid, requested_jid)
-      |> normalize_jid_with_device()
-      |> case do
-        "" -> requested_jid
-        jid -> jid
-      end
-
-    signal_jid =
-      device_jid
-      |> JIDUtils.resolve_signal_encryption_jid(lid_mapping)
-      |> case do
-        "" -> device_jid
-        jid -> jid
-      end
-
-    {device_jid, signal_jid}
-  end
-
-  defp finalize_created_bundle_session(
-         bundle,
-         requested_jid,
-         signal_jid,
-         device_jid,
-         created_session,
-         base_key,
-         updated_sessions,
-         bundle_map
-       ) do
-    updated_sessions =
-      updated_sessions
-      |> maybe_alias_signal_session(requested_jid, signal_jid, created_session)
-      |> maybe_alias_signal_session(device_jid, signal_jid, created_session)
-
-    Logger.debug(
-      "[PREKEY] Session ready for wire_jid=#{device_jid} signal_jid=#{signal_jid}, base_key=#{if base_key, do: byte_size(base_key), else: "nil"} bytes"
-    )
-
-    bundle_with_info =
-      bundle
-      |> Map.put(:base_key, base_key)
-      |> Map.put(:device_jid, device_jid)
-      |> Map.put(:signal_jid, signal_jid)
-
-    bundle_map =
-      bundle_map
-      |> Map.put(device_jid, bundle_with_info)
-      |> maybe_put_bundle_alias(signal_jid, device_jid, bundle_with_info)
-
-    {:ok, updated_sessions, bundle_map}
-  end
-
-  defp finalize_bundle_session_creation({:ok, updated_sessions, bundle_map})
-       when map_size(bundle_map) > 0,
-       do: {:ok, updated_sessions, bundle_map}
-
-  defp finalize_bundle_session_creation({:ok, _updated_sessions, _bundle_map}),
-    do: {:error, :no_sessions_created}
-
-  defp finalize_bundle_session_creation({:error, reason}), do: {:error, reason}
-
-  defp maybe_put_bundle_alias(bundle_map, alias_jid, source_jid, bundle)
-       when is_binary(alias_jid) and is_binary(source_jid) and alias_jid != "" and
-              source_jid != "" and
-              alias_jid != source_jid do
-    Map.put(bundle_map, alias_jid, bundle)
-  end
-
-  defp maybe_put_bundle_alias(bundle_map, _alias_jid, _source_jid, _bundle), do: bundle_map
-
   defp current_device_target?(jid, own_device_id)
        when is_integer(own_device_id) and own_device_id >= 0,
        do: JIDUtils.current_device_target?(jid, own_device_id)
@@ -1694,19 +1554,6 @@ defmodule ExWapp.Session.Worker.Outbound do
           :not_found ->
             signal_sessions
         end
-    end
-  end
-
-  defp maybe_alias_signal_session(signal_sessions, requested_jid, device_jid, session) do
-    requested_jid = normalize_jid_with_device(requested_jid)
-    device_jid = normalize_jid_with_device(device_jid)
-
-    if requested_jid != "" and device_jid != "" and requested_jid != device_jid and
-         not SessionStore.has_session?(signal_sessions, requested_jid) do
-      Logger.debug("[PREKEY] Aliasing session #{requested_jid} -> #{device_jid}")
-      SessionStore.put_session(signal_sessions, requested_jid, session)
-    else
-      signal_sessions
     end
   end
 
