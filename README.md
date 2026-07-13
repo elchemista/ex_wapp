@@ -112,7 +112,7 @@ Common functions:
 - media download: `download_media/3`
 - local data access: `list_contacts/1`, `get_contact/2`, `sync_contacts/1`,
   `create_contact/3`, `delete_contact/2`, `list_chats/1`, `list_groups/1`,
-  `get_chat/2`
+  `get_chat/2`, `get_messages/3`, `all_messages/2`
 - diagnostics: `status/1`, `last_error/1`, `diagnostics/1`
 
 Example:
@@ -136,6 +136,8 @@ client =
   )
 
 {:ok, chats} = ExWapp.list_chats(client)
+{:ok, recent_messages} =
+  ExWapp.get_messages(client, "393XXXXXXXXX@s.whatsapp.net", limit: 50)
 status = ExWapp.status(client)
 diag = ExWapp.diagnostics(client)
 ```
@@ -322,24 +324,30 @@ High-level operations also log at the client boundary:
 - `info` when it succeeds
 - `error` when it fails or raises
 
-## Wrapper Module
+## Application Wrapper
 
-You can define a small application wrapper with default adapters:
+`ExWapp.Client` is deliberately data-only and does not generate wrapper
+modules. Keep the client in a process owned by your application and expose the
+small API your domain needs:
 
 ```elixir
 defmodule MyApp.WhatsApp do
-  use ExWapp.Client,
-    store: {ExWapp.Store.Ets, path: "/tmp/ex_wapp/account_1.etf"},
-    transport: MyApp.WhatsAppTransport,
-    events: MyApp.WhatsAppEvents
+  def new(account_id) do
+    ExWapp.new(
+      session_id: account_id,
+      store: {ExWapp.Store.Ets, path: "/tmp/ex_wapp/#{account_id}.etf"},
+      transport: ExWapp.Client.Transport.Session,
+      events: MyApp.WhatsAppEvents
+    )
+  end
+
+  def send_text(client, jid, text) do
+    ExWapp.send_message(client, to: jid, text: text)
+  end
+
+  def all_messages(client, jid), do: ExWapp.all_messages(client, jid)
 end
-
-client = MyApp.WhatsApp.new(session_id: "account_1")
-{:ok, client} = MyApp.WhatsApp.connect(client)
-{:ok, client, id} = MyApp.WhatsApp.send_message(client, to: jid, text: "hello")
 ```
-
-The macro only generates thin forwarding helpers. It does not start processes.
 
 ## GenServer Example
 
@@ -527,7 +535,16 @@ Contacts and chats are exposed through the runtime-neutral client facade:
 {:ok, chats} = ExWapp.list_chats(client)
 {:ok, groups} = ExWapp.list_groups(client)
 {:ok, group} = ExWapp.get_chat(client, "123456789@g.us")
+
+# Results are newest first.
+{:ok, page} = ExWapp.get_messages(client, group.jid, limit: 100, offset: 0)
+{:ok, all_local} = ExWapp.all_messages(client, group.jid)
 ```
+
+`get_messages/3` supports integer pagination and `limit: :all`.
+`all_messages/2` is the explicit convenience form. Both read messages already
+present in the configured store; they do not start a remote history download.
+The built-in chat store retains the newest 1,000 messages per chat.
 
 Implementation notes:
 
@@ -538,6 +555,45 @@ Implementation notes:
 
 When you use the built-in session transport, these modules read and write the
 configured store directly, so they are useful both at runtime and in tests.
+
+### Synchronization and wrapper persistence
+
+After authentication, the built-in session automatically runs app-state sync
+and consumes supported inline history-sync payloads delivered by WhatsApp.
+Contacts, chat metadata, and history messages found in those payloads are
+merged into the configured store. History notifications that require a
+separate blob download are currently detected and logged but are not imported. `ExWapp.sync_contacts/1` is an explicit contact refresh; it
+is not a command to download an account's complete message history.
+
+WhatsApp does not expose a reliable public command here for fetching every
+historical message on demand. Therefore:
+
+- `ExWapp.all_messages/2` means all messages currently retained locally
+- a wrapper that needs durable, unbounded history should upsert inbound
+  messages into its database as they arrive
+- the local result can be used as a bootstrap or catch-up source
+
+```elixir
+{:ok, messages} = ExWapp.all_messages(client, jid)
+
+Enum.each(messages, fn message ->
+  MyApp.MessageRepo.upsert(jid, message)
+end)
+```
+
+For a complete backup of the built-in session's current local state:
+
+```elixir
+session = client.metadata.session_pid
+{:ok, %{data: data, blob: blob, checksum: checksum}} =
+  ExWapp.Session.export_snapshot(session)
+
+local_chats = Map.get(data, :chats, %{})
+```
+
+The snapshot is local state, not a remote resynchronization. Continue consuming
+`ExWapp.Session.message_stream/1` or high-level inbound events for new
+messages after the snapshot.
 
 ## How It Works
 
@@ -586,7 +642,7 @@ Use this section as a map of the current codebase.
 Core public entry points:
 
 - `ExWapp`: runtime-neutral client facade
-- `ExWapp.Client`: client struct and `use ExWapp.Client` wrapper macro
+- `ExWapp.Client`: runtime-neutral client state struct
 - `ExWapp.Session`: direct built-in session API
 - `ExWapp.Message`: user-facing outbound message builders
 - `ExWapp.Media`: user-facing media helpers
