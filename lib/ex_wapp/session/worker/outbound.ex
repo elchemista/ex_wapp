@@ -578,35 +578,17 @@ defmodule ExWapp.Session.Worker.Outbound do
     )
   end
 
-  defp fetch_group_prekeys(_state, [], signal_sessions, _context), do: {signal_sessions, %{}}
-
   defp fetch_group_prekeys(state, devices_needing_prekeys, signal_sessions, context) do
-    Logger.debug(
-      "[SEND] Fetching group prekeys for #{length(devices_needing_prekeys)} devices: #{inspect(devices_needing_prekeys)}"
-    )
-
-    {updated_sessions, prekey_bundles} =
-      case fetch_prekeys_batch_worker(state, devices_needing_prekeys, signal_sessions) do
-        {:ok, sessions, bundles} ->
-          {sessions, bundles}
-
-        {:error, reason} ->
-          Logger.warning(
-            "[SEND] Group batch prekey fetch failed: #{inspect(reason)}, retrying individually"
-          )
-
-          case fetch_prekeys_individually_worker(state, devices_needing_prekeys, signal_sessions) do
-            {:ok, sessions, bundles} -> {sessions, bundles}
-            {:error, fallback_reason} -> {{:error, fallback_reason}, %{}}
-          end
-      end
-
-    retry_missing_prekeys_worker(
-      state,
+    Prekeys.fetch_group(
       devices_needing_prekeys,
-      updated_sessions,
-      prekey_bundles,
-      context
+      signal_sessions,
+      context,
+      fn target_jids, current_sessions ->
+        fetch_prekeys_batch_worker(state, target_jids, current_sessions)
+      end,
+      fn target_jid, current_sessions ->
+        fetch_prekeys_worker(state, target_jid, current_sessions)
+      end
     )
   end
 
@@ -832,15 +814,16 @@ defmodule ExWapp.Session.Worker.Outbound do
       end
 
     {updated_sessions, prekey_bundles} =
-      fetch_needed_prekeys(state, devices_needing_prekeys, signal_sessions, recipient_base_jid)
-
-    {updated_sessions, prekey_bundles} =
-      retry_missing_prekeys_worker(
-        state,
+      Prekeys.fetch_direct(
         devices_needing_prekeys,
-        updated_sessions,
-        prekey_bundles,
-        "dm"
+        signal_sessions,
+        recipient_base_jid,
+        fn target_jids, current_sessions ->
+          fetch_prekeys_batch_worker(state, target_jids, current_sessions)
+        end,
+        fn target_jid, current_sessions ->
+          fetch_prekeys_worker(state, target_jid, current_sessions)
+        end
       )
 
     case updated_sessions do
@@ -986,29 +969,6 @@ defmodule ExWapp.Session.Worker.Outbound do
     )
   end
 
-  defp fetch_needed_prekeys(_state, [], signal_sessions, _recipient_base_jid) do
-    {signal_sessions, %{}}
-  end
-
-  defp fetch_needed_prekeys(state, devices_needing_prekeys, signal_sessions, recipient_base_jid) do
-    Logger.debug(
-      "[SEND] Fetching prekeys for #{length(devices_needing_prekeys)} devices: #{inspect(devices_needing_prekeys)}"
-    )
-
-    case fetch_prekeys_batch_worker(state, devices_needing_prekeys, signal_sessions) do
-      {:ok, sessions, bundles} ->
-        {sessions, bundles}
-
-      {:error, reason} ->
-        Logger.warning("[SEND] Batch prekey fetch failed: #{inspect(reason)}, trying individual")
-
-        case fetch_prekeys_worker(state, recipient_base_jid, signal_sessions) do
-          {:ok, sessions, bundles} -> {sessions, bundles}
-          {:error, reason2} -> {{:error, reason2}, %{}}
-        end
-    end
-  end
-
   # Fetch prekeys for multiple device JIDs in a single IQ request
   defp fetch_prekeys_batch_worker(
          %{conn: conn, store: store} = state,
@@ -1064,94 +1024,6 @@ defmodule ExWapp.Session.Worker.Outbound do
 
       error ->
         {:error, {:send_failed, error}}
-    end
-  end
-
-  defp fetch_prekeys_individually_worker(state, device_jids, signal_sessions)
-       when is_list(device_jids) do
-    Enum.reduce_while(device_jids, {:ok, signal_sessions, %{}}, fn device_jid,
-                                                                   {:ok, sessions, bundles} ->
-      case fetch_prekeys_worker(state, device_jid, sessions) do
-        {:ok, updated_sessions, fetched_bundles} ->
-          {:cont, {:ok, updated_sessions, Map.merge(bundles, fetched_bundles)}}
-
-        {:error, reason} ->
-          {:halt, {:error, {:prekey_fetch_failed, device_jid, reason}}}
-      end
-    end)
-  end
-
-  defp retry_missing_prekeys_worker(
-         _state,
-         _requested_device_jids,
-         {:error, _reason} = error,
-         _prekey_bundles,
-         _context
-       ),
-       do: {error, %{}}
-
-  defp retry_missing_prekeys_worker(
-         state,
-         requested_device_jids,
-         sessions,
-         prekey_bundles,
-         context
-       ) do
-    prekey_bundles = prekey_bundles || %{}
-
-    case SessionStore.store?(sessions) do
-      true ->
-        retry_missing_prekeys_from_store(
-          state,
-          requested_device_jids,
-          sessions,
-          prekey_bundles,
-          context
-        )
-
-      false ->
-        {sessions, prekey_bundles}
-    end
-  end
-
-  @spec retry_missing_prekeys_from_store(map(), [term()], term(), map(), term()) ::
-          {term(), map()}
-  defp retry_missing_prekeys_from_store(
-         state,
-         requested_device_jids,
-         sessions,
-         prekey_bundles,
-         context
-       ) do
-    missing =
-      requested_device_jids
-      |> Prekeys.missing_bundle_targets(prekey_bundles)
-      |> Enum.sort()
-
-    case missing do
-      [] ->
-        {sessions, prekey_bundles}
-
-      _ ->
-        fetch_missing_prekeys_individually(state, missing, sessions, prekey_bundles, context)
-    end
-  end
-
-  @spec fetch_missing_prekeys_individually(map(), [String.t()], term(), map(), term()) ::
-          {term(), map()}
-  defp fetch_missing_prekeys_individually(state, missing, sessions, prekey_bundles, context) do
-    Logger.warning(
-      "[SEND] Missing #{context} prekey bundles for #{length(missing)} device(s), retrying individually: #{inspect(missing)}"
-    )
-
-    case fetch_prekeys_individually_worker(state, missing, sessions) do
-      {:ok, retried_sessions, retried_bundles} ->
-        {retried_sessions, Map.merge(prekey_bundles, retried_bundles)}
-
-      {:error, reason} ->
-        Logger.warning("[SEND] Individual #{context} prekey retry failed: #{inspect(reason)}")
-
-        {sessions, prekey_bundles}
     end
   end
 
