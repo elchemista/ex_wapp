@@ -15,7 +15,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     MessageNode
   }
 
-  alias ExWapp.Session.Outbound.{DeviceDiscovery, Fanout}
+  alias ExWapp.Session.Outbound.{DeviceDiscovery, Fanout, Prekeys}
 
   @spec send_text_worker(pid(), map(), String.t(), iodata(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
@@ -547,6 +547,13 @@ defmodule ExWapp.Session.Worker.Outbound do
     |> MapSet.new()
   end
 
+  @spec find_group_devices_needing_prekeys(
+          [term()],
+          map(),
+          SessionStore.t(),
+          map(),
+          MapSet.t({String.t(), String.t()})
+        ) :: [String.t()]
   defp find_group_devices_needing_prekeys(
          distribution_targets,
          runtime_cfg,
@@ -554,29 +561,6 @@ defmodule ExWapp.Session.Worker.Outbound do
          lid_mapping,
          own_identity_set
        ) do
-    Enum.filter(distribution_targets, fn device_jid ->
-      group_target_needs_prekey?(
-        device_jid,
-        runtime_cfg,
-        signal_sessions,
-        lid_mapping,
-        own_identity_set
-      )
-    end)
-  end
-
-  defp group_target_needs_prekey?(
-         device_jid,
-         runtime_cfg,
-         signal_sessions,
-         lid_mapping,
-         own_identity_set
-       ) do
-    device_jid = normalize_jid_with_device(device_jid)
-    signal_jid = JIDUtils.resolve_signal_encryption_jid(device_jid, lid_mapping)
-    target_identity = JIDUtils.identity(device_jid)
-    now_ms = System.system_time(:millisecond)
-
     session_max_age_ms =
       Config.get(
         runtime_cfg || %{},
@@ -584,17 +568,14 @@ defmodule ExWapp.Session.Worker.Outbound do
         :timer.hours(12)
       )
 
-    # Pragmatic sync fix: always refresh our own targets so distribution fanout
-    # to phone/other linked devices starts with a clean pkmsg bootstrap.
-    MapSet.member?(own_identity_set, target_identity) or
-      not (SessionStore.has_session?(signal_sessions, signal_jid) or
-             SessionStore.has_session?(signal_sessions, device_jid)) or
-      SessionStore.stale_or_missing?(
-        signal_sessions,
-        [signal_jid, device_jid],
-        session_max_age_ms,
-        now_ms
-      )
+    Prekeys.targets_needing_prekeys(
+      signal_sessions,
+      distribution_targets,
+      own_identity_set,
+      lid_mapping,
+      session_max_age_ms,
+      System.system_time(:millisecond)
+    )
   end
 
   defp fetch_group_prekeys(_state, [], signal_sessions, _context), do: {signal_sessions, %{}}
@@ -847,7 +828,7 @@ defmodule ExWapp.Session.Worker.Outbound do
       if self_chat? do
         devices_needing_prekeys
       else
-        expand_recipient_identity_prekey_targets(devices_needing_prekeys, recipient_devices)
+        Prekeys.expand_recipient_identity_targets(devices_needing_prekeys, recipient_devices)
       end
 
     {updated_sessions, prekey_bundles} =
@@ -974,6 +955,13 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   # Match whatsmeow: check existing sessions by BOTH wire JID and LID-mapped JID,
   # but fetch prekeys using the ORIGINAL wire JIDs (PN), not the LID-mapped ones.
+  @spec find_devices_needing_prekeys(
+          map(),
+          term(),
+          SessionStore.t(),
+          [term()],
+          [term()]
+        ) :: [String.t()]
   defp find_devices_needing_prekeys(
          runtime_cfg,
          store,
@@ -981,15 +969,6 @@ defmodule ExWapp.Session.Worker.Outbound do
          all_device_jids,
          own_device_jids
        ) do
-    lid_mapping = Account.load_lid_mapping(store)
-    now_ms = System.system_time(:millisecond)
-
-    own_identity_set =
-      own_device_jids
-      |> Enum.map(&JIDUtils.identity/1)
-      |> Enum.reject(fn {user, server} -> user == "" or server == "" end)
-      |> MapSet.new()
-
     session_max_age_ms =
       Config.get(
         runtime_cfg || %{},
@@ -997,25 +976,14 @@ defmodule ExWapp.Session.Worker.Outbound do
         :timer.hours(12)
       )
 
-    Enum.filter(all_device_jids, fn device_jid ->
-      device_jid = normalize_jid_with_device(device_jid)
-      signal_jid = JIDUtils.resolve_signal_encryption_jid(device_jid, lid_mapping)
-      target_identity = JIDUtils.identity(device_jid)
-
-      has_session =
-        SessionStore.has_session?(signal_sessions, signal_jid) or
-          SessionStore.has_session?(signal_sessions, device_jid)
-
-      MapSet.member?(own_identity_set, target_identity) or
-        not has_session or
-        SessionStore.stale_or_missing?(
-          signal_sessions,
-          [signal_jid, device_jid],
-          session_max_age_ms,
-          now_ms
-        )
-    end)
-    |> JIDUtils.normalize_target_list()
+    Prekeys.devices_needing_prekeys(
+      signal_sessions,
+      all_device_jids,
+      own_device_jids,
+      Account.load_lid_mapping(store),
+      session_max_age_ms,
+      System.system_time(:millisecond)
+    )
   end
 
   defp fetch_needed_prekeys(_state, [], signal_sessions, _recipient_base_jid) do
@@ -1038,26 +1006,6 @@ defmodule ExWapp.Session.Worker.Outbound do
           {:ok, sessions, bundles} -> {sessions, bundles}
           {:error, reason2} -> {{:error, reason2}, %{}}
         end
-    end
-  end
-
-  defp expand_recipient_identity_prekey_targets(devices_needing_prekeys, recipient_devices) do
-    devices_needing_prekeys = JIDUtils.normalize_target_list(devices_needing_prekeys)
-    recipient_devices = JIDUtils.normalize_target_list(recipient_devices)
-
-    recipient_identities =
-      recipient_devices
-      |> Enum.map(&JIDUtils.identity/1)
-      |> Enum.reject(fn {user, server} -> user == "" or server == "" end)
-      |> MapSet.new()
-
-    if recipient_devices != [] and
-         Enum.any?(devices_needing_prekeys, fn device_jid ->
-           MapSet.member?(recipient_identities, JIDUtils.identity(device_jid))
-         end) do
-      JIDUtils.normalize_target_list(recipient_devices ++ devices_needing_prekeys)
-    else
-      devices_needing_prekeys
     end
   end
 
@@ -1177,7 +1125,7 @@ defmodule ExWapp.Session.Worker.Outbound do
        ) do
     missing =
       requested_device_jids
-      |> missing_prekey_bundle_targets(prekey_bundles)
+      |> Prekeys.missing_bundle_targets(prekey_bundles)
       |> Enum.sort()
 
     case missing do
@@ -1187,24 +1135,6 @@ defmodule ExWapp.Session.Worker.Outbound do
       _ ->
         fetch_missing_prekeys_individually(state, missing, sessions, prekey_bundles, context)
     end
-  end
-
-  @spec missing_prekey_bundle_targets([term()], map()) :: [String.t()]
-  defp missing_prekey_bundle_targets(requested_device_jids, prekey_bundles) do
-    requested =
-      requested_device_jids
-      |> JIDUtils.normalize_target_list()
-      |> MapSet.new()
-
-    returned =
-      prekey_bundles
-      |> Map.keys()
-      |> JIDUtils.normalize_target_list()
-      |> MapSet.new()
-
-    requested
-    |> MapSet.difference(returned)
-    |> MapSet.to_list()
   end
 
   @spec fetch_missing_prekeys_individually(map(), [String.t()], term(), map(), term()) ::
