@@ -204,6 +204,29 @@ Le estrazioni architetturali pianificate sono complete:
 Resta intenzionalmente esterna a questo ambiente soltanto l'esecuzione della
 validazione Elixir/Erlang elencata sotto.
 
+## Fase 8 — Storico messaggi a cursore
+
+La cronologia non deve più gonfiare `%ExWapp.Chat{}` o obbligare i wrapper a
+materializzare liste complete.
+
+- [x] rimuovere `messages` dalla struttura chat;
+- [x] introdurre uno store messaggi indicizzato separato per JID, timestamp e ID;
+- [x] migrare automaticamente snapshot legacy con messaggi incorporati;
+- [x] mantenere `get_messages/3` come lettura paginata e materializzata;
+- [x] rendere `stream_messages/3` e `all_messages/2` realmente lazy;
+- [x] rimuovere il limite fisso di 1.000 messaggi;
+- [x] aggiungere cancellazione esplicita per ID dopo persistenza applicativa;
+- [x] includere i messaggi separati soltanto negli export snapshot espliciti;
+- [x] documentare la distinzione tra stream storico locale e stream inbound live;
+- [ ] implementare download e ingest delle history-sync notification esterne;
+- [ ] valutare il fetch storico on-demand come funzionalità protocollo separata;
+- [ ] eseguire la validazione Elixir/Erlang fuori da questo ambiente.
+
+Il contratto dello store consente agli adapter custom di collegare
+`stream_messages/3` direttamente a un cursore DB. Gli adapter built-in usano
+un indice ETS, evitando di copiare l'intera cronologia nell'heap del processo
+che legge una chat.
+
 ## Validazione richiesta per ogni tranche
 
 Da eseguire in un ambiente con Elixir/Erlang installati:
