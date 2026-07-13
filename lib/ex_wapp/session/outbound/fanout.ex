@@ -55,6 +55,8 @@ defmodule ExWapp.Session.Outbound.Fanout do
         self_chat_mode: self_chat_mode
       })
       when is_map(hints) and is_map(lid_mapping) do
+    prekey_bundles = if is_map(prekey_bundles), do: prekey_bundles, else: %{}
+
     {recipient_targets_hint, recipient_evictions} =
       finalize_soft_targets(
         signal_sessions,
