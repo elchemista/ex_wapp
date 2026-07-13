@@ -237,10 +237,28 @@ defmodule ExWapp.Client.API do
     do: client_read(client, :get_messages, [jid, opts])
 
   @doc """
-  Gets every message currently retained for a chat through the configured transport.
+  Builds a lazy stream over locally retained messages.
+
+  The stream is oldest first by default and delegates cursor ownership to the
+  configured adapter. It does not trigger remote WhatsApp history retrieval.
   """
-  @spec all_messages(Client.t(), String.t()) :: read_result([Chat.message()])
-  def all_messages(%Client{} = client, jid), do: get_messages(client, jid, limit: :all)
+  @spec stream_messages(Client.t(), String.t(), keyword()) :: read_result(Enumerable.t())
+  def stream_messages(%Client{} = client, jid, opts \\ []),
+    do: client_read(client, :stream_messages, [jid, opts])
+
+  @doc """
+  Returns a lazy stream over every locally retained message.
+  """
+  @spec all_messages(Client.t(), String.t(), keyword()) :: read_result(Enumerable.t())
+  def all_messages(%Client{} = client, jid, opts \\ []),
+    do: stream_messages(client, jid, Keyword.put_new(opts, :limit, :all))
+
+  @doc """
+  Deletes selected local messages after durable wrapper persistence.
+  """
+  @spec delete_messages(Client.t(), String.t(), [String.t()]) :: mutation_result()
+  def delete_messages(%Client{} = client, jid, message_ids),
+    do: client_mutation(client, :delete_messages, [jid, message_ids], :messages_deleted)
 
   @doc """
   Returns the current client status.
@@ -366,9 +384,16 @@ defmodule ExWapp.Client.API do
 
   @spec client_read(Client.t(), atom(), [term()]) :: read_result(term())
   defp client_read(%Client{} = client, function, args) do
-    case apply(client.transport, function, [client | args]) do
-      {:ok, value} -> {:ok, value}
-      {:error, reason} -> client_error(client, function, :transport, reason)
+    arity = length(args) + 1
+
+    if Code.ensure_loaded?(client.transport) and
+         function_exported?(client.transport, function, arity) do
+      case apply(client.transport, function, [client | args]) do
+        {:ok, value} -> {:ok, value}
+        {:error, reason} -> client_error(client, function, :transport, reason)
+      end
+    else
+      client_error(client, function, :transport, :unsupported_operation)
     end
   end
 
