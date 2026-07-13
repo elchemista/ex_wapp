@@ -28,9 +28,7 @@ defmodule ExWapp.Signal.Adapter do
   @spec impl_module() :: module()
   def impl_module, do: Session
 
-  # ============================================================================
-  # Session Management
-  # ============================================================================
+  # Session lifecycle
 
   @doc """
   Creates a new session using X3DH key agreement.
@@ -98,9 +96,7 @@ defmodule ExWapp.Signal.Adapter do
     Session.decrypt_prekey_message_with_session(session, ciphertext)
   end
 
-  # ============================================================================
-  # Key Generation
-  # ============================================================================
+  # Curve25519 key utilities
 
   @doc """
   Generate a new Curve25519 key pair.
@@ -128,9 +124,7 @@ defmodule ExWapp.Signal.Adapter do
     Keys.verify(public_key, message, signature)
   end
 
-  # ============================================================================
-  # Debug Helpers
-  # ============================================================================
+  # Diagnostic inspection
 
   @doc """
   Debug: dump a message's structure.
