@@ -675,9 +675,42 @@ defmodule ExWappTest do
       chats = ExWapp.list_chats(session)
       assert length(chats) == 1
       assert hd(chats).jid == "15550001111@s.whatsapp.net"
-      assert hd(chats).messages |> hd() |> Map.get(:id) == "MSG_2"
+      refute Map.has_key?(hd(chats), :messages)
+
+      assert [%{id: "MSG_2"}] =
+               ExWapp.get_messages(session, "15550001111@s.whatsapp.net", limit: 1)
 
       GenServer.stop(session)
+    end
+
+    test "message history is streamed outside the chat struct without a retention cap" do
+      store = ExWapp.Store.Memory.new()
+      jid = "15550001111@s.whatsapp.net"
+
+      messages =
+        Enum.map(1..1_001, fn number ->
+          %{
+            id: "history-#{number}",
+            from_me: false,
+            timestamp: number,
+            text: "message #{number}",
+            status: :received,
+            participant: nil,
+            raw: nil
+          }
+        end)
+
+      assert :ok = ExWapp.Chat.merge_messages(store, jid, messages)
+      assert {:ok, chat} = ExWapp.Chat.get(store, jid)
+      refute Map.has_key?(chat, :messages)
+
+      stream = ExWapp.all_messages(store, jid)
+      assert %Stream{} = stream
+      assert Enum.count(stream) == 1_001
+      assert [%{id: "history-1"}] = Enum.take(stream, 1)
+
+      assert :ok = ExWapp.delete_messages(store, jid, ["history-1"])
+      assert Enum.count(ExWapp.all_messages(store, jid)) == 1_000
     end
   end
 
