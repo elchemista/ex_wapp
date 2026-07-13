@@ -10,8 +10,10 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
 
   alias ExWapp.AppState.Engine
   alias ExWapp.{Chat, Store}
-  alias ExWapp.Message.Handler.{Common, Wire}
-  alias ExWapp.Message.Handler.Inbound.Projection
+  alias ExWapp.Message.Content, as: MessageContent
+  alias ExWapp.Message.Handler.Common
+  alias ExWapp.Message.Handler.Inbound.{Content, Projection}
+  alias ExWapp.Message.Handler.Wire.Fields
   alias ExWapp.Proto.{HistorySync, SyncAction}
 
   @doc """
@@ -82,12 +84,12 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
          state
        )
        when is_binary(payload) do
-    with {:ok, message_fields} <- Wire.decode_wire_fields_safe(payload),
+    with {:ok, message_fields} <- Fields.decode_safe(payload),
          protocol_message when is_binary(protocol_message) <-
-           Wire.find_first_ld_field(message_fields, 12),
-         {:ok, protocol_fields} <- Wire.decode_wire_fields_safe(protocol_message),
+           Fields.first_length_delimited(message_fields, 12),
+         {:ok, protocol_fields} <- Fields.decode_safe(protocol_message),
          key_share_bytes when is_binary(key_share_bytes) <-
-           Wire.find_first_ld_field(protocol_fields, 7),
+           Fields.first_length_delimited(protocol_fields, 7),
          {:ok, key_share} <- SyncAction.decode_app_state_sync_key_share(key_share_bytes),
          true <- key_share.keys != [] do
       case store_app_state_keys(state, key_share.keys) do
@@ -154,20 +156,20 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
           | :not_placeholder_resend_response
           | {:error, term()}
   defp extract_placeholder_resend_response(message_payload) do
-    with {:ok, message_fields} <- Wire.decode_wire_fields_safe(message_payload),
+    with {:ok, message_fields} <- Fields.decode_safe(message_payload),
          protocol_message when is_binary(protocol_message) <-
-           Wire.find_first_ld_field(message_fields, 12),
-         {:ok, protocol_fields} <- Wire.decode_wire_fields_safe(protocol_message),
-         17 <- Wire.find_first_varint_field(protocol_fields, 2),
+           Fields.first_length_delimited(message_fields, 12),
+         {:ok, protocol_fields} <- Fields.decode_safe(protocol_message),
+         17 <- Fields.first_varint(protocol_fields, 2),
          peer_response when is_binary(peer_response) <-
-           Wire.find_first_ld_field(protocol_fields, 17),
-         {:ok, response_fields} <- Wire.decode_wire_fields_safe(peer_response),
-         4 <- Wire.find_first_varint_field(response_fields, 1) do
-      request_id = Wire.find_first_ld_field(response_fields, 2) || ""
+           Fields.first_length_delimited(protocol_fields, 17),
+         {:ok, response_fields} <- Fields.decode_safe(peer_response),
+         4 <- Fields.first_varint(response_fields, 1) do
+      request_id = Fields.first_length_delimited(response_fields, 2) || ""
 
       messages =
         response_fields
-        |> Wire.find_all_ld_fields(3)
+        |> Fields.all_length_delimited(3)
         |> Enum.flat_map(&extract_placeholder_result_messages/1)
 
       {:ok, %{request_id: request_id, messages: messages}}
@@ -180,12 +182,12 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
 
   @spec extract_placeholder_result_messages(binary()) :: [map()]
   defp extract_placeholder_result_messages(result_payload) do
-    with {:ok, result_fields} <- Wire.decode_wire_fields_safe(result_payload),
+    with {:ok, result_fields} <- Fields.decode_safe(result_payload),
          placeholder_response when is_binary(placeholder_response) <-
-           Wire.find_first_ld_field(result_fields, 4),
-         {:ok, placeholder_fields} <- Wire.decode_wire_fields_safe(placeholder_response),
+           Fields.first_length_delimited(result_fields, 4),
+         {:ok, placeholder_fields} <- Fields.decode_safe(placeholder_response),
          web_message_info when is_binary(web_message_info) <-
-           Wire.find_first_ld_field(placeholder_fields, 1),
+           Fields.first_length_delimited(placeholder_fields, 1),
          {:ok, recovered} <- decode_recovered_web_message_info(web_message_info) do
       [recovered]
     else
@@ -195,13 +197,13 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
 
   @spec decode_recovered_web_message_info(binary()) :: {:ok, map()} | {:error, atom()}
   defp decode_recovered_web_message_info(web_message_info) do
-    with {:ok, fields} <- Wire.decode_wire_fields_safe(web_message_info),
-         key_payload when is_binary(key_payload) <- Wire.find_first_ld_field(fields, 1),
-         message_payload when is_binary(message_payload) <- Wire.find_first_ld_field(fields, 2),
+    with {:ok, fields} <- Fields.decode_safe(web_message_info),
+         key_payload when is_binary(key_payload) <- Fields.first_length_delimited(fields, 1),
+         message_payload when is_binary(message_payload) <- Fields.first_length_delimited(fields, 2),
          {:ok, key} <- decode_message_key_payload(key_payload) do
-      timestamp = Wire.find_first_varint_field(fields, 3)
-      participant = Wire.find_first_ld_field(fields, 5) || Map.get(key, :participant)
-      push_name = Wire.find_first_ld_field(fields, 19)
+      timestamp = Fields.first_varint(fields, 3)
+      participant = Fields.first_length_delimited(fields, 5) || Map.get(key, :participant)
+      push_name = Fields.first_length_delimited(fields, 19)
 
       {:ok,
        %{
@@ -218,13 +220,13 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
 
   @spec decode_message_key_payload(binary()) :: {:ok, map()} | {:error, term()}
   defp decode_message_key_payload(key_payload) do
-    with {:ok, fields} <- Wire.decode_wire_fields_safe(key_payload) do
+    with {:ok, fields} <- Fields.decode_safe(key_payload) do
       {:ok,
        %{
-         remote_jid: Wire.find_first_ld_field(fields, 1) || "",
-         from_me: Wire.find_first_varint_field(fields, 2) == 1,
-         id: Wire.find_first_ld_field(fields, 3) || "",
-         participant: Wire.find_first_ld_field(fields, 4)
+         remote_jid: Fields.first_length_delimited(fields, 1) || "",
+         from_me: Fields.first_varint(fields, 2) == 1,
+         id: Fields.first_length_delimited(fields, 3) || "",
+         participant: Fields.first_length_delimited(fields, 4)
        }}
     end
   end
@@ -236,22 +238,36 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
          session
        )
        when is_binary(chat_jid) and chat_jid != "" and is_binary(id) and id != "" do
-    {content_type, decoded_text} = Wire.classify_decrypted_content(payload, 0)
+    canonical =
+      Content.decode_plaintext(payload,
+        enc_type: "placeholder_resend",
+        sender_jid: Map.get(recovered, :participant, "")
+      )
 
-    if content_type == :protocol do
+    if canonical.kind == :protocol do
       :skip
     else
+      legacy = MessageContent.to_legacy(canonical)
+
       message = %{
         id: id,
+        content: canonical,
         from_me: Map.get(key, :from_me, false),
         timestamp: Map.get(recovered, :timestamp) || System.system_time(:second),
-        text: decoded_text,
+        text: Map.get(legacy, :text),
         status: if(Map.get(key, :from_me, false), do: :sent, else: :received),
         participant: Map.get(recovered, :participant),
+        media: Map.get(legacy, :media),
+        location: Map.get(legacy, :location),
+        contact: Map.get(legacy, :contact),
+        event: Map.get(legacy, :event),
         raw: %{
           type: :placeholder_resend,
+          content: canonical,
           from_me: Map.get(key, :from_me, false),
-          media: nil,
+          media: Map.get(legacy, :media),
+          media_type: Map.get(legacy, :media_type),
+          content_type: Map.get(legacy, :content_type),
           push_name: Map.get(recovered, :push_name)
         }
       }
