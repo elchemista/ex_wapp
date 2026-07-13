@@ -209,21 +209,9 @@ defmodule ExWapp.Chat do
         :ok
 
       store ->
-        updated_chat =
-          case latest_message_timestamp(normalized_messages) do
-            nil ->
-              chat
-
-            latest ->
-              current =
-                if(is_integer(chat.last_message_timestamp), do: chat.last_message_timestamp, else: 0)
-
-              %{chat | last_message_timestamp: max(current, latest)}
-          end
-
-        with :ok <- Store.upsert_messages(store, jid_str, normalized_messages),
-             :ok <- save_chat(target, updated_chat) do
-          :ok
+        case Store.upsert_messages(store, jid_str, normalized_messages) do
+          :ok -> save_chat(target, update_last_message_timestamp(chat, normalized_messages))
+          {:error, _reason} = error -> error
         end
     end
   end
@@ -250,9 +238,9 @@ defmodule ExWapp.Chat do
             unread_count: if(message.from_me, do: chat.unread_count, else: chat.unread_count + 1)
         }
 
-        with :ok <- Store.upsert_messages(store, jid_str, [message]),
-             :ok <- save_chat(target, updated_chat) do
-          :ok
+        case Store.upsert_messages(store, jid_str, [message]) do
+          :ok -> save_chat(target, updated_chat)
+          {:error, _reason} = error -> error
         end
     end
   end
@@ -341,9 +329,9 @@ defmodule ExWapp.Chat do
       chats = Map.get(data, :chats, %{})
       updated_data = Map.put(data, :chats, Map.delete(chats, jid_str))
 
-      with :ok <- Store.delete_chat_messages(store, jid_str),
-           :ok <- Store.persist(store, updated_data) do
-        :ok
+      case Store.delete_chat_messages(store, jid_str) do
+        :ok -> Store.persist(store, updated_data)
+        {:error, _reason} = error -> error
       end
     else
       :ok
@@ -679,13 +667,28 @@ defmodule ExWapp.Chat do
 
   defp latest_message_timestamp(messages) when is_list(messages) do
     Enum.reduce(messages, nil, fn
-      %{timestamp: timestamp}, nil when is_integer(timestamp) and timestamp >= 0 -> timestamp
+      %{timestamp: timestamp}, nil when is_integer(timestamp) and timestamp >= 0 ->
+        timestamp
+
       %{timestamp: timestamp}, current when is_integer(timestamp) and timestamp >= 0 ->
         max(current, timestamp)
 
       _message, current ->
         current
     end)
+  end
+
+  defp update_last_message_timestamp(chat, messages) do
+    case latest_message_timestamp(messages) do
+      nil ->
+        chat
+
+      latest ->
+        current =
+          if(is_integer(chat.last_message_timestamp), do: chat.last_message_timestamp, else: 0)
+
+        %{chat | last_message_timestamp: max(current, latest)}
+    end
   end
 
   defp save_chat(target, chat) do
@@ -739,5 +742,4 @@ defmodule ExWapp.Chat do
         :ok
     end
   end
-
 end

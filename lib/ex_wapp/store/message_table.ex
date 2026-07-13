@@ -99,6 +99,12 @@ defmodule ExWapp.Store.MessageTable do
     offset = normalize_offset(Keyword.get(opts, :offset, 0))
     limit = normalize_limit(Keyword.get(opts, :limit, :all))
 
+    message_store
+    |> resource_stream(jid, order, offset, limit)
+    |> Stream.map(& &1)
+  end
+
+  defp resource_stream(message_store, jid, order, offset, limit) do
     Stream.resource(
       fn -> %{cursor: nil, skip: offset, remaining: limit} end,
       &next_stream_item(message_store, jid, order, &1),
@@ -243,17 +249,19 @@ defmodule ExWapp.Store.MessageTable do
   end
 
   defp upsert_one(message_store, jid, message) when is_map(message) do
-    with message_id when is_binary(message_id) and message_id != "" <- Map.get(message, :id) do
-      delete_previous_key(message_store, jid, message_id)
+    case Map.get(message, :id) do
+      message_id when is_binary(message_id) and message_id != "" ->
+        delete_previous_key(message_store, jid, message_id)
 
-      timestamp = normalize_timestamp(Map.get(message, :timestamp))
-      key = {jid, timestamp, message_id}
-      normalized_message = Map.put(message, :timestamp, timestamp)
+        timestamp = normalize_timestamp(Map.get(message, :timestamp))
+        key = {jid, timestamp, message_id}
+        normalized_message = Map.put(message, :timestamp, timestamp)
 
-      :ets.insert(message_store.table, {key, normalized_message})
-      :ets.insert(message_store.index_table, {{jid, message_id}, key})
-    else
-      _ -> :ok
+        :ets.insert(message_store.table, {key, normalized_message})
+        :ets.insert(message_store.index_table, {{jid, message_id}, key})
+
+      _ ->
+        :ok
     end
   end
 
@@ -283,8 +291,7 @@ defmodule ExWapp.Store.MessageTable do
             })
 
           [{^key, message}] ->
-            {[message],
-             %{state | cursor: key, remaining: decrement_remaining(state.remaining)}}
+            {[message], %{state | cursor: key, remaining: decrement_remaining(state.remaining)}}
 
           _ ->
             next_stream_item(message_store, jid, order, %{state | cursor: key})

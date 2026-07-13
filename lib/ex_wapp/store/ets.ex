@@ -195,10 +195,8 @@ defmodule ExWapp.Store.Ets do
   @impl true
   @spec upsert_messages(t(), String.t(), [map()]) :: :ok | {:error, term()}
   def upsert_messages(%__MODULE__{} = store, jid, messages) do
-    with :ok <- MessageTable.upsert(store.message_table, jid, messages),
-         :ok <- persist_snapshot(store) do
-      :ok
-    end
+    MessageTable.upsert(store.message_table, jid, messages)
+    persist_snapshot(store)
   end
 
   @impl true
@@ -217,38 +215,30 @@ defmodule ExWapp.Store.Ets do
   @spec update_message_status(t(), String.t(), String.t(), atom()) ::
           :ok | {:error, term()}
   def update_message_status(%__MODULE__{} = store, jid, message_id, status) do
-    with :ok <- MessageTable.update_status(store.message_table, jid, message_id, status),
-         :ok <- persist_snapshot(store) do
-      :ok
-    end
+    MessageTable.update_status(store.message_table, jid, message_id, status)
+    persist_snapshot(store)
   end
 
   @impl true
   @spec update_message_status_by_id(t(), String.t(), atom()) ::
           :ok | {:error, term()}
   def update_message_status_by_id(%__MODULE__{} = store, message_id, status) do
-    with :ok <- MessageTable.update_status_by_id(store.message_table, message_id, status),
-         :ok <- persist_snapshot(store) do
-      :ok
-    end
+    MessageTable.update_status_by_id(store.message_table, message_id, status)
+    persist_snapshot(store)
   end
 
   @impl true
   @spec delete_messages(t(), String.t(), [String.t()]) :: :ok | {:error, term()}
   def delete_messages(%__MODULE__{} = store, jid, message_ids) do
-    with :ok <- MessageTable.delete(store.message_table, jid, message_ids),
-         :ok <- persist_snapshot(store) do
-      :ok
-    end
+    MessageTable.delete(store.message_table, jid, message_ids)
+    persist_snapshot(store)
   end
 
   @impl true
   @spec delete_chat_messages(t(), String.t()) :: :ok | {:error, term()}
   def delete_chat_messages(%__MODULE__{} = store, jid) do
-    with :ok <- MessageTable.delete_chat(store.message_table, jid),
-         :ok <- persist_snapshot(store) do
-      :ok
-    end
+    MessageTable.delete_chat(store.message_table, jid)
+    persist_snapshot(store)
   end
 
   @impl true
@@ -319,24 +309,28 @@ defmodule ExWapp.Store.Ets do
     base_data
     |> Map.put(:signal_sessions, SessionStore.snapshot(SessionStore.attach(signal_table)))
     |> Map.put(:device_cache, load_device_cache_snapshot(device_cache_table))
-    |> Map.put(:chat_messages, MessageTable.snapshot(message_table))
+    |> put_message_snapshot(MessageTable.snapshot(message_table))
   end
 
   defp persist_snapshot(%__MODULE__{} = store) do
-    with {:ok, blob} <- ExWapp.Store.Codec.encode(merged_snapshot(store)),
-         :ok <- File.write(store.path, blob) do
-      :ok
+    case ExWapp.Store.Codec.encode(merged_snapshot(store)) do
+      {:ok, blob} -> File.write(store.path, blob)
+      {:error, _reason} = error -> error
     end
   end
 
   defp put_initial_messages(message_table, messages) when is_map(messages) do
-    Enum.reduce_while(messages, :ok, fn {jid, chat_messages}, :ok ->
-      case MessageTable.upsert(message_table, jid, chat_messages) do
-        :ok -> {:cont, :ok}
-        {:error, _reason} = error -> {:halt, error}
-      end
+    Enum.each(messages, fn {jid, chat_messages} ->
+      MessageTable.upsert(message_table, jid, chat_messages)
     end)
+
+    :ok
   end
+
+  defp put_message_snapshot(data, messages) when map_size(messages) == 0,
+    do: Map.delete(data, :chat_messages)
+
+  defp put_message_snapshot(data, messages), do: Map.put(data, :chat_messages, messages)
 
   defp put_base_data(table, data) when is_map(data) do
     :ets.insert(table, {:data, data})

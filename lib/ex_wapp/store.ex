@@ -374,12 +374,8 @@ defmodule ExWapp.Store do
     if function_exported?(store.__struct__, :find_message_by_id, 2) do
       store.__struct__.find_message_by_id(store, message_id)
     else
-      Enum.find_value(fallback_message_map(store), fn {jid, messages} ->
-        case Enum.find(messages, &(Map.get(&1, :id) == message_id)) do
-          nil -> nil
-          message -> {jid, message}
-        end
-      end)
+      fallback_message_map(store)
+      |> Enum.find_value(&message_with_jid(&1, message_id))
     end
   end
 
@@ -423,8 +419,10 @@ defmodule ExWapp.Store do
       store.__struct__.delete_messages(store, jid, message_ids)
     else
       ids = MapSet.new(message_ids)
+
       messages =
         Enum.reject(fallback_messages_for(store, jid), &MapSet.member?(ids, Map.get(&1, :id)))
+
       persist_fallback_messages(store, jid, messages)
     end
   end
@@ -456,7 +454,7 @@ defmodule ExWapp.Store do
           fallback_message_map(store)
         end
 
-      {:ok, Map.put(data, :chat_messages, messages)}
+      {:ok, put_message_snapshot(data, messages)}
     end
   end
 
@@ -475,6 +473,12 @@ defmodule ExWapp.Store do
   end
 
   defp fallback_message_stream(store, jid, opts) do
+    store
+    |> fallback_resource_stream(jid, opts)
+    |> Stream.map(& &1)
+  end
+
+  defp fallback_resource_stream(store, jid, opts) do
     Stream.resource(
       fn ->
         messages =
@@ -511,15 +515,32 @@ defmodule ExWapp.Store do
     legacy =
       data
       |> Map.get(:chats, %{})
-      |> Enum.reduce(%{}, fn {jid, chat}, acc ->
-        case if(is_map(chat), do: Map.get(chat, :messages, []), else: []) do
-          messages when is_list(messages) and messages != [] -> Map.put(acc, jid, messages)
-          _ -> acc
-        end
-      end)
+      |> Enum.reduce(%{}, &put_legacy_messages/2)
 
     Map.merge(current, legacy, fn _jid, left, right -> left ++ right end)
   end
+
+  defp message_with_jid({jid, messages}, message_id) do
+    case Enum.find(messages, &(Map.get(&1, :id) == message_id)) do
+      nil -> nil
+      message -> {jid, message}
+    end
+  end
+
+  defp put_message_snapshot(data, messages) when map_size(messages) == 0,
+    do: Map.delete(data, :chat_messages)
+
+  defp put_message_snapshot(data, messages), do: Map.put(data, :chat_messages, messages)
+
+  defp put_legacy_messages({jid, chat}, acc) do
+    case legacy_chat_messages(chat) do
+      messages when is_list(messages) and messages != [] -> Map.put(acc, jid, messages)
+      _ -> acc
+    end
+  end
+
+  defp legacy_chat_messages(chat) when is_map(chat), do: Map.get(chat, :messages, [])
+  defp legacy_chat_messages(_chat), do: []
 
   defp fallback_messages_for(store, jid) do
     store
@@ -563,6 +584,9 @@ defmodule ExWapp.Store do
   end
 
   defp take_messages(messages, :all), do: messages
-  defp take_messages(messages, limit) when is_integer(limit) and limit >= 0, do: Enum.take(messages, limit)
+
+  defp take_messages(messages, limit) when is_integer(limit) and limit >= 0,
+    do: Enum.take(messages, limit)
+
   defp take_messages(messages, _invalid), do: messages
 end
