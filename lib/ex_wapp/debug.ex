@@ -77,7 +77,12 @@ defmodule ExWapp.Debug do
   defmodule FullClient do
     use WebSockex
     require Logger
-    @moduledoc false
+    @moduledoc """
+    Development helpers for tracing WhatsApp's WebSocket and Noise handshake.
+
+    These functions are intended for interactive diagnosis. Normal applications
+    should connect and send through `ExWapp.Session`.
+    """
 
     def handle_connect(_conn, state) do
       Logger.info("Connected, will send client hello...")
@@ -492,7 +497,10 @@ defmodule ExWapp.Debug do
   # Simple WebSockex client for debugging
   defmodule DebugClient do
     use WebSockex
-    @moduledoc false
+    @moduledoc """
+    WebSockex callback process used internally by `ExWapp.Debug` to inspect
+    handshake frames.
+    """
 
     def handle_connect(_conn, state) do
       send(state.parent, {:ws_connected})
