@@ -50,6 +50,7 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
 
     %{
       id: Map.fetch!(envelope, :id),
+      content: Map.fetch!(message_data, :content),
       from_me: from_me,
       timestamp: Map.fetch!(envelope, :timestamp),
       text: Map.get(message_data, :text),
@@ -62,6 +63,7 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
       raw: %{
         type: type,
         attrs: attrs,
+        content: Map.fetch!(message_data, :content),
         media: Map.get(message_data, :media),
         media_type: Map.get(message_data, :media_type),
         content_type: Map.get(message_data, :content_type),
