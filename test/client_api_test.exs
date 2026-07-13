@@ -205,7 +205,7 @@ defmodule ExWapp.ClientApiTest do
     assert_receive {:adapter_get_messages, ^jid, [limit: 10, offset: 5]}
 
     assert {:ok, stream} = ExWapp.all_messages(client, jid)
-    assert_receive {:adapter_stream_messages, ^jid, [limit: :all]}
+    assert_receive {:adapter_stream_messages, ^jid, [limit: :all, order: :oldest_first]}
     refute_receive {:adapter_stream_item, _}
 
     assert [%{id: "m1"}] = Enum.to_list(stream)
