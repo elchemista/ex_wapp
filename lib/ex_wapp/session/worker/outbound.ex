@@ -1053,14 +1053,6 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
-  @spec find_child([Binary.Node.t()], String.t()) :: Binary.Node.t() | nil
-  defp find_child(content, tag) when is_list(content) do
-    Enum.find(content, fn
-      %Binary.Node{tag: ^tag} -> true
-      _ -> false
-    end)
-  end
-
   @spec normalize_jid_for_signal(term()) :: String.t()
   defp normalize_jid_for_signal(jid) when is_binary(jid), do: JIDUtils.normalize_for_signal(jid)
 
