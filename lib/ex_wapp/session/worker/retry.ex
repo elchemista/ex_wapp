@@ -161,19 +161,9 @@ defmodule ExWapp.Session.Worker.Retry do
   end
 
   defp find_outgoing_message_any_chat(store, message_id) do
-    store
-    |> Chat.list()
-    |> Enum.find_value(fn chat ->
-      chat.messages
-      |> find_outgoing_text_by_id(chat.jid, message_id)
-      |> case do
-        {:ok, _, _} = ok -> ok
-        _ -> nil
-      end
-    end)
-    |> case do
+    case Chat.find_message_by_id(store, message_id) do
+      {jid, message} -> find_outgoing_text_by_id([message], jid, message_id)
       nil -> {:error, :message_not_found}
-      {:ok, _retry_jid, _text} = result -> result
     end
   end
 
