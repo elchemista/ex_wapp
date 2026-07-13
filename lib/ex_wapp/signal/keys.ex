@@ -1,5 +1,10 @@
 defmodule ExWapp.Signal.Keys do
-  @moduledoc false
+  @moduledoc """
+  Generates Signal Curve25519 key material and implements XEdDSA signatures.
+
+  This is the cryptographic key boundary for identities, one-time prekeys, signed
+  prekeys, and ADV device signatures.
+  """
 
   import Bitwise
 
