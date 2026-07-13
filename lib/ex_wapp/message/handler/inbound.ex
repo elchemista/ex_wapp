@@ -3,14 +3,14 @@ defmodule ExWapp.Message.Handler.Inbound do
 
   require Logger
 
-  alias ExWapp.{Chat, JID}
+  alias ExWapp.JID
   alias ExWapp.Binary.Node
   alias ExWapp.Message.Handler.{Common, Wire}
   alias ExWapp.Message.Handler.Inbound.{
     Content,
     Decryptor,
     Envelope,
-    Projection,
+    Publisher,
     Receipts,
     Sync
   }
@@ -41,45 +41,20 @@ defmodule ExWapp.Message.Handler.Inbound do
     state = Sync.ingest(message_data, session, state, from, id)
     from_me = Envelope.from_me?(attrs, from, state, message_data)
 
-    message = %{
-      id: id,
-      from_me: from_me,
-      timestamp: timestamp,
-      text: message_data[:text],
-      status: if(from_me, do: :sent, else: :received),
-      participant: participant,
-      media: message_data[:media],
-      location: message_data[:location],
-      contact: message_data[:contact],
-      event: message_data[:event],
-      raw: %{
+    Publisher.publish(
+      message_data,
+      %{
+        id: id,
+        from: from,
+        from_me: from_me,
+        timestamp: timestamp,
+        participant: participant,
         type: type,
-        attrs: attrs,
-        media: message_data[:media],
-        media_type: message_data[:media_type],
-        content_type: message_data[:content_type],
-        location: message_data[:location],
-        contact: message_data[:contact],
-        event: message_data[:event],
-        from_me: from_me
-      }
-    }
-
-    is_protocol = message_data[:message_content_type] == :protocol
-    suppress_message? = transient_encrypted_placeholder?(message_data)
-
-    if not is_protocol and not suppress_message? do
-      if target = Common.chat_target(session, state) do
-        Projection.update_chat_name(target, from, attrs)
-        Chat.add_message(target, from, message)
-      end
-
-      if is_pid(session) do
-        send(session, {:new_message, from, message})
-      end
-    else
-      maybe_log_suppressed_message(is_protocol, suppress_message?, from, id, message_data)
-    end
+        attrs: attrs
+      },
+      session,
+      state
+    )
 
     {actions, state} = Receipts.build_actions(from, id, participant, attrs, message_data, state)
     updated_state = Common.update_stats(state, :messages_received)
@@ -130,20 +105,4 @@ defmodule ExWapp.Message.Handler.Inbound do
   defp maybe_decrypt_message(message_data, state, _from, _participant, _attrs),
     do: {message_data, state}
 
-  @spec transient_encrypted_placeholder?(map()) :: boolean()
-  defp transient_encrypted_placeholder?(%{encrypted: true, decrypt_status: {:error, _}}), do: true
-  defp transient_encrypted_placeholder?(%{placeholder_unavailable: true}), do: true
-  defp transient_encrypted_placeholder?(_message_data), do: false
-
-  @spec maybe_log_suppressed_message(boolean(), boolean(), term(), term(), map()) :: :ok
-  defp maybe_log_suppressed_message(true, _suppress_message?, _from, _id, _message_data), do: :ok
-
-  defp maybe_log_suppressed_message(_is_protocol, true, from, id, message_data) do
-    Logger.debug(
-      "[DECRYPT] Suppressing undecryptable encrypted placeholder from=#{Common.normalize_jid_with_device(from)} id=#{id} reason=#{inspect(Map.get(message_data, :decrypt_status))}"
-    )
-  end
-
-  defp maybe_log_suppressed_message(_is_protocol, _suppress_message?, _from, _id, _message_data),
-    do: :ok
 end
