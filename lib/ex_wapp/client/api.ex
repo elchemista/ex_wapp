@@ -227,6 +227,22 @@ defmodule ExWapp.Client.API do
   def get_chat(%Client{} = client, jid), do: client_read(client, :get_chat, [jid])
 
   @doc """
+  Gets locally retained messages for a chat through the configured transport.
+
+  The `:limit` option accepts a non-negative integer or `:all`; `:offset`
+  skips messages from the newest-first result.
+  """
+  @spec get_messages(Client.t(), String.t(), keyword()) :: read_result([Chat.message()])
+  def get_messages(%Client{} = client, jid, opts \\ []),
+    do: client_read(client, :get_messages, [jid, opts])
+
+  @doc """
+  Gets every message currently retained for a chat through the configured transport.
+  """
+  @spec all_messages(Client.t(), String.t()) :: read_result([Chat.message()])
+  def all_messages(%Client{} = client, jid), do: get_messages(client, jid, limit: :all)
+
+  @doc """
   Returns the current client status.
   """
   @spec status(Client.t()) :: Client.status()
