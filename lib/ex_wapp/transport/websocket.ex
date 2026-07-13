@@ -182,6 +182,8 @@ defmodule ExWapp.Transport.WebSocket do
     end
   end
 
+  @spec process_decoded_frames(State.t(), binary()) ::
+          {:ok, State.t(), [event()]} | {:error, term()}
   defp process_decoded_frames(state, buffer) do
     {frames, rest} = Frame.decode(buffer)
     state = %{state | buffer: rest}
@@ -194,7 +196,10 @@ defmodule ExWapp.Transport.WebSocket do
     end)
   end
 
+  @doc false
   @impl true
+  @spec handle_connect(term(), State.t()) ::
+          {:reply, {:binary, binary()}, State.t()} | {:ok, State.t()}
   def handle_connect(_conn, %State{} = state) do
     notify_owner(state, {:connected, self()})
 
@@ -204,7 +209,9 @@ defmodule ExWapp.Transport.WebSocket do
     end
   end
 
+  @doc false
   @impl true
+  @spec handle_disconnect(term(), State.t()) :: {:ok, State.t()}
   def handle_disconnect(reason, %State{} = state) do
     Logger.info("[ExWapp.Transport.WebSocket] disconnected reason=#{inspect(reason)}")
     notify_owner(state, {:disconnected, reason})
@@ -217,7 +224,11 @@ defmodule ExWapp.Transport.WebSocket do
     {:ok, state}
   end
 
+  @doc false
   @impl true
+  @spec handle_frame(term(), State.t()) ::
+          {:ok, State.t()}
+          | {:reply, {:binary, binary()} | [{:binary, binary()}], State.t()}
   def handle_frame({:binary, bytes}, %State{} = state) do
     case receive_bytes(state, bytes) do
       {:ok, next_state, events} ->
@@ -245,7 +256,12 @@ defmodule ExWapp.Transport.WebSocket do
     {:ok, state}
   end
 
+  @doc false
   @impl true
+  @spec handle_cast(
+          {:send_node, Binary.binary_node() | tuple()} | {:send_payload, binary()},
+          State.t()
+        ) :: {:reply, {:binary, binary()}, State.t()} | {:ok, State.t()}
   def handle_cast({:send_node, node}, %State{} = state) do
     case encode_node(state, node) do
       {:ok, next_state, payload} -> {:reply, {:binary, payload}, next_state}
