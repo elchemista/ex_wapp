@@ -158,14 +158,19 @@ vecchio nome.
 
 ## Fase 6 — Wire e decoder tipizzati
 
-Separare:
+Il precedente modulo misto è stato separato mantenendo la facade compatibile:
 
-- primitive protobuf/wire generiche;
-- unwrap dei contenitori WhatsApp;
-- decoder dei singoli contenuti;
-- mapping verso il contratto inbound canonico.
+- [x] `Wire.Fields`: primitive protobuf/wire generiche;
+- [x] `Wire.ContentDecoder`: unwrap dei contenitori WhatsApp e decoder dei
+  contenuti supportati;
+- [x] `Wire`: envelope XML, candidati cifrati e deleghe compatibili;
+- [x] mapping del plaintext verso `ExWapp.Message.Content` nel boundary
+  `Inbound.Content`;
+- [x] fixture binarie minime per primitive, testo, protocollo e media;
+- [ ] eseguire i test wire e dei formati supportati fuori da questo ambiente.
 
-I decoder devono essere puri e testabili con fixture binarie.
+I decoder sono puri, non accedono allo store o al transport e non pubblicano
+eventi. Il mapping canonico resta separato dal parsing protobuf.
 
 ## Fase 7 — Namespace e struttura file
 
