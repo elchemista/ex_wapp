@@ -79,7 +79,8 @@ defmodule ExWapp.Noise.HandshakeParityTest do
 
   describe "key schedule" do
     test "mix_into_key/2 matches HKDF and resets the counter" do
-      state = %{Handshake.new(@pattern, "header") | counter: 9}
+      initial = Handshake.new(@pattern, "header")
+      state = %{initial | counter: 9}
       secret = :binary.copy(<<0x42>>, 32)
       expected = hkdf(state.salt, secret)
       <<expected_salt::binary-size(32), expected_key::binary-size(32)>> = expected
