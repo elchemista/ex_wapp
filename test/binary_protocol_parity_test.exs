@@ -149,8 +149,7 @@ defmodule ExWapp.BinaryProtocolParityTest do
         |> Binary.encode!()
         |> Binary.decode!()
 
-      assert %JID{user: "1234", device: 0, server: "s.whatsapp.net"} =
-               decoded.attrs["from"]
+      assert decoded.attrs["from"] == "1234:xx@s.whatsapp.net"
     end
   end
 
