@@ -54,4 +54,47 @@ defmodule ExWapp.AppState.LTHashTest do
     # Result should differ from input
     assert result != hash
   end
+  test "adding to zero matches the full HKDF-expanded MAC" do
+    mac = :crypto.hash(:sha256, "known LTHash MAC")
+    expected = expand_mac(mac)
+
+    assert LTHash.add(LTHash.new(), [mac]) == expected
+  end
+
+  test "multiple additions match pointwise little-endian u16 wrapping" do
+    first = :crypto.hash(:sha256, "first MAC")
+    second = :crypto.hash(:sha256, "second MAC")
+    first_expanded = expand_mac(first)
+    second_expanded = expand_mac(second)
+
+    expected =
+      for offset <- 0..126//2, into: <<>> do
+        <<left::little-unsigned-16>> = binary_part(first_expanded, offset, 2)
+        <<right::little-unsigned-16>> = binary_part(second_expanded, offset, 2)
+        <<rem(left + right, 65_536)::little-unsigned-16>>
+      end
+
+    assert LTHash.add(LTHash.new(), [first, second]) == expected
+  end
+
+  defp expand_mac(mac) do
+    salt = :binary.copy(<<0>>, 32)
+    prk = :crypto.mac(:hmac, :sha256, salt, mac)
+
+    {output, _previous} =
+      Enum.reduce(1..4, {<<>>, <<>>}, fn index, {acc, previous} ->
+        block =
+          :crypto.mac(
+            :hmac,
+            :sha256,
+            prk,
+            previous <> "WhatsApp Patch Integrity" <> <<index>>
+          )
+
+        {acc <> block, block}
+      end)
+
+    output
+  end
+
 end
