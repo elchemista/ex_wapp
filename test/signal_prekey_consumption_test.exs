@@ -63,7 +63,10 @@ defmodule ExWapp.SignalPrekeyConsumptionTest do
              )
 
     persisted = Store.load!(store)
+    persisted_sessions = Store.load_signal_sessions(store)
+
     assert persisted.signal.identity_key == bob_identity
+    assert SessionStore.has_session?(persisted_sessions, alice_jid)
     refute Map.has_key?(persisted.signal.prekeys, prekey_id)
 
     assert {:error, :message_key_not_found} =
