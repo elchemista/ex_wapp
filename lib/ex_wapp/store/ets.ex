@@ -47,6 +47,7 @@ defmodule ExWapp.Store.Ets do
         }
 
   @default_path_segments [".cache", "ex_wapp", "session.etf"]
+  @delete_gc_threshold 1_000
 
   @impl true
   @spec new(keyword()) :: t()
@@ -195,8 +196,9 @@ defmodule ExWapp.Store.Ets do
   @impl true
   @spec upsert_messages(t(), String.t(), [map()]) :: :ok | {:error, term()}
   def upsert_messages(%__MODULE__{} = store, jid, messages) do
-    MessageTable.upsert(store.message_table, jid, messages)
-    persist_snapshot(store)
+    store.message_table
+    |> MessageTable.upsert_count(jid, messages)
+    |> persist_if_changed(store)
   end
 
   @impl true
@@ -215,30 +217,32 @@ defmodule ExWapp.Store.Ets do
   @spec update_message_status(t(), String.t(), String.t(), atom()) ::
           :ok | {:error, term()}
   def update_message_status(%__MODULE__{} = store, jid, message_id, status) do
-    MessageTable.update_status(store.message_table, jid, message_id, status)
-    persist_snapshot(store)
+    store.message_table
+    |> MessageTable.update_status_count(jid, message_id, status)
+    |> persist_if_changed(store)
   end
 
   @impl true
   @spec update_message_status_by_id(t(), String.t(), atom()) ::
           :ok | {:error, term()}
   def update_message_status_by_id(%__MODULE__{} = store, message_id, status) do
-    MessageTable.update_status_by_id(store.message_table, message_id, status)
-    persist_snapshot(store)
+    store.message_table
+    |> MessageTable.update_status_by_id_count(message_id, status)
+    |> persist_if_changed(store)
   end
 
   @impl true
   @spec delete_messages(t(), String.t(), [String.t()]) :: :ok | {:error, term()}
   def delete_messages(%__MODULE__{} = store, jid, message_ids) do
-    MessageTable.delete(store.message_table, jid, message_ids)
-    persist_snapshot(store)
+    deleted = MessageTable.delete_count(store.message_table, jid, message_ids)
+    persist_after_delete(store, deleted)
   end
 
   @impl true
   @spec delete_chat_messages(t(), String.t()) :: :ok | {:error, term()}
   def delete_chat_messages(%__MODULE__{} = store, jid) do
-    MessageTable.delete_chat(store.message_table, jid)
-    persist_snapshot(store)
+    deleted = MessageTable.delete_chat_count(store.message_table, jid)
+    persist_after_delete(store, deleted)
   end
 
   @impl true
@@ -318,6 +322,23 @@ defmodule ExWapp.Store.Ets do
       {:error, _reason} = error -> error
     end
   end
+
+  defp persist_if_changed(0, _store), do: :ok
+  defp persist_if_changed(_changed, store), do: persist_snapshot(store)
+
+  defp persist_after_delete(store, deleted) do
+    result = persist_if_changed(deleted, store)
+    maybe_collect_after_delete(deleted)
+    result
+  end
+
+  defp maybe_collect_after_delete(deleted)
+       when is_integer(deleted) and deleted >= @delete_gc_threshold do
+    :erlang.garbage_collect(self())
+    :ok
+  end
+
+  defp maybe_collect_after_delete(_deleted), do: :ok
 
   defp put_initial_messages(message_table, messages) when is_map(messages) do
     Enum.each(messages, fn {jid, chat_messages} ->

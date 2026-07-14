@@ -13,6 +13,7 @@ defmodule ExWapp.Store.MessageTable do
   """
 
   @max_timestamp 18_446_744_073_709_551_615
+  @select_chunk_size 100
 
   defstruct [:table, :index_table]
 
@@ -80,11 +81,22 @@ defmodule ExWapp.Store.MessageTable do
   @spec upsert(t(), String.t(), [map()]) :: :ok
   def upsert(%__MODULE__{} = message_store, jid, messages)
       when is_binary(jid) and is_list(messages) do
-    Enum.each(messages, &upsert_one(message_store, jid, &1))
+    upsert_count(message_store, jid, messages)
     :ok
   end
 
   def upsert(%__MODULE__{}, _jid, _messages), do: :ok
+
+  @doc false
+  @spec upsert_count(t(), String.t(), [map()]) :: non_neg_integer()
+  def upsert_count(%__MODULE__{} = message_store, jid, messages)
+      when is_binary(jid) and is_list(messages) do
+    Enum.reduce(messages, 0, fn message, count ->
+      count + upsert_one(message_store, jid, message)
+    end)
+  end
+
+  def upsert_count(%__MODULE__{}, _jid, _messages), do: 0
 
   @doc """
   Returns a lazy stream over messages for one chat.
@@ -144,13 +156,8 @@ defmodule ExWapp.Store.MessageTable do
   @spec find_by_id(t(), String.t()) :: {String.t(), map()} | nil
   def find_by_id(%__MODULE__{} = message_store, message_id) when is_binary(message_id) do
     message_store.index_table
-    |> :ets.select([{{{:"$1", message_id}, :"$2"}, [], [:"$_"]}])
-    |> Enum.find_value(fn {{jid, ^message_id}, key} ->
-      case :ets.lookup(message_store.table, key) do
-        [{^key, message}] -> {jid, message}
-        _ -> nil
-      end
-    end)
+    |> select_index_by_message_id(message_id)
+    |> find_by_id_from_selection(message_store.table, message_id)
   end
 
   def find_by_id(%__MODULE__{}, _message_id), do: nil
@@ -160,9 +167,20 @@ defmodule ExWapp.Store.MessageTable do
   """
   @spec update_status(t(), String.t(), String.t(), atom()) :: :ok
   def update_status(%__MODULE__{} = message_store, jid, message_id, status) do
-    case find(message_store, jid, message_id) do
-      nil -> :ok
-      message -> upsert(message_store, jid, [Map.put(message, :status, status)])
+    update_status_count(message_store, jid, message_id, status)
+    :ok
+  end
+
+  @doc false
+  @spec update_status_count(t(), String.t(), String.t(), atom()) :: non_neg_integer()
+  def update_status_count(%__MODULE__{} = message_store, jid, message_id, status) do
+    with [{{^jid, ^message_id}, key}] <-
+           :ets.lookup(message_store.index_table, {jid, message_id}),
+         [{^key, message}] <- :ets.lookup(message_store.table, key) do
+      :ets.insert(message_store.table, {key, Map.put(message, :status, status)})
+      1
+    else
+      _ -> 0
     end
   end
 
@@ -172,19 +190,22 @@ defmodule ExWapp.Store.MessageTable do
   @spec update_status_by_id(t(), String.t(), atom()) :: :ok
   def update_status_by_id(%__MODULE__{} = message_store, message_id, status)
       when is_binary(message_id) do
-    message_store.index_table
-    |> :ets.select([{{{:"$1", message_id}, :"$2"}, [], [:"$_"]}])
-    |> Enum.each(fn {{jid, ^message_id}, key} ->
-      case :ets.lookup(message_store.table, key) do
-        [{^key, message}] -> upsert(message_store, jid, [Map.put(message, :status, status)])
-        _ -> :ok
-      end
-    end)
-
+    update_status_by_id_count(message_store, message_id, status)
     :ok
   end
 
   def update_status_by_id(%__MODULE__{}, _message_id, _status), do: :ok
+
+  @doc false
+  @spec update_status_by_id_count(t(), String.t(), atom()) :: non_neg_integer()
+  def update_status_by_id_count(%__MODULE__{} = message_store, message_id, status)
+      when is_binary(message_id) do
+    message_store.index_table
+    |> select_index_by_message_id(message_id)
+    |> update_status_from_selection(message_store.table, message_id, status, 0)
+  end
+
+  def update_status_by_id_count(%__MODULE__{}, _message_id, _status), do: 0
 
   @doc """
   Deletes selected messages after an application has durably persisted them.
@@ -192,34 +213,57 @@ defmodule ExWapp.Store.MessageTable do
   @spec delete(t(), String.t(), [String.t()]) :: :ok
   def delete(%__MODULE__{} = message_store, jid, message_ids)
       when is_binary(jid) and is_list(message_ids) do
-    Enum.each(message_ids, fn message_id ->
-      case :ets.take(message_store.index_table, {jid, message_id}) do
-        [{{^jid, ^message_id}, key}] -> :ets.delete(message_store.table, key)
-        _ -> :ok
-      end
-    end)
-
+    delete_count(message_store, jid, message_ids)
     :ok
   end
 
   def delete(%__MODULE__{}, _jid, _message_ids), do: :ok
+
+  @doc false
+  @spec delete_count(t(), String.t(), [String.t()]) :: non_neg_integer()
+  def delete_count(%__MODULE__{} = message_store, jid, message_ids)
+      when is_binary(jid) and is_list(message_ids) do
+    Enum.reduce(message_ids, 0, fn message_id, count ->
+      case :ets.take(message_store.index_table, {jid, message_id}) do
+        [{{^jid, ^message_id}, key}] ->
+          :ets.delete(message_store.table, key)
+          count + 1
+
+        _ ->
+          count
+      end
+    end)
+  end
+
+  def delete_count(%__MODULE__{}, _jid, _message_ids), do: 0
 
   @doc """
   Deletes all messages for one chat.
   """
   @spec delete_chat(t(), String.t()) :: :ok
   def delete_chat(%__MODULE__{} = message_store, jid) when is_binary(jid) do
-    message_store.index_table
-    |> :ets.select([{{{jid, :"$1"}, :"$2"}, [], [:"$_"]}])
-    |> Enum.each(fn {{^jid, message_id}, key} ->
-      :ets.delete(message_store.index_table, {jid, message_id})
-      :ets.delete(message_store.table, key)
-    end)
-
+    delete_chat_count(message_store, jid)
     :ok
   end
 
   def delete_chat(%__MODULE__{}, _jid), do: :ok
+
+  @doc false
+  @spec delete_chat_count(t(), String.t()) :: non_neg_integer()
+  def delete_chat_count(%__MODULE__{} = message_store, jid) when is_binary(jid) do
+    deleted =
+      :ets.select_delete(message_store.table, [
+        {{{jid, :_, :_}, :_}, [], [true]}
+      ])
+
+    :ets.select_delete(message_store.index_table, [
+      {{{jid, :_}, :_}, [], [true]}
+    ])
+
+    deleted
+  end
+
+  def delete_chat_count(%__MODULE__{}, _jid), do: 0
 
   @doc """
   Returns a complete, newest-first snapshot grouped by chat JID.
@@ -259,13 +303,14 @@ defmodule ExWapp.Store.MessageTable do
 
         :ets.insert(message_store.table, {key, normalized_message})
         :ets.insert(message_store.index_table, {{jid, message_id}, key})
+        1
 
       _ ->
-        :ok
+        0
     end
   end
 
-  defp upsert_one(_message_store, _jid, _message), do: :ok
+  defp upsert_one(_message_store, _jid, _message), do: 0
 
   defp delete_previous_key(message_store, jid, message_id) do
     case :ets.lookup(message_store.index_table, {jid, message_id}) do
@@ -278,39 +323,67 @@ defmodule ExWapp.Store.MessageTable do
     do: {:halt, state}
 
   defp next_stream_item(message_store, jid, order, state) do
-    key = next_key(message_store.table, jid, order, state.cursor)
+    case next_lookup(message_store.table, jid, order, state.cursor) do
+      {{^jid, _timestamp, _id} = key, [{object_key, _message}]}
+      when object_key == key and state.skip > 0 ->
+        next_stream_item(message_store, jid, order, %{
+          state
+          | cursor: key,
+            skip: state.skip - 1
+        })
 
-    case key do
-      {^jid, _timestamp, _id} ->
-        case :ets.lookup(message_store.table, key) do
-          [{^key, _message}] when state.skip > 0 ->
-            next_stream_item(message_store, jid, order, %{
-              state
-              | cursor: key,
-                skip: state.skip - 1
-            })
+      {{^jid, _timestamp, _id} = key, [{object_key, message}]} when object_key == key ->
+        {[message], %{state | cursor: key, remaining: decrement_remaining(state.remaining)}}
 
-          [{^key, message}] ->
-            {[message], %{state | cursor: key, remaining: decrement_remaining(state.remaining)}}
-
-          _ ->
-            next_stream_item(message_store, jid, order, %{state | cursor: key})
-        end
-
-      _ ->
+      _end_or_next_chat ->
         {:halt, state}
     end
   rescue
     ArgumentError -> {:halt, state}
   end
 
-  defp next_key(table, jid, :oldest_first, nil), do: :ets.next(table, {jid, -1, ""})
+  defp next_lookup(table, jid, :oldest_first, nil),
+    do: :ets.next_lookup(table, {jid, -1, ""})
 
-  defp next_key(table, jid, :newest_first, nil),
-    do: :ets.prev(table, {jid, @max_timestamp + 1, ""})
+  defp next_lookup(table, jid, :newest_first, nil),
+    do: :ets.prev_lookup(table, {jid, @max_timestamp + 1, ""})
 
-  defp next_key(table, _jid, :oldest_first, cursor), do: :ets.next(table, cursor)
-  defp next_key(table, _jid, :newest_first, cursor), do: :ets.prev(table, cursor)
+  defp next_lookup(table, _jid, :oldest_first, cursor), do: :ets.next_lookup(table, cursor)
+  defp next_lookup(table, _jid, :newest_first, cursor), do: :ets.prev_lookup(table, cursor)
+
+  defp select_index_by_message_id(index_table, message_id) do
+    :ets.select(index_table, [{{{:"$1", message_id}, :"$2"}, [], [:"$_"]}], @select_chunk_size)
+  end
+
+  defp find_by_id_from_selection(:"$end_of_table", _table, _message_id), do: nil
+
+  defp find_by_id_from_selection({matches, continuation}, table, message_id) do
+    Enum.find_value(matches, fn {{jid, ^message_id}, key} ->
+      case :ets.lookup(table, key) do
+        [{^key, message}] -> {jid, message}
+        _ -> nil
+      end
+    end) || find_by_id_from_selection(:ets.select(continuation), table, message_id)
+  end
+
+  defp update_status_from_selection(:"$end_of_table", _table, _message_id, _status, count),
+    do: count
+
+  defp update_status_from_selection({matches, continuation}, table, message_id, status, count) do
+    count =
+      Enum.reduce(matches, count, fn {{_jid, ^message_id}, key}, updated_count ->
+        case :ets.lookup(table, key) do
+          [{^key, message}] ->
+            :ets.insert(table, {key, Map.put(message, :status, status)})
+            updated_count + 1
+
+          _ ->
+            updated_count
+        end
+      end)
+
+    update_status_from_selection(:ets.select(continuation), table, message_id, status, count)
+  end
 
   defp decrement_remaining(:all), do: :all
   defp decrement_remaining(remaining), do: remaining - 1

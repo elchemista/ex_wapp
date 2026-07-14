@@ -3,6 +3,7 @@ defmodule ExWapp.StoreTest do
   use ExUnit.Case, async: true
 
   alias ExWapp.Store
+  alias ExWapp.Store.MessageTable
 
   @tmp_dir Path.join(System.tmp_dir!(), "ex_wapp_store_tests")
 
@@ -128,6 +129,56 @@ defmodule ExWapp.StoreTest do
                |> Enum.to_list()
     end
 
+    test "status updates by ID apply across chats" do
+      path = Path.join(@tmp_dir, "status_by_id_test.etf")
+      store = Store.Ets.new(path: path)
+      message_id = "shared-message-id"
+      jid1 = "15550001111@s.whatsapp.net"
+      jid2 = "15550002222@s.whatsapp.net"
+
+      assert :ok =
+               Store.upsert_messages(store, jid1, [
+                 %{id: message_id, timestamp: 1, status: :pending}
+               ])
+
+      assert :ok =
+               Store.upsert_messages(store, jid2, [
+                 %{id: message_id, timestamp: 2, status: :pending}
+               ])
+
+      assert :ok = Store.update_message_status_by_id(store, message_id, :delivered)
+
+      assert %{status: :delivered} = Store.find_message(store, jid1, message_id)
+      assert %{status: :delivered} = Store.find_message(store, jid2, message_id)
+    end
+
+    test "delete_chat_messages removes only the requested chat history" do
+      path = Path.join(@tmp_dir, "delete_chat_messages_test.etf")
+      store = Store.Ets.new(path: path)
+      jid = "15550001111@s.whatsapp.net"
+      other_jid = "15550002222@s.whatsapp.net"
+
+      assert :ok =
+               Store.upsert_messages(store, jid, [
+                 %{id: "m1", timestamp: 1, status: :received},
+                 %{id: "m2", timestamp: 2, status: :received}
+               ])
+
+      assert :ok =
+               Store.upsert_messages(store, other_jid, [
+                 %{id: "m3", timestamp: 3, status: :received}
+               ])
+
+      assert :ok = Store.delete_chat_messages(store, jid)
+
+      assert [] = Store.list_messages(store, jid, limit: :all)
+      assert [%{id: "m3"}] = Store.list_messages(store, other_jid, limit: :all)
+
+      reloaded = Store.Ets.new(path: path)
+      assert [] = Store.list_messages(reloaded, jid, limit: :all)
+      assert [%{id: "m3"}] = Store.list_messages(reloaded, other_jid, limit: :all)
+    end
+
     test "persists to file and survives reload" do
       path = Path.join(@tmp_dir, "persist_test.etf")
 
@@ -138,6 +189,36 @@ defmodule ExWapp.StoreTest do
       # Second store instance loading same file
       store2 = Store.Ets.new(path: path)
       assert {:ok, %{key: "value"}} = Store.load(store2)
+    end
+  end
+
+  describe "MessageTable" do
+    test "streams a chat in timestamp order with offset and limit" do
+      table =
+        MessageTable.new(%{
+          "15550001111@s.whatsapp.net" => [
+            %{id: "m1", timestamp: 1},
+            %{id: "m3", timestamp: 3},
+            %{id: "m2", timestamp: 2}
+          ],
+          "15550002222@s.whatsapp.net" => [
+            %{id: "other", timestamp: 4}
+          ]
+        })
+
+      assert ["m3", "m2"] =
+               table
+               |> MessageTable.stream("15550001111@s.whatsapp.net", limit: 2)
+               |> Enum.map(& &1.id)
+
+      assert ["m2"] =
+               table
+               |> MessageTable.stream("15550001111@s.whatsapp.net",
+                 order: :oldest_first,
+                 offset: 1,
+                 limit: 1
+               )
+               |> Enum.map(& &1.id)
     end
   end
 

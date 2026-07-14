@@ -197,22 +197,22 @@ defmodule ExWapp.Chat do
           :ok | {:error, term()}
   def merge_messages(target, jid, messages) when is_list(messages) do
     jid_str = normalize_jid(jid)
-    chat = get_or_create(target, jid_str)
+    store = resolve_store(target)
+    chat = stored_or_new_chat(store, jid_str)
 
-    normalized_messages =
-      messages
-      |> Enum.map(&normalize_merged_message/1)
-      |> Enum.reject(&is_nil/1)
+    normalized_messages = normalize_merged_messages(messages)
 
-    case resolve_store(target) do
+    case store do
       nil ->
         :ok
 
       store ->
-        case Store.upsert_messages(store, jid_str, normalized_messages) do
-          :ok -> save_chat(target, update_last_message_timestamp(chat, normalized_messages))
-          {:error, _reason} = error -> error
-        end
+        save_chat_with_messages(
+          store,
+          jid_str,
+          normalized_messages,
+          update_last_message_timestamp(chat, normalized_messages)
+        )
     end
   end
 
@@ -225,9 +225,10 @@ defmodule ExWapp.Chat do
           :ok | {:error, term()}
   def add_message(target, jid, message) do
     jid_str = normalize_jid(jid)
-    chat = get_or_create(target, jid_str)
+    store = resolve_store(target)
+    chat = stored_or_new_chat(store, jid_str)
 
-    case resolve_store(target) do
+    case store do
       nil ->
         :ok
 
@@ -238,10 +239,7 @@ defmodule ExWapp.Chat do
             unread_count: if(message.from_me, do: chat.unread_count, else: chat.unread_count + 1)
         }
 
-        case Store.upsert_messages(store, jid_str, [message]) do
-          :ok -> save_chat(target, updated_chat)
-          {:error, _reason} = error -> error
-        end
+        save_chat_with_messages(store, jid_str, [message], updated_chat)
     end
   end
 
@@ -535,6 +533,15 @@ defmodule ExWapp.Chat do
     :exit, _ -> nil
   end
 
+  defp stored_or_new_chat(nil, jid_str), do: new_chat(jid_str)
+
+  defp stored_or_new_chat(store, jid_str) do
+    case Store.get(store, :chats, %{}) |> Map.get(jid_str) do
+      nil -> new_chat(jid_str)
+      chat -> normalize_stored_chat(store, chat)
+    end
+  end
+
   # Normalize JID to string format
   defp normalize_jid(%JID{} = jid), do: normalize_jid(JID.to_string(jid))
 
@@ -643,6 +650,17 @@ defmodule ExWapp.Chat do
 
   defp normalize_merged_message(_), do: nil
 
+  defp normalize_merged_messages(messages) do
+    messages
+    |> Enum.reduce([], fn message, acc ->
+      case normalize_merged_message(message) do
+        nil -> acc
+        normalized -> [normalized | acc]
+      end
+    end)
+    |> Enum.reverse()
+  end
+
   defp normalize_optional_text(value) when is_binary(value) do
     value = String.trim(value)
     if value == "", do: nil, else: value
@@ -698,6 +716,21 @@ defmodule ExWapp.Chat do
     end
   end
 
+  defp save_chat_with_messages(%Store.Ets{} = store, jid, messages, chat),
+    do: persist_chat_with_messages(store, jid, messages, chat)
+
+  defp save_chat_with_messages(%Store.Memory{} = store, jid, messages, chat),
+    do: persist_chat_with_messages(store, jid, messages, chat)
+
+  defp save_chat_with_messages(store, _jid, [], chat), do: save_chat_to_store(store, chat)
+
+  defp save_chat_with_messages(store, jid, messages, chat) do
+    case Store.upsert_messages(store, jid, messages) do
+      :ok -> save_chat_to_store(store, chat)
+      {:error, _reason} = error -> error
+    end
+  end
+
   defp save_chat_to_store(store, chat) do
     data = Store.load!(store)
     chats = Map.get(data, :chats, %{})
@@ -705,15 +738,28 @@ defmodule ExWapp.Chat do
     Store.persist(store, updated_data)
   end
 
+  defp persist_chat_with_messages(store, jid, messages, chat) do
+    data = Store.load!(store)
+    chats = Map.get(data, :chats, %{})
+
+    data
+    |> Map.put(:chats, Map.put(chats, chat.jid, strip_legacy_messages(chat)))
+    |> maybe_put_messages_for_persist(jid, messages)
+    |> then(&Store.persist(store, &1))
+  end
+
+  defp maybe_put_messages_for_persist(data, _jid, []), do: data
+
+  defp maybe_put_messages_for_persist(data, jid, messages) do
+    Map.put(data, :chat_messages, %{jid => messages})
+  end
+
   defp normalize_stored_chat(store, chat) when is_map(chat) do
     legacy_messages = Map.get(chat, :messages, [])
     clean_chat = strip_legacy_messages(chat)
 
     if is_list(legacy_messages) and legacy_messages != [] do
-      normalized_messages =
-        legacy_messages
-        |> Enum.map(&normalize_merged_message/1)
-        |> Enum.reject(&is_nil/1)
+      normalized_messages = normalize_merged_messages(legacy_messages)
 
       :ok = Store.upsert_messages(store, clean_chat.jid, normalized_messages)
       :ok = save_chat_to_store(store, clean_chat)
