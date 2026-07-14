@@ -120,4 +120,123 @@ defmodule ExWapp.AppState.CryptoTest do
       assert byte_size(mac) == 32
     end
   end
+  describe "reference compatibility" do
+    test "key expansion matches the HKDF slices directly" do
+      key_data = :crypto.hash(:sha256, "app-state-key")
+      expanded = hkdf_160(key_data)
+      keys = Crypto.expand_keys(key_data)
+
+      assert keys.index == binary_part(expanded, 0, 32)
+      assert keys.value_encryption == binary_part(expanded, 32, 32)
+      assert keys.value_mac == binary_part(expanded, 64, 32)
+      assert keys.snapshot_mac == binary_part(expanded, 96, 32)
+      assert keys.patch_mac == binary_part(expanded, 128, 32)
+    end
+
+    test "content MAC matches the WhatsApp field ordering" do
+      mac_key = :crypto.hash(:sha256, "content-mac-key")
+      key_id = <<1, 2, 3, 4>>
+      encrypted = "encrypted mutation"
+      key_data_length = <<byte_size(key_id) + 1::big-unsigned-64>>
+
+      expected =
+        :crypto.mac(
+          :hmac,
+          :sha512,
+          mac_key,
+          [<<1>>, key_id, encrypted, key_data_length]
+        )
+        |> binary_part(0, 32)
+
+      assert Crypto.compute_content_mac(0, encrypted, key_id, mac_key) == expected
+    end
+
+    test "snapshot MAC matches the explicit HMAC input" do
+      hash_state = :binary.copy(<<0xA5>>, 128)
+      key = :crypto.hash(:sha256, "snapshot-key")
+      version = 0x0102_0304
+      collection = "regular_low"
+
+      expected =
+        :crypto.mac(
+          :hmac,
+          :sha256,
+          key,
+          [hash_state, <<version::big-unsigned-64>>, collection]
+        )
+
+      assert Crypto.compute_snapshot_mac(hash_state, version, collection, key) == expected
+    end
+
+    test "patch MAC preserves value-MAC ordering" do
+      snapshot = :crypto.hash(:sha256, "snapshot")
+      value_macs = [
+        :crypto.hash(:sha256, "first"),
+        :crypto.hash(:sha256, "second")
+      ]
+
+      key = :crypto.hash(:sha256, "patch-key")
+      version = 7
+      collection = "regular"
+
+      expected =
+        :crypto.mac(
+          :hmac,
+          :sha256,
+          key,
+          [snapshot | value_macs] ++ [<<version::big-unsigned-64>>, collection]
+        )
+
+      assert Crypto.compute_patch_mac(snapshot, value_macs, version, collection, key) == expected
+
+      refute Crypto.compute_patch_mac(
+               snapshot,
+               Enum.reverse(value_macs),
+               version,
+               collection,
+               key
+             ) == expected
+    end
+  end
+
+  describe "PKCS7 validation" do
+    test "rejects padding whose bytes do not match its length" do
+      key = :crypto.hash(:sha256, "cbc-key")
+      iv = :binary.copy(<<0>>, 16)
+      invalid_plaintext = :binary.copy(<<0x41>>, 14) <> <<1, 2>>
+      ciphertext = :crypto.crypto_one_time(:aes_256_cbc, key, iv, invalid_plaintext, true)
+
+      assert {:error, :invalid_padding} = Crypto.decrypt_cbc(ciphertext, key, iv)
+    end
+
+    test "rejects padding longer than one AES block" do
+      key = :crypto.hash(:sha256, "cbc-key")
+      iv = :binary.copy(<<0>>, 16)
+      invalid_plaintext = :binary.copy(<<0x41>>, 15) <> :binary.copy(<<17>>, 17)
+      ciphertext = :crypto.crypto_one_time(:aes_256_cbc, key, iv, invalid_plaintext, true)
+
+      assert {:error, :invalid_padding} = Crypto.decrypt_cbc(ciphertext, key, iv)
+    end
+  end
+
+  defp hkdf_160(key_data) do
+    salt = :binary.copy(<<0>>, 32)
+    prk = :crypto.mac(:hmac, :sha256, salt, key_data)
+
+    {output, _previous} =
+      Enum.reduce(1..5, {<<>>, <<>>}, fn index, {acc, previous} ->
+        block =
+          :crypto.mac(
+            :hmac,
+            :sha256,
+            prk,
+            previous <> "WhatsApp Mutation Keys" <> <<index>>
+          )
+
+        {acc <> block, block}
+      end)
+
+    output
+  end
+
 end
