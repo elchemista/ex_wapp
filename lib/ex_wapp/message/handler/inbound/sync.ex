@@ -18,21 +18,40 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
 
   @doc """
   Applies every supported inbound protocol-sync payload to session state.
+
+  `own_sender?` must come from trusted envelope metadata. History sync and
+  app-state key shares are self-only protocol messages and are ignored unless
+  the server-attested sender is one of the local account identities.
   """
   @spec ingest(map(), term(), map(), term(), term()) :: map()
   def ingest(message_data, session, state, from, id) do
-    state = maybe_ingest_history_sync(message_data, session, state, from, id)
-    state = maybe_ingest_app_state_keys(message_data, session, state)
+    ingest(message_data, session, state, from, id, false)
+  end
+
+  @spec ingest(map(), term(), map(), term(), term(), boolean()) :: map()
+  def ingest(message_data, session, state, from, id, own_sender?) do
+    state =
+      maybe_ingest_history_sync(
+        message_data,
+        session,
+        state,
+        from,
+        id,
+        own_sender? == true
+      )
+
+    state = maybe_ingest_app_state_keys(message_data, session, state, own_sender? == true)
     maybe_ingest_placeholder_resend_response(message_data, session, state)
   end
 
-  @spec maybe_ingest_history_sync(map(), term(), map(), term(), term()) :: map()
+  @spec maybe_ingest_history_sync(map(), term(), map(), term(), term(), boolean()) :: map()
   defp maybe_ingest_history_sync(
          %{message_content_type: :protocol, protocol_payload: payload},
          session,
          state,
          from,
-         id
+         id,
+         true
        )
        when is_binary(payload) do
     case HistorySync.extract_from_message(payload) do
@@ -75,24 +94,36 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
     end
   end
 
-  defp maybe_ingest_history_sync(_message_data, _session, state, _from, _id), do: state
+  defp maybe_ingest_history_sync(
+         %{message_content_type: :protocol},
+         _session,
+         state,
+         _from,
+         _id,
+         false
+       ),
+       do: state
 
-  @spec maybe_ingest_app_state_keys(map(), term(), map()) :: map()
+  defp maybe_ingest_history_sync(
+         _message_data,
+         _session,
+         state,
+         _from,
+         _id,
+         _own_sender?
+       ),
+       do: state
+
+  @spec maybe_ingest_app_state_keys(map(), term(), map(), boolean()) :: map()
   defp maybe_ingest_app_state_keys(
          %{message_content_type: :protocol, protocol_payload: payload},
          session,
-         state
+         state,
+         true
        )
        when is_binary(payload) do
-    with {:ok, message_fields} <- Fields.decode_safe(payload),
-         protocol_message when is_binary(protocol_message) <-
-           Fields.first_length_delimited(message_fields, 12),
-         {:ok, protocol_fields} <- Fields.decode_safe(protocol_message),
-         key_share_bytes when is_binary(key_share_bytes) <-
-           Fields.first_length_delimited(protocol_fields, 7),
-         {:ok, key_share} <- SyncAction.decode_app_state_sync_key_share(key_share_bytes),
-         true <- key_share.keys != [] do
-      case store_app_state_keys(state, key_share.keys) do
+    with {:ok, keys} <- extract_app_state_keys(payload) do
+      case store_app_state_keys(state, keys) do
         {:ok, action} when action in [:updated, :unchanged] ->
           maybe_trigger_initial_app_state_sync(session)
 
@@ -110,7 +141,31 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
       state
   end
 
-  defp maybe_ingest_app_state_keys(_message_data, _session, state), do: state
+  defp maybe_ingest_app_state_keys(
+         %{message_content_type: :protocol},
+         _session,
+         state,
+         false
+       ),
+       do: state
+
+  defp maybe_ingest_app_state_keys(_message_data, _session, state, _own_sender?), do: state
+
+  @spec extract_app_state_keys(binary()) :: {:ok, [map()]} | :not_app_state_key_share
+  defp extract_app_state_keys(payload) when is_binary(payload) do
+    with {:ok, message_fields} <- Fields.decode_safe(payload),
+         protocol_message when is_binary(protocol_message) <-
+           Fields.first_length_delimited(message_fields, 12),
+         {:ok, protocol_fields} <- Fields.decode_safe(protocol_message),
+         key_share_bytes when is_binary(key_share_bytes) <-
+           Fields.first_length_delimited(protocol_fields, 7),
+         {:ok, key_share} <- SyncAction.decode_app_state_sync_key_share(key_share_bytes),
+         true <- key_share.keys != [] do
+      {:ok, key_share.keys}
+    else
+      _ -> :not_app_state_key_share
+    end
+  end
 
   @spec maybe_ingest_placeholder_resend_response(map(), term(), map()) :: map()
   defp maybe_ingest_placeholder_resend_response(
