@@ -65,6 +65,7 @@ defmodule ExWapp.Message.Handler.Inbound.ReceiptsTest do
   test "does not build receipts without a sender and message id" do
     assert {[], %{}} = Receipts.build_actions("", "", nil, %{}, %{}, %{})
   end
+
   test "treats consumed Signal key failures as delivered duplicates" do
     from = "15550001111@s.whatsapp.net"
     state = %{marker: :unchanged}
@@ -125,5 +126,4 @@ defmodule ExWapp.Message.Handler.Inbound.ReceiptsTest do
 
     assert map_size(updated_state.retry_counters) == 1
   end
-
 end
