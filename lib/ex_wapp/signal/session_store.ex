@@ -495,6 +495,9 @@ defmodule ExWapp.Signal.SessionStore do
       {:ok, plaintext, session} ->
         {:ok, plaintext, put_session(store, jid, session)}
 
+      {:error, reason} ->
+        {:error, reason}
+
       :try_fresh ->
         case Signal.decrypt_prekey_message(ciphertext, local_identity, local_prekeys) do
           {:ok, plaintext, session} ->
@@ -526,6 +529,13 @@ defmodule ExWapp.Signal.SessionStore do
             )
 
             {:ok, plaintext, updated_session}
+
+          {:error, reason} when reason in [:message_key_not_found, :prekey_not_found] ->
+            Logger.debug(
+              "[SESSION_STORE] Prekey message for #{jid} references already-consumed key material: #{inspect(reason)}"
+            )
+
+            {:error, reason}
 
           {:error, reason} ->
             Logger.debug(
