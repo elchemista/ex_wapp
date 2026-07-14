@@ -339,14 +339,17 @@ defmodule ExWapp.Signal.Session do
       Logger.debug("[SIGNAL] MAC verification: #{mac_valid}")
 
       if mac_valid do
-        plaintext =
-          WireFormat.decrypt_aes_cbc(
-            parsed.ciphertext,
-            message_keys.cipher_key,
-            message_keys.iv
-          )
+        case WireFormat.decrypt_aes_cbc(
+               parsed.ciphertext,
+               message_keys.cipher_key,
+               message_keys.iv
+             ) do
+          {:ok, plaintext} ->
+            {:ok, plaintext, %{session | receiving_chain: updated_chain}}
 
-        {:ok, plaintext, %{session | receiving_chain: updated_chain}}
+          {:error, reason} ->
+            {:error, reason}
+        end
       else
         {:error, :invalid_mac}
       end
