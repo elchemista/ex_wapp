@@ -35,6 +35,7 @@ defmodule ExWapp.JID do
   @spec group?(String.t() | t()) :: boolean()
   def group?(%__MODULE__{server: server}), do: server == @group_server
   def group?(jid) when is_binary(jid), do: String.ends_with?(jid, "@" <> @group_server)
+  def group?(_jid), do: false
   @deprecated "Use group?/1 instead."
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_group?(jid), do: group?(jid)
@@ -43,6 +44,7 @@ defmodule ExWapp.JID do
   @spec broadcast?(String.t() | t()) :: boolean()
   def broadcast?(%__MODULE__{server: server}), do: server == @broadcast_server
   def broadcast?(jid) when is_binary(jid), do: String.ends_with?(jid, "@" <> @broadcast_server)
+  def broadcast?(_jid), do: false
   @deprecated "Use broadcast?/1 instead."
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_broadcast?(jid), do: broadcast?(jid)
@@ -51,6 +53,7 @@ defmodule ExWapp.JID do
   @spec user?(String.t() | t()) :: boolean()
   def user?(%__MODULE__{server: server}), do: server == @default_user_server
   def user?(jid) when is_binary(jid), do: String.ends_with?(jid, "@" <> @default_user_server)
+  def user?(_jid), do: false
   @deprecated "Use user?/1 instead."
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_user?(jid), do: user?(jid)
@@ -71,10 +74,18 @@ defmodule ExWapp.JID do
     end
   end
 
+  def parse(_jid), do: {:error, :invalid_jid}
+
   defp parse_user_device(user) do
-    case String.split(user, ":") do
-      [u, d] -> {u, String.to_integer(d)}
-      [u] -> {u, 0}
+    case String.split(user, ":", parts: 2) do
+      [u, device] ->
+        case Integer.parse(device) do
+          {parsed, ""} when parsed >= 0 -> {u, parsed}
+          _ -> {u, 0}
+        end
+
+      [u] ->
+        {u, 0}
     end
   end
 
