@@ -120,6 +120,7 @@ defmodule ExWapp.AppState.CryptoTest do
       assert byte_size(mac) == 32
     end
   end
+
   describe "reference compatibility" do
     test "key expansion matches the HKDF slices directly" do
       key_data = :crypto.hash(:sha256, "app-state-key")
@@ -238,5 +239,4 @@ defmodule ExWapp.AppState.CryptoTest do
 
     output
   end
-
 end
