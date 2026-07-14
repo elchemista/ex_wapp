@@ -313,11 +313,11 @@ defmodule ExWapp.Signal.Encryption do
     with {:ok, %{prekey_id: prekey_id}}
          when is_integer(prekey_id) and prekey_id > 0 <-
            WireFormat.parse_prekey_signal_message(ciphertext),
+         :ok <- persist_session_before_prekey_delete(store, sessions, prekey_id),
          data when is_map(data) <- ExWapp.Store.load!(store),
          signal when is_map(signal) <- Map.get(data, :signal, %{}),
          prekeys when is_map(prekeys) <- Map.get(signal, :prekeys, %{}),
-         true <- Map.has_key?(prekeys, prekey_id),
-         :ok <- persist_session_before_prekey_delete(store, sessions, prekey_id) do
+         true <- Map.has_key?(prekeys, prekey_id) do
       updated_signal = Map.put(signal, :prekeys, Map.delete(prekeys, prekey_id))
 
       case ExWapp.Store.persist(store, Map.put(data, :signal, updated_signal)) do
