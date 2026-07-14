@@ -9,7 +9,7 @@ defmodule ExWapp.Signal.Encryption do
   4. Decrypting incoming messages
   """
 
-  alias ExWapp.Signal.{PrekeyFetcher, SessionStore}
+  alias ExWapp.Signal.{PrekeyFetcher, SessionStore, WireFormat}
 
   require Logger
 
@@ -150,6 +150,7 @@ defmodule ExWapp.Signal.Encryption do
                local_prekeys
              ) do
           {:ok, plaintext, updated_store} ->
+            :ok = consume_one_time_prekey(store, ciphertext, is_prekey)
             Logger.debug("[ENCRYPTION] Decrypt succeeded, plaintext_size=#{byte_size(plaintext)}")
             {:ok, plaintext, updated_store}
 
@@ -303,6 +304,40 @@ defmodule ExWapp.Signal.Encryption do
 
       {:error, :no_identity_key}
     end
+  end
+
+  @spec consume_one_time_prekey(term(), binary(), boolean()) :: :ok
+  defp consume_one_time_prekey(_store, _ciphertext, false), do: :ok
+
+  defp consume_one_time_prekey(store, ciphertext, true) do
+    with {:ok, %{prekey_id: prekey_id}}
+         when is_integer(prekey_id) and prekey_id > 0 <-
+           WireFormat.parse_prekey_signal_message(ciphertext),
+         data when is_map(data) <- ExWapp.Store.load!(store),
+         signal when is_map(signal) <- Map.get(data, :signal, %{}),
+         prekeys when is_map(prekeys) <- Map.get(signal, :prekeys, %{}),
+         true <- Map.has_key?(prekeys, prekey_id) do
+      updated_signal = Map.put(signal, :prekeys, Map.delete(prekeys, prekey_id))
+
+      case ExWapp.Store.persist(store, Map.put(data, :signal, updated_signal)) do
+        :ok ->
+          Logger.debug("[SIGNAL] Consumed one-time prekey #{prekey_id}")
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "[SIGNAL] Failed persisting consumed one-time prekey #{prekey_id}: #{inspect(reason)}"
+          )
+
+          :ok
+      end
+    else
+      _ -> :ok
+    end
+  rescue
+    error ->
+      Logger.warning("[SIGNAL] Failed consuming one-time prekey: #{inspect(error)}")
+      :ok
   end
 
   defp prekey_message?(enc_type) when enc_type in [:pkmsg, :prekey, 3], do: true
