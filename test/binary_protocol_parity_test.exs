@@ -139,7 +139,7 @@ defmodule ExWapp.BinaryProtocolParityTest do
       end
     end
 
-    test "a malformed device segment is normalized without crashing the encoder" do
+    test "a malformed device segment round-trips as a raw string" do
       decoded =
         %Node{
           tag: "message",
