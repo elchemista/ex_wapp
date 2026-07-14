@@ -32,7 +32,7 @@ defmodule ExWapp.JID do
   def interop_server, do: @interop_server
 
   @doc "Checks if a JID string represents a group."
-  @spec group?(String.t() | t()) :: boolean()
+  @spec group?(term()) :: boolean()
   def group?(%__MODULE__{server: server}), do: server == @group_server
   def group?(jid) when is_binary(jid), do: String.ends_with?(jid, "@" <> @group_server)
   def group?(_jid), do: false
@@ -41,7 +41,7 @@ defmodule ExWapp.JID do
   def is_group?(jid), do: group?(jid)
 
   @doc "Checks if a JID string represents a broadcast list."
-  @spec broadcast?(String.t() | t()) :: boolean()
+  @spec broadcast?(term()) :: boolean()
   def broadcast?(%__MODULE__{server: server}), do: server == @broadcast_server
   def broadcast?(jid) when is_binary(jid), do: String.ends_with?(jid, "@" <> @broadcast_server)
   def broadcast?(_jid), do: false
@@ -50,7 +50,7 @@ defmodule ExWapp.JID do
   def is_broadcast?(jid), do: broadcast?(jid)
 
   @doc "Checks if a JID string represents a regular user."
-  @spec user?(String.t() | t()) :: boolean()
+  @spec user?(term()) :: boolean()
   def user?(%__MODULE__{server: server}), do: server == @default_user_server
   def user?(jid) when is_binary(jid), do: String.ends_with?(jid, "@" <> @default_user_server)
   def user?(_jid), do: false
@@ -59,12 +59,17 @@ defmodule ExWapp.JID do
   def is_user?(jid), do: user?(jid)
 
   @doc "Parses a JID string into a struct."
-  @spec parse(String.t()) :: {:ok, t()} | {:error, :invalid_jid}
+  @spec parse(term()) :: {:ok, t()} | {:error, :invalid_jid}
   def parse(jid) when is_binary(jid) do
     case String.split(jid, "@") do
       [user, server] ->
-        {user, device} = parse_user_device(user)
-        {:ok, %__MODULE__{user: user, device: device, server: server}}
+        case parse_user_device(user) do
+          {:ok, parsed_user, device} ->
+            {:ok, %__MODULE__{user: parsed_user, device: device, server: server}}
+
+          :error ->
+            {:error, :invalid_jid}
+        end
 
       [server] ->
         {:ok, %__MODULE__{user: "", server: server}}
@@ -80,12 +85,12 @@ defmodule ExWapp.JID do
     case String.split(user, ":", parts: 2) do
       [u, device] ->
         case Integer.parse(device) do
-          {parsed, ""} when parsed >= 0 -> {u, parsed}
-          _ -> {u, 0}
+          {parsed, ""} when parsed >= 0 -> {:ok, u, parsed}
+          _ -> :error
         end
 
       [u] ->
-        {u, 0}
+        {:ok, u, 0}
     end
   end
 
