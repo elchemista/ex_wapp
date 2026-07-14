@@ -521,7 +521,7 @@ defmodule ExWapp.SignalSenderKeyTest do
 
     assert record.current_id == 6
     assert record.state_ids == [6, 5, 4, 3, 2]
-    assert Map.keys(record.states) |> Enum.sort() == [2, 3, 4, 5, 6]
+    assert record.states |> Map.keys() |> Enum.sort() == [2, 3, 4, 5, 6]
   end
 
   defp receiver_with_distribution(key_id) do
