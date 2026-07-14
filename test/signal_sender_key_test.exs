@@ -354,6 +354,210 @@ defmodule ExWapp.SignalSenderKeyTest do
            end)
   end
 
+  test "decrypts out-of-order messages once and rejects a replay" do
+    fixture = receiver_with_distribution(301)
+
+    messages =
+      for {iteration, plaintext} <- [{0, "zero"}, {1, "one"}, {2, "two"}], into: %{} do
+        ciphertext =
+          build_sender_key_message(
+            fixture.key_id,
+            iteration,
+            fixture.chain_key,
+            fixture.signing.private,
+            plaintext
+          )
+
+        {iteration, {plaintext, ciphertext}}
+      end
+
+    {plaintext_2, ciphertext_2} = messages[2]
+    {plaintext_0, ciphertext_0} = messages[0]
+    {plaintext_1, ciphertext_1} = messages[1]
+
+    assert {:ok, ^plaintext_2} =
+             SenderKey.decrypt_group_message(
+               fixture.store,
+               fixture.group_jid,
+               fixture.sender_jid,
+               ciphertext_2
+             )
+
+    assert {:ok, ^plaintext_0} =
+             SenderKey.decrypt_group_message(
+               fixture.store,
+               fixture.group_jid,
+               fixture.sender_jid,
+               ciphertext_0
+             )
+
+    assert {:ok, ^plaintext_1} =
+             SenderKey.decrypt_group_message(
+               fixture.store,
+               fixture.group_jid,
+               fixture.sender_jid,
+               ciphertext_1
+             )
+
+    assert {:error, :old_sender_key_iteration} =
+             SenderKey.decrypt_group_message(
+               fixture.store,
+               fixture.group_jid,
+               fixture.sender_jid,
+               ciphertext_0
+             )
+  end
+
+  test "rejects sender-key iterations too far into the future" do
+    fixture = receiver_with_distribution(302)
+
+    ciphertext =
+      build_sender_key_message(
+        fixture.key_id,
+        2_001,
+        fixture.chain_key,
+        fixture.signing.private,
+        "too far"
+      )
+
+    assert {:error, :sender_key_iteration_too_far_into_future} =
+             SenderKey.decrypt_group_message(
+               fixture.store,
+               fixture.group_jid,
+               fixture.sender_jid,
+               ciphertext
+             )
+  end
+
+  test "reports an unknown sender-key id without mutating the active state" do
+    fixture = receiver_with_distribution(303)
+
+    ciphertext =
+      build_sender_key_message(
+        fixture.key_id + 1,
+        0,
+        fixture.chain_key,
+        fixture.signing.private,
+        "wrong id"
+      )
+
+    assert {:error, {:unknown_sender_key_id, 304}} =
+             SenderKey.decrypt_group_message(
+               fixture.store,
+               fixture.group_jid,
+               fixture.sender_jid,
+               ciphertext
+             )
+
+    data = ExWapp.Store.load!(fixture.store)
+
+    assert get_in(data, [
+             :signal,
+             :sender_keys,
+             {fixture.group_jid, fixture.sender_jid},
+             :current_id
+           ]) == fixture.key_id
+  end
+
+  test "distinguishes malformed and unsupported sender-key messages" do
+    fixture = receiver_with_distribution(305)
+
+    assert {:error, :invalid_sender_key_message} =
+             SenderKey.decrypt_group_message(
+               fixture.store,
+               fixture.group_jid,
+               fixture.sender_jid,
+               <<1, 2, 3>>
+             )
+
+    valid =
+      build_sender_key_message(
+        fixture.key_id,
+        0,
+        fixture.chain_key,
+        fixture.signing.private,
+        "version"
+      )
+
+    <<_version, rest::binary>> = valid
+    unsupported = <<0x23, rest::binary>>
+
+    assert {:error, {:unsupported_sender_key_message_version, 2}} =
+             SenderKey.decrypt_group_message(
+               fixture.store,
+               fixture.group_jid,
+               fixture.sender_jid,
+               unsupported
+             )
+  end
+
+  test "retains only the five newest sender-key states" do
+    store = ExWapp.Store.Memory.new(initial_data: %{signal: %{}})
+    signing = Keys.generate_key_pair()
+    group_jid = "120363043214477337@g.us"
+    sender_jid = "199316597694686@lid"
+
+    for key_id <- 1..6 do
+      payload =
+        build_sender_key_distribution_message_payload(
+          group_jid,
+          key_id,
+          0,
+          :crypto.hash(:sha256, <<key_id>>),
+          signing.public
+        )
+
+      assert {:ok, 1} =
+               SenderKey.process_distributions_from_plaintext(
+                 store,
+                 group_jid,
+                 sender_jid,
+                 payload
+               )
+    end
+
+    data = ExWapp.Store.load!(store)
+    record = get_in(data, [:signal, :sender_keys, {group_jid, sender_jid}])
+
+    assert record.current_id == 6
+    assert record.state_ids == [6, 5, 4, 3, 2]
+    assert Map.keys(record.states) |> Enum.sort() == [2, 3, 4, 5, 6]
+  end
+
+  defp receiver_with_distribution(key_id) do
+    store = ExWapp.Store.Memory.new(initial_data: %{signal: %{}})
+    signing = Keys.generate_key_pair()
+    group_jid = "120363043214477337@g.us"
+    sender_jid = "199316597694686@lid"
+    chain_key = :crypto.strong_rand_bytes(32)
+
+    payload =
+      build_sender_key_distribution_message_payload(
+        group_jid,
+        key_id,
+        0,
+        chain_key,
+        signing.public
+      )
+
+    {:ok, 1} =
+      SenderKey.process_distributions_from_plaintext(
+        store,
+        group_jid,
+        sender_jid,
+        payload
+      )
+
+    %{
+      store: store,
+      signing: signing,
+      group_jid: group_jid,
+      sender_jid: sender_jid,
+      key_id: key_id,
+      chain_key: chain_key
+    }
+  end
+
   defp build_sender_key_distribution_message_payload(
          group_jid,
          sender_key_id,
