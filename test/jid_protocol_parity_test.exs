@@ -68,7 +68,7 @@ defmodule ExWapp.JIDProtocolParityTest do
       assert JID.to_string(%JID{user: "1234", device: 5}) ==
                "1234:5@s.whatsapp.net"
 
-      assert JID.new_ad("1234", 128, 2) |> JID.to_string() ==
+      assert JID.to_string(JID.new_ad("1234", 128, 2)) ==
                "1234.128:2@hosted"
     end
   end
