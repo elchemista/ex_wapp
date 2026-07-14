@@ -63,4 +63,32 @@ defmodule ExWapp.Message.Handler.Inbound.EnvelopeTest do
              %{}
            )
   end
+
+  test "authorizes self-only protocol senders from PN, LID, and group participant" do
+    own_pn = "15550009999@s.whatsapp.net"
+    own_lid = "90000000099@lid"
+    other = "15550001111@s.whatsapp.net"
+
+    store =
+      Memory.new(
+        initial_data: %{
+          pairing: %{device: %{jid: own_pn}},
+          client_info: %{jid: own_pn, lid: own_lid}
+        }
+      )
+
+    state = %{store: store}
+    direct_attrs = %{"to" => own_pn}
+
+    assert Envelope.own_sender?(direct_attrs, own_pn, nil, state)
+    assert Envelope.own_sender?(direct_attrs, "#{own_pn |> String.split("@") |> hd()}:7@s.whatsapp.net", nil, state)
+    assert Envelope.own_sender?(%{"to" => own_lid}, own_lid, nil, state)
+
+    group_attrs = %{"to" => own_pn, "from" => "12000000000@g.us"}
+    assert Envelope.own_sender?(group_attrs, "12000000000@g.us", own_pn, state)
+
+    refute Envelope.own_sender?(direct_attrs, other, nil, state)
+    refute Envelope.own_sender?(group_attrs, "12000000000@g.us", other, state)
+    refute Envelope.own_sender?(direct_attrs, "invalid", nil, state)
+  end
 end
