@@ -13,6 +13,7 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
   alias ExWapp.Signal.SessionStore
 
   @max_retry_receipt_count 2
+  @duplicate_decrypt_reasons [:message_key_not_found, :prekey_not_found, :key_unavailable]
 
   @doc """
   Plans receipt-related actions for one normalized inbound message.
@@ -22,6 +23,16 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
     cond do
       invalid_receipt_target?(from, id) ->
         {[], state}
+
+      duplicate_decrypt_error?(Map.get(message_data, :decrypt_status)) ->
+        build_duplicate_delivery_receipt_actions(
+          from,
+          id,
+          participant,
+          attrs,
+          message_data,
+          state
+        )
 
       needs_retry_receipt?(message_data) ->
         build_retry_receipt_actions(from, id, participant, attrs, message_data, state)
@@ -62,6 +73,28 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
       end
 
     {actions, updated_state}
+  end
+
+  @spec build_duplicate_delivery_receipt_actions(term(), term(), term(), map(), map(), map()) ::
+          {[term()], map()}
+  defp build_duplicate_delivery_receipt_actions(
+         from,
+         id,
+         participant,
+         attrs,
+         message_data,
+         state
+       ) do
+    Logger.debug("[DECRYPT] Treating #{inspect(id)} as an already-decrypted Signal duplicate")
+
+    receipt_type = delivery_receipt_type(from, attrs, state)
+    receipt_meta = %{recipient: Map.get(attrs, "recipient")}
+
+    actions =
+      [{:send_receipt, from, id, participant, receipt_type, receipt_meta}] ++
+        signal_sessions_update_actions(message_data)
+
+    {actions, state}
   end
 
   @spec build_delivery_receipt_actions(term(), term(), term(), map(), map(), map()) ::
@@ -118,6 +151,21 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
        do: 1
 
   defp retry_reason_code(_), do: 0
+
+  @doc false
+  @spec duplicate_decrypt_error?(term()) :: boolean()
+  def duplicate_decrypt_error?(reason) when reason in @duplicate_decrypt_reasons, do: true
+
+  def duplicate_decrypt_error?({:error, reason}),
+    do: duplicate_decrypt_error?(reason)
+
+  def duplicate_decrypt_error?({:decrypt_failed_for_payload, _enc_type, reason}),
+    do: duplicate_decrypt_error?(reason)
+
+  def duplicate_decrypt_error?({:decrypt_failed_for_candidate, _candidate, reason}),
+    do: duplicate_decrypt_error?(reason)
+
+  def duplicate_decrypt_error?(_reason), do: false
 
   @spec needs_retry_receipt?(map()) :: boolean()
   defp needs_retry_receipt?(%{decrypt_status: {:error, _}}), do: true
