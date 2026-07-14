@@ -135,7 +135,7 @@ defmodule ExWapp.Message.Handler.Inbound.Envelope do
       end
 
     sender_base = Common.strip_device_from_jid(sender)
-    local_jids = local_recipient_jids(state, attrs)
+    local_jids = local_recipient_jids(state, %{})
 
     sender != "" and (sender in local_jids or sender_base in local_jids)
   end
