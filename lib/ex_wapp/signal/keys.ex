@@ -78,6 +78,8 @@ defmodule ExWapp.Signal.Keys do
     verify_message(identity_public, message, signature)
   end
 
+  def verify(_identity_public, _curve25519_public, _signature), do: false
+
   @doc """
   Verify a signature produced by `sign_message/2` for an arbitrary message.
   """
@@ -98,6 +100,8 @@ defmodule ExWapp.Signal.Keys do
         false
     end
   end
+
+  def verify_message(_identity_public, _message, _signature), do: false
 
   defp sign_curve25519(private_key, message, random) do
     priv_scalar = private_key |> :binary.decode_unsigned(:little)
