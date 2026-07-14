@@ -145,19 +145,39 @@ defmodule ExWapp.Signal.WireFormat do
   end
 
   @doc """
-  Decrypts ciphertext using AES-256-CBC with PKCS7 padding removal.
+  Decrypts ciphertext using AES-256-CBC and validates PKCS7 padding.
   """
-  def decrypt_aes_cbc(ciphertext, cipher_key, iv) do
-    # AES-256-CBC decryption
-    padded = :crypto.crypto_one_time(:aes_256_cbc, cipher_key, iv, ciphertext, false)
+  @spec decrypt_aes_cbc(binary(), binary(), binary()) ::
+          {:ok, binary()} | {:error, :invalid_ciphertext | :invalid_padding | :decrypt_failed}
+  def decrypt_aes_cbc(ciphertext, cipher_key, iv)
+      when is_binary(ciphertext) and byte_size(ciphertext) > 0 and
+             rem(byte_size(ciphertext), 16) == 0 and is_binary(cipher_key) and
+             byte_size(cipher_key) == 32 and is_binary(iv) and byte_size(iv) == 16 do
+    try do
+      padded = :crypto.crypto_one_time(:aes_256_cbc, cipher_key, iv, ciphertext, false)
+      unpad_pkcs7(padded)
+    rescue
+      _error -> {:error, :decrypt_failed}
+    end
+  end
 
-    # Remove PKCS7 padding
+  def decrypt_aes_cbc(_ciphertext, _cipher_key, _iv), do: {:error, :invalid_ciphertext}
+
+  defp unpad_pkcs7(padded) when is_binary(padded) and byte_size(padded) > 0 do
     padding_len = :binary.last(padded)
 
-    if padding_len > 0 and padding_len <= 16 do
-      binary_part(padded, 0, byte_size(padded) - padding_len)
-    else
-      padded
+    cond do
+      padding_len == 0 or padding_len > 16 or padding_len > byte_size(padded) ->
+        {:error, :invalid_padding}
+
+      true ->
+        padding = binary_part(padded, byte_size(padded) - padding_len, padding_len)
+
+        if padding == :binary.copy(<<padding_len>>, padding_len) do
+          {:ok, binary_part(padded, 0, byte_size(padded) - padding_len)}
+        else
+          {:error, :invalid_padding}
+        end
     end
   end
 
