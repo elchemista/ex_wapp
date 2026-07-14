@@ -161,11 +161,17 @@ defmodule ExWapp.AppState.Crypto do
     pad_len = :binary.last(data)
 
     cond do
-      pad_len == 0 or pad_len > byte_size(data) ->
+      pad_len == 0 or pad_len > 16 or pad_len > byte_size(data) ->
         {:error, :invalid_padding}
 
       true ->
-        {:ok, binary_part(data, 0, byte_size(data) - pad_len)}
+        padding = binary_part(data, byte_size(data) - pad_len, pad_len)
+
+        if padding == :binary.copy(<<pad_len>>, pad_len) do
+          {:ok, binary_part(data, 0, byte_size(data) - pad_len)}
+        else
+          {:error, :invalid_padding}
+        end
     end
   end
 
