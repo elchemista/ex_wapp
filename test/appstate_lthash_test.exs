@@ -54,6 +54,7 @@ defmodule ExWapp.AppState.LTHashTest do
     # Result should differ from input
     assert result != hash
   end
+
   test "adding to zero matches the full HKDF-expanded MAC" do
     mac = :crypto.hash(:sha256, "known LTHash MAC")
     expected = expand_mac(mac)
@@ -96,5 +97,4 @@ defmodule ExWapp.AppState.LTHashTest do
 
     output
   end
-
 end
