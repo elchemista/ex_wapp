@@ -129,7 +129,7 @@ defmodule ExWapp.Signal.SenderKey do
          :ok <- verify_sender_key_signature(parsed_message, sender_state.signing_key),
          {:ok, message_keys, updated_state} <-
            message_keys_for_iteration(sender_state, parsed_message.iteration),
-         plaintext <-
+         {:ok, plaintext} <-
            WireFormat.decrypt_aes_cbc(
              parsed_message.ciphertext,
              message_keys.cipher_key,
