@@ -16,12 +16,9 @@ defmodule ExWapp.JIDProtocolParityTest do
       assert {:ok, %JID{user: "", server: "s.whatsapp.net"}} = JID.parse("s.whatsapp.net")
     end
 
-    test "malformed device segments degrade safely instead of raising" do
-      assert {:ok, %JID{user: "1234", device: 0, server: "s.whatsapp.net"}} =
-               JID.parse("1234:xx@s.whatsapp.net")
-
-      assert {:ok, %JID{user: "1234", device: 0}} =
-               JID.parse("1234:-1@s.whatsapp.net")
+    test "malformed device segments return errors instead of raising" do
+      assert {:error, :invalid_jid} = JID.parse("1234:xx@s.whatsapp.net")
+      assert {:error, :invalid_jid} = JID.parse("1234:-1@s.whatsapp.net")
     end
 
     test "rejects non-binary and ambiguous JIDs" do
