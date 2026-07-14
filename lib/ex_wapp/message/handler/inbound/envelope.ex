@@ -113,6 +113,35 @@ defmodule ExWapp.Message.Handler.Inbound.Envelope do
 
   def from_me?(_attrs, _from, _state, _message_data), do: false
 
+  @doc """
+  Returns whether a server-attested envelope sender belongs to the local account.
+
+  Group stanzas use `participant` as the actual sender; direct stanzas fall back
+  to `from`. Both PN and LID identities, with or without a device suffix, are
+  accepted. This predicate deliberately ignores message payload claims such as
+  `from_me` because self-only protocol messages must be authorized from envelope
+  metadata before their contents are applied.
+  """
+  @spec own_sender?(map(), term(), term(), map()) :: boolean()
+  def own_sender?(attrs, from, participant, state)
+      when is_map(attrs) and is_map(state) do
+    normalized_participant = Common.normalize_jid_with_device(participant)
+
+    sender =
+      if normalized_participant == "" do
+        Common.normalize_jid_with_device(from)
+      else
+        normalized_participant
+      end
+
+    sender_base = Common.strip_device_from_jid(sender)
+    local_jids = local_recipient_jids(state, attrs)
+
+    sender != "" and (sender in local_jids or sender_base in local_jids)
+  end
+
+  def own_sender?(_attrs, _from, _participant, _state), do: false
+
   @spec persist_normalized_lid_mappings(term(), [{String.t(), String.t()}]) :: :ok
   defp persist_normalized_lid_mappings(store, normalized_mappings) do
     data = Store.load!(store)
