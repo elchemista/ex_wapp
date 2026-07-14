@@ -288,21 +288,30 @@ defmodule ExWapp.Signal.Session do
     signed_prekey = Map.get(local_prekeys.signed_prekeys, signed_prekey_id)
     one_time_prekey = if prekey_id, do: Map.get(local_prekeys.prekeys, prekey_id), else: nil
 
-    if signed_prekey do
-      x3dh_and_decrypt(
-        local_identity,
-        signed_prekey,
-        one_time_prekey,
-        remote_identity,
-        base_key,
-        inner_ciphertext
-      )
-    else
-      Logger.warning(
-        "[SIGNAL] Unknown signed prekey #{signed_prekey_id}, available: #{inspect(Map.keys(local_prekeys.signed_prekeys))}"
-      )
+    cond do
+      is_nil(signed_prekey) ->
+        Logger.warning(
+          "[SIGNAL] Unknown signed prekey #{signed_prekey_id}, available: #{inspect(Map.keys(local_prekeys.signed_prekeys))}"
+        )
 
-      {:error, :unknown_signed_prekey}
+        {:error, :unknown_signed_prekey}
+
+      is_integer(prekey_id) and prekey_id > 0 and is_nil(one_time_prekey) ->
+        Logger.debug(
+          "[SIGNAL] One-time prekey #{prekey_id} is unavailable (already consumed or unknown)"
+        )
+
+        {:error, :prekey_not_found}
+
+      true ->
+        x3dh_and_decrypt(
+          local_identity,
+          signed_prekey,
+          one_time_prekey,
+          remote_identity,
+          base_key,
+          inner_ciphertext
+        )
     end
   end
 
