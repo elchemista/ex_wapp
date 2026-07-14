@@ -150,7 +150,7 @@ defmodule ExWapp.Signal.Encryption do
                local_prekeys
              ) do
           {:ok, plaintext, updated_store} ->
-            :ok = consume_one_time_prekey(store, ciphertext, is_prekey)
+            :ok = consume_one_time_prekey(store, ciphertext, is_prekey, updated_store)
             Logger.debug("[ENCRYPTION] Decrypt succeeded, plaintext_size=#{byte_size(plaintext)}")
             {:ok, plaintext, updated_store}
 
@@ -306,17 +306,18 @@ defmodule ExWapp.Signal.Encryption do
     end
   end
 
-  @spec consume_one_time_prekey(term(), binary(), boolean()) :: :ok
-  defp consume_one_time_prekey(_store, _ciphertext, false), do: :ok
+  @spec consume_one_time_prekey(term(), binary(), boolean(), SessionStore.t()) :: :ok
+  defp consume_one_time_prekey(_store, _ciphertext, false, _sessions), do: :ok
 
-  defp consume_one_time_prekey(store, ciphertext, true) do
+  defp consume_one_time_prekey(store, ciphertext, true, sessions) do
     with {:ok, %{prekey_id: prekey_id}}
          when is_integer(prekey_id) and prekey_id > 0 <-
            WireFormat.parse_prekey_signal_message(ciphertext),
          data when is_map(data) <- ExWapp.Store.load!(store),
          signal when is_map(signal) <- Map.get(data, :signal, %{}),
          prekeys when is_map(prekeys) <- Map.get(signal, :prekeys, %{}),
-         true <- Map.has_key?(prekeys, prekey_id) do
+         true <- Map.has_key?(prekeys, prekey_id),
+         :ok <- persist_session_before_prekey_delete(store, sessions, prekey_id) do
       updated_signal = Map.put(signal, :prekeys, Map.delete(prekeys, prekey_id))
 
       case ExWapp.Store.persist(store, Map.put(data, :signal, updated_signal)) do
@@ -338,6 +339,22 @@ defmodule ExWapp.Signal.Encryption do
     error ->
       Logger.warning("[SIGNAL] Failed consuming one-time prekey: #{inspect(error)}")
       :ok
+  end
+
+  @spec persist_session_before_prekey_delete(term(), SessionStore.t(), pos_integer()) ::
+          :ok | {:error, term()}
+  defp persist_session_before_prekey_delete(store, sessions, prekey_id) do
+    case ExWapp.Store.persist_signal_sessions(store, sessions) do
+      :ok ->
+        :ok
+
+      {:error, reason} = error ->
+        Logger.warning(
+          "[SIGNAL] Keeping one-time prekey #{prekey_id} because session persistence failed: #{inspect(reason)}"
+        )
+
+        error
+    end
   end
 
   defp prekey_message?(enc_type) when enc_type in [:pkmsg, :prekey, 3], do: true
