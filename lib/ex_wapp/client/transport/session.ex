@@ -84,28 +84,11 @@ defmodule ExWapp.Client.Transport.Session do
   @impl true
   @spec send_message(Client.t(), Message.t()) ::
           {:ok, Client.t(), String.t()} | {:error, Client.t(), term()} | {:error, term()}
-  def send_message(%Client{} = client, %Message{type: :text, to: to, body: text} = message) do
-    case ensure_session(client) do
-      {:ok, client, session} ->
-        opts = Keyword.put(message.opts, :retry_message_id, message.id)
-
-        case Session.send_text(session, to, text, opts) do
-          {:ok, message_id} -> {:ok, client, message_id}
-          {:error, reason} -> {:error, client, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
   def send_message(%Client{} = client, %Message{type: type} = message)
-      when type in [:image, :audio, :document, :location, :contact, :event] do
+      when type in [:text, :image, :audio, :document, :location, :contact, :event] do
     with {:ok, client, session} <- ensure_session(client) do
-      opts = Keyword.put(message.opts, :retry_message_id, message.id)
-
       session
-      |> send_session_content(message, opts)
+      |> Session.send_message(message)
       |> normalize_session_send(client)
     end
   end
@@ -203,36 +186,6 @@ defmodule ExWapp.Client.Transport.Session do
       {:ok, client, download}
     end
   end
-
-  defp send_session_content(session, %Message{type: :image, to: to, body: source}, opts),
-    do: Session.send_image(session, to, source, opts)
-
-  defp send_session_content(session, %Message{type: :audio, to: to, body: source}, opts),
-    do: Session.send_audio(session, to, source, opts)
-
-  defp send_session_content(session, %Message{type: :document, to: to, body: source}, opts),
-    do: Session.send_document(session, to, source, opts)
-
-  defp send_session_content(
-         session,
-         %Message{type: :location, to: to, body: %{latitude: latitude, longitude: longitude}},
-         opts
-       ),
-       do: Session.send_location(session, to, latitude, longitude, opts)
-
-  defp send_session_content(
-         session,
-         %Message{type: :contact, to: to, body: %{display_name: name, vcard: vcard}},
-         opts
-       ),
-       do: Session.send_contact(session, to, name, vcard, opts)
-
-  defp send_session_content(
-         session,
-         %Message{type: :event, to: to, body: %{name: name, start_time: start_time}},
-         opts
-       ),
-       do: Session.send_event(session, to, name, start_time, opts)
 
   @spec normalize_session_send(
           {:ok, String.t()} | {:error, term()},

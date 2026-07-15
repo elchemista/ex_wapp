@@ -5,6 +5,7 @@ defmodule ExWapp.Session do
   The GenServer implementation lives in `ExWapp.Session.Worker`.
   """
 
+  alias ExWapp.Message
   alias ExWapp.Session.Options
   alias ExWapp.Session.Worker
 
@@ -67,11 +68,20 @@ defmodule ExWapp.Session do
   @spec send_text(GenServer.server(), binary(), iodata(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def send_text(server, jid, text, opts \\ []) when is_list(opts) do
-    GenServer.call(
-      server,
-      {:send_text, jid, IO.iodata_to_binary(text), opts},
-      media_timeout(opts)
-    )
+    jid
+    |> Message.text(text, message_options(opts))
+    |> then(&send_message(server, &1))
+  end
+
+  @doc """
+  Sends a canonical outbound message through the session engine.
+
+  The message ID, when present, is preserved through encryption and transport.
+  """
+  @spec send_message(GenServer.server(), Message.t()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_message(server, %Message{} = message) do
+    GenServer.call(server, {:send_message, message}, message_timeout(message))
   end
 
   @spec send_typing(GenServer.server(), binary(), boolean()) :: :ok | {:error, term()}
@@ -81,31 +91,42 @@ defmodule ExWapp.Session do
 
   @spec send_image(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
-  def send_image(server, jid, source, opts \\ []),
-    do: GenServer.call(server, {:send_content, :image, jid, source, opts}, media_timeout(opts))
+  def send_image(server, jid, source, opts \\ []) do
+    jid
+    |> Message.image(source, message_options(opts))
+    |> then(&send_message(server, &1))
+  end
 
   @spec send_audio(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
-  def send_audio(server, jid, source, opts \\ []),
-    do: GenServer.call(server, {:send_content, :audio, jid, source, opts}, media_timeout(opts))
+  def send_audio(server, jid, source, opts \\ []) do
+    jid
+    |> Message.audio(source, message_options(opts))
+    |> then(&send_message(server, &1))
+  end
 
   @spec send_document(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
-  def send_document(server, jid, source, opts \\ []),
-    do: GenServer.call(server, {:send_content, :document, jid, source, opts}, media_timeout(opts))
+  def send_document(server, jid, source, opts \\ []) do
+    jid
+    |> Message.document(source, message_options(opts))
+    |> then(&send_message(server, &1))
+  end
 
   @spec send_location(GenServer.server(), binary(), number(), number(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def send_location(server, jid, latitude, longitude, opts \\ []) do
-    body = %{latitude: latitude, longitude: longitude}
-    GenServer.call(server, {:send_content, :location, jid, body, opts}, media_timeout(opts))
+    jid
+    |> Message.location(latitude, longitude, message_options(opts))
+    |> then(&send_message(server, &1))
   end
 
   @spec send_contact(GenServer.server(), binary(), String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def send_contact(server, jid, display_name, vcard, opts \\ []) do
-    body = %{display_name: display_name, vcard: vcard}
-    GenServer.call(server, {:send_content, :contact, jid, body, opts}, media_timeout(opts))
+    jid
+    |> Message.contact(display_name, vcard, message_options(opts))
+    |> then(&send_message(server, &1))
   end
 
   @spec send_event(
@@ -116,8 +137,9 @@ defmodule ExWapp.Session do
           keyword()
         ) :: {:ok, String.t()} | {:error, term()}
   def send_event(server, jid, name, start_time, opts \\ []) do
-    body = %{name: name, start_time: start_time}
-    GenServer.call(server, {:send_content, :event, jid, body, opts}, media_timeout(opts))
+    jid
+    |> Message.event(name, start_time, message_options(opts))
+    |> then(&send_message(server, &1))
   end
 
   @spec download_media(GenServer.server(), ExWapp.Media.Ref.t(), keyword()) ::
@@ -240,4 +262,17 @@ defmodule ExWapp.Session do
 
   @spec media_timeout(keyword()) :: timeout()
   defp media_timeout(opts), do: Keyword.get(opts, :timeout, 60_000)
+
+  defp message_timeout(%Message{opts: opts}) when is_list(opts), do: media_timeout(opts)
+  defp message_timeout(%Message{}), do: 60_000
+
+  defp message_options(opts) when is_list(opts) do
+    case Keyword.get(opts, :retry_message_id) do
+      message_id when is_binary(message_id) and message_id != "" ->
+        Keyword.put_new(opts, :id, message_id)
+
+      _other ->
+        opts
+    end
+  end
 end

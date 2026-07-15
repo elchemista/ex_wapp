@@ -49,11 +49,25 @@ defmodule ExWapp.Session.Worker do
   require Logger
 
   alias ExWapp.AppState.Engine
-  alias ExWapp.{Binary, Config, Media, Messages, Pairing, Quota, RateLimiter, Store, Telemetry}
+
+  alias ExWapp.{
+    Binary,
+    Config,
+    Media,
+    Message,
+    Messages,
+    Pairing,
+    Quota,
+    RateLimiter,
+    Store,
+    Telemetry
+  }
+
   alias ExWapp.Pairing.LinkCode
   alias ExWapp.Signal.{PrekeyFetcher, SessionStore}
 
   alias ExWapp.Session.{Account, InboundRouter, JIDUtils, Options, OutboundQueue}
+  alias ExWapp.Session.Outbound.Command
 
   alias ExWapp.Session.Worker.{
     NodeHandler,
@@ -546,72 +560,15 @@ defmodule ExWapp.Session.Worker do
     {:reply, {:error, {:pairing_not_ready, state.status}}, state}
   end
 
-  def handle_call({:send_text, jid, text}, from, state) do
-    handle_call({:send_text, jid, text, []}, from, state)
-  end
-
-  def handle_call({:send_text, jid, text, opts}, from, state) when is_list(opts) do
-    with {:ok, state} <- ensure_send_enabled(state, jid),
-         :ok <- ensure_connected_for_send(state),
-         {:ok, policy_state} <- enforce_send_policies(state, jid) do
-      # Spawn a worker to handle the full send flow (including prekey fetch if needed)
-      # This allows us to wait for IQ responses without blocking the GenServer
-      session_pid = self()
-
-      case start_send_worker(
-             policy_state,
-             jid,
-             primary_send_task_fun(session_pid, policy_state, jid, text, :primary, 0, opts),
-             from
-           ) do
-        {:ok, worker, mon} ->
-          new_state = register_send_worker(policy_state, worker, mon, jid)
-
-          {:noreply, update_stats(new_state, :messages_sent)}
-
-        {:error, reason} ->
-          {:reply, {:error, {:send_worker_start_failed, reason}}, policy_state}
-      end
-    else
-      {:error, reason, blocked_state} ->
-        {:reply, {:error, reason}, blocked_state}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+  def handle_call({:send_message, %Message{} = message}, from, state) do
+    case dispatch_outbound_message(state, message, from) do
+      {:ok, new_state} -> {:noreply, new_state}
+      {:error, reason, error_state} -> {:reply, {:error, reason}, error_state}
     end
   end
 
-  def handle_call({:send_text, _jid, _text, _opts}, _from, state) do
-    {:reply, {:error, :invalid_send_options}, state}
-  end
-
-  def handle_call({:send_content, type, jid, body, opts}, from, state)
-      when type in [:image, :audio, :document, :location, :contact, :event] and
-             is_binary(jid) and is_list(opts) do
-    with {:ok, state} <- ensure_send_enabled(state, jid),
-         :ok <- ensure_connected_for_send(state),
-         {:ok, policy_state} <- enforce_send_policies(state, jid) do
-      session_pid = self()
-
-      task = fn -> safe_send_content(session_pid, policy_state, type, jid, body, opts) end
-
-      case start_send_worker(policy_state, jid, task, from) do
-        {:ok, worker, mon} ->
-          new_state = register_send_worker(policy_state, worker, mon, jid)
-          {:noreply, update_stats(new_state, :messages_sent)}
-
-        {:error, reason} ->
-          {:reply, {:error, {:send_worker_start_failed, reason}}, policy_state}
-      end
-    else
-      {:error, reason, blocked_state} -> {:reply, {:error, reason}, blocked_state}
-      {:error, reason} -> {:reply, {:error, reason}, state}
-    end
-  end
-
-  def handle_call({:send_content, type, _jid, _body, _opts}, _from, state) do
-    {:reply, {:error, {:unsupported_message_type, type}}, state}
-  end
+  def handle_call({:send_message, _message}, _from, state),
+    do: {:reply, {:error, :invalid_message}, state}
 
   def handle_call({:download_media, %Media.Ref{} = ref, opts}, from, state)
       when is_list(opts) do
@@ -1025,29 +982,15 @@ defmodule ExWapp.Session.Worker do
 
   # PubSub send command - dispatched via ExWapp.send_message("session_id", jid, text)
   def handle_info({:ex_wapp_send, jid, text}, state) do
-    with {:ok, state} <- ensure_send_enabled(state, jid),
-         {:ok, policy_state} <- enforce_send_policies(state, jid) do
-      session_pid = self()
+    message = Message.text(jid, text)
 
-      case start_send_worker(
-             policy_state,
-             jid,
-             primary_send_task_fun(session_pid, policy_state, jid, text, :primary, 0)
-           ) do
-        {:ok, worker, mon} ->
-          {:noreply,
-           policy_state
-           |> register_send_worker(worker, mon, jid)
-           |> update_stats(:messages_sent)}
+    case dispatch_outbound_message(state, message, nil) do
+      {:ok, new_state} ->
+        {:noreply, new_state}
 
-        {:error, reason} ->
-          Logger.warning("[SESSION] PubSub send failed for #{jid}: #{inspect(reason)}")
-          {:noreply, policy_state}
-      end
-    else
-      {:error, reason, blocked_state} ->
+      {:error, reason, error_state} ->
         Logger.warning("[SESSION] PubSub send blocked for #{jid}: #{inspect(reason)}")
-        {:noreply, blocked_state}
+        {:noreply, error_state}
     end
   end
 
@@ -1841,6 +1784,47 @@ defmodule ExWapp.Session.Worker do
 
   # Outbound message dispatch
 
+  defp dispatch_outbound_message(state, message, from) do
+    with {:ok, message} <- Command.prepare(message),
+         {:ok, state} <- ensure_send_enabled(state, message.to),
+         :ok <- ensure_connected_for_send(state),
+         {:ok, policy_state} <- enforce_send_policies(state, message.to) do
+      task = outbound_message_task(self(), policy_state, message)
+
+      case start_send_worker(policy_state, message.to, task, from) do
+        {:ok, worker, mon} ->
+          new_state =
+            policy_state
+            |> register_send_worker(worker, mon, message.to)
+            |> update_stats(:messages_sent)
+
+          {:ok, new_state}
+
+        {:error, reason} ->
+          {:error, {:send_worker_start_failed, reason}, policy_state}
+      end
+    else
+      {:error, reason, blocked_state} -> {:error, reason, blocked_state}
+      {:error, reason} -> {:error, reason, state}
+    end
+  end
+
+  defp outbound_message_task(
+         session_pid,
+         state,
+         %Message{type: :text, to: jid, body: text, opts: opts}
+       ) do
+    primary_send_task_fun(session_pid, state, jid, text, :primary, 0, opts)
+  end
+
+  defp outbound_message_task(
+         session_pid,
+         state,
+         %Message{type: type, to: jid, body: body, opts: opts}
+       ) do
+    fn -> safe_send_content(session_pid, state, type, jid, body, opts) end
+  end
+
   # Worker function - runs in a separate process so it can wait for IQ responses
   defp do_send_text_worker(session_pid, state, jid, text, opts) do
     Outbound.send_text_worker(session_pid, state, jid, text, opts)
@@ -2023,7 +2007,7 @@ defmodule ExWapp.Session.Worker do
     kind, reason -> {:error, {:media_download_throw, kind, reason}}
   end
 
-  defp primary_send_task_fun(session_pid, state, jid, text, strategy, attempt, opts \\ []) do
+  defp primary_send_task_fun(session_pid, state, jid, text, strategy, attempt, opts) do
     fn ->
       result = do_send_text_worker(session_pid, state, jid, text, opts)
       send(session_pid, {:send_result, jid, text, result, strategy, attempt})

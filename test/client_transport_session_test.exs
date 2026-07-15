@@ -13,9 +13,9 @@ defmodule ExWapp.ClientTransportSessionTest do
     def init(owner), do: {:ok, owner}
 
     @impl true
-    def handle_call({:send_text, to, text, opts}, _from, owner) do
-      send(owner, {:session_send_text, to, text, opts})
-      {:reply, {:ok, Keyword.fetch!(opts, :retry_message_id)}, owner}
+    def handle_call({:send_message, message}, _from, owner) do
+      send(owner, {:session_send_message, message})
+      {:reply, {:ok, message.id}, owner}
     end
   end
 
@@ -37,7 +37,6 @@ defmodule ExWapp.ClientTransportSessionTest do
 
     assert {:ok, ^client, ^message_id} = Session.send_message(client, message)
 
-    assert_receive {:session_send_text, "15550001111@s.whatsapp.net", "hello",
-                    [retry_message_id: ^message_id]}
+    assert_receive {:session_send_message, ^message}
   end
 end
