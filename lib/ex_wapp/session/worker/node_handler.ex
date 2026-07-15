@@ -387,8 +387,6 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     if Process.alive?(worker_pid), do: send(worker_pid, {msg_tag, iq_id, node})
   end
 
-  defp send_iq_to_worker(_worker_pid, _msg_tag, _iq_id, _node), do: :ok
-
   defp dispatch_iq(state, _node, attrs, "urn:xmpp:ping", "get", _iq_id) do
     Logger.debug("[SESSION] Received ping, sending pong")
     {state, [{:send_node, build_iq_result(attrs)}]}
