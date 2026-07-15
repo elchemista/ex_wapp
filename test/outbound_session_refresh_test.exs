@@ -217,7 +217,8 @@ defmodule ExWapp.OutboundSessionRefreshTest do
             local_lid_linked_jid
           ]
         },
-        prekey_bundles: prekey_bundles
+        prekey_bundles: prekey_bundles,
+        route_via_session: true
       })
 
     session = start_connected_session(store, conn, signal_sessions)
@@ -313,7 +314,8 @@ defmodule ExWapp.OutboundSessionRefreshTest do
             local_lid_linked_jid
           ]
         },
-        prekey_bundles: prekey_bundles
+        prekey_bundles: prekey_bundles,
+        route_via_session: true
       })
 
     session = start_connected_session(store, conn, signal_sessions)
@@ -527,7 +529,7 @@ defmodule ExWapp.OutboundSessionRefreshTest do
       {:transport_send, caller,
        %Binary.Node{tag: "iq", attrs: %{"xmlns" => "usync", "id" => id}} = node} ->
         send(owner, {:usync_query, extract_query_jids(node)})
-        send(caller, {:prekey_response, id, build_usync_response(id, responses.device_map)})
+        deliver_iq_response(caller, id, build_usync_response(id, responses.device_map), responses)
         fake_conn_loop(owner, responses)
 
       {:transport_send, caller,
@@ -535,11 +537,8 @@ defmodule ExWapp.OutboundSessionRefreshTest do
         requested_jids = extract_query_jids(node)
         send(owner, {:prekey_request, requested_jids})
 
-        send(
-          caller,
-          {:prekey_response, id,
-           build_prekey_response(id, responses.prekey_bundles, requested_jids)}
-        )
+        response = build_prekey_response(id, responses.prekey_bundles, requested_jids)
+        deliver_iq_response(caller, id, response, responses)
 
         fake_conn_loop(owner, responses)
 
@@ -547,6 +546,14 @@ defmodule ExWapp.OutboundSessionRefreshTest do
         send(owner, {:message_send, node})
         fake_conn_loop(owner, responses)
     end
+  end
+
+  defp deliver_iq_response(caller, _id, response, %{route_via_session: true}) do
+    send(caller, {:inbound_node, response})
+  end
+
+  defp deliver_iq_response(caller, id, response, _responses) do
+    send(caller, {:prekey_response, id, response})
   end
 
   defp extract_query_jids(%Binary.Node{content: content}) when is_list(content) do

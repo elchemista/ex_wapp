@@ -4,6 +4,7 @@ defmodule ExWapp.Session.Outbound.CommandTest do
   alias ExWapp.Message
   alias ExWapp.Session
   alias ExWapp.Session.Outbound.Command
+  alias ExWapp.Session.SendCoordinator
 
   defmodule SessionStub do
     use GenServer
@@ -97,5 +98,29 @@ defmodule ExWapp.Session.Outbound.CommandTest do
 
     assert {:error, {:unsupported_message_type, :typing}} =
              Command.prepare(Message.typing(valid.to))
+  end
+
+  test "worker-owned error replies leave no pending send operation" do
+    {:ok, session} = Session.start_link(store: ExWapp.Store.Memory, reconnect: false)
+
+    :sys.replace_state(session, fn state ->
+      %{state | status: :connected, conn: self(), transport_ready?: true}
+    end)
+
+    message = %Message{
+      id: "invalid-location",
+      to: "15550001111@s.whatsapp.net",
+      type: :location,
+      body: %{latitude: 200, longitude: 9},
+      opts: []
+    }
+
+    assert {:error, :invalid_location} = Session.send_message(session, message)
+
+    coordinator = :sys.get_state(session).send_coordinator
+    assert SendCoordinator.operation_count(coordinator) == 0
+    assert SendCoordinator.iq_route_count(coordinator) == 0
+
+    GenServer.stop(session)
   end
 end

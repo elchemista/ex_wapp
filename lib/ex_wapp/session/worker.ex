@@ -66,7 +66,7 @@ defmodule ExWapp.Session.Worker do
   alias ExWapp.Pairing.LinkCode
   alias ExWapp.Signal.{PrekeyFetcher, SessionStore}
 
-  alias ExWapp.Session.{Account, InboundRouter, JIDUtils, Options, OutboundQueue}
+  alias ExWapp.Session.{Account, InboundRouter, JIDUtils, Options, OutboundQueue, SendCoordinator}
   alias ExWapp.Session.Outbound.Command
 
   alias ExWapp.Session.Worker.{
@@ -124,8 +124,7 @@ defmodule ExWapp.Session.Worker do
     status: :idle,
     qr_subscribers: %{},
     message_subscribers: %{},
-    send_workers: %{},
-    send_worker_mons: %{},
+    send_coordinator: %SendCoordinator{},
     opts: [],
     runtime_cfg: %{},
     send_health: @default_send_health,
@@ -175,8 +174,7 @@ defmodule ExWapp.Session.Worker do
           health_timer: reference() | nil,
           qr_subscribers: %{reference() => {pid(), reference()}},
           message_subscribers: %{reference() => {pid(), reference()}},
-          send_workers: %{pid() => binary()},
-          send_worker_mons: %{reference() => pid()},
+          send_coordinator: SendCoordinator.t(),
           opts: Options.t(),
           runtime_cfg: map(),
           send_health: map(),
@@ -577,9 +575,9 @@ defmodule ExWapp.Session.Worker do
 
       task = fn -> safe_download_media(session_pid, state, ref, opts) end
 
-      case start_send_worker(state, "media_download", task, from) do
+      case start_send_worker(state, "media_download", task) do
         {:ok, worker, mon} ->
-          {:noreply, register_send_worker(state, worker, mon, "media_download")}
+          {:noreply, register_send_worker(state, worker, mon, "media_download", from)}
 
         {:error, reason} ->
           {:reply, {:error, {:download_worker_start_failed, reason}}, state}
@@ -702,6 +700,32 @@ defmodule ExWapp.Session.Worker do
     {:reply, {:error, {:not_connected, state.status}}, state}
   end
 
+  def handle_call(
+        {:send_worker_iq, worker_pid, %Binary.Node{attrs: attrs} = node},
+        _from,
+        %{status: status, conn: conn} = state
+      )
+      when status in [:connected, :syncing] and is_pid(conn) and is_pid(worker_pid) do
+    iq_id = Map.get(attrs || %{}, "id")
+
+    with :ok <- ensure_worker_iq_capacity(state),
+         :ok <- ensure_iq_id_available(state, iq_id),
+         true <- SendCoordinator.registered?(state.send_coordinator, worker_pid),
+         {:ok, coordinator} <-
+           SendCoordinator.register_iq(state.send_coordinator, worker_pid, iq_id),
+         :ok <- state.transport_mod.send_node(conn, node) do
+      {:reply, :ok, %{state | send_coordinator: coordinator}}
+    else
+      false -> {:reply, {:error, :unknown_send_worker}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+      other -> {:reply, other, state}
+    end
+  end
+
+  def handle_call({:send_worker_iq, _worker_pid, _node}, _from, state) do
+    {:reply, {:error, {:not_connected, state.status}}, state}
+  end
+
   # ── App State Sync Operations ──
 
   def handle_call({:app_state_mutation, patch_info}, from, %{status: :connected} = state) do
@@ -709,27 +733,15 @@ defmodule ExWapp.Session.Worker do
 
     # Spawn a worker to avoid deadlock: send_mutation calls GenServer.call(session, {:send_iq, ...})
     # which would deadlock if run inside handle_call of the same GenServer.
-    case start_send_worker(
-           state,
-           "app_state_mutation",
-           fn ->
-             try do
-               ExWapp.AppState.Engine.send_mutation(session_pid, patch_info, state.store)
-             rescue
-               e -> {:error, {:exception, e}}
-             end
-           end,
-           from
-         ) do
+    case start_send_worker(state, "app_state_mutation", fn ->
+           try do
+             ExWapp.AppState.Engine.send_mutation(session_pid, patch_info, state.store)
+           rescue
+             e -> {:error, {:exception, e}}
+           end
+         end) do
       {:ok, worker, mon} ->
-        new_state =
-          state
-          |> Map.update(:send_workers, %{worker => "app_state"}, fn workers ->
-            Map.put(workers, worker, "app_state")
-          end)
-          |> Map.update(:send_worker_mons, %{mon => worker}, fn mons ->
-            Map.put(mons, mon, worker)
-          end)
+        new_state = register_send_worker(state, worker, mon, "app_state_mutation", from)
 
         {:noreply, new_state}
 
@@ -791,21 +803,50 @@ defmodule ExWapp.Session.Worker do
   defp send_iq_call(node, message_id, timeout_ms, from, state) do
     max_pending = Config.get(state.runtime_cfg, [:iq, :max_pending_requests], 1_000)
 
-    if map_size(state.pending_iqs) >= max_pending do
-      {:reply, {:error, :too_many_pending_iq_requests}, state}
-    else
-      case state.transport_mod.send_node(state.conn, node) do
-        :ok ->
-          timer = Process.send_after(self(), {:iq_timeout, message_id}, timeout_ms)
-          pending = %{from: from, timer: timer}
-          new_state = %{state | pending_iqs: Map.put(state.pending_iqs, message_id, pending)}
-          {:noreply, new_state}
+    pending_count =
+      map_size(state.pending_iqs) + SendCoordinator.iq_route_count(state.send_coordinator)
 
-        error ->
-          {:reply, error, state}
-      end
+    cond do
+      pending_count >= max_pending ->
+        {:reply, {:error, :too_many_pending_iq_requests}, state}
+
+      Map.has_key?(state.pending_iqs, message_id) or
+          SendCoordinator.has_iq?(state.send_coordinator, message_id) ->
+        {:reply, {:error, {:duplicate_iq_id, message_id}}, state}
+
+      true ->
+        case state.transport_mod.send_node(state.conn, node) do
+          :ok ->
+            timer = Process.send_after(self(), {:iq_timeout, message_id}, timeout_ms)
+            pending = %{from: from, timer: timer}
+            new_state = %{state | pending_iqs: Map.put(state.pending_iqs, message_id, pending)}
+            {:noreply, new_state}
+
+          error ->
+            {:reply, error, state}
+        end
     end
   end
+
+  defp ensure_worker_iq_capacity(state) do
+    max_pending = Config.get(state.runtime_cfg, [:iq, :max_pending_requests], 1_000)
+
+    pending_count =
+      map_size(state.pending_iqs) + SendCoordinator.iq_route_count(state.send_coordinator)
+
+    if pending_count < max_pending, do: :ok, else: {:error, :too_many_pending_iq_requests}
+  end
+
+  defp ensure_iq_id_available(state, iq_id) when is_binary(iq_id) and iq_id != "" do
+    if Map.has_key?(state.pending_iqs, iq_id) or
+         SendCoordinator.has_iq?(state.send_coordinator, iq_id) do
+      {:error, {:duplicate_iq_id, iq_id}}
+    else
+      :ok
+    end
+  end
+
+  defp ensure_iq_id_available(_state, _iq_id), do: {:error, :invalid_iq_route}
 
   @impl true
   def handle_cast(:connect, %__MODULE__{status: status} = state)
@@ -896,29 +937,26 @@ defmodule ExWapp.Session.Worker do
 
   def handle_info({:EXIT, pid, reason}, %__MODULE__{send_worker_sup: pid} = state) do
     Logger.warning("[SESSION] send worker supervisor exited: #{inspect(reason)}")
+    state = fail_all_send_workers(state, {:send_worker_supervisor_exited, reason})
 
     case Task.Supervisor.start_link() do
       {:ok, send_worker_sup} ->
-        {:noreply,
-         %{state | send_worker_sup: send_worker_sup, send_workers: %{}, send_worker_mons: %{}}}
+        {:noreply, %{state | send_worker_sup: send_worker_sup}}
 
       {:error, restart_reason} ->
         Logger.error(
           "[SESSION] failed to restart send worker supervisor: #{inspect(restart_reason)}"
         )
 
-        {:noreply, %{state | send_worker_sup: nil, send_workers: %{}, send_worker_mons: %{}}}
+        {:noreply, %{state | send_worker_sup: nil}}
     end
   end
 
-  def handle_info({:EXIT, pid, _reason}, %__MODULE__{send_workers: workers} = state) do
-    send_worker_mons =
-      state.send_worker_mons
-      |> Enum.reject(fn {_mon, worker_pid} -> worker_pid == pid end)
-      |> Map.new()
-
-    {:noreply,
-     %{state | send_workers: Map.delete(workers, pid), send_worker_mons: send_worker_mons}}
+  def handle_info({:EXIT, pid, reason}, state) do
+    case finish_send_worker(state, pid, {:error, {:send_worker_exited, reason}}) do
+      {:ok, new_state} -> {:noreply, new_state}
+      :not_found -> {:noreply, state}
+    end
   end
 
   # Connection events from Conn process
@@ -970,14 +1008,19 @@ defmodule ExWapp.Session.Worker do
     {:noreply, state}
   end
 
-  # Monitor DOWN for subscribers and ordinary send workers.
-  def handle_info({:DOWN, mon, :process, _pid, _reason}, state) do
-    new_state =
-      state
-      |> cleanup_dead_subscriber(mon)
-      |> cleanup_dead_send_worker(mon)
+  def handle_info({:send_worker_finished, pid, result}, state) when is_pid(pid) do
+    case finish_send_worker(state, pid, result) do
+      {:ok, new_state} -> {:noreply, new_state}
+      :not_found -> {:noreply, state}
+    end
+  end
 
-    {:noreply, new_state}
+  # Monitor DOWN for subscribers and ordinary send workers.
+  def handle_info({:DOWN, mon, :process, _pid, reason}, state) do
+    case send_worker_down(state, mon, reason) do
+      {:ok, new_state} -> {:noreply, new_state}
+      :not_found -> {:noreply, cleanup_dead_subscriber(state, mon)}
+    end
   end
 
   # PubSub send command - dispatched via ExWapp.send_message("session_id", jid, text)
@@ -1747,6 +1790,7 @@ defmodule ExWapp.Session.Worker do
         max_attempts: max_attempts,
         normalize_jid: &JIDUtils.normalize_for_signal/1,
         start_worker: &start_send_worker/3,
+        register_worker: &register_send_worker/4,
         outgoing_payloads: Map.get(state, :outgoing_retry_payloads, %{}),
         retry_meta: retry_meta,
         send_fun: fn normalized_jid, text ->
@@ -1791,11 +1835,11 @@ defmodule ExWapp.Session.Worker do
          {:ok, policy_state} <- enforce_send_policies(state, message.to) do
       task = outbound_message_task(self(), policy_state, message)
 
-      case start_send_worker(policy_state, message.to, task, from) do
+      case start_send_worker(policy_state, message.to, task) do
         {:ok, worker, mon} ->
           new_state =
             policy_state
-            |> register_send_worker(worker, mon, message.to)
+            |> register_send_worker(worker, mon, message.to, from)
             |> update_stats(:messages_sent)
 
           {:ok, new_state}
@@ -1827,6 +1871,7 @@ defmodule ExWapp.Session.Worker do
 
   # Worker function - runs in a separate process so it can wait for IQ responses
   defp do_send_text_worker(session_pid, state, jid, text, opts) do
+    state = Map.put(state, :outbound_iq_router, session_pid)
     Outbound.send_text_worker(session_pid, state, jid, text, opts)
   end
 
@@ -1846,6 +1891,7 @@ defmodule ExWapp.Session.Worker do
   defp maybe_put_retry_own_device_destination(opts, _retry_meta), do: opts
 
   defp safe_send_content(session_pid, state, type, jid, body, opts) do
+    state = Map.put(state, :outbound_iq_router, session_pid)
     do_send_content(session_pid, state, type, jid, body, opts)
   rescue
     exception -> {:error, {:content_send_exception, exception}}
@@ -2064,14 +2110,9 @@ defmodule ExWapp.Session.Worker do
 
   defp trim_outgoing_retry_payloads(payloads), do: payloads
 
-  defp register_send_worker(state, worker, mon, jid) do
-    state
-    |> Map.update(:send_workers, %{worker => jid}, fn workers ->
-      Map.put(workers, worker, jid)
-    end)
-    |> Map.update(:send_worker_mons, %{mon => worker}, fn mons ->
-      Map.put(mons, mon, worker)
-    end)
+  defp register_send_worker(state, worker, mon, label, from \\ nil) do
+    coordinator = SendCoordinator.register(state.send_coordinator, worker, mon, label, from)
+    %{state | send_coordinator: coordinator}
   end
 
   # QR subscriber delivery
@@ -2341,11 +2382,10 @@ defmodule ExWapp.Session.Worker do
     case start_send_worker(
            state,
            "app_state_sync_contacts",
-           fn -> fetch_contacts_collection(session_pid, state.store) end,
-           from
+           fn -> fetch_contacts_collection(session_pid, state.store) end
          ) do
       {:ok, worker, mon} ->
-        {:noreply, register_send_worker(state, worker, mon, "app_state_sync_contacts")}
+        {:noreply, register_send_worker(state, worker, mon, "app_state_sync_contacts", from)}
 
       {:error, reason} ->
         {:reply, {:error, {:send_worker_start_failed, reason}}, state}
@@ -2358,46 +2398,87 @@ defmodule ExWapp.Session.Worker do
     error -> {:error, {:exception, error}}
   end
 
-  defp start_send_worker(state, jid, fun) do
-    start_send_worker(state, jid, fun, nil)
-  end
-
-  defp start_send_worker(%__MODULE__{send_worker_sup: sup}, jid, fun, from)
+  defp start_send_worker(%__MODULE__{send_worker_sup: sup}, label, fun)
        when is_pid(sup) and is_function(fun, 0) do
+    session_pid = self()
+
     case Task.Supervisor.start_child(sup, fn ->
-           run_send_worker_fun(fun, from)
+           run_send_worker_fun(session_pid, fun)
          end) do
       {:ok, worker} ->
         mon = Process.monitor(worker)
         {:ok, worker, mon}
 
       {:error, reason} ->
-        Logger.warning("[SEND] Failed to start worker for #{jid}: #{inspect(reason)}")
+        Logger.warning("[SEND] Failed to start worker for #{label}: #{inspect(reason)}")
         {:error, reason}
     end
   end
 
-  defp start_send_worker(_state, jid, _fun, _from) do
-    {:error, {:missing_send_worker_supervisor, jid}}
+  defp start_send_worker(_state, label, _fun) do
+    {:error, {:missing_send_worker_supervisor, label}}
   end
 
-  defp run_send_worker_fun(fun, from) when is_function(fun, 0) do
-    result = fun.()
-    if from, do: GenServer.reply(from, result)
+  defp run_send_worker_fun(session_pid, fun) when is_pid(session_pid) and is_function(fun, 0) do
+    result = safe_run_send_worker(fun)
+    send(session_pid, {:send_worker_finished, self(), result})
   end
 
-  defp cleanup_dead_send_worker(%__MODULE__{send_workers: workers} = state, mon)
-       when is_reference(mon) do
-    case Map.pop(state.send_worker_mons, mon) do
-      {nil, mons} ->
-        %{state | send_worker_mons: mons}
+  defp safe_run_send_worker(fun) do
+    fun.()
+  rescue
+    exception ->
+      {:error, {:send_worker_exception, exception.__struct__, Exception.message(exception)}}
+  catch
+    kind, reason -> {:error, {:send_worker_caught, kind, reason}}
+  end
 
-      {pid, mons} ->
-        %{state | send_workers: Map.delete(workers, pid), send_worker_mons: mons}
+  defp finish_send_worker(state, pid, result) do
+    case SendCoordinator.complete(state.send_coordinator, pid) do
+      {:ok, operation, coordinator} ->
+        Process.demonitor(operation.monitor, [:flush])
+        reply_send_caller(operation.from, result)
+        {:ok, %{state | send_coordinator: coordinator}}
+
+      {:error, :not_found, _coordinator} ->
+        :not_found
     end
   end
 
-  defp cleanup_dead_send_worker(state, _mon), do: state
+  defp send_worker_down(state, monitor, reason) do
+    case SendCoordinator.down(state.send_coordinator, monitor) do
+      {:ok, operation, coordinator} ->
+        result = {:error, {:send_worker_exited, reason}}
+        reply_send_caller(operation.from, result)
+
+        Logger.warning(
+          "[SEND] Worker exited label=#{inspect(operation.label)} reason=#{inspect(reason)}"
+        )
+
+        {:ok, %{state | send_coordinator: coordinator}}
+
+      {:error, :not_found, _coordinator} ->
+        :not_found
+    end
+  end
+
+  defp fail_all_send_workers(state, reason) do
+    {operations, iq_routes, coordinator} = SendCoordinator.drain(state.send_coordinator)
+
+    Enum.each(operations, fn operation ->
+      Process.demonitor(operation.monitor, [:flush])
+      reply_send_caller(operation.from, {:error, reason})
+    end)
+
+    Enum.each(iq_routes, fn {iq_id, worker_pid} ->
+      if Process.alive?(worker_pid), do: send(worker_pid, {:prekey_error, iq_id, reason})
+    end)
+
+    %{state | send_coordinator: coordinator}
+  end
+
+  defp reply_send_caller(nil, _result), do: :ok
+  defp reply_send_caller(from, result), do: GenServer.reply(from, result)
 
   defp maybe_log_inbound_node(%Binary.Node{tag: tag}) when tag in ["iq", "chatstate"], do: :ok
 
@@ -2409,19 +2490,14 @@ defmodule ExWapp.Session.Worker do
 
   defp clear_pending_requests(state, reason) do
     Enum.each(state.pending_iqs, &cancel_pending_call(&1, reason))
-    Enum.each(state.send_workers, &notify_disconnected_worker(&1, reason))
-    Enum.each(state.send_worker_mons, fn {mon, _pid} -> Process.demonitor(mon, [:flush]) end)
     Enum.each(state.outbound_confirmations, &cancel_pending_timer/1)
     Enum.each(state.pending_media_retries, &cancel_pending_call(&1, reason))
 
-    %{
-      state
-      | pending_iqs: %{},
-        send_workers: %{},
-        send_worker_mons: %{},
-        outbound_confirmations: %{},
-        pending_media_retries: %{}
-    }
+    state
+    |> fail_all_send_workers({:disconnected, reason})
+    |> Map.put(:pending_iqs, %{})
+    |> Map.put(:outbound_confirmations, %{})
+    |> Map.put(:pending_media_retries, %{})
   end
 
   defp cancel_session_tasks(state, reason) do
@@ -2480,10 +2556,6 @@ defmodule ExWapp.Session.Worker do
       timer when is_reference(timer) -> Process.cancel_timer(timer)
       _ -> :ok
     end
-  end
-
-  defp notify_disconnected_worker({pid, _jid}, reason) do
-    if Process.alive?(pid), do: send(pid, {:prekey_error, :transport_closed, reason})
   end
 
   defp enforce_send_policies(state, jid) do

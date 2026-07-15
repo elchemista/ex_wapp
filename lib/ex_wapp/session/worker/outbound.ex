@@ -734,7 +734,19 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   @spec send_node_fun(worker_state()) :: IQRequests.send_node_fun()
   defp send_node_fun(state) do
-    fn node -> send_transport_node(state, state.conn, node) end
+    case Map.get(state, :outbound_iq_router) do
+      session_pid when is_pid(session_pid) ->
+        fn node -> route_worker_iq(session_pid, state, node) end
+
+      _other ->
+        fn node -> send_transport_node(state, state.conn, node) end
+    end
+  end
+
+  defp route_worker_iq(session_pid, state, node) do
+    GenServer.call(session_pid, {:send_worker_iq, self(), node}, iq_timeout_ms(state))
+  catch
+    :exit, reason -> {:error, {:iq_router_exit, reason}}
   end
 
   @spec send_transport_node(worker_state(), pid() | nil, Binary.Node.t()) ::

@@ -10,7 +10,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   alias ExWapp.{Binary, Config, Pairing}
 
-  alias ExWapp.Session.OutboundQueue
+  alias ExWapp.Session.{OutboundQueue, SendCoordinator}
 
   alias ExWapp.Session.Worker.{
     Inbound,
@@ -77,10 +77,10 @@ defmodule ExWapp.Session.Worker.NodeHandler do
       "[NODE_HANDLER] iq received session_id=#{inspect(Map.get(state, :session_id))} id=#{inspect(iq_id)} type=#{inspect(iq_type)} xmlns=#{inspect(xmlns)} pending_iqs=#{map_size(Map.get(state, :pending_iqs, %{}))} post_auth_ids=#{inspect(%{prekey_count_query_id: Map.get(state, :prekey_count_query_id), prekey_upload_iq_id: Map.get(state, :prekey_upload_iq_id), passive_iq_id: Map.get(state, :passive_iq_id), digest_iq_id: Map.get(state, :digest_iq_id)})}"
     )
 
-    state = forward_iq_to_workers(state, iq_type, iq_id, node)
+    {state, worker_handled} = forward_iq_to_worker(state, iq_type, iq_id, node)
     {state, pending_handled} = resolve_pending_iq(state, iq_type, iq_id, node)
 
-    if pending_handled do
+    if worker_handled or pending_handled do
       Logger.debug(
         "[NODE_HANDLER] iq handled by pending request session_id=#{inspect(Map.get(state, :session_id))} id=#{inspect(iq_id)}"
       )
@@ -284,22 +284,26 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   # IQ routing and pending-request handling
 
-  defp forward_iq_to_workers(state, iq_type, iq_id, node)
+  defp forward_iq_to_worker(state, iq_type, iq_id, node)
        when iq_type in ["result", "error"] and iq_id != nil do
-    workers = Map.get(state, :send_workers, %{})
+    coordinator = Map.get(state, :send_coordinator, SendCoordinator.new())
 
-    if map_size(workers) > 0 do
-      Logger.debug("[SESSION] Forwarding IQ #{iq_id} to #{map_size(workers)} workers")
-      msg_tag = if iq_type == "result", do: :prekey_response, else: :prekey_error
-      broadcast_iq_to_workers(workers, msg_tag, iq_id, node)
-    else
-      Logger.debug("[NODE_HANDLER] no send workers waiting for IQ id=#{inspect(iq_id)}")
+    case SendCoordinator.take_iq(coordinator, iq_id) do
+      {:ok, worker_pid, coordinator} ->
+        msg_tag = if iq_type == "result", do: :prekey_response, else: :prekey_error
+        send_iq_to_worker(worker_pid, msg_tag, iq_id, node)
+
+        Logger.debug("[SESSION] Forwarded IQ #{iq_id} to worker=#{inspect(worker_pid)}")
+
+        {Map.put(state, :send_coordinator, coordinator), true}
+
+      {:error, :not_found, _coordinator} ->
+        Logger.debug("[NODE_HANDLER] no send worker waiting for IQ id=#{inspect(iq_id)}")
+        {state, false}
     end
-
-    state
   end
 
-  defp forward_iq_to_workers(state, _iq_type, _iq_id, _node), do: state
+  defp forward_iq_to_worker(state, _iq_type, _iq_id, _node), do: {state, false}
 
   defp resolve_pending_iq(state, iq_type, iq_id, node)
        when iq_type in ["result", "error"] and iq_id != nil do
@@ -378,12 +382,6 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   defp binary_bytes(content) when is_binary(content), do: byte_size(content)
   defp binary_bytes(_content), do: 0
-
-  defp broadcast_iq_to_workers(workers, msg_tag, iq_id, node) when is_map(workers) do
-    Enum.each(workers, fn {worker_pid, _jid} ->
-      send_iq_to_worker(worker_pid, msg_tag, iq_id, node)
-    end)
-  end
 
   defp send_iq_to_worker(worker_pid, msg_tag, iq_id, node) when is_pid(worker_pid) do
     if Process.alive?(worker_pid), do: send(worker_pid, {msg_tag, iq_id, node})
