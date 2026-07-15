@@ -68,6 +68,7 @@ defmodule ExWapp.Session.Worker do
 
   alias ExWapp.Session.{
     Account,
+    AppStateSync,
     InboundRouter,
     InitialSync,
     JIDUtils,
@@ -760,7 +761,7 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_call(:sync_contacts, from, %{status: :connected} = state) do
-    if has_app_state_keys?(state.store) do
+    if AppStateSync.keys_available?(state.store) do
       start_contact_sync_worker(state, from)
     else
       Logger.debug(
@@ -997,7 +998,7 @@ defmodule ExWapp.Session.Worker do
       "[APP_STATE] initial sync task exited without a result session_id=#{inspect(state.session_id)} reason=#{inspect(reason)}"
     )
 
-    broadcast_initial_sync_failure(
+    AppStateSync.broadcast_failure(
       state.session_id,
       self(),
       failure_reason,
@@ -1082,7 +1083,7 @@ defmodule ExWapp.Session.Worker do
   # collection changes from another device
   def handle_info({:app_state_sync_collections, collection_names}, %{status: status} = state)
       when status in [:connected, :syncing] and is_list(collection_names) do
-    refresh_app_state_collections(
+    AppStateSync.refresh(
       state.send_worker_sup,
       self(),
       state.store,
@@ -1103,14 +1104,14 @@ defmodule ExWapp.Session.Worker do
   def handle_info({:app_state_initial_sync, collection_names}, %{status: status} = state)
       when status in [:connected, :syncing] and is_list(collection_names) do
     cond do
-      not initial_app_state_sync_enabled?(state) ->
+      not AppStateSync.initial_enabled?(state) ->
         Logger.debug(
           "[APP_STATE] Automatic initial sync disabled session_id=#{inspect(state.session_id)}"
         )
 
         {:noreply, state}
 
-      not has_app_state_keys?(state.store) ->
+      not AppStateSync.keys_available?(state.store) ->
         Logger.debug(
           "[APP_STATE] Initial sync still waiting for app-state keys session_id=#{inspect(state.session_id)}"
         )
@@ -1120,7 +1121,7 @@ defmodule ExWapp.Session.Worker do
       true ->
         state = enter_initial_sync_gate(state)
 
-        case refresh_app_state_collections(
+        case AppStateSync.refresh(
                state.send_worker_sup,
                self(),
                state.store,
@@ -1135,7 +1136,7 @@ defmodule ExWapp.Session.Worker do
             {:noreply, %{state | initial_sync: initial_sync}}
 
           {:error, reason} ->
-            broadcast_initial_sync_failure(
+            AppStateSync.broadcast_failure(
               state.session_id,
               self(),
               {:task_start_failed, reason},
@@ -1730,7 +1731,8 @@ defmodule ExWapp.Session.Worker do
   defp handle_connection_event({:auth, :ready}, state) do
     emit_telemetry(:connected, %{}, state)
 
-    initial_sync? = initial_app_state_sync_enabled?(state) and has_app_state_keys?(state.store)
+    initial_sync? =
+      AppStateSync.initial_enabled?(state) and AppStateSync.keys_available?(state.store)
 
     state =
       %{
@@ -1747,7 +1749,7 @@ defmodule ExWapp.Session.Worker do
        lifecycle_event_meta(state, %{initial_sync_pending?: initial_sync?})}
     )
 
-    maybe_schedule_initial_app_state_sync(state)
+    AppStateSync.schedule_initial(state, self())
   end
 
   defp handle_connection_event({:connection_message, %Binary.Node{} = node}, state) do
@@ -2214,15 +2216,6 @@ defmodule ExWapp.Session.Worker do
       status: state.status,
       transport_ready?: state.transport_ready?,
       post_auth_phase: state.post_auth_phase
-    })
-  end
-
-  defp initial_sync_event_payload(session_id, runtime_ref, payload) do
-    payload
-    |> Map.new()
-    |> Map.merge(%{
-      runtime_ref: runtime_ref,
-      session_id: session_id
     })
   end
 
@@ -2794,41 +2787,6 @@ defmodule ExWapp.Session.Worker do
 
   defp maybe_broadcast_pubsub_error(_event, _measurements, _extra_metadata, _state), do: :ok
 
-  # Initial app-state synchronization
-
-  defp maybe_schedule_initial_app_state_sync(state) do
-    cond do
-      not initial_app_state_sync_enabled?(state) ->
-        Logger.debug(
-          "[APP_STATE] Automatic initial sync disabled session_id=#{inspect(state.session_id)}"
-        )
-
-      has_app_state_keys?(state.store) ->
-        send(self(), {:app_state_initial_sync, Engine.all_collections()})
-
-      true ->
-        Logger.debug(
-          "[APP_STATE] Deferring initial sync until app-state keys are available session_id=#{inspect(state.session_id)}"
-        )
-    end
-
-    state
-  end
-
-  defp initial_app_state_sync_enabled?(state) do
-    Config.get(state.runtime_cfg, [:app_state, :initial_sync_enabled], true)
-  end
-
-  defp has_app_state_keys?(store) do
-    store
-    |> Store.load!()
-    |> Map.get(:app_state_keys, %{})
-    |> map_size()
-    |> Kernel.>(0)
-  rescue
-    _ -> false
-  end
-
   # ── Initial sync gate ──────────────────────────────────────────────────────
   # While the initial app-state sync runs the session is :syncing, which blocks
   # outbound sends. There is intentionally no elapsed-time cutoff: completion,
@@ -2846,302 +2804,6 @@ defmodule ExWapp.Session.Worker do
     if is_reference(ref), do: Process.demonitor(ref, [:flush])
     %{state | initial_sync: InitialSync.reset(initial_sync)}
   end
-
-  defp refresh_app_state_collections(
-         task_supervisor,
-         session_pid,
-         store,
-         collection_names,
-         source,
-         session_id \\ nil
-       ) do
-    names =
-      collection_names
-      |> Enum.filter(&is_binary/1)
-      |> Enum.uniq()
-
-    task = fn ->
-      result =
-        safe_run_app_state_collection_refresh(
-          session_pid,
-          store,
-          names,
-          source,
-          session_id
-        )
-
-      if source == :initial do
-        send(session_pid, {:initial_sync_finished, self(), result})
-      end
-
-      result
-    end
-
-    case start_refresh_task(task_supervisor, task) do
-      {:ok, task_pid} ->
-        {:ok, task_pid}
-
-      {:error, reason} ->
-        Logger.warning(
-          "[APP_STATE] Failed to start collection refresh source=#{source}: #{inspect(reason)}"
-        )
-
-        {:error, reason}
-    end
-  end
-
-  defp start_refresh_task(task_supervisor, task)
-       when is_pid(task_supervisor) and is_function(task, 0) do
-    Task.Supervisor.start_child(task_supervisor, task)
-  catch
-    :exit, reason -> {:error, {:task_supervisor_exit, reason}}
-  end
-
-  defp start_refresh_task(_task_supervisor, _task),
-    do: {:error, :task_supervisor_unavailable}
-
-  defp safe_run_app_state_collection_refresh(
-         session_pid,
-         store,
-         names,
-         source,
-         session_id
-       ) do
-    run_app_state_collection_refresh(session_pid, store, names, source, session_id)
-  rescue
-    exception ->
-      reason = {:exception, Exception.message(exception)}
-
-      Logger.warning(
-        "[APP_STATE] collection refresh crashed source=#{source} reason=#{inspect(reason)}"
-      )
-
-      maybe_broadcast_unexpected_initial_sync_failure(
-        source,
-        session_id,
-        session_pid,
-        reason
-      )
-
-      :failed
-  catch
-    kind, caught_reason ->
-      reason = {kind, caught_reason}
-
-      Logger.warning(
-        "[APP_STATE] collection refresh stopped source=#{source} reason=#{inspect(reason)}"
-      )
-
-      maybe_broadcast_unexpected_initial_sync_failure(
-        source,
-        session_id,
-        session_pid,
-        reason
-      )
-
-      :failed
-  end
-
-  defp maybe_broadcast_unexpected_initial_sync_failure(
-         :initial,
-         session_id,
-         session_pid,
-         reason
-       ) do
-    broadcast_initial_sync_failure(session_id, session_pid, reason, %{})
-  end
-
-  defp maybe_broadcast_unexpected_initial_sync_failure(
-         _source,
-         _session_id,
-         _session_pid,
-         _reason
-       ),
-       do: :ok
-
-  defp run_app_state_collection_refresh(session_pid, store, names, :initial, session_id) do
-    Subscribers.broadcast_lifecycle(
-      session_id,
-      {:ex_wapp_session, :initial_sync, :started,
-       initial_sync_event_payload(session_id, session_pid, %{collection_names: names})}
-    )
-
-    :ok = begin_store_batch(store, :initial_app_state_sync)
-
-    total_count = length(names)
-
-    {success_count, failures} =
-      names
-      |> Enum.with_index(1)
-      |> Enum.reduce({0, []}, fn {collection_name, index}, {successes, failures} ->
-        started_at = System.monotonic_time(:millisecond)
-
-        broadcast_initial_sync_progress(session_id, session_pid, %{
-          collection_name: collection_name,
-          index: index,
-          total_count: total_count,
-          status: :started
-        })
-
-        case fetch_app_state_collection(session_pid, store, collection_name) do
-          :ok ->
-            duration_ms = elapsed_ms(started_at)
-
-            Logger.info(
-              "[APP_STATE] Initial sync collection completed collection=#{collection_name} progress=#{index}/#{total_count} duration_ms=#{duration_ms}"
-            )
-
-            broadcast_initial_sync_progress(session_id, session_pid, %{
-              collection_name: collection_name,
-              index: index,
-              total_count: total_count,
-              status: :completed,
-              duration_ms: duration_ms
-            })
-
-            {successes + 1, failures}
-
-          {:error, reason} ->
-            duration_ms = elapsed_ms(started_at)
-
-            broadcast_initial_sync_progress(session_id, session_pid, %{
-              collection_name: collection_name,
-              index: index,
-              total_count: total_count,
-              status: :failed,
-              duration_ms: duration_ms,
-              reason: reason
-            })
-
-            {successes, [%{collection: collection_name, reason: reason} | failures]}
-        end
-      end)
-
-    flush_result = finish_store_batch(store, :initial_app_state_sync)
-    failures = Enum.reverse(failures)
-
-    case {failures, flush_result} do
-      {[], :ok} ->
-        Subscribers.broadcast_lifecycle(
-          session_id,
-          {:ex_wapp_session, :initial_sync, :completed,
-           initial_sync_event_payload(session_id, session_pid, %{
-             collection_names: names,
-             success_count: success_count,
-             skipped: false
-           })}
-        )
-
-      {failures, :ok} ->
-        reason = {:collection_fetch_failed, failures}
-
-        Subscribers.broadcast_lifecycle(
-          session_id,
-          {:ex_wapp_session, :initial_sync, :failed, reason,
-           initial_sync_event_payload(session_id, session_pid, %{
-             collection_names: names,
-             success_count: success_count,
-             failures: failures
-           })}
-        )
-
-      {failures, {:error, flush_reason}} ->
-        reason = {:final_store_flush_failed, flush_reason}
-
-        Subscribers.broadcast_lifecycle(
-          session_id,
-          {:ex_wapp_session, :initial_sync, :failed, reason,
-           initial_sync_event_payload(session_id, session_pid, %{
-             collection_names: names,
-             success_count: success_count,
-             failures: failures,
-             flush_reason: flush_reason
-           })}
-        )
-    end
-
-    sync_outcome(failures, flush_result)
-  end
-
-  defp run_app_state_collection_refresh(session_pid, store, names, _source, _session_id) do
-    Enum.each(names, fn collection_name ->
-      _ = fetch_app_state_collection(session_pid, store, collection_name)
-    end)
-  end
-
-  defp sync_outcome([], :ok), do: :completed
-  defp sync_outcome(_failures, _flush_result), do: :failed
-
-  defp begin_store_batch(%module{} = store, reason) when is_atom(reason) do
-    if function_exported?(module, :begin_batch, 2) do
-      apply(module, :begin_batch, [store, reason])
-    else
-      :ok
-    end
-  end
-
-  defp begin_store_batch(_store, _reason), do: :ok
-
-  defp finish_store_batch(%module{} = store, reason) when is_atom(reason) do
-    if function_exported?(module, :finish_batch, 2) do
-      apply(module, :finish_batch, [store, reason])
-    else
-      :ok
-    end
-  end
-
-  defp finish_store_batch(_store, _reason), do: :ok
-
-  defp fetch_app_state_collection(session_pid, store, collection_name) do
-    case Engine.fetch_collection(session_pid, store, collection_name) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("[APP_STATE] Failed to fetch #{collection_name}: #{inspect(reason)}")
-        {:error, reason}
-    end
-  rescue
-    error ->
-      Logger.warning(
-        "[APP_STATE] Failed to fetch #{collection_name}: #{Exception.message(error)}"
-      )
-
-      {:error, {:exception, error}}
-  catch
-    kind, reason ->
-      Logger.warning("[APP_STATE] Failed to fetch #{collection_name}: #{inspect({kind, reason})}")
-
-      {:error, {kind, reason}}
-  end
-
-  defp broadcast_initial_sync_progress(session_id, session_pid, payload) do
-    Subscribers.broadcast_lifecycle(
-      session_id,
-      {:ex_wapp_session, :initial_sync, :progress,
-       initial_sync_event_payload(session_id, session_pid, payload)}
-    )
-  end
-
-  defp broadcast_initial_sync_failure(session_id, session_pid, reason, payload) do
-    Subscribers.broadcast_lifecycle(
-      session_id,
-      {:ex_wapp_session, :initial_sync, :failed, reason,
-       initial_sync_event_payload(session_id, session_pid, payload)}
-    )
-  rescue
-    exception ->
-      Logger.warning(
-        "[APP_STATE] failed to broadcast initial sync failure: #{Exception.message(exception)}"
-      )
-
-      :ok
-  catch
-    _kind, _reason -> :ok
-  end
-
-  defp elapsed_ms(started_at),
-    do: max(System.monotonic_time(:millisecond) - started_at, 0)
 
   defp connection_event_summary({:connection_message, %Binary.Node{} = node}) do
     {:connection_message,
