@@ -73,8 +73,7 @@ defmodule ExWapp.Config.Validator do
 
   defp validate_app_state(cfg) do
     run_validations([
-      fn -> ensure_boolean(cfg, [:app_state, :initial_sync_enabled]) end,
-      fn -> ensure_positive_integer(cfg, [:app_state, :initial_sync_gate_ms]) end
+      fn -> ensure_boolean(cfg, [:app_state, :initial_sync_enabled]) end
     ])
   end
 

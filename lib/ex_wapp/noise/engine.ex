@@ -124,10 +124,6 @@ defmodule ExWapp.Noise.Engine do
       "process_server_hello: got server hello eph_len=#{byte_size(re)} static_len=#{byte_size(rs_ct)} cert_len=#{byte_size(cert_ct)}"
     )
 
-    Logger.debug("server ephemeral: #{Base.encode16(re, case: :lower)}")
-    Logger.debug("our ephemeral private: #{Base.encode16(state.e_kp.private, case: :lower)}")
-    Logger.debug("our static public: #{Base.encode16(state.s_kp.public, case: :lower)}")
-
     noise = Handshake.authenticate(state.noise, re)
 
     with {:ok, noise} <- Handshake.mix_shared_secret(noise, state.e_kp.private, re),
@@ -142,20 +138,12 @@ defmodule ExWapp.Noise.Engine do
       new_state = %{state | noise: noise, server_static: rs, server_cert: cert}
 
       Logger.debug(
-        "process_server_hello: decrypted static=#{Base.encode16(rs, case: :lower)} cert_len=#{byte_size(cert)} client_finish_len=#{byte_size(client_finish)}"
-      )
-
-      Logger.debug(
-        "encrypted static (s_pub_ct) len=#{byte_size(s_pub_ct)}: #{Base.encode16(s_pub_ct, case: :lower)}"
+        "process_server_hello: server static decrypted cert_len=#{byte_size(cert)} client_finish_len=#{byte_size(client_finish)}"
       )
 
       Logger.debug("encrypted payload len=#{byte_size(payload_ct)}")
       Logger.debug("payload plaintext len=#{byte_size(state.payload)}")
       Logger.debug("client_finish total len=#{byte_size(client_finish)}")
-
-      Logger.debug(
-        "client_finish hex (first 100): #{Base.encode16(client_finish, case: :lower) |> String.slice(0, 100)}..."
-      )
 
       {:ok, new_state, client_finish}
     else

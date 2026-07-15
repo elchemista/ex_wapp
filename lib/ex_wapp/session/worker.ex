@@ -39,10 +39,10 @@ defmodule ExWapp.Session.Worker do
 
   ## State Machine
 
-      idle -> connecting -> handshaking -> connected
-        ^                                      |
-        |                                      v
-        +<-------- disconnected <--------------+
+      idle -> connecting -> handshaking -> syncing -> connected
+        ^                                                  |
+        |                                                  v
+        +<---------------- disconnected <------------------+
   """
 
   use GenServer
@@ -95,6 +95,7 @@ defmodule ExWapp.Session.Worker do
 
   defstruct [
     :store,
+    :store_owned?,
     :transport_mod,
     :pairing,
     :conn,
@@ -102,9 +103,10 @@ defmodule ExWapp.Session.Worker do
     :outbound_queue,
     :inbound_router,
     :send_worker_sup,
+    :initial_sync_task,
+    :initial_sync_task_ref,
     :session_id,
     :health_timer,
-    :initial_sync_gate_timer,
     status: :idle,
     qr_subscribers: %{},
     message_subscribers: %{},
@@ -148,10 +150,13 @@ defmodule ExWapp.Session.Worker do
           conn: pid() | nil,
           conn_ref: reference() | nil,
           store: Store.t() | nil,
+          store_owned?: boolean(),
           transport_mod: module(),
           outbound_queue: pid() | nil,
           inbound_router: pid() | nil,
           send_worker_sup: pid() | nil,
+          initial_sync_task: pid() | nil,
+          initial_sync_task_ref: reference() | nil,
           session_id: term() | nil,
           health_timer: reference() | nil,
           qr_subscribers: %{reference() => {pid(), reference()}},
@@ -429,7 +434,8 @@ defmodule ExWapp.Session.Worker do
           raise ArgumentError, "invalid runtime config: #{inspect(reason)}"
       end
 
-    store = Store.new(Keyword.get(opts, :store))
+    store_input = Keyword.get(opts, :store)
+    store = Store.new(store_input)
     session_id = Keyword.get(opts, :session_id)
     transport_mod = Keyword.get(opts, :transport, ExWapp.Conn)
 
@@ -461,6 +467,7 @@ defmodule ExWapp.Session.Worker do
       opts: opts,
       runtime_cfg: runtime_cfg,
       store: store,
+      store_owned?: not is_struct(store_input),
       transport_mod: transport_mod,
       outbound_queue: outbound_queue,
       inbound_router: inbound_router,
@@ -773,25 +780,14 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_call(:sync_contacts, from, %{status: :connected} = state) do
-    session_pid = self()
+    if has_app_state_keys?(state.store) do
+      start_contact_sync_worker(state, from)
+    else
+      Logger.debug(
+        "[APP_STATE] Contact sync skipped while app-state keys are unavailable session_id=#{inspect(state.session_id)}"
+      )
 
-    case start_send_worker(
-           state,
-           "app_state_sync_contacts",
-           fn ->
-             try do
-               Engine.fetch_collection(session_pid, state.store, "critical_unblock_low")
-             rescue
-               e -> {:error, {:exception, e}}
-             end
-           end,
-           from
-         ) do
-      {:ok, worker, mon} ->
-        {:noreply, register_send_worker(state, worker, mon, "app_state_sync_contacts")}
-
-      {:error, reason} ->
-        {:reply, {:error, {:send_worker_start_failed, reason}}, state}
+      {:reply, {:error, :app_state_keys_unavailable}, state}
     end
   end
 
@@ -965,13 +961,13 @@ defmodule ExWapp.Session.Worker do
   # Connection events from Conn process
   def handle_info({:connection_event, event}, state) do
     Logger.debug(
-      "[SESSION] connection_event session_id=#{state.session_id} event=#{inspect(event, limit: 80)} status_before=#{inspect(state.status)} post_auth_phase=#{inspect(state.post_auth_phase)}"
+      "[SESSION] connection_event session_id=#{state.session_id} event=#{inspect(connection_event_summary(event))} status_before=#{inspect(state.status)} post_auth_phase=#{inspect(state.post_auth_phase)}"
     )
 
     new_state = handle_connection_event(event, state)
 
     Logger.debug(
-      "[SESSION] connection_event handled session_id=#{state.session_id} event=#{inspect(event, limit: 80)} status_after=#{inspect(new_state.status)} post_auth_phase=#{inspect(new_state.post_auth_phase)}"
+      "[SESSION] connection_event handled session_id=#{state.session_id} event=#{inspect(connection_event_summary(event))} status_after=#{inspect(new_state.status)} post_auth_phase=#{inspect(new_state.post_auth_phase)}"
     )
 
     {:noreply, new_state}
@@ -982,7 +978,36 @@ defmodule ExWapp.Session.Worker do
       {:noreply, new_state}
   end
 
-  # Monitor DOWN for QR subscribers
+  # The initial sync has no wall-clock deadline. Its monitor is the safety
+  # mechanism: if the task exits without reporting a result, release the gate
+  # and surface the failure instead of leaving the session stuck in :syncing.
+  def handle_info(
+        {:DOWN, ref, :process, pid, reason},
+        %__MODULE__{initial_sync_task_ref: ref, initial_sync_task: pid} = state
+      ) do
+    failure_reason = {:task_exited_without_result, reason}
+
+    Logger.warning(
+      "[APP_STATE] initial sync task exited without a result session_id=#{inspect(state.session_id)} reason=#{inspect(reason)}"
+    )
+
+    broadcast_initial_sync_failure(
+      state.session_id,
+      self(),
+      failure_reason,
+      %{task_exit_reason: reason}
+    )
+
+    state =
+      state
+      |> clear_initial_sync_task()
+      |> Map.put(:app_state_initial_sync_requested, false)
+      |> maybe_mark_synced()
+
+    {:noreply, state}
+  end
+
+  # Monitor DOWN for subscribers and ordinary send workers.
   def handle_info({:DOWN, mon, :process, _pid, _reason}, state) do
     new_state =
       state
@@ -1061,7 +1086,13 @@ defmodule ExWapp.Session.Worker do
   # collection changes from another device
   def handle_info({:app_state_sync_collections, collection_names}, %{status: status} = state)
       when status in [:connected, :syncing] and is_list(collection_names) do
-    refresh_app_state_collections(self(), state.store, collection_names, :notification)
+    refresh_app_state_collections(
+      state.send_worker_sup,
+      self(),
+      state.store,
+      collection_names,
+      :notification
+    )
 
     {:noreply, state}
   end
@@ -1075,39 +1106,78 @@ defmodule ExWapp.Session.Worker do
 
   def handle_info({:app_state_initial_sync, collection_names}, %{status: status} = state)
       when status in [:connected, :syncing] and is_list(collection_names) do
-    refresh_app_state_collections(
-      self(),
-      state.store,
-      collection_names,
-      :initial,
-      state.session_id
-    )
+    cond do
+      not initial_app_state_sync_enabled?(state) ->
+        Logger.debug(
+          "[APP_STATE] Automatic initial sync disabled session_id=#{inspect(state.session_id)}"
+        )
 
-    {:noreply, %{state | app_state_initial_sync_requested: true}}
+        {:noreply, state}
+
+      not has_app_state_keys?(state.store) ->
+        Logger.debug(
+          "[APP_STATE] Initial sync still waiting for app-state keys session_id=#{inspect(state.session_id)}"
+        )
+
+        {:noreply, state}
+
+      true ->
+        state =
+          state
+          |> Map.put(:app_state_initial_sync_requested, true)
+          |> enter_initial_sync_gate()
+
+        case refresh_app_state_collections(
+               state.send_worker_sup,
+               self(),
+               state.store,
+               collection_names,
+               :initial,
+               state.session_id
+             ) do
+          {:ok, task_pid} ->
+            task_ref = Process.monitor(task_pid)
+
+            {:noreply, %{state | initial_sync_task: task_pid, initial_sync_task_ref: task_ref}}
+
+          {:error, reason} ->
+            broadcast_initial_sync_failure(
+              state.session_id,
+              self(),
+              {:task_start_failed, reason},
+              %{collection_names: collection_names}
+            )
+
+            {:noreply,
+             state
+             |> Map.put(:app_state_initial_sync_requested, false)
+             |> maybe_mark_synced()}
+        end
+    end
   end
 
   # Initial app-state sync finished (success or failure): the session is usable,
-  # so leave the :syncing gate and allow outbound sends again.
-  def handle_info({:initial_sync_finished, _result}, %{status: :syncing} = state) do
+  # so leave the :syncing gate and allow outbound sends again. Include the task
+  # pid so a late result from a cancelled connection cycle cannot release a
+  # newer sync task.
+  def handle_info(
+        {:initial_sync_finished, task_pid, _result},
+        %{initial_sync_task: task_pid} = state
+      ) do
     Logger.debug(
       "[APP_STATE] initial sync finished; marking session connected session_id=#{inspect(state.session_id)}"
     )
 
-    {:noreply, mark_synced(state)}
+    state =
+      state
+      |> clear_initial_sync_task()
+      |> Map.put(:app_state_initial_sync_requested, false)
+      |> maybe_mark_synced()
+
+    {:noreply, state}
   end
 
-  def handle_info({:initial_sync_finished, _result}, state), do: {:noreply, state}
-
-  # Safety valve: never stay stuck in :syncing if the sync task dies silently.
-  def handle_info(:initial_sync_gate_timeout, %{status: :syncing} = state) do
-    Logger.warning(
-      "[APP_STATE] initial sync gate timed out; marking session connected session_id=#{inspect(state.session_id)}"
-    )
-
-    {:noreply, mark_synced(state)}
-  end
-
-  def handle_info(:initial_sync_gate_timeout, state), do: {:noreply, state}
+  def handle_info({:initial_sync_finished, _task_pid, _result}, state), do: {:noreply, state}
 
   def handle_info({:app_state_sync_collections, _}, state), do: {:noreply, state}
 
@@ -1294,8 +1364,13 @@ defmodule ExWapp.Session.Worker do
       end
     end
 
+    # Stop every operation that can still mutate the store before persisting
+    # the final snapshot. Then explicitly stop linked helpers, because normal
+    # exits are ignored by linked processes when this worker traps exits.
+    state = do_disconnect(state, reason)
     flush_store(state.store)
-    do_disconnect(state, reason)
+    stop_session_helpers(state)
+    close_owned_store(state)
     :ok
   end
 
@@ -1377,7 +1452,12 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp do_disconnect(%__MODULE__{conn: nil} = state, reason) do
-    state = state |> cancel_health_check() |> clear_pending_requests(reason)
+    state =
+      state
+      |> cancel_health_check()
+      |> cancel_session_tasks(reason)
+      |> clear_pending_requests(reason)
+
     OutboundQueue.clear_conn(state.outbound_queue)
 
     %{
@@ -1395,7 +1475,13 @@ defmodule ExWapp.Session.Worker do
 
   defp do_disconnect(%__MODULE__{conn: conn, conn_ref: ref} = state, reason) do
     if ref, do: Process.demonitor(ref, [:flush])
-    state = state |> cancel_health_check() |> clear_pending_requests(reason)
+
+    state =
+      state
+      |> cancel_health_check()
+      |> cancel_session_tasks(reason)
+      |> clear_pending_requests(reason)
+
     OutboundQueue.clear_conn(state.outbound_queue)
 
     # Gracefully stop connection
@@ -1435,6 +1521,7 @@ defmodule ExWapp.Session.Worker do
 
     next_state =
       state
+      |> cancel_session_tasks(reason)
       |> clear_pending_requests(reason)
       |> cancel_health_check()
       |> Map.merge(%{
@@ -1602,12 +1689,18 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp handle_connection_event({:transport, {:closed, reason}}, %{conn: nil} = state) do
-    Logger.debug("[SESSION] Ignoring stale transport close: #{inspect(reason)}")
+    Logger.debug(
+      "[SESSION] Ignoring stale transport close: #{inspect(connection_close_reason_summary(reason))}"
+    )
+
     state
   end
 
   defp handle_connection_event({:transport, {:closed, reason}}, state) do
-    Logger.warning("[SESSION] Transport closed: #{inspect(reason)}")
+    Logger.warning(
+      "[SESSION] Transport closed: #{inspect(connection_close_reason_summary(reason))}"
+    )
+
     handle_connection_exit(state, {:transport_closed, reason})
   end
 
@@ -1661,8 +1754,6 @@ defmodule ExWapp.Session.Worker do
           post_auth_phase: :complete
       }
 
-    state = if initial_sync?, do: arm_initial_sync_gate(state), else: state
-
     Subscribers.broadcast_lifecycle(
       state.session_id,
       {:ex_wapp_session, :post_auth_ready,
@@ -1694,7 +1785,7 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp handle_connection_event(event, state) do
-    Logger.debug("Unhandled connection event: #{inspect(event)}")
+    Logger.debug("Unhandled connection event: #{inspect(connection_event_summary(event))}")
     state
   end
 
@@ -2145,6 +2236,64 @@ defmodule ExWapp.Session.Worker do
       :ok
   end
 
+  defp stop_session_helpers(state) do
+    stop_gen_server(state.outbound_queue, :outbound_queue)
+    stop_gen_server(state.inbound_router, :inbound_router)
+    stop_task_supervisor(state.send_worker_sup)
+    :ok
+  end
+
+  defp stop_gen_server(pid, label) when is_pid(pid) do
+    if Process.alive?(pid), do: GenServer.stop(pid, :normal, 5_000)
+    :ok
+  rescue
+    exception ->
+      Logger.warning("[SESSION] Failed stopping #{label}: #{Exception.message(exception)}")
+      :ok
+  catch
+    :exit, reason ->
+      Logger.warning("[SESSION] Failed stopping #{label}: #{inspect(reason)}")
+      :ok
+  end
+
+  defp stop_gen_server(_pid, _label), do: :ok
+
+  defp stop_task_supervisor(pid) when is_pid(pid) do
+    if Process.alive?(pid), do: Supervisor.stop(pid, :normal, 5_000)
+    :ok
+  rescue
+    exception ->
+      Logger.warning(
+        "[SESSION] Failed stopping send worker supervisor: #{Exception.message(exception)}"
+      )
+
+      :ok
+  catch
+    :exit, reason ->
+      Logger.warning("[SESSION] Failed stopping send worker supervisor: #{inspect(reason)}")
+
+      :ok
+  end
+
+  defp stop_task_supervisor(_pid), do: :ok
+
+  defp close_owned_store(%{store_owned?: true, store: store}) do
+    case Store.close(store) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("[SESSION] Failed closing store: #{inspect(reason)}")
+    end
+  rescue
+    exception ->
+      Logger.warning("[SESSION] Failed closing store: #{Exception.message(exception)}")
+      :ok
+  catch
+    kind, reason ->
+      Logger.warning("[SESSION] Failed closing store: #{inspect({kind, reason})}")
+      :ok
+  end
+
+  defp close_owned_store(_state), do: :ok
+
   defp restart_outbound_queue(state) do
     {:ok, outbound_queue} =
       OutboundQueue.start_link(
@@ -2195,6 +2344,29 @@ defmodule ExWapp.Session.Worker do
       runtime_ref: runtime_ref,
       session_id: session_id
     })
+  end
+
+  defp start_contact_sync_worker(state, from) do
+    session_pid = self()
+
+    case start_send_worker(
+           state,
+           "app_state_sync_contacts",
+           fn -> fetch_contacts_collection(session_pid, state.store) end,
+           from
+         ) do
+      {:ok, worker, mon} ->
+        {:noreply, register_send_worker(state, worker, mon, "app_state_sync_contacts")}
+
+      {:error, reason} ->
+        {:reply, {:error, {:send_worker_start_failed, reason}}, state}
+    end
+  end
+
+  defp fetch_contacts_collection(session_pid, store) do
+    Engine.fetch_collection(session_pid, store, "critical_unblock_low")
+  rescue
+    error -> {:error, {:exception, error}}
   end
 
   defp start_send_worker(state, jid, fun) do
@@ -2249,6 +2421,7 @@ defmodule ExWapp.Session.Worker do
   defp clear_pending_requests(state, reason) do
     Enum.each(state.pending_iqs, &cancel_pending_call(&1, reason))
     Enum.each(state.send_workers, &notify_disconnected_worker(&1, reason))
+    Enum.each(state.send_worker_mons, fn {mon, _pid} -> Process.demonitor(mon, [:flush]) end)
     Enum.each(state.outbound_confirmations, &cancel_pending_timer/1)
     Enum.each(state.pending_media_retries, &cancel_pending_call(&1, reason))
 
@@ -2261,6 +2434,46 @@ defmodule ExWapp.Session.Worker do
         pending_media_retries: %{}
     }
   end
+
+  defp cancel_session_tasks(state, reason) do
+    if state.app_state_initial_sync_requested do
+      Logger.debug(
+        "[APP_STATE] cancelling initial sync session_id=#{inspect(state.session_id)} reason=#{inspect(reason)}"
+      )
+    end
+
+    state =
+      state
+      |> clear_initial_sync_task()
+      |> Map.put(:app_state_initial_sync_requested, false)
+
+    state.send_worker_sup
+    |> task_supervisor_children()
+    |> Enum.each(&terminate_supervised_task(state.send_worker_sup, &1))
+
+    state
+  end
+
+  defp task_supervisor_children(supervisor) when is_pid(supervisor) do
+    Task.Supervisor.children(supervisor)
+  rescue
+    _ -> []
+  catch
+    :exit, _ -> []
+  end
+
+  defp task_supervisor_children(_supervisor), do: []
+
+  defp terminate_supervised_task(supervisor, task_pid)
+       when is_pid(supervisor) and is_pid(task_pid) do
+    Task.Supervisor.terminate_child(supervisor, task_pid)
+  rescue
+    _ -> :ok
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp terminate_supervised_task(_supervisor, _task_pid), do: :ok
 
   defp cancel_pending_call({_id, pending}, reason) do
     cancel_pending_timer(pending)
@@ -2676,12 +2889,19 @@ defmodule ExWapp.Session.Worker do
   # Initial app-state synchronization
 
   defp maybe_schedule_initial_app_state_sync(state) do
-    if initial_app_state_sync_enabled?(state) and has_app_state_keys?(state.store) do
-      send(self(), {:app_state_initial_sync, Engine.all_collections()})
-    else
-      Logger.debug(
-        "[APP_STATE] Deferring initial sync until app-state keys are available session_id=#{inspect(state.session_id)}"
-      )
+    cond do
+      not initial_app_state_sync_enabled?(state) ->
+        Logger.debug(
+          "[APP_STATE] Automatic initial sync disabled session_id=#{inspect(state.session_id)}"
+        )
+
+      has_app_state_keys?(state.store) ->
+        send(self(), {:app_state_initial_sync, Engine.all_collections()})
+
+      true ->
+        Logger.debug(
+          "[APP_STATE] Deferring initial sync until app-state keys are available session_id=#{inspect(state.session_id)}"
+        )
     end
 
     state
@@ -2703,31 +2923,24 @@ defmodule ExWapp.Session.Worker do
 
   # ── Initial sync gate ──────────────────────────────────────────────────────
   # While the initial app-state sync runs the session is :syncing, which blocks
-  # outbound sends. These helpers arm a timeout safety valve and clear the gate.
+  # outbound sends. There is intentionally no elapsed-time cutoff: completion,
+  # task failure, disconnect, or session termination are the only exits.
 
-  defp arm_initial_sync_gate(state) do
-    state = finish_initial_sync_gate(state)
-    gate_ms = Config.get(state.runtime_cfg, [:app_state, :initial_sync_gate_ms], 180_000)
+  defp enter_initial_sync_gate(%{status: :connected} = state),
+    do: %{state | status: :syncing}
 
-    %{
-      state
-      | initial_sync_gate_timer: Process.send_after(self(), :initial_sync_gate_timeout, gate_ms)
-    }
+  defp enter_initial_sync_gate(state), do: state
+
+  defp maybe_mark_synced(%{status: :syncing} = state), do: %{state | status: :connected}
+  defp maybe_mark_synced(state), do: state
+
+  defp clear_initial_sync_task(%{initial_sync_task_ref: ref} = state) do
+    if is_reference(ref), do: Process.demonitor(ref, [:flush])
+    %{state | initial_sync_task: nil, initial_sync_task_ref: nil}
   end
-
-  defp mark_synced(state) do
-    %{finish_initial_sync_gate(state) | status: :connected}
-  end
-
-  defp finish_initial_sync_gate(%{initial_sync_gate_timer: timer} = state)
-       when is_reference(timer) do
-    Process.cancel_timer(timer)
-    %{state | initial_sync_gate_timer: nil}
-  end
-
-  defp finish_initial_sync_gate(state), do: %{state | initial_sync_gate_timer: nil}
 
   defp refresh_app_state_collections(
+         task_supervisor,
          session_pid,
          store,
          collection_names,
@@ -2739,10 +2952,104 @@ defmodule ExWapp.Session.Worker do
       |> Enum.filter(&is_binary/1)
       |> Enum.uniq()
 
-    spawn(fn ->
-      run_app_state_collection_refresh(session_pid, store, names, source, session_id)
-    end)
+    task = fn ->
+      result =
+        safe_run_app_state_collection_refresh(
+          session_pid,
+          store,
+          names,
+          source,
+          session_id
+        )
+
+      if source == :initial do
+        send(session_pid, {:initial_sync_finished, self(), result})
+      end
+
+      result
+    end
+
+    case start_refresh_task(task_supervisor, task) do
+      {:ok, task_pid} ->
+        {:ok, task_pid}
+
+      {:error, reason} ->
+        Logger.warning(
+          "[APP_STATE] Failed to start collection refresh source=#{source}: #{inspect(reason)}"
+        )
+
+        {:error, reason}
+    end
   end
+
+  defp start_refresh_task(task_supervisor, task)
+       when is_pid(task_supervisor) and is_function(task, 0) do
+    Task.Supervisor.start_child(task_supervisor, task)
+  catch
+    :exit, reason -> {:error, {:task_supervisor_exit, reason}}
+  end
+
+  defp start_refresh_task(_task_supervisor, _task),
+    do: {:error, :task_supervisor_unavailable}
+
+  defp safe_run_app_state_collection_refresh(
+         session_pid,
+         store,
+         names,
+         source,
+         session_id
+       ) do
+    run_app_state_collection_refresh(session_pid, store, names, source, session_id)
+  rescue
+    exception ->
+      reason = {:exception, Exception.message(exception)}
+
+      Logger.warning(
+        "[APP_STATE] collection refresh crashed source=#{source} reason=#{inspect(reason)}"
+      )
+
+      maybe_broadcast_unexpected_initial_sync_failure(
+        source,
+        session_id,
+        session_pid,
+        reason
+      )
+
+      :failed
+  catch
+    kind, caught_reason ->
+      reason = {kind, caught_reason}
+
+      Logger.warning(
+        "[APP_STATE] collection refresh stopped source=#{source} reason=#{inspect(reason)}"
+      )
+
+      maybe_broadcast_unexpected_initial_sync_failure(
+        source,
+        session_id,
+        session_pid,
+        reason
+      )
+
+      :failed
+  end
+
+  defp maybe_broadcast_unexpected_initial_sync_failure(
+         :initial,
+         session_id,
+         session_pid,
+         reason
+       ) do
+    broadcast_initial_sync_failure(session_id, session_pid, reason, %{})
+  end
+
+  defp maybe_broadcast_unexpected_initial_sync_failure(
+         _source,
+         _session_id,
+         _session_pid,
+         _reason
+       ),
+       do: :ok
 
   defp run_app_state_collection_refresh(session_pid, store, names, :initial, session_id) do
     Subscribers.broadcast_lifecycle(
@@ -2753,13 +3060,51 @@ defmodule ExWapp.Session.Worker do
 
     :ok = begin_store_batch(store, :initial_app_state_sync)
 
+    total_count = length(names)
+
     {success_count, failures} =
-      Enum.reduce(names, {0, []}, fn collection_name, {successes, failures} ->
+      names
+      |> Enum.with_index(1)
+      |> Enum.reduce({0, []}, fn {collection_name, index}, {successes, failures} ->
+        started_at = System.monotonic_time(:millisecond)
+
+        broadcast_initial_sync_progress(session_id, session_pid, %{
+          collection_name: collection_name,
+          index: index,
+          total_count: total_count,
+          status: :started
+        })
+
         case fetch_app_state_collection(session_pid, store, collection_name) do
           :ok ->
+            duration_ms = elapsed_ms(started_at)
+
+            Logger.info(
+              "[APP_STATE] Initial sync collection completed collection=#{collection_name} progress=#{index}/#{total_count} duration_ms=#{duration_ms}"
+            )
+
+            broadcast_initial_sync_progress(session_id, session_pid, %{
+              collection_name: collection_name,
+              index: index,
+              total_count: total_count,
+              status: :completed,
+              duration_ms: duration_ms
+            })
+
             {successes + 1, failures}
 
           {:error, reason} ->
+            duration_ms = elapsed_ms(started_at)
+
+            broadcast_initial_sync_progress(session_id, session_pid, %{
+              collection_name: collection_name,
+              index: index,
+              total_count: total_count,
+              status: :failed,
+              duration_ms: duration_ms,
+              reason: reason
+            })
+
             {successes, [%{collection: collection_name, reason: reason} | failures]}
         end
       end)
@@ -2807,9 +3152,7 @@ defmodule ExWapp.Session.Worker do
         )
     end
 
-    # Whether the sync succeeded or failed, the transport is usable again: let
-    # the worker leave the :syncing gate so outbound sends resume.
-    send(session_pid, {:initial_sync_finished, sync_outcome(failures, flush_result)})
+    sync_outcome(failures, flush_result)
   end
 
   defp run_app_state_collection_refresh(session_pid, store, names, _source, _session_id) do
@@ -2842,7 +3185,7 @@ defmodule ExWapp.Session.Worker do
   defp finish_store_batch(_store, _reason), do: :ok
 
   defp fetch_app_state_collection(session_pid, store, collection_name) do
-    case ExWapp.AppState.Engine.fetch_collection(session_pid, store, collection_name) do
+    case Engine.fetch_collection(session_pid, store, collection_name) do
       :ok ->
         :ok
 
@@ -2850,5 +3193,67 @@ defmodule ExWapp.Session.Worker do
         Logger.warning("[APP_STATE] Failed to fetch #{collection_name}: #{inspect(reason)}")
         {:error, reason}
     end
+  rescue
+    error ->
+      Logger.warning(
+        "[APP_STATE] Failed to fetch #{collection_name}: #{Exception.message(error)}"
+      )
+
+      {:error, {:exception, error}}
+  catch
+    kind, reason ->
+      Logger.warning("[APP_STATE] Failed to fetch #{collection_name}: #{inspect({kind, reason})}")
+
+      {:error, {kind, reason}}
   end
+
+  defp broadcast_initial_sync_progress(session_id, session_pid, payload) do
+    Subscribers.broadcast_lifecycle(
+      session_id,
+      {:ex_wapp_session, :initial_sync, :progress,
+       initial_sync_event_payload(session_id, session_pid, payload)}
+    )
+  end
+
+  defp broadcast_initial_sync_failure(session_id, session_pid, reason, payload) do
+    Subscribers.broadcast_lifecycle(
+      session_id,
+      {:ex_wapp_session, :initial_sync, :failed, reason,
+       initial_sync_event_payload(session_id, session_pid, payload)}
+    )
+  rescue
+    exception ->
+      Logger.warning(
+        "[APP_STATE] failed to broadcast initial sync failure: #{Exception.message(exception)}"
+      )
+
+      :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  defp elapsed_ms(started_at),
+    do: max(System.monotonic_time(:millisecond) - started_at, 0)
+
+  defp connection_event_summary({:connection_message, %Binary.Node{} = node}) do
+    {:connection_message,
+     %{tag: node.tag, attrs: node.attrs |> then(&(&1 || %{})) |> Map.keys() |> Enum.sort()}}
+  end
+
+  defp connection_event_summary({:connection_binary, payload}) when is_binary(payload),
+    do: {:connection_binary, %{bytes: byte_size(payload)}}
+
+  defp connection_event_summary({:transport, {:closed, reason}}),
+    do: {:transport, {:closed, connection_close_reason_summary(reason)}}
+
+  defp connection_event_summary(event), do: event
+
+  defp connection_close_reason_summary(%{__struct__: module}),
+    do: %{type: inspect(module)}
+
+  defp connection_close_reason_summary(reason) when is_map(reason) do
+    Map.take(reason, [:reason, :attempt_number, :code])
+  end
+
+  defp connection_close_reason_summary(reason), do: reason
 end

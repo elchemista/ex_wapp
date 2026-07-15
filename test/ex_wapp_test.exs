@@ -33,6 +33,21 @@ defmodule ExWappTest do
     end
   end
 
+  defmodule ForwardingConn do
+    use GenServer
+
+    def start_link(owner), do: GenServer.start_link(__MODULE__, owner)
+
+    @impl true
+    def init(owner), do: {:ok, owner}
+
+    @impl true
+    def handle_info(message, owner) do
+      send(owner, message)
+      {:noreply, owner}
+    end
+  end
+
   describe "Session lifecycle" do
     test "starts in idle state" do
       {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
@@ -56,6 +71,82 @@ defmodule ExWappTest do
       Process.sleep(10)
       assert ExWapp.state(session) == :idle
       GenServer.stop(session)
+    end
+
+    test "disconnect cancels an active initial sync without stopping the session" do
+      {session, conn, sync_state} = start_blocked_initial_sync("disconnect-during-sync")
+
+      sync_task = sync_state.initial_sync_task
+      queue = sync_state.outbound_queue
+      router = sync_state.inbound_router
+      task_supervisor = sync_state.send_worker_sup
+      store_agent = sync_state.store.agent
+
+      assert Process.alive?(sync_task)
+      assert sync_state.status == :syncing
+      refute Map.has_key?(sync_state, :initial_sync_gate_timer)
+
+      :ok = ExWapp.disconnect(session)
+
+      assert eventually(fn ->
+               state = :sys.get_state(session)
+
+               state.status == :idle and state.pending_iqs == %{} and
+                 state.app_state_initial_sync_requested == false and
+                 is_nil(state.initial_sync_task) and is_nil(state.initial_sync_task_ref)
+             end)
+
+      refute Process.alive?(sync_task)
+      refute Process.alive?(conn)
+      assert Process.alive?(session)
+      assert Process.alive?(queue)
+      assert Process.alive?(router)
+      assert Process.alive?(task_supervisor)
+      assert Process.alive?(store_agent)
+
+      GenServer.stop(session)
+
+      refute Process.alive?(queue)
+      refute Process.alive?(router)
+      refute Process.alive?(task_supervisor)
+      refute Process.alive?(store_agent)
+    end
+
+    test "stopping a session during initial sync cleans every owned process" do
+      {session, conn, state} = start_blocked_initial_sync("stop-during-sync")
+
+      owned_processes = [
+        state.initial_sync_task,
+        state.outbound_queue,
+        state.inbound_router,
+        state.send_worker_sup,
+        state.store.agent,
+        conn
+      ]
+
+      assert Enum.all?(owned_processes, &Process.alive?/1)
+
+      GenServer.stop(session)
+
+      refute Process.alive?(session)
+      assert Enum.all?(owned_processes, &(not Process.alive?(&1)))
+    end
+
+    test "stopping a session does not close a caller-owned store" do
+      store = ExWapp.Store.Memory.new()
+      on_exit(fn -> ExWapp.Store.Memory.stop(store) end)
+
+      {:ok, session} = ExWapp.start_link(store: store)
+      state = :sys.get_state(session)
+
+      assert state.store_owned? == false
+
+      GenServer.stop(session)
+
+      assert Process.alive?(store.agent)
+      refute Process.alive?(state.outbound_queue)
+      refute Process.alive?(state.inbound_router)
+      refute Process.alive?(state.send_worker_sup)
     end
   end
 
@@ -102,6 +193,19 @@ defmodule ExWappTest do
       {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
 
       assert {:error, {:not_connected, :idle}} = ExWapp.sync_contacts(session)
+
+      GenServer.stop(session)
+    end
+
+    test "sync_contacts fails fast while app-state keys are unavailable" do
+      {:ok, session} = ExWapp.start_link(store: ExWapp.Store.Memory)
+
+      :sys.replace_state(session, fn state ->
+        %{state | status: :connected, conn: self()}
+      end)
+
+      assert {:error, :app_state_keys_unavailable} = ExWapp.sync_contacts(session)
+      assert Process.alive?(session)
 
       GenServer.stop(session)
     end
@@ -223,6 +327,91 @@ defmodule ExWappTest do
       Process.exit(conn, :kill)
     end
 
+    test "app-state keys arriving after auth enter and release the initial sync gate" do
+      if Process.whereis(ExWapp.PubSub) == nil do
+        start_supervised!({Phoenix.PubSub, name: ExWapp.PubSub})
+      end
+
+      session_id = "session-delayed-keys-#{System.unique_integer([:positive])}"
+      Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
+
+      {:ok, session} =
+        ExWapp.start_link(
+          reconnect: false,
+          transport: TrackingTransport,
+          store: ExWapp.Store.Memory,
+          session_id: session_id
+        )
+
+      test_pid = self()
+
+      :sys.replace_state(session, fn state ->
+        %{
+          state
+          | conn: test_pid,
+            status: :handshaking,
+            app_state_initial_sync_requested: false
+        }
+      end)
+
+      send(session, {:connection_event, {:auth, :ready}})
+
+      assert_receive {:ex_wapp_session, :post_auth_ready,
+                      %{status: :connected, initial_sync_pending?: false}},
+                     1_000
+
+      key_id_hex = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+      store = :sys.get_state(session).store
+
+      :ok =
+        ExWapp.Store.persist(store, %{
+          app_state_keys: %{
+            key_id_hex => %{data: :crypto.strong_rand_bytes(32), timestamp: 1}
+          }
+        })
+
+      send(session, {:app_state_initial_sync, ["regular_high"]})
+
+      assert_receive {:ex_wapp_session, :initial_sync, :started,
+                      %{collection_names: ["regular_high"]}},
+                     1_000
+
+      assert_receive {:ex_wapp_session, :initial_sync, :progress,
+                      %{
+                        collection_name: "regular_high",
+                        index: 1,
+                        total_count: 1,
+                        status: :started
+                      }},
+                     1_000
+
+      assert eventually(fn ->
+               state = :sys.get_state(session)
+
+               state.status == :syncing and state.app_state_initial_sync_requested and
+                 is_pid(state.initial_sync_task) and
+                 is_reference(state.initial_sync_task_ref)
+             end)
+
+      assert_receive {:transport_send, %{attrs: %{"id" => request_id}}}, 1_000
+      send(session, {:iq_timeout, request_id})
+
+      assert_receive {:ex_wapp_session, :initial_sync, :progress,
+                      %{collection_name: "regular_high", status: :failed}},
+                     1_000
+
+      assert_receive {:ex_wapp_session, :initial_sync, :failed, _reason, _payload}, 1_000
+
+      assert eventually(fn ->
+               state = :sys.get_state(session)
+
+               state.status == :connected and is_nil(state.initial_sync_task) and
+                 is_nil(state.initial_sync_task_ref)
+             end)
+
+      GenServer.stop(session)
+    end
+
     test "auth ready can skip initial app-state sync even when keys are present" do
       if Process.whereis(ExWapp.PubSub) == nil do
         start_supervised!({Phoenix.PubSub, name: ExWapp.PubSub})
@@ -266,6 +455,56 @@ defmodule ExWappTest do
       state = :sys.get_state(session)
       assert state.status == :connected
       assert state.app_state_initial_sync_requested == false
+      assert map_size(state.pending_iqs) == 0
+
+      GenServer.stop(session)
+      Process.exit(conn, :kill)
+    end
+
+    test "runtime opt-out also skips initial sync when keys arrive after auth" do
+      if Process.whereis(ExWapp.PubSub) == nil do
+        start_supervised!({Phoenix.PubSub, name: ExWapp.PubSub})
+      end
+
+      session_id = "session-skip-delayed-sync-#{System.unique_integer([:positive])}"
+      Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
+
+      {:ok, session} =
+        ExWapp.start_link(
+          reconnect: false,
+          transport: FakeTransport,
+          runtime: [app_state: [initial_sync_enabled: false]],
+          store: ExWapp.Store.Memory,
+          session_id: session_id
+        )
+
+      conn = spawn(fn -> Process.sleep(:infinity) end)
+
+      :sys.replace_state(session, fn state ->
+        %{state | conn: conn, status: :handshaking, app_state_initial_sync_requested: false}
+      end)
+
+      send(session, {:connection_event, {:auth, :ready}})
+      assert_receive {:ex_wapp_session, :post_auth_ready, %{status: :connected}}, 1_000
+
+      key_id_hex = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+      store = :sys.get_state(session).store
+
+      :ok =
+        ExWapp.Store.persist(store, %{
+          app_state_keys: %{
+            key_id_hex => %{data: :crypto.strong_rand_bytes(32), timestamp: 1}
+          }
+        })
+
+      send(session, {:app_state_initial_sync, ["regular_high"]})
+
+      refute_receive {:ex_wapp_session, :initial_sync, :started, _payload}, 200
+
+      state = :sys.get_state(session)
+      assert state.status == :connected
+      assert state.app_state_initial_sync_requested == false
+      refute Map.has_key?(state, :initial_sync_gate_timer)
       assert map_size(state.pending_iqs) == 0
 
       GenServer.stop(session)
@@ -854,11 +1093,20 @@ defmodule ExWappTest do
     test "stop_session terminates the session" do
       session_id = "test_#{System.unique_integer([:positive])}"
       {:ok, session} = SessionSupervisor.start_session(session_id, store: ExWapp.Store.Memory)
+      state = :sys.get_state(session)
+
+      owned_processes = [
+        state.outbound_queue,
+        state.inbound_router,
+        state.send_worker_sup,
+        state.store.agent
+      ]
 
       :ok = SessionSupervisor.stop_session(session_id)
       Process.sleep(10)
 
       refute Process.alive?(session)
+      assert Enum.all?(owned_processes, &(not Process.alive?(&1)))
       assert :error = SessionSupervisor.get_session(session_id)
     end
 
@@ -891,6 +1139,44 @@ defmodule ExWappTest do
       Process.sleep(10)
       refute SessionSupervisor.session_exists?(session_id)
     end
+  end
+
+  defp start_blocked_initial_sync(label) do
+    key_id_hex = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+    session_id = "#{label}-#{System.unique_integer([:positive])}"
+
+    {:ok, session} =
+      ExWapp.start_link(
+        reconnect: false,
+        transport: TrackingTransport,
+        session_id: session_id,
+        store:
+          {ExWapp.Store.Memory,
+           initial_data: %{
+             app_state_keys: %{
+               key_id_hex => %{data: :crypto.strong_rand_bytes(32), timestamp: 1}
+             }
+           }}
+      )
+
+    {:ok, conn} = ForwardingConn.start_link(self())
+
+    :sys.replace_state(session, fn state ->
+      %{state | conn: conn, status: :handshaking, app_state_initial_sync_requested: false}
+    end)
+
+    send(session, {:connection_event, {:auth, :ready}})
+
+    assert_receive {:transport_send, %ExWapp.Binary.Node{tag: "iq"}}, 1_000
+
+    assert eventually(fn ->
+             state = :sys.get_state(session)
+
+             state.status == :syncing and is_pid(state.initial_sync_task) and
+               is_reference(state.initial_sync_task_ref) and map_size(state.pending_iqs) > 0
+           end)
+
+    {session, conn, :sys.get_state(session)}
   end
 
   defp eventually(fun, attempts \\ 80)

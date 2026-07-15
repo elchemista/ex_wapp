@@ -144,6 +144,8 @@ defmodule ExWapp.SessionHelpersTest do
       {:ex_wapp_session, :connected, %{runtime_ref: self()}},
       {:ex_wapp_session, :post_auth_ready, %{runtime_ref: self()}},
       {:ex_wapp_session, :initial_sync, :started, %{collection_names: ["regular_high"]}},
+      {:ex_wapp_session, :initial_sync, :progress,
+       %{collection_name: "regular_high", index: 1, total_count: 1, status: :completed}},
       {:ex_wapp_session, :initial_sync, :completed, %{success_count: 1}},
       {:ex_wapp_session, :initial_sync, :failed, :boom, %{failures: []}},
       {:ex_wapp_session, :disconnected, :network, %{runtime_ref: self()}},

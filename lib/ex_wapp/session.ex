@@ -12,7 +12,7 @@ defmodule ExWapp.Session do
           {:code, String.t()} | {:pairing_code, String.t()} | :success | {:error, term()}
 
   @typedoc "Session status"
-  @type status :: :idle | :connecting | :handshaking | :connected | :disconnected
+  @type status :: :idle | :connecting | :handshaking | :syncing | :connected | :disconnected
 
   @opaque t :: Worker.t()
 

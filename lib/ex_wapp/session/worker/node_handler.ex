@@ -60,10 +60,10 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     handle_pairing_action(action, state)
   rescue
     e ->
-      Logger.error("Error handling action #{inspect(action)}: #{inspect(e)}")
+      Logger.error("Error handling action #{inspect(compact_action(action))}: #{inspect(e)}")
   catch
     :exit, reason ->
-      Logger.error("Exit handling action #{inspect(action)}: #{inspect(reason)}")
+      Logger.error("Exit handling action #{inspect(compact_action(action))}: #{inspect(reason)}")
   end
 
   # Dispatch by node type
@@ -733,21 +733,28 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   defp loggable_attrs(attrs) when is_map(attrs) do
     attrs
-    |> Enum.map(fn {key, value} -> {key, loggable_attr_value(value)} end)
+    |> Enum.map(fn {key, value} -> {key, loggable_attr_value(key, value)} end)
     |> Enum.into(%{})
   end
 
   defp loggable_attrs(value), do: value
 
-  defp loggable_attr_value(%{__struct__: module} = value) do
+  defp loggable_attr_value(key, _value)
+       when key in ["auth", "ip_token", "token", "companion_enc_static"],
+       do: "[FILTERED]"
+
+  defp loggable_attr_value(_key, %{__struct__: module} = value) do
     %{struct: inspect(module), value: inspect(value, limit: 20)}
   end
 
-  defp loggable_attr_value(value) when is_binary(value) and byte_size(value) > 120 do
+  defp loggable_attr_value(_key, value) when is_binary(value) and byte_size(value) > 120 do
     String.slice(value, 0, 120)
   end
 
-  defp loggable_attr_value(value), do: value
+  defp loggable_attr_value(_key, value), do: value
+
+  defp compact_action({:qr, code}) when is_binary(code),
+    do: {:qr, %{bytes: byte_size(code)}}
 
   defp compact_action({:send_node, %Binary.Node{} = node}) do
     {:send_node,

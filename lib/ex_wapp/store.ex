@@ -98,6 +98,14 @@ defmodule ExWapp.Store do
   @callback persist(store :: t(), data :: data()) :: :ok | {:error, term()}
 
   @doc """
+  Optional callback that releases adapter-owned processes or connections.
+
+  Sessions call this only for store instances they created themselves. A
+  pre-created store passed as a struct remains owned by the caller.
+  """
+  @callback close(store :: t()) :: :ok | {:error, term()}
+
+  @doc """
   Optional callback to clear all stored data.
 
   Useful for testing or when unlinking a device.
@@ -146,7 +154,8 @@ defmodule ExWapp.Store do
   @doc "Materializes all messages for an explicit backup operation."
   @callback snapshot_messages(store :: t()) :: %{optional(String.t()) => [map()]}
 
-  @optional_callbacks clear: 1,
+  @optional_callbacks close: 1,
+                      clear: 1,
                       stream_messages: 3,
                       upsert_messages: 3,
                       find_message: 3,
@@ -187,6 +196,16 @@ defmodule ExWapp.Store do
   def new(%_{} = struct), do: struct
   def new({mod, opts}) when is_atom(mod) and is_list(opts), do: mod.new(opts)
   def new(mod) when is_atom(mod), do: mod.new([])
+
+  @doc """
+  Releases resources held by a store adapter when it implements `close/1`.
+
+  Adapters without process or connection resources need no callback.
+  """
+  @spec close(t()) :: :ok | {:error, term()}
+  def close(%module{} = store) do
+    if function_exported?(module, :close, 1), do: module.close(store), else: :ok
+  end
 
   @doc """
   Loads data from a store adapter.

@@ -89,7 +89,7 @@ defmodule ExWapp.Noise do
         with {:ok, client_payload, pending_data} <- build_client_payload(base_state),
              {:ok, handshake_ref, client_hello, static_map} <-
                start_handshake(base_state, client_payload, static_key),
-             _ = Logger.debug("[NOISE] static_map from handshake: #{inspect(static_map)}"),
+             _ = Logger.debug("[NOISE] static key ready"),
              :ok <- persist_static_key(store, static_map) do
           state =
             base_state

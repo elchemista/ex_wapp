@@ -99,8 +99,7 @@ defmodule ExWapp.Config do
         device_cache_max_age_ms: :timer.hours(24 * 14)
       },
       app_state: %{
-        initial_sync_enabled: true,
-        initial_sync_gate_ms: 180_000
+        initial_sync_enabled: true
       },
       protocol: %{
         strict_mode: false,

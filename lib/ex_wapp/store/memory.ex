@@ -197,4 +197,8 @@ defmodule ExWapp.Store.Memory do
     :exit, {:noproc, _} -> :ok
     :exit, :noproc -> :ok
   end
+
+  @impl true
+  @spec close(t()) :: :ok
+  def close(store), do: stop(store)
 end

@@ -52,6 +52,7 @@ defmodule ExWapp.RuntimeHardeningTest do
     {:ok, default_cfg} = Config.resolve([])
     assert get_in(default_cfg, [:protocol, :post_auth_digest_enabled]) == false
     assert get_in(default_cfg, [:app_state, :initial_sync_enabled]) == true
+    refute Map.has_key?(default_cfg.app_state, :initial_sync_gate_ms)
 
     {:ok, overridden_cfg} =
       Config.resolve(
@@ -285,22 +286,18 @@ defmodule ExWapp.RuntimeHardeningTest do
   end
 
   test "health check only sends keepalive ping" do
-    {:ok, queue} =
-      ExWapp.Session.OutboundQueue.start_link(
-        session: self(),
-        transport: TestTransport
-      )
-
-    ExWapp.Session.OutboundQueue.set_conn(queue, self())
-
     {:ok, session} =
       GenServer.start(ExWapp.Session.Worker,
         store: ExWapp.Store.Memory,
+        transport: TestTransport,
         runtime: [health: [check_interval_ms: 60_000]]
       )
 
+    queue = :sys.get_state(session).outbound_queue
+    ExWapp.Session.OutboundQueue.set_conn(queue, self())
+
     :sys.replace_state(session, fn state ->
-      %{state | status: :connected, conn: self(), outbound_queue: queue}
+      %{state | status: :connected, conn: self()}
     end)
 
     send(session, :health_check)
@@ -324,26 +321,22 @@ defmodule ExWapp.RuntimeHardeningTest do
                    100
 
     GenServer.stop(session)
-    GenServer.stop(queue)
+    refute Process.alive?(queue)
   end
 
   test "auth ready does not emit an extra presence assertion" do
-    {:ok, queue} =
-      ExWapp.Session.OutboundQueue.start_link(
-        session: self(),
-        transport: TestTransport
-      )
-
-    ExWapp.Session.OutboundQueue.set_conn(queue, self())
-
     {:ok, session} =
       GenServer.start(ExWapp.Session.Worker,
         store: ExWapp.Store.Memory,
+        transport: TestTransport,
         runtime: [health: [check_interval_ms: 60_000]]
       )
 
+    queue = :sys.get_state(session).outbound_queue
+    ExWapp.Session.OutboundQueue.set_conn(queue, self())
+
     :sys.replace_state(session, fn state ->
-      %{state | status: :handshaking, conn: self(), outbound_queue: queue}
+      %{state | status: :handshaking, conn: self()}
     end)
 
     send(session, {:connection_event, {:auth, :ready}})
@@ -351,7 +344,7 @@ defmodule ExWapp.RuntimeHardeningTest do
     refute_receive {:transport_send, %ExWapp.Binary.Node{tag: "presence"}}, 100
 
     GenServer.stop(session)
-    GenServer.stop(queue)
+    refute Process.alive?(queue)
   end
 
   defp eventually(fun, attempts \\ 25)

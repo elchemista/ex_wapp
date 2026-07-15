@@ -237,7 +237,8 @@ defmodule ExWapp do
   @doc """
   Returns the current session status.
 
-  Possible values: `:idle`, `:connecting`, `:handshaking`, `:connected`, `:disconnected`
+  Possible values: `:idle`, `:connecting`, `:handshaking`, `:syncing`,
+  `:connected`, `:disconnected`.
 
   ## Example
 

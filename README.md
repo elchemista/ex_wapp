@@ -581,6 +581,28 @@ separate blob download are currently detected and logged but are not imported.
 `ExWapp.sync_contacts/1` is an explicit contact refresh; it
 is not a command to download an account's complete message history.
 
+The initial app-state sync has no elapsed-time cutoff: large accounts remain in
+the `:syncing` state until the refresh really finishes. Calling
+`ExWapp.disconnect/1` or stopping the session cancels in-flight sync and send
+tasks before the final store flush; session-owned helper processes and stores
+are then closed cleanly. A pre-created store passed as a struct remains owned
+by the caller and is not closed by the session.
+
+Applications that only need the authenticated transport can disable the
+automatic initial app-state bootstrap per session:
+
+```elixir
+{:ok, session} =
+  ExWapp.start_link(
+    runtime: [app_state: [initial_sync_enabled: false]]
+  )
+```
+
+This flag does not disable server-pushed inline history sync, and it does not
+prevent an explicit `ExWapp.sync_contacts/1` call. Disabling the bootstrap can
+leave contacts and chat metadata incomplete, so it is best suited to send-only
+or externally persisted integrations.
+
 WhatsApp's user-facing "Export chat" action is not a stable WhatsApp Web
 protocol endpoint that a linked-device library can invoke. ExWapp therefore
 keeps local-history iteration separate from remote history synchronization:

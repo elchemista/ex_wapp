@@ -440,11 +440,16 @@ defmodule ExWapp.Conn do
   end
 
   defp node_to_xml(%Node{tag: tag, attrs: attrs, content: content}) when is_binary(content) do
-    "<#{tag}#{attrs_to_string(attrs)}>#{content}</#{tag}>"
+    "<#{tag}#{attrs_to_string(attrs)}>[binary #{byte_size(content)} bytes]</#{tag}>"
   end
 
   defp node_to_xml(%Node{tag: tag, attrs: attrs, content: %Raw{data: data}}) do
     "<#{tag}#{attrs_to_string(attrs)}>[raw #{byte_size(data)} bytes]</#{tag}>"
+  end
+
+  defp node_to_xml(%Node{tag: tag, attrs: attrs, content: content})
+       when is_list(content) and length(content) > 20 do
+    "<#{tag}#{attrs_to_string(attrs)}>[#{length(content)} children]</#{tag}>"
   end
 
   defp node_to_xml(%Node{tag: tag, attrs: attrs, content: content}) when is_list(content) do
@@ -456,8 +461,14 @@ defmodule ExWapp.Conn do
 
   defp attrs_to_string(attrs) do
     Enum.map_join(attrs, "", fn
-      {key, true} -> " #{key}"
-      {key, value} -> " #{key}=\"#{value}\""
+      {key, true} ->
+        " #{key}"
+
+      {key, _value} when key in ["auth", "ip_token", "token", "companion_enc_static"] ->
+        " #{key}=\"[FILTERED]\""
+
+      {key, value} ->
+        " #{key}=\"#{value}\""
     end)
   end
 
