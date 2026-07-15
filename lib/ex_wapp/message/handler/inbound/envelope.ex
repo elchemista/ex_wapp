@@ -407,20 +407,7 @@ defmodule ExWapp.Message.Handler.Inbound.Envelope do
   """
   @spec local_recipient_jids(map(), map()) :: [String.t()]
   def local_recipient_jids(state, attrs) do
-    from_store =
-      case Map.get(state, :store) do
-        nil ->
-          []
-
-        store ->
-          data = Store.load!(store)
-
-          [
-            MapPath.first(data, [["pairing", "device", "jid"], ["client_info", "jid"]]),
-            MapPath.get(data, ["client_info", "wid"]),
-            MapPath.get(data, ["client_info", "lid"])
-          ]
-      end
+    from_store = load_local_recipient_jids(Map.get(state, :store))
 
     from_attrs = [
       Map.get(attrs, "to"),
@@ -440,5 +427,22 @@ defmodule ExWapp.Message.Handler.Inbound.Envelope do
       |> Enum.reject(&(&1 == ""))
 
     Enum.uniq(normalized_with_device ++ normalized_without_device)
+  end
+
+  @spec load_local_recipient_jids(term()) :: [term()]
+  defp load_local_recipient_jids(nil), do: []
+
+  defp load_local_recipient_jids(store) do
+    data = Store.load!(store)
+
+    [
+      MapPath.first(data, [["pairing", "device", "jid"], ["client_info", "jid"]]),
+      MapPath.get(data, ["client_info", "wid"]),
+      MapPath.get(data, ["client_info", "lid"])
+    ]
+  rescue
+    _ -> []
+  catch
+    _, _ -> []
   end
 end
