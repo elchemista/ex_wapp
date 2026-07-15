@@ -66,7 +66,16 @@ defmodule ExWapp.Session.Worker do
   alias ExWapp.Pairing.LinkCode
   alias ExWapp.Signal.{PrekeyFetcher, SessionStore}
 
-  alias ExWapp.Session.{Account, InboundRouter, JIDUtils, Options, OutboundQueue, SendCoordinator}
+  alias ExWapp.Session.{
+    Account,
+    InboundRouter,
+    InitialSync,
+    JIDUtils,
+    Options,
+    OutboundQueue,
+    SendCoordinator
+  }
+
   alias ExWapp.Session.Outbound.{Command, Content}
 
   alias ExWapp.Session.Worker.{
@@ -117,8 +126,6 @@ defmodule ExWapp.Session.Worker do
     :outbound_queue,
     :inbound_router,
     :send_worker_sup,
-    :initial_sync_task,
-    :initial_sync_task_ref,
     :session_id,
     :health_timer,
     status: :idle,
@@ -143,7 +150,7 @@ defmodule ExWapp.Session.Worker do
     outgoing_retry_payloads: %{},
     outbound_confirmations: %{},
     pending_media_retries: %{},
-    app_state_initial_sync_requested: false,
+    initial_sync: %InitialSync{},
     post_auth_phase: :idle,
     prekey_count_query_id: nil,
     prekey_upload_iq_id: nil,
@@ -168,8 +175,7 @@ defmodule ExWapp.Session.Worker do
           outbound_queue: pid() | nil,
           inbound_router: pid() | nil,
           send_worker_sup: pid() | nil,
-          initial_sync_task: pid() | nil,
-          initial_sync_task_ref: reference() | nil,
+          initial_sync: InitialSync.t(),
           session_id: term() | nil,
           health_timer: reference() | nil,
           qr_subscribers: %{reference() => {pid(), reference()}},
@@ -187,7 +193,6 @@ defmodule ExWapp.Session.Worker do
           connected_at: DateTime.t() | nil,
           transport_ready?: boolean(),
           server_time_offset_ms: integer(),
-          app_state_initial_sync_requested: boolean(),
           post_auth_phase: atom(),
           prekey_count_query_id: binary() | nil,
           prekey_upload_iq_id: binary() | nil,
@@ -984,7 +989,7 @@ defmodule ExWapp.Session.Worker do
   # and surface the failure instead of leaving the session stuck in :syncing.
   def handle_info(
         {:DOWN, ref, :process, pid, reason},
-        %__MODULE__{initial_sync_task_ref: ref, initial_sync_task: pid} = state
+        %__MODULE__{initial_sync: %InitialSync{monitor: ref, task: pid}} = state
       ) do
     failure_reason = {:task_exited_without_result, reason}
 
@@ -1002,7 +1007,6 @@ defmodule ExWapp.Session.Worker do
     state =
       state
       |> clear_initial_sync_task()
-      |> Map.put(:app_state_initial_sync_requested, false)
       |> maybe_mark_synced()
 
     {:noreply, state}
@@ -1091,9 +1095,9 @@ defmodule ExWapp.Session.Worker do
 
   def handle_info(
         {:app_state_initial_sync, _collection_names},
-        %{status: status, app_state_initial_sync_requested: true} = state
+        %{status: status, initial_sync: %InitialSync{task: task}} = state
       )
-      when status in [:connected, :syncing],
+      when status in [:connected, :syncing] and is_pid(task),
       do: {:noreply, state}
 
   def handle_info({:app_state_initial_sync, collection_names}, %{status: status} = state)
@@ -1114,10 +1118,7 @@ defmodule ExWapp.Session.Worker do
         {:noreply, state}
 
       true ->
-        state =
-          state
-          |> Map.put(:app_state_initial_sync_requested, true)
-          |> enter_initial_sync_gate()
+        state = enter_initial_sync_gate(state)
 
         case refresh_app_state_collections(
                state.send_worker_sup,
@@ -1129,8 +1130,9 @@ defmodule ExWapp.Session.Worker do
              ) do
           {:ok, task_pid} ->
             task_ref = Process.monitor(task_pid)
+            initial_sync = InitialSync.track(state.initial_sync, task_pid, task_ref)
 
-            {:noreply, %{state | initial_sync_task: task_pid, initial_sync_task_ref: task_ref}}
+            {:noreply, %{state | initial_sync: initial_sync}}
 
           {:error, reason} ->
             broadcast_initial_sync_failure(
@@ -1142,7 +1144,6 @@ defmodule ExWapp.Session.Worker do
 
             {:noreply,
              state
-             |> Map.put(:app_state_initial_sync_requested, false)
              |> maybe_mark_synced()}
         end
     end
@@ -1154,8 +1155,9 @@ defmodule ExWapp.Session.Worker do
   # newer sync task.
   def handle_info(
         {:initial_sync_finished, task_pid, _result},
-        %{initial_sync_task: task_pid} = state
-      ) do
+        %{initial_sync: %InitialSync{task: task_pid}} = state
+      )
+      when is_pid(task_pid) do
     Logger.debug(
       "[APP_STATE] initial sync finished; marking session connected session_id=#{inspect(state.session_id)}"
     )
@@ -1163,7 +1165,6 @@ defmodule ExWapp.Session.Worker do
     state =
       state
       |> clear_initial_sync_task()
-      |> Map.put(:app_state_initial_sync_requested, false)
       |> maybe_mark_synced()
 
     {:noreply, state}
@@ -1453,8 +1454,7 @@ defmodule ExWapp.Session.Worker do
 
     %{
       state
-      | app_state_initial_sync_requested: false,
-        transport_ready?: false,
+      | transport_ready?: false,
         post_auth_phase: :idle,
         prekey_count_query_id: nil,
         prekey_upload_iq_id: nil,
@@ -1497,7 +1497,6 @@ defmodule ExWapp.Session.Worker do
         last_disconnect_reason: reason,
         connected_at: nil,
         transport_ready?: false,
-        app_state_initial_sync_requested: false,
         post_auth_phase: :idle,
         prekey_count_query_id: nil,
         prekey_upload_iq_id: nil,
@@ -1522,7 +1521,6 @@ defmodule ExWapp.Session.Worker do
         last_disconnect_reason: reason,
         connected_at: nil,
         transport_ready?: false,
-        app_state_initial_sync_requested: false,
         post_auth_phase: :idle,
         prekey_count_query_id: nil,
         prekey_upload_iq_id: nil,
@@ -1670,7 +1668,6 @@ defmodule ExWapp.Session.Worker do
     %{
       state
       | status: :handshaking,
-        app_state_initial_sync_requested: false,
         transport_ready?: false
     }
   end
@@ -1703,7 +1700,6 @@ defmodule ExWapp.Session.Worker do
         state
         | status: :handshaking,
           transport_ready?: true,
-          app_state_initial_sync_requested: false,
           post_auth_phase: :idle,
           prekey_count_query_id: nil,
           prekey_upload_iq_id: nil,
@@ -2355,16 +2351,13 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp cancel_session_tasks(state, reason) do
-    if state.app_state_initial_sync_requested do
+    if InitialSync.active?(state.initial_sync) do
       Logger.debug(
         "[APP_STATE] cancelling initial sync session_id=#{inspect(state.session_id)} reason=#{inspect(reason)}"
       )
     end
 
-    state =
-      state
-      |> clear_initial_sync_task()
-      |> Map.put(:app_state_initial_sync_requested, false)
+    state = clear_initial_sync_task(state)
 
     state.send_worker_sup
     |> task_supervisor_children()
@@ -2849,9 +2842,9 @@ defmodule ExWapp.Session.Worker do
   defp maybe_mark_synced(%{status: :syncing} = state), do: %{state | status: :connected}
   defp maybe_mark_synced(state), do: state
 
-  defp clear_initial_sync_task(%{initial_sync_task_ref: ref} = state) do
+  defp clear_initial_sync_task(%{initial_sync: %InitialSync{monitor: ref} = initial_sync} = state) do
     if is_reference(ref), do: Process.demonitor(ref, [:flush])
-    %{state | initial_sync_task: nil, initial_sync_task_ref: nil}
+    %{state | initial_sync: InitialSync.reset(initial_sync)}
   end
 
   defp refresh_app_state_collections(
