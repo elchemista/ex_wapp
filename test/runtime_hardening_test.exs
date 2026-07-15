@@ -66,6 +66,11 @@ defmodule ExWapp.RuntimeHardeningTest do
     assert get_in(overridden_cfg, [:app_state, :initial_sync_enabled]) == false
   end
 
+  test "config resolve preserves empty list values" do
+    assert {:ok, cfg} = Config.resolve(runtime: [canary: [recipients: []]])
+    assert get_in(cfg, [:canary, :recipients]) == []
+  end
+
   test "config validates the native Android client mode" do
     assert {:ok, android_cfg} =
              Config.resolve(runtime: [protocol: [client_mode: :android]])

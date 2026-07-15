@@ -5,6 +5,7 @@ defmodule ExWapp.Session do
   The GenServer implementation lives in `ExWapp.Session.Worker`.
   """
 
+  alias ExWapp.Session.Options
   alias ExWapp.Session.Worker
 
   @typedoc "Human readable events emitted during the pairing flow."
@@ -19,7 +20,7 @@ defmodule ExWapp.Session do
   @spec child_spec(term()) :: Supervisor.child_spec()
   defdelegate child_spec(arg), to: Worker
 
-  @spec start_link(keyword()) :: GenServer.on_start()
+  @spec start_link(keyword() | Options.t()) :: GenServer.on_start()
   defdelegate start_link(opts), to: Worker
 
   @spec connect(GenServer.server()) :: :ok

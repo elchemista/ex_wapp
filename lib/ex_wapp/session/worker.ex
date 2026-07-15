@@ -53,7 +53,7 @@ defmodule ExWapp.Session.Worker do
   alias ExWapp.Pairing.LinkCode
   alias ExWapp.Signal.{PrekeyFetcher, SessionStore}
 
-  alias ExWapp.Session.{Account, InboundRouter, JIDUtils, OutboundQueue}
+  alias ExWapp.Session.{Account, InboundRouter, JIDUtils, Options, OutboundQueue}
 
   alias ExWapp.Session.Worker.{
     NodeHandler,
@@ -163,7 +163,7 @@ defmodule ExWapp.Session.Worker do
           message_subscribers: %{reference() => {pid(), reference()}},
           send_workers: %{pid() => binary()},
           send_worker_mons: %{reference() => pid()},
-          opts: keyword(),
+          opts: Options.t(),
           runtime_cfg: map(),
           send_health: map(),
           rate_limiter: map(),
@@ -203,9 +203,9 @@ defmodule ExWapp.Session.Worker do
     * `:reconnect` - Enable automatic reconnection (default: true)
     * `:runtime` - Runtime hardening settings override (deep-merged)
   """
-  @spec start_link(keyword()) :: GenServer.on_start()
+  @spec start_link(keyword() | Options.t()) :: GenServer.on_start()
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
+    GenServer.start_link(__MODULE__, opts, Options.gen_server_options(opts))
   end
 
   @doc """
@@ -425,19 +425,17 @@ defmodule ExWapp.Session.Worker do
   def init(opts) do
     Process.flag(:trap_exit, true)
 
-    runtime_cfg =
-      case Config.resolve(opts) do
-        {:ok, cfg} ->
-          cfg
-
-        {:error, reason} ->
-          raise ArgumentError, "invalid runtime config: #{inspect(reason)}"
+    options =
+      case Options.from_start_options(opts) do
+        {:ok, options} -> options
+        {:error, reason} -> raise ArgumentError, "invalid session options: #{inspect(reason)}"
       end
 
-    store_input = Keyword.get(opts, :store)
+    runtime_cfg = options.runtime
+    store_input = options.store
     store = Store.new(store_input)
-    session_id = Keyword.get(opts, :session_id)
-    transport_mod = Keyword.get(opts, :transport, ExWapp.Conn)
+    session_id = options.session_id
+    transport_mod = options.transport
 
     # Register with Registry and subscribe to PubSub commands if session_id provided
     if session_id do
@@ -464,7 +462,7 @@ defmodule ExWapp.Session.Worker do
     {:ok, send_worker_sup} = Task.Supervisor.start_link()
 
     state = %__MODULE__{
-      opts: opts,
+      opts: options,
       runtime_cfg: runtime_cfg,
       store: store,
       store_owned?: not is_struct(store_input),
@@ -482,7 +480,7 @@ defmodule ExWapp.Session.Worker do
 
     emit_telemetry(:init, %{session_id: session_id}, state)
 
-    if Keyword.get(opts, :auto_connect, false) do
+    if options.auto_connect do
       send(self(), :connect)
     end
 
@@ -1437,8 +1435,7 @@ defmodule ExWapp.Session.Worker do
     Logger.debug("[SESSION] safe_start_connection calling transport.start_link...")
 
     noise_opts =
-      state.opts
-      |> Keyword.get(:noise, [])
+      state.opts.noise
       |> Keyword.put_new(
         :client_payload_fun,
         &ExWapp.Noise.ClientPayload.build(&1, state.runtime_cfg)

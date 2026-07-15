@@ -27,6 +27,7 @@ defmodule ExWapp.Client.Transport.Session do
   require Logger
 
   alias ExWapp.{Client, Event, Message, Session}
+  alias ExWapp.Session.Options
 
   @impl true
   @spec connect(Client.t()) :: {:ok, Client.t()} | {:error, term()}
@@ -271,40 +272,42 @@ defmodule ExWapp.Client.Transport.Session do
 
   @spec start_session(Client.t()) :: {:ok, Client.t(), pid()} | {:error, term()}
   defp start_session(%Client{} = client) do
-    opts =
-      client.metadata
-      |> Map.get(:session_opts, [])
-      |> Keyword.put_new(:store, client.store)
+    legacy_options = Map.get(client.metadata, :session_opts, [])
 
-    start_result =
-      if is_nil(client.session_id) do
-        Session.start_link(opts)
-      else
-        start_supervised_session(client.session_id, opts)
+    with {:ok, options} <- Options.from_client(client, legacy_options) do
+      start_result =
+        if is_nil(client.session_id) do
+          Session.start_link(options)
+        else
+          start_supervised_session(client.session_id, options)
+        end
+
+      case start_result do
+        {:ok, pid} ->
+          client = put_in(client.metadata[:session_pid], pid)
+          {:ok, client, pid}
+
+        {:error, {:already_started, pid}} when is_pid(pid) ->
+          client = put_in(client.metadata[:session_pid], pid)
+          {:ok, client, pid}
+
+        {:error, reason} ->
+          {:error, reason}
       end
-
-    case start_result do
-      {:ok, pid} ->
-        client = put_in(client.metadata[:session_pid], pid)
-        {:ok, client, pid}
-
-      {:error, {:already_started, pid}} when is_pid(pid) ->
-        client = put_in(client.metadata[:session_pid], pid)
-        {:ok, client, pid}
-
-      {:error, reason} ->
-        {:error, reason}
     end
   end
 
-  @spec start_supervised_session(term(), keyword()) :: {:ok, pid()} | {:error, term()}
-  defp start_supervised_session(session_id, opts) do
+  @spec start_supervised_session(term(), Options.t()) :: {:ok, pid()} | {:error, term()}
+  defp start_supervised_session(session_id, options) do
     if Process.whereis(ExWapp.Session.Supervisor) do
-      Session.Supervisor.start_session(session_id, opts)
+      Session.Supervisor.start_session(session_id, options)
     else
-      opts
-      |> Keyword.put_new(:session_id, session_id)
-      |> Session.start_link()
+      options
+      |> Options.with_session_id(session_id)
+      |> case do
+        {:ok, options} -> Session.start_link(options)
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 

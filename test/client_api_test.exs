@@ -256,6 +256,7 @@ defmodule ExWapp.ClientApiTest do
         session_id: session_id,
         store: ExWapp.Store.Memory,
         transport: ExWapp.Client.Transport.Session,
+        runtime: [iq: [default_timeout_ms: 1_234]],
         metadata: %{session_opts: [reconnect: false]}
       )
 
@@ -265,6 +266,14 @@ defmodule ExWapp.ClientApiTest do
     assert error.reason == {:not_connected, :idle}
     assert is_pid(failed.metadata.session_pid)
     assert ExWapp.Session.state(failed.metadata.session_pid) == :idle
+
+    assert get_in(ExWapp.Session.runtime_config(failed.metadata.session_pid), [
+             :iq,
+             :default_timeout_ms
+           ]) == 1_234
+
+    assert %ExWapp.Session.Options{session_id: ^session_id, reconnect: false} =
+             :sys.get_state(failed.metadata.session_pid).opts
   end
 
   test "built-in session transport converts session subscriber messages into events" do

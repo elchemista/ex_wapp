@@ -32,7 +32,14 @@ defmodule ExWapp.Session.Worker.Resilience do
   @spec reconnect_enabled?(map(), map()) :: boolean()
   def reconnect_enabled?(state, reconnect_cfg) when is_map(state) and is_map(reconnect_cfg) do
     cfg_enabled = Config.get(reconnect_cfg, [:enabled], true)
-    legacy_enabled = state |> Map.get(:opts, []) |> Keyword.get(:reconnect, true)
+
+    legacy_enabled =
+      case Map.get(state, :opts) do
+        %ExWapp.Session.Options{reconnect: enabled?} -> enabled?
+        options when is_list(options) -> Keyword.get(options, :reconnect, true)
+        _ -> true
+      end
+
     cfg_enabled and legacy_enabled
   end
 
