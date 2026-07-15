@@ -473,7 +473,9 @@ defmodule ExWapp.AppState.Engine do
     expected =
       Crypto.compute_content_mac(op, encrypted, key_id, keys.value_mac)
 
-    if expected == value_mac, do: :ok, else: {:error, :mismatching_content_mac}
+    if Crypto.secure_compare(expected, value_mac),
+      do: :ok,
+      else: {:error, :mismatching_content_mac}
   end
 
   defp decrypt_content(encrypted, _keys) when byte_size(encrypted) < 16 do
@@ -501,7 +503,10 @@ defmodule ExWapp.AppState.Engine do
 
   defp verify_index_mac(index_blob, index_mac, keys, true) when is_binary(index_blob) do
     expected = Crypto.compute_index_mac(index_blob, keys.index)
-    if expected == index_mac, do: :ok, else: {:error, :mismatching_index_mac}
+
+    if Crypto.secure_compare(expected, index_mac),
+      do: :ok,
+      else: {:error, :mismatching_index_mac}
   end
 
   defp verify_index_mac(_index_blob, _index_mac, _keys, _validate), do: :ok
@@ -1228,32 +1233,45 @@ defmodule ExWapp.AppState.Engine do
          mutation_macs
        )
        when is_list(patches) do
-    Enum.reduce_while(patches, {:ok, hash_state, mutation_macs, 0}, fn patch_binary,
-                                                                       {:ok, state, macs, count} ->
-      case apply_single_patch(
-             store,
-             session,
-             collection_name,
-             patch_binary,
-             key_store,
-             state,
-             macs
-           ) do
-        {:ok, decoded, new_state, new_macs} ->
-          {:cont, {:ok, new_state, new_macs, count + length(decoded)}}
+    result =
+      Enum.reduce_while(
+        patches,
+        {:ok, hash_state, mutation_macs, []},
+        fn patch_binary, {:ok, state, macs, decoded_acc} ->
+          case apply_single_patch(
+                 session,
+                 collection_name,
+                 patch_binary,
+                 key_store,
+                 state,
+                 macs
+               ) do
+            {:ok, decoded, new_state, new_macs} ->
+              {:cont, {:ok, new_state, new_macs, decoded_acc ++ decoded}}
 
-        {:error, reason} ->
-          {:halt, {:error, {:apply_patch_failed, reason}}}
-      end
-    end)
+            {:error, reason} ->
+              {:halt, {:error, {:apply_patch_failed, reason}}}
+          end
+        end
+      )
+
+    case result do
+      {:ok, new_state, new_macs, decoded} ->
+        # Do not partially mutate local state when a later patch in the same
+        # authenticated chain is corrupt.
+        dispatch_decoded_mutations(store, decoded)
+        {:ok, new_state, new_macs, length(decoded)}
+
+      {:error, _reason} = error ->
+        error
+    end
   end
 
-  defp apply_single_patch(store, session, collection_name, patch_binary, key_store, state, macs) do
+  defp apply_single_patch(session, collection_name, patch_binary, key_store, state, macs) do
     with {:ok, patch} <- SyncAction.decode_syncd_patch(patch_binary),
          {:ok, patch} <- maybe_resolve_external_patch_mutations(session, patch),
          {:ok, decoded, new_state, new_macs} <-
            decode_patch(patch, collection_name, state, macs, key_store, true) do
-      dispatch_decoded_mutations(store, decoded)
       {:ok, decoded, new_state, new_macs}
     end
   end
@@ -1563,7 +1581,9 @@ defmodule ExWapp.AppState.Engine do
       :crypto.mac(:hmac, :sha256, mac_key, [iv, ciphertext])
       |> binary_part(0, @media_hmac_length)
 
-    if expected == mac, do: :ok, else: {:error, :invalid_external_blob_mac}
+    if Crypto.secure_compare(expected, mac),
+      do: :ok,
+      else: {:error, :invalid_external_blob_mac}
   end
 
   defp verify_external_blob_mac(_, _, _, _), do: {:error, :invalid_external_blob_mac}
@@ -1704,8 +1724,9 @@ defmodule ExWapp.AppState.Engine do
     compare_mac(expected, mac, :mismatching_snapshot_mac)
   end
 
-  defp compare_mac(expected, actual, _error) when expected == actual, do: :ok
-  defp compare_mac(_expected, _actual, error), do: {:error, error}
+  defp compare_mac(expected, actual, error) do
+    if Crypto.secure_compare(expected, actual), do: :ok, else: {:error, error}
+  end
 
   defp update_mutation_macs(decoded_mutations, mutation_macs) when is_map(mutation_macs) do
     updated =

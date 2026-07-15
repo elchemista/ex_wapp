@@ -10,12 +10,17 @@ defmodule ExWapp.Transport.Frame do
   @dict_version 0x03
   @header <<?W, ?A, @wa_magic, @dict_version>>
   @length_size 3
+  @max_payload_size 0xFF_FFFF
 
   @doc """
   Returns the static WA connection header.
   """
   @spec header() :: binary()
   def header, do: @header
+
+  @doc false
+  @spec max_payload_size() :: pos_integer()
+  def max_payload_size, do: @max_payload_size
 
   @doc """
   Wraps the given payload in a WA websocket frame.
@@ -25,10 +30,17 @@ defmodule ExWapp.Transport.Frame do
   already sent for a connection and set the option accordingly.
   """
   @spec encode(binary(), keyword()) :: binary()
-  def encode(payload, opts \\ []) when is_binary(payload) do
+  def encode(payload, opts \\ [])
+
+  def encode(payload, opts) when is_binary(payload) and byte_size(payload) <= @max_payload_size do
     include_header = Keyword.get(opts, :include_header, false)
     header = if include_header, do: @header, else: <<>>
     <<header::binary, byte_size(payload)::unsigned-big-size(24), payload::binary>>
+  end
+
+  def encode(payload, _opts) when is_binary(payload) do
+    raise ArgumentError,
+          "WA frame payload exceeds 24-bit limit (#{byte_size(payload)} > #{@max_payload_size})"
   end
 
   @doc """

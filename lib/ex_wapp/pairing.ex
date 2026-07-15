@@ -11,7 +11,7 @@ defmodule ExWapp.Pairing do
   Aggregate structure that keeps temporary pairing data.
   """
   @type state :: %{
-          status: :idle | :waiting_for_scan | :paired,
+          status: :idle | :waiting_for_scan | :waiting_for_code | :paired,
           ref: String.t() | nil,
           store: Store.t(),
           req_id: String.t() | nil
@@ -23,6 +23,18 @@ defmodule ExWapp.Pairing do
   @spec new(Store.t()) :: state()
   def new(store) do
     %{status: :idle, ref: nil, store: store, req_id: nil}
+  end
+
+  @doc false
+  @spec mark_waiting_for_code(state(), String.t()) :: state()
+  def mark_waiting_for_code(state, request_id) when is_binary(request_id) do
+    %{state | status: :waiting_for_code, ref: nil, req_id: request_id}
+  end
+
+  @doc false
+  @spec mark_link_code_paired(state()) :: state()
+  def mark_link_code_paired(state) do
+    %{state | status: :paired, ref: nil, req_id: nil}
   end
 
   @doc """
@@ -314,6 +326,14 @@ defmodule ExWapp.Pairing do
     do: {:error, :invalid_adv_secret}
 
   defp fetch_adv_secret(_), do: {:error, :missing_adv_secret}
+
+  defp fetch_identity_keypair(%{
+         signal: %{
+           identity_key:
+             %{public: <<_::binary-size(32)>>, private: <<_::binary-size(32)>>} = identity
+         }
+       }),
+       do: {:ok, identity}
 
   defp fetch_identity_keypair(%{
          identity: %{public: <<_::binary-size(32)>>, private: <<_::binary-size(32)>>} = identity

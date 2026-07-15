@@ -516,33 +516,43 @@ defmodule ExWapp.AppState.Engine.Sync do
          mutation_macs
        )
        when is_list(patches) do
-    Enum.reduce_while(patches, {:ok, hash_state, mutation_macs, 0}, fn patch_binary,
-                                                                       {:ok, state, macs, count} ->
-      case apply_single_patch(
-             store,
-             session,
-             collection_name,
-             patch_binary,
-             key_store,
-             state,
-             macs
-           ) do
-        {:ok, decoded, new_state, new_macs} ->
-          {:cont, {:ok, new_state, new_macs, count + length(decoded)}}
+    result =
+      Enum.reduce_while(
+        patches,
+        {:ok, hash_state, mutation_macs, []},
+        fn patch_binary, {:ok, state, macs, decoded_batches} ->
+          case apply_single_patch(
+                 session,
+                 collection_name,
+                 patch_binary,
+                 key_store,
+                 state,
+                 macs
+               ) do
+            {:ok, decoded, new_state, new_macs} ->
+              {:cont, {:ok, new_state, new_macs, [decoded | decoded_batches]}}
 
-        {:error, reason} ->
-          {:halt, {:error, {:apply_patch_failed, reason}}}
-      end
-    end)
+            {:error, reason} ->
+              {:halt, {:error, {:apply_patch_failed, reason}}}
+          end
+        end
+      )
+
+    case result do
+      {:ok, new_state, new_macs, decoded_batches} ->
+        decoded = decoded_batches |> Enum.reverse() |> Enum.flat_map(& &1)
+        dispatch_decoded_mutations(store, decoded)
+        {:ok, new_state, new_macs, length(decoded)}
+
+      {:error, _reason} = error ->
+        error
+    end
   end
 
-  defp apply_single_patch(store, session, collection_name, patch_binary, key_store, state, macs) do
+  defp apply_single_patch(session, collection_name, patch_binary, key_store, state, macs) do
     with {:ok, patch} <- SyncAction.decode_syncd_patch(patch_binary),
-         {:ok, patch} <- maybe_resolve_external_patch_mutations(session, patch),
-         {:ok, decoded, new_state, new_macs} <-
-           Codec.decode_patch(patch, collection_name, state, macs, key_store, true) do
-      dispatch_decoded_mutations(store, decoded)
-      {:ok, decoded, new_state, new_macs}
+         {:ok, patch} <- maybe_resolve_external_patch_mutations(session, patch) do
+      Codec.decode_patch(patch, collection_name, state, macs, key_store, true)
     end
   end
 

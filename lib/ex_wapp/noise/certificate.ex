@@ -21,8 +21,21 @@ defmodule ExWapp.Noise.Certificate do
 
   @spec verify(binary(), binary()) :: :ok | {:error, term()}
   def verify(cert_bytes, static_key) when is_binary(cert_bytes) and is_binary(static_key) do
+    verify(cert_bytes, static_key, [])
+  end
+
+  def verify(_cert_bytes, _static_key), do: {:error, :invalid_certificate}
+
+  @doc false
+  @spec verify(binary(), binary(), keyword()) :: :ok | {:error, term()}
+  def verify(cert_bytes, static_key, opts)
+      when is_binary(cert_bytes) and is_binary(static_key) and is_list(opts) do
+    root_key = Keyword.get(opts, :root_key, @wa_cert_pub_key)
+
     with {:ok, %CertChain{} = chain} <- CertChain.decode(cert_bytes),
-         {:ok, intermediate_details} <- verify_intermediate_certificate(chain.intermediate),
+         :ok <- validate_root_key(root_key),
+         {:ok, intermediate_details} <-
+           verify_intermediate_certificate(chain.intermediate, root_key),
          :ok <- verify_leaf_certificate(chain.leaf, intermediate_details, static_key) do
       :ok
     else
@@ -31,23 +44,29 @@ defmodule ExWapp.Noise.Certificate do
     end
   end
 
-  def verify(_cert_bytes, _static_key), do: {:error, :invalid_certificate}
+  def verify(_cert_bytes, _static_key, _opts), do: {:error, :invalid_certificate}
 
-  defp verify_intermediate_certificate(%NoiseCertificate{
-         details: int_details_raw,
-         signature: int_signature
-       })
+  defp verify_intermediate_certificate(
+         %NoiseCertificate{
+           details: int_details_raw,
+           signature: int_signature
+         },
+         root_key
+       )
        when is_binary(int_details_raw) and is_binary(int_signature) do
     with :ok <- validate_signature_length(int_signature, :intermediate),
          :ok <-
-           validate_signature(@wa_cert_pub_key, int_details_raw, int_signature, :intermediate),
+           validate_signature(root_key, int_details_raw, int_signature, :intermediate),
          {:ok, %Details{} = intermediate_details} <- Details.decode(int_details_raw),
          :ok <- validate_intermediate_details(intermediate_details) do
       {:ok, intermediate_details}
     end
   end
 
-  defp verify_intermediate_certificate(_), do: {:error, :missing_certificate_parts}
+  defp verify_intermediate_certificate(_, _root_key), do: {:error, :missing_certificate_parts}
+
+  defp validate_root_key(key) when is_binary(key) and byte_size(key) == 32, do: :ok
+  defp validate_root_key(_key), do: {:error, :invalid_root_key}
 
   defp verify_leaf_certificate(
          %NoiseCertificate{details: leaf_details_raw, signature: leaf_signature},

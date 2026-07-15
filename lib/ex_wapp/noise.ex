@@ -137,10 +137,14 @@ defmodule ExWapp.Noise do
     if is_nil(cipher) do
       {:error, :invalid_state}
     else
-      {:ok, new_cipher, payload} = NoiseEngine.encrypt(cipher, plaintext, state.tx_counter)
-      new_state = %{state | cipher_ref: new_cipher, tx_counter: state.tx_counter + 1}
+      case NoiseEngine.encrypt(cipher, plaintext, state.tx_counter) do
+        {:ok, new_cipher, payload} ->
+          new_state = %{state | cipher_ref: new_cipher, tx_counter: state.tx_counter + 1}
+          {:ok, ensure_binary(payload), new_state}
 
-      {:ok, ensure_binary(payload), new_state}
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 

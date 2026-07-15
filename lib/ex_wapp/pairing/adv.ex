@@ -71,16 +71,6 @@ defmodule ExWapp.Pairing.ADV do
 
           parse_direct_signed_identity(adv_bytes, identity_pub, identity_priv)
 
-        {:error, :adv_invalid_hmac} ->
-          Logger.warning("[ADV] HMAC wrapper missing/invalid, trying direct signed identity")
-
-          parse_direct_signed_identity(adv_bytes, identity_pub, identity_priv)
-
-        {:error, :adv_missing_details} ->
-          Logger.warning("[ADV] HMAC wrapper missing details, trying direct signed identity")
-
-          parse_direct_signed_identity(adv_bytes, identity_pub, identity_priv)
-
         {:error, reason} ->
           {:error, reason}
       end
@@ -228,7 +218,9 @@ defmodule ExWapp.Pairing.ADV do
        when is_binary(hmac) and byte_size(hmac) == 32 do
     expected = :crypto.mac(:hmac, :sha256, secret, prefix <> details)
 
-    if hmac == expected, do: :ok, else: {:error, :adv_hmac_mismatch}
+    if :crypto.hash_equals(hmac, expected),
+      do: :ok,
+      else: {:error, :adv_hmac_mismatch}
   end
 
   defp verify_hmac(_details, _hmac, _secret, _prefix), do: {:error, :adv_invalid_hmac}

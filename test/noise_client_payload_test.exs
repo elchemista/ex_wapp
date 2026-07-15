@@ -175,6 +175,42 @@ defmodule ExWapp.Noise.ClientPayloadTest do
       assert get_in(data, [:client_info, :os_build]) == "x86_64"
     end
 
+    test "builds a native Android registration payload without WebInfo" do
+      store = store_fixture()
+      noise = %Noise{store: store}
+
+      runtime_cfg = put_in(Config.defaults(), [:protocol, :client_mode], :android)
+
+      assert {:ok, payload, _data} = NoiseClientPayload.build(noise, runtime_cfg)
+      assert {:ok, decoded} = ClientPayloadProto.decode(payload)
+      assert decoded.userAgent.platform == :ANDROID
+      assert decoded.webInfo == nil
+
+      assert %DeviceProps{} =
+               device_props = DeviceProps.decode!(decoded.devicePairingData.deviceProps)
+
+      assert device_props.platform_type == 16
+    end
+
+    test "builds a native Android login payload without WebInfo" do
+      store = store_fixture()
+      noise = %Noise{store: store}
+
+      :ok =
+        Store.persist(store, %{
+          pairing: %{device: %{jid: %ExWapp.JID{user: "15550001111", device: 40}}},
+          client_info: %{}
+        })
+
+      runtime_cfg = put_in(Config.defaults(), [:protocol, :client_mode], :android)
+
+      assert {:ok, payload, _data} = NoiseClientPayload.build(noise, runtime_cfg)
+      assert {:ok, decoded} = ClientPayloadProto.decode(payload)
+      assert decoded.userAgent.platform == :ANDROID
+      assert decoded.webInfo == nil
+      assert decoded.passive
+    end
+
     test "supports runtime pairing device props overrides" do
       store = store_fixture()
       noise = %Noise{store: store}

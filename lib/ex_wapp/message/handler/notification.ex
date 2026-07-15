@@ -9,9 +9,13 @@ defmodule ExWapp.Message.Handler.Notification do
 
   require Logger
 
-  alias ExWapp.{Chat, Store}
+  alias ExWapp.{Chat, Config, Pairing, Store}
   alias ExWapp.Binary.Node
+  alias ExWapp.Media.Retry, as: MediaRetry
   alias ExWapp.Message.Handler.{Ack, Common}
+  alias ExWapp.Pairing.LinkCode
+  alias ExWapp.Session.{Account, DeviceCache, JIDUtils}
+  alias ExWapp.Signal.SessionStore
 
   @spec handle_notification(Node.t(), pid(), map()) :: {:ok, map()} | {:ok, map(), [term()]}
   def handle_notification(%Node{attrs: attrs, content: content}, session, state) do
@@ -36,8 +40,8 @@ defmodule ExWapp.Message.Handler.Notification do
     end
   end
 
-  defp handle_notification_type("encrypt", _attrs, content, session, state),
-    do: handle_encrypt_notification(content, session, state)
+  defp handle_notification_type("encrypt", attrs, content, session, state),
+    do: handle_encrypt_notification(attrs, content, session, state)
 
   defp handle_notification_type("w:gp2", attrs, content, session, state),
     do: handle_group_notification(attrs, content, session, state)
@@ -51,8 +55,8 @@ defmodule ExWapp.Message.Handler.Notification do
   defp handle_notification_type("w:sync:app:state", _attrs, content, session, state),
     do: handle_app_state_sync_notification(content, session, state)
 
-  defp handle_notification_type("devices", _attrs, content, session, state),
-    do: handle_devices_notification(content, session, state)
+  defp handle_notification_type("devices", attrs, content, session, state),
+    do: handle_devices_notification(attrs, content, session, state)
 
   defp handle_notification_type("contacts", attrs, content, _session, state),
     do: handle_contacts_notification(attrs, content, state)
@@ -60,8 +64,13 @@ defmodule ExWapp.Message.Handler.Notification do
   defp handle_notification_type("privacy_token", attrs, content, _session, state),
     do: handle_privacy_token_notification(attrs, content, state)
 
-  defp handle_notification_type(type, _attrs, _content, _session, state)
-       when type in ["picture", "mediaretry"] do
+  defp handle_notification_type("mediaretry", attrs, content, _session, state),
+    do: handle_media_retry_notification(attrs, content, state)
+
+  defp handle_notification_type("link_code_companion_reg", attrs, content, _session, state),
+    do: handle_link_code_notification(attrs, content, state)
+
+  defp handle_notification_type("picture", _attrs, _content, _session, state) do
     {:ok, state}
   end
 
@@ -70,14 +79,115 @@ defmodule ExWapp.Message.Handler.Notification do
     {:ok, state}
   end
 
+  defp handle_link_code_notification(attrs, content, state) do
+    notification = %Node{
+      tag: "notification",
+      attrs: attrs,
+      content: content
+    }
+
+    case LinkCode.finish(Map.get(state, :store), notification) do
+      {:ok, %{node: finish_node, jid: jid}} ->
+        state =
+          case Map.get(state, :pairing) do
+            %{store: _store} = pairing ->
+              Map.put(state, :pairing, Pairing.mark_link_code_paired(pairing))
+
+            _other ->
+              state
+          end
+
+        {:ok, state,
+         [
+           {:send_node, finish_node},
+           {:status, :success},
+           {:pairing_success, :link_code, jid}
+         ]}
+
+      {:error, reason}
+      when reason in [:missing_link_code_registration, :link_code_not_pending] ->
+        Logger.debug("[PAIRING] Ignoring incomplete link-code notification: #{inspect(reason)}")
+        {:ok, state}
+
+      {:error, {:missing_link_code_field, _field} = reason} ->
+        Logger.debug("[PAIRING] Ignoring incomplete link-code notification: #{inspect(reason)}")
+        {:ok, state}
+
+      {:error, reason} ->
+        Logger.warning("[PAIRING] Link-code finish failed: #{inspect(reason)}")
+        {:ok, state, [{:error, {:link_code_pairing, reason}}]}
+    end
+  end
+
   defp append_actions({:ok, state}, extra_actions), do: {:ok, state, extra_actions}
 
   defp append_actions({:ok, state, actions}, extra_actions),
     do: {:ok, state, extra_actions ++ actions}
 
-  defp handle_encrypt_notification(_content, _session, state) do
-    Logger.debug("Received encryption notification (identity key change)")
-    {:ok, state}
+  defp handle_encrypt_notification(attrs, content, _session, state) do
+    from = Common.normalize_jid_with_device(Map.get(attrs, "from"))
+
+    cond do
+      server_encrypt_origin?(from) ->
+        handle_prekey_inventory_notification(content, state)
+
+      Map.get(attrs, "offline") not in [nil, ""] ->
+        Logger.debug("[IDENTITY] Ignoring offline identity notification from #{from}")
+        {:ok, state}
+
+      true ->
+        invalidate_identity_sessions(from, state)
+    end
+  end
+
+  defp server_encrypt_origin?(from), do: from in ["", "s.whatsapp.net", "@s.whatsapp.net"]
+
+  defp handle_prekey_inventory_notification(content, state) do
+    count =
+      case Common.find_child_node(content, "count") do
+        %Node{attrs: attrs} -> parse_non_negative_integer(Map.get(attrs, "value"))
+        _ -> nil
+      end
+
+    threshold = Config.get(Map.get(state, :runtime_cfg, %{}), [:prekeys, :min_threshold], 5)
+
+    if is_integer(count) and count <= threshold do
+      Logger.debug("[PREKEYS] Server inventory low (#{count}); scheduling refill")
+      {:ok, state, [{:refill_prekeys, count}]}
+    else
+      {:ok, state}
+    end
+  end
+
+  defp invalidate_identity_sessions("", state), do: {:ok, state}
+
+  defp invalidate_identity_sessions(from, state) do
+    sessions = Map.get(state, :signal_sessions)
+
+    if SessionStore.store?(sessions) do
+      before_count = sessions |> SessionStore.list_sessions() |> length()
+      lid_mapping = Account.load_lid_mapping(Map.get(state, :store))
+      updated_sessions = SessionStore.delete_sessions_for_user(sessions, from, lid_mapping)
+      after_count = updated_sessions |> SessionStore.list_sessions() |> length()
+
+      if after_count < before_count do
+        Logger.debug(
+          "[IDENTITY] Removed #{before_count - after_count} stale session(s) for #{from}"
+        )
+
+        updated_state = Map.put(state, :signal_sessions, updated_sessions)
+
+        {:ok, updated_state,
+         [
+           {:signal_sessions_updated, updated_sessions},
+           {:refresh_identity_session, from}
+         ]}
+      else
+        {:ok, state}
+      end
+    else
+      {:ok, state}
+    end
   end
 
   defp handle_privacy_token_notification(attrs, content, state) do
@@ -128,7 +238,7 @@ defmodule ExWapp.Message.Handler.Notification do
     Store.persist(store, Map.put(data, :tctokens, tctokens))
   end
 
-  defp handle_devices_notification(content, _session, state) do
+  defp handle_devices_notification(attrs, content, _session, state) do
     if is_list(content) do
       Enum.each(content, fn
         %Node{tag: tag, attrs: node_attrs} ->
@@ -139,9 +249,32 @@ defmodule ExWapp.Message.Handler.Notification do
       end)
     end
 
-    ExWapp.Message.Handler.Inbound.persist_notification_devices(state, content)
+    affected_bases =
+      notification_jids([%Node{tag: "notification", attrs: attrs, content: content}])
+
+    DeviceCache.invalidate_bases(Map.get(state, :store), affected_bases)
     {:ok, state}
   end
+
+  defp notification_jids(content) when is_list(content) do
+    content
+    |> Enum.flat_map(&notification_jids/1)
+    |> Enum.map(&JIDUtils.strip_device/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp notification_jids(%Node{attrs: attrs, content: content}) do
+    current =
+      [Map.get(attrs || %{}, "jid"), Map.get(attrs || %{}, "user")]
+      |> Enum.map(&Common.normalize_jid_with_device/1)
+      |> Enum.filter(&String.contains?(&1, "@"))
+
+    nested = if is_list(content), do: Enum.flat_map(content, &notification_jids/1), else: []
+    current ++ nested
+  end
+
+  defp notification_jids(_content), do: []
 
   defp handle_contacts_notification(attrs, content, state) do
     from = Common.normalize_jid(Map.get(attrs, "from"))
@@ -201,8 +334,107 @@ defmodule ExWapp.Message.Handler.Notification do
 
   defp handle_account_sync(content, session, state) do
     process_sync_collections(content, Common.chat_target(session, state))
+    invalidate_own_device_cache_if_needed(content, state)
     {:ok, state}
   end
+
+  defp invalidate_own_device_cache_if_needed(content, state) do
+    if contains_node_tag?(content, "devices") do
+      store = Map.get(state, :store)
+
+      own_bases =
+        [Account.local_account_base_jid(store), Account.local_account_lid_jid(store)]
+        |> Enum.reject(&(&1 == ""))
+
+      DeviceCache.invalidate_bases(store, own_bases)
+    end
+
+    :ok
+  end
+
+  defp contains_node_tag?(content, tag) when is_list(content),
+    do: Enum.any?(content, &contains_node_tag?(&1, tag))
+
+  defp contains_node_tag?(%Node{tag: tag}, tag), do: true
+
+  defp contains_node_tag?(%Node{content: content}, tag),
+    do: contains_node_tag?(content, tag)
+
+  defp contains_node_tag?(_content, _tag), do: false
+
+  defp handle_media_retry_notification(attrs, content, state) do
+    msg_id = Map.get(attrs, "id", "")
+    pending_retries = Map.get(state, :pending_media_retries, %{})
+
+    case Map.pop(pending_retries, msg_id) do
+      {nil, _pending} ->
+        Logger.debug("[MEDIA_RETRY] No pending request for #{msg_id}")
+        {:ok, state}
+
+      {pending, remaining} ->
+        cancel_pending_timer(pending)
+
+        result =
+          %Node{tag: "notification", attrs: attrs, content: content}
+          |> MediaRetry.decode_notification(Map.fetch!(pending, :media_key))
+          |> finalize_media_retry(pending, state)
+
+        next_state = Map.put(state, :pending_media_retries, remaining)
+        {:ok, next_state, [{:resolve_media_retry, Map.fetch!(pending, :from), result}]}
+    end
+  end
+
+  defp finalize_media_retry({:ok, direct_path}, pending, state) do
+    refreshed_ref = %{Map.fetch!(pending, :ref) | direct_path: direct_path, url: nil}
+    persist_refreshed_media(state, pending, refreshed_ref)
+    {:ok, refreshed_ref}
+  end
+
+  defp finalize_media_retry({:error, _reason} = error, _pending, _state), do: error
+
+  defp persist_refreshed_media(state, pending, refreshed_ref) do
+    message = Map.fetch!(pending, :message)
+    chat_jid = Map.fetch!(pending, :chat_jid)
+
+    updated_message =
+      message
+      |> Map.put(:media, refreshed_ref)
+      |> update_canonical_media(refreshed_ref)
+      |> update_raw_media(refreshed_ref)
+
+    case Map.get(state, :store) do
+      nil -> :ok
+      store -> Store.upsert_messages(store, chat_jid, [updated_message])
+    end
+  end
+
+  defp update_canonical_media(%{content: %ExWapp.Message.Content{} = content} = message, ref),
+    do: %{message | content: %{content | media: ref}}
+
+  defp update_canonical_media(message, _ref), do: message
+
+  defp update_raw_media(%{raw: raw} = message, ref) when is_map(raw),
+    do: %{message | raw: Map.put(raw, :media, ref)}
+
+  defp update_raw_media(message, _ref), do: message
+
+  defp cancel_pending_timer(%{timer: timer}) when is_reference(timer) do
+    Process.cancel_timer(timer)
+    :ok
+  end
+
+  defp cancel_pending_timer(_pending), do: :ok
+
+  defp parse_non_negative_integer(value) when is_integer(value) and value >= 0, do: value
+
+  defp parse_non_negative_integer(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {integer, ""} when integer >= 0 -> integer
+      _ -> nil
+    end
+  end
+
+  defp parse_non_negative_integer(_value), do: nil
 
   defp handle_app_state_sync_notification(content, session, state) do
     collection_names = extract_app_state_collection_names(content)

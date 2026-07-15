@@ -8,6 +8,7 @@ defmodule ExWapp.Media do
   """
 
   alias ExWapp.Domains.Media.Source
+  alias ExWapp.Media.Retry
 
   @typedoc """
   Media kinds currently supported by the high-level API.
@@ -54,4 +55,24 @@ defmodule ExWapp.Media do
       metadata: Keyword.get(opts, :metadata, %{})
     }
   end
+
+  @doc "Builds the authenticated `server-error` receipt used to re-request expired media."
+  defdelegate build_retry_receipt(
+                msg_id,
+                own_jid,
+                chat_jid,
+                from_me,
+                participant_jid,
+                media_key
+              ),
+              to: Retry,
+              as: :build_receipt
+
+  @doc "Decrypts a `mediaretry` notification with the original message media key."
+  defdelegate decode_retry_notification(node, media_key),
+    to: Retry,
+    as: :decode_notification
+
+  @doc "Derives the media-retry wrapping key from a media key."
+  defdelegate retry_key(media_key), to: Retry
 end

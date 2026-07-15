@@ -577,6 +577,15 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   defp handle_pairing_action({:status, :success}, state), do: notify_qr(state, :success)
 
+  defp handle_pairing_action({:pairing_success, :link_code, jid}, state) do
+    Subscribers.broadcast_lifecycle(
+      Map.get(state, :session_id),
+      {:ex_wapp_session, :pairing_success, %{via: :link_code, jid: jid}}
+    )
+
+    :ok
+  end
+
   defp handle_pairing_action(:mark_authenticated, _state),
     do:
       (
@@ -610,6 +619,27 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     if ExWapp.Signal.SessionStore.store?(sessions) do
       send(self(), {:signal_sessions_updated, sessions})
     end
+  end
+
+  defp handle_pairing_action({:refresh_identity_session, jid}, _state) do
+    send(self(), {:refresh_identity_session, jid})
+    :ok
+  end
+
+  defp handle_pairing_action({:refill_prekeys, server_count}, _state) do
+    send(self(), {:refill_prekeys, server_count})
+    :ok
+  end
+
+  defp handle_pairing_action({:resolve_media_retry, from, result}, state) do
+    GenServer.reply(from, result)
+
+    Subscribers.broadcast_lifecycle(
+      Map.get(state, :session_id),
+      {:ex_wapp_session, :media_retry, result}
+    )
+
+    :ok
   end
 
   defp handle_pairing_action({:contacts_changed, payload}, state) do

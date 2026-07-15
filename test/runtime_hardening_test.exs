@@ -65,6 +65,18 @@ defmodule ExWapp.RuntimeHardeningTest do
     assert get_in(overridden_cfg, [:app_state, :initial_sync_enabled]) == false
   end
 
+  test "config validates the native Android client mode" do
+    assert {:ok, android_cfg} =
+             Config.resolve(runtime: [protocol: [client_mode: :android]])
+
+    assert get_in(android_cfg, [:protocol, :client_mode]) == :android
+
+    assert {:error,
+            {:invalid_runtime_config, [:protocol, :client_mode], :ios,
+             {:expected_one_of, [:web, :android]}}} =
+             Config.resolve(runtime: [protocol: [client_mode: :ios]])
+  end
+
   test "config resolve keeps the vendor default but allows app/runtime overrides" do
     assert get_in(Config.defaults(), [:signal, :session_max_age_ms]) == :timer.hours(12)
 

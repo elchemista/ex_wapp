@@ -337,7 +337,9 @@ defmodule ExWapp.AppState.Engine.Codec do
     expected =
       Crypto.compute_content_mac(op, encrypted, key_id, keys.value_mac)
 
-    if expected == value_mac, do: :ok, else: {:error, :mismatching_content_mac}
+    if Crypto.secure_compare(expected, value_mac),
+      do: :ok,
+      else: {:error, :mismatching_content_mac}
   end
 
   defp decrypt_content(encrypted, _keys) when byte_size(encrypted) < 16 do
@@ -365,7 +367,10 @@ defmodule ExWapp.AppState.Engine.Codec do
 
   defp verify_index_mac(index_blob, index_mac, keys, true) when is_binary(index_blob) do
     expected = Crypto.compute_index_mac(index_blob, keys.index)
-    if expected == index_mac, do: :ok, else: {:error, :mismatching_index_mac}
+
+    if Crypto.secure_compare(expected, index_mac),
+      do: :ok,
+      else: {:error, :mismatching_index_mac}
   end
 
   defp verify_index_mac(_index_blob, _index_mac, _keys, _validate), do: :ok
@@ -497,8 +502,9 @@ defmodule ExWapp.AppState.Engine.Codec do
     compare_mac(expected, mac, :mismatching_snapshot_mac)
   end
 
-  defp compare_mac(expected, actual, _error) when expected == actual, do: :ok
-  defp compare_mac(_expected, _actual, error), do: {:error, error}
+  defp compare_mac(expected, actual, error) do
+    if Crypto.secure_compare(expected, actual), do: :ok, else: {:error, error}
+  end
 
   defp update_mutation_macs(decoded_mutations, mutation_macs) when is_map(mutation_macs) do
     updated =

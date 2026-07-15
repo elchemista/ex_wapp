@@ -133,6 +133,7 @@ defmodule ExWapp.Config.Validator do
   defp validate_protocol(cfg) do
     run_validations([
       fn -> ensure_boolean(cfg, [:protocol, :strict_mode]) end,
+      fn -> ensure_one_of(cfg, [:protocol, :client_mode], [:web, :android]) end,
       fn -> ensure_boolean(cfg, [:protocol, :post_auth_digest_enabled]) end,
       fn -> ensure_positive_integer(cfg, [:protocol, :client_version, :primary]) end,
       fn -> ensure_positive_integer(cfg, [:protocol, :client_version, :secondary]) end,

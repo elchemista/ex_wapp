@@ -125,6 +125,32 @@ defmodule ExWapp.Session.DeviceCache do
     _ -> :ok
   end
 
+  @doc """
+  Invalidates complete cached device lists for one or more identities.
+
+  Device notifications carry deltas, not authoritative lists. Removing the
+  whole PN/LID-related cache entry ensures that the next send performs USync
+  instead of treating a partial notification as the current fanout set.
+  """
+  @spec invalidate_bases(term(), [term()]) :: :ok
+  def invalidate_bases(nil, _base_jids), do: :ok
+  def invalidate_bases(_store, base_jids) when not is_list(base_jids), do: :ok
+
+  def invalidate_bases(store, base_jids) do
+    lid_mapping = Account.load_lid_mapping(store)
+    cache = Store.load_device_cache(store)
+
+    invalidated =
+      base_jids
+      |> Enum.flat_map(&JIDUtils.related_bases(&1, lid_mapping))
+      |> JIDUtils.normalize_target_list()
+
+    updated_cache = Map.drop(cache, invalidated)
+    persist_if_changed(store, cache, updated_cache)
+  rescue
+    _ -> :ok
+  end
+
   defp put_devices(cache, base_jid, devices, lid_mapping, now_ms, touch_throttle_ms) do
     base_jid = JIDUtils.normalize_with_device(base_jid) |> JIDUtils.strip_device()
 
@@ -148,11 +174,11 @@ defmodule ExWapp.Session.DeviceCache do
       if updated_devices == existing_devices do
         acc
       else
-        Map.put(acc, related_base, %{
-          existing_entry
-          | devices: updated_devices,
-            updated_at_ms: now_ms
-        })
+        Map.put(
+          acc,
+          related_base,
+          Map.merge(existing_entry, %{devices: updated_devices, updated_at_ms: now_ms})
+        )
       end
     end)
   end
@@ -192,7 +218,7 @@ defmodule ExWapp.Session.DeviceCache do
           Map.delete(acc, related_base)
 
         true ->
-          Map.put(acc, related_base, %{entry | devices: devices})
+          Map.put(acc, related_base, Map.put(entry, :devices, devices))
       end
     end)
   end

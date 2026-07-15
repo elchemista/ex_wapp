@@ -69,7 +69,7 @@ defmodule ExWapp.Noise.ClientPayload do
       lidDbMigrated: true,
       lc: 1,
       userAgent: build_user_agent(nil, info, runtime_cfg),
-      webInfo: build_web_info(info),
+      webInfo: build_web_info(info, runtime_cfg),
       connectType: :WIFI_UNKNOWN,
       connectReason: :USER_ACTIVATED
     }
@@ -95,7 +95,7 @@ defmodule ExWapp.Noise.ClientPayload do
         passive: false,
         pull: false,
         userAgent: build_user_agent(nil, info, runtime_cfg),
-        webInfo: build_web_info(info),
+        webInfo: build_web_info(info, runtime_cfg),
         devicePairingData: build_device_pairing_data(signal_info, runtime_cfg),
         connectType: :WIFI_UNKNOWN,
         connectReason: :USER_ACTIVATED
@@ -165,9 +165,10 @@ defmodule ExWapp.Noise.ClientPayload do
     {primary, secondary, tertiary} = protocol_version(runtime_cfg)
     ua_defaults = Config.get(runtime_cfg, [:protocol, :user_agent], %{})
 
-    # Match Go's BaseClientPayload.UserAgent exactly
+    # Web remains the compatibility default. Android mode mirrors the native
+    # companion payload used by upstream clients and must not carry WebInfo.
     %UserAgent{
-      platform: :WEB,
+      platform: user_agent_platform(runtime_cfg),
       appVersion: %AppVersion{primary: primary, secondary: secondary, tertiary: tertiary},
       mcc: "000",
       mnc: "000",
@@ -207,12 +208,26 @@ defmodule ExWapp.Noise.ClientPayload do
     end
   end
 
-  defp build_web_info(_info) do
+  defp build_web_info(_info, runtime_cfg) do
+    if client_mode(runtime_cfg) == :android do
+      nil
+    else
+      web_info()
+    end
+  end
+
+  defp web_info do
     # Match Go's BaseClientPayload.WebInfo - only webSubPlatform is set
     %WebInfo{
       webSubPlatform: :WEB_BROWSER
     }
   end
+
+  defp user_agent_platform(runtime_cfg) do
+    if client_mode(runtime_cfg) == :android, do: :ANDROID, else: :WEB
+  end
+
+  defp client_mode(runtime_cfg), do: Config.get(runtime_cfg, [:protocol, :client_mode], :web)
 
   defp ensure_signal_bundle(data) do
     params =
@@ -295,12 +310,23 @@ defmodule ExWapp.Noise.ClientPayload do
     %CompanionDeviceProps{
       os: Map.get(device_props, :os, "whatsmeow"),
       version: build_device_props_version(device_props),
-      platform_type: Map.get(device_props, :platform_type, 0),
+      platform_type: pairing_platform_type(device_props, runtime_cfg),
       require_full_sync: Map.get(device_props, :require_full_sync, false),
       history_sync_config: build_history_sync_config(device_props)
     }
     |> CompanionDeviceProps.encode!()
     |> IO.iodata_to_binary()
+  end
+
+  # DeviceProps.PlatformType.ANDROID_PHONE is 16. In web mode keep the
+  # configurable platform type exactly as before.
+  defp pairing_platform_type(device_props, runtime_cfg)
+       when is_map(runtime_cfg) do
+    if client_mode(runtime_cfg) == :android do
+      16
+    else
+      Map.get(device_props, :platform_type, 0)
+    end
   end
 
   defp maybe_put(map, _key, nil), do: map

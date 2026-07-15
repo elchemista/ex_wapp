@@ -50,14 +50,16 @@ defmodule ExWapp.Session.Worker do
 
   alias ExWapp.AppState.Engine
   alias ExWapp.{Binary, Config, Media, Messages, Pairing, Quota, RateLimiter, Store, Telemetry}
-  alias ExWapp.Signal.SessionStore
+  alias ExWapp.Pairing.LinkCode
+  alias ExWapp.Signal.{PrekeyFetcher, SessionStore}
 
-  alias ExWapp.Session.{InboundRouter, JIDUtils, OutboundQueue}
+  alias ExWapp.Session.{Account, InboundRouter, JIDUtils, OutboundQueue}
 
   alias ExWapp.Session.Worker.{
     NodeHandler,
     Outbound,
     OutboundConfirmation,
+    PostAuth,
     Resilience,
     Retry,
     Safety,
@@ -65,7 +67,8 @@ defmodule ExWapp.Session.Worker do
   }
 
   @typedoc "Human readable events emitted during the pairing flow."
-  @type qr_event :: {:code, String.t()} | :success | {:error, term()}
+  @type qr_event ::
+          {:code, String.t()} | {:pairing_code, String.t()} | :success | {:error, term()}
 
   @typedoc "Session status"
   @type status ::
@@ -124,6 +127,7 @@ defmodule ExWapp.Session.Worker do
     retry_counters: %{},
     outgoing_retry_payloads: %{},
     outbound_confirmations: %{},
+    pending_media_retries: %{},
     app_state_initial_sync_requested: false,
     post_auth_phase: :idle,
     prekey_count_query_id: nil,
@@ -176,6 +180,7 @@ defmodule ExWapp.Session.Worker do
           retry_counters: map(),
           outgoing_retry_payloads: map(),
           outbound_confirmations: map(),
+          pending_media_retries: map(),
           stats: map()
         }
 
@@ -255,6 +260,13 @@ defmodule ExWapp.Session.Worker do
   """
   @spec subscribe_qr(GenServer.server()) :: {:ok, reference()}
   def subscribe_qr(server), do: GenServer.call(server, {:subscribe_qr, self()})
+
+  @doc "Requests phone-number pairing while the Noise transport is awaiting authentication."
+  @spec request_pairing_code(GenServer.server(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def request_pairing_code(server, phone, opts \\ []) do
+    GenServer.call(server, {:request_pairing_code, phone, opts}, 30_000)
+  end
 
   @doc """
   Unsubscribes from QR code events.
@@ -493,6 +505,42 @@ defmodule ExWapp.Session.Worker do
     {:reply, {:ok, ref}, new_state}
   end
 
+  def handle_call(
+        {:request_pairing_code, phone, opts},
+        _from,
+        %{status: :handshaking, transport_ready?: true, outbound_queue: outbound_queue} = state
+      )
+      when is_binary(phone) and is_list(opts) and is_pid(outbound_queue) do
+    case LinkCode.request(state.store, phone, opts, state.runtime_cfg) do
+      {:ok, %{code: code, request_id: request_id, node: node, jid: jid}} ->
+        OutboundQueue.enqueue_node(outbound_queue, node)
+
+        Subscribers.notify_qr(state, {:pairing_code, code}, fn ->
+          emit_telemetry(
+            :qr,
+            %{subscriber_count: map_size(state.qr_subscribers)},
+            state,
+            %{event: :pairing_code}
+          )
+        end)
+
+        Subscribers.broadcast_lifecycle(
+          state.session_id,
+          {:ex_wapp_session, :pairing_code, %{code: code, jid: jid}}
+        )
+
+        {:reply, {:ok, code},
+         %{state | pairing: Pairing.mark_waiting_for_code(state.pairing, request_id)}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:request_pairing_code, _phone, _opts}, _from, state) do
+    {:reply, {:error, {:pairing_not_ready, state.status}}, state}
+  end
+
   def handle_call({:send_text, jid, text}, from, state) do
     with {:ok, state} <- ensure_send_enabled(state, jid),
          :ok <- ensure_connected_for_send(state),
@@ -573,6 +621,52 @@ defmodule ExWapp.Session.Worker do
 
   def handle_call({:download_media, _ref, _opts}, _from, state) do
     {:reply, {:error, :invalid_media_reference}, state}
+  end
+
+  def handle_call({:retry_media, message_id, opts}, from, %{status: status} = state)
+      when status in [:connected, :syncing] and is_binary(message_id) and is_list(opts) do
+    with false <- Map.has_key?(state.pending_media_retries, message_id),
+         {chat_jid, message} <- Store.find_message_by_id(state.store, message_id),
+         %Media.Ref{media_key: media_key} = ref <- message_media_ref(message),
+         true <- is_binary(media_key) and byte_size(media_key) == 32,
+         own_jid when is_binary(own_jid) and own_jid != "" <-
+           Account.local_account_base_jid(state.store) do
+      receipt =
+        Media.build_retry_receipt(
+          message_id,
+          own_jid,
+          chat_jid,
+          Map.get(message, :from_me, false) == true,
+          normalize_retry_participant(Map.get(message, :participant)),
+          media_key
+        )
+
+      timeout_ms = retry_media_timeout(opts)
+      timer = Process.send_after(self(), {:media_retry_timeout, message_id}, timeout_ms)
+
+      pending = %{
+        from: from,
+        timer: timer,
+        media_key: media_key,
+        ref: ref,
+        message: message,
+        chat_jid: chat_jid
+      }
+
+      OutboundQueue.enqueue_node(state.outbound_queue, receipt)
+
+      {:noreply,
+       %{state | pending_media_retries: Map.put(state.pending_media_retries, message_id, pending)}}
+    else
+      true -> {:reply, {:error, :media_retry_already_pending}, state}
+      nil -> {:reply, {:error, :message_not_found}, state}
+      %Media.Ref{} -> {:reply, {:error, :invalid_media_key}, state}
+      _ -> {:reply, {:error, :not_media}, state}
+    end
+  end
+
+  def handle_call({:retry_media, _message_id, _opts}, _from, state) do
+    {:reply, {:error, {:not_connected, state.status}}, state}
   end
 
   def handle_call(:get_store, _from, state) do
@@ -1050,6 +1144,51 @@ defmodule ExWapp.Session.Worker do
     {:noreply, %{state | signal_sessions: sessions}}
   end
 
+  def handle_info({:refill_prekeys, server_count}, state)
+      when is_integer(server_count) and server_count >= 0 do
+    {next_state, actions} = PostAuth.refill_from_notification(state, server_count)
+
+    Enum.each(actions, &NodeHandler.safe_handle_action(&1, next_state))
+    {:noreply, next_state}
+  end
+
+  def handle_info({:refresh_identity_session, jid}, %{status: status} = state)
+      when status in [:connected, :syncing] and is_binary(jid) do
+    session = self()
+
+    case Task.Supervisor.start_child(state.send_worker_sup, fn ->
+           result = PrekeyFetcher.fetch_prekeys(session, jid)
+           send(session, {:identity_prekey_bundle, jid, result})
+         end) do
+      {:ok, _pid} -> :ok
+      {:error, reason} -> Logger.warning("[IDENTITY] Refresh worker failed: #{inspect(reason)}")
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_info({:refresh_identity_session, _jid}, state), do: {:noreply, state}
+
+  def handle_info({:identity_prekey_bundle, jid, {:ok, bundle}}, state) do
+    {:noreply, install_refreshed_identity_session(state, jid, bundle)}
+  end
+
+  def handle_info({:identity_prekey_bundle, jid, {:error, reason}}, state) do
+    Logger.warning("[IDENTITY] Could not refresh #{jid}: #{inspect(reason)}")
+    {:noreply, state}
+  end
+
+  def handle_info({:media_retry_timeout, message_id}, state) do
+    case Map.pop(state.pending_media_retries, message_id) do
+      {nil, _pending} ->
+        {:noreply, state}
+
+      {%{from: from}, remaining} ->
+        GenServer.reply(from, {:error, :media_retry_timeout})
+        {:noreply, %{state | pending_media_retries: remaining}}
+    end
+  end
+
   def handle_info({:retry_outgoing_message, jid, message_id}, state) do
     {:noreply, maybe_retry_outgoing_message(state, jid, message_id, %{})}
   end
@@ -1237,7 +1376,8 @@ defmodule ExWapp.Session.Worker do
       {:error, {:exit, reason}}
   end
 
-  defp do_disconnect(%__MODULE__{conn: nil} = state, _reason) do
+  defp do_disconnect(%__MODULE__{conn: nil} = state, reason) do
+    state = state |> cancel_health_check() |> clear_pending_requests(reason)
     OutboundQueue.clear_conn(state.outbound_queue)
 
     %{
@@ -1933,6 +2073,61 @@ defmodule ExWapp.Session.Worker do
       :ok
   end
 
+  defp install_refreshed_identity_session(state, jid, bundle) do
+    data = Store.load!(state.store)
+    local_identity = get_in(data, [:signal, :identity_key])
+    local_registration_id = get_in(data, [:signal, :registration_id]) || 0
+
+    with true <- SessionStore.store?(state.signal_sessions),
+         %{private: private, public: public} = identity <- local_identity,
+         true <- is_binary(private) and is_binary(public),
+         target_jid when is_binary(target_jid) <- Map.get(bundle, :jid) || jid,
+         {:ok, _session, _base_key, sessions} <-
+           SessionStore.get_or_create_session(
+             state.signal_sessions,
+             target_jid,
+             identity,
+             bundle,
+             local_registration_id,
+             force: true
+           ) do
+      persist_signal_sessions_store(state.store, sessions)
+      %{state | signal_sessions: sessions}
+    else
+      reason ->
+        Logger.warning("[IDENTITY] Invalid refreshed bundle for #{jid}: #{inspect(reason)}")
+        state
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[IDENTITY] Failed installing refreshed bundle for #{jid}: #{inspect(error)}"
+      )
+
+      state
+  end
+
+  defp message_media_ref(%{media: %Media.Ref{} = ref}), do: ref
+
+  defp message_media_ref(%{content: %ExWapp.Message.Content{media: %Media.Ref{} = ref}}),
+    do: ref
+
+  defp message_media_ref(_message), do: nil
+
+  defp normalize_retry_participant(participant) do
+    case JIDUtils.normalize_with_device(participant) do
+      "" -> nil
+      jid -> jid
+    end
+  end
+
+  defp retry_media_timeout(opts) do
+    case Keyword.get(opts, :timeout, 30_000) do
+      value when is_integer(value) and value > 0 -> value
+      _ -> 30_000
+    end
+  end
+
   defp flush_store(nil), do: :ok
 
   defp flush_store(store) do
@@ -2052,36 +2247,41 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp clear_pending_requests(state, reason) do
-    Enum.each(state.pending_iqs, fn {_message_id, pending} ->
-      timer = Map.get(pending, :timer)
-      if timer, do: Process.cancel_timer(timer)
-
-      case Map.get(pending, :from) do
-        nil -> :ok
-        from -> GenServer.reply(from, {:error, {:disconnected, reason}})
-      end
-    end)
-
-    Enum.each(state.send_workers, fn {pid, _jid} ->
-      if Process.alive?(pid) do
-        send(pid, {:prekey_error, :transport_closed, reason})
-      end
-    end)
-
-    Enum.each(state.outbound_confirmations, fn {_message_id, confirmation} ->
-      case Map.get(confirmation, :timer) do
-        timer when is_reference(timer) -> Process.cancel_timer(timer)
-        _ -> :ok
-      end
-    end)
+    Enum.each(state.pending_iqs, &cancel_pending_call(&1, reason))
+    Enum.each(state.send_workers, &notify_disconnected_worker(&1, reason))
+    Enum.each(state.outbound_confirmations, &cancel_pending_timer/1)
+    Enum.each(state.pending_media_retries, &cancel_pending_call(&1, reason))
 
     %{
       state
       | pending_iqs: %{},
         send_workers: %{},
         send_worker_mons: %{},
-        outbound_confirmations: %{}
+        outbound_confirmations: %{},
+        pending_media_retries: %{}
     }
+  end
+
+  defp cancel_pending_call({_id, pending}, reason) do
+    cancel_pending_timer(pending)
+
+    case Map.get(pending, :from) do
+      nil -> :ok
+      from -> GenServer.reply(from, {:error, {:disconnected, reason}})
+    end
+  end
+
+  defp cancel_pending_timer({_id, pending}), do: cancel_pending_timer(pending)
+
+  defp cancel_pending_timer(pending) do
+    case Map.get(pending, :timer) do
+      timer when is_reference(timer) -> Process.cancel_timer(timer)
+      _ -> :ok
+    end
+  end
+
+  defp notify_disconnected_worker({pid, _jid}, reason) do
+    if Process.alive?(pid), do: send(pid, {:prekey_error, :transport_closed, reason})
   end
 
   defp enforce_send_policies(state, jid) do

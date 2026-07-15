@@ -47,7 +47,9 @@ defmodule ExWapp.Prekeys do
     initial_upload = Keyword.get(opts, :initial, false)
     initial_count = prekey_cfg(runtime_cfg, :initial_prekey_count, @initial_prekey_count)
     refill_count = prekey_cfg(runtime_cfg, :refill_prekey_count, @wanted_prekey_count)
-    prekey_count = if initial_upload, do: initial_count, else: refill_count
+
+    prekey_count =
+      Keyword.get(opts, :count) || if(initial_upload, do: initial_count, else: refill_count)
 
     Logger.debug("[PREKEYS] Building upload, signal keys: #{inspect(Map.keys(signal))}")
 

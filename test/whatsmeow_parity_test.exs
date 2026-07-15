@@ -450,6 +450,7 @@ defmodule ExWapp.WhatsmeowParityTest do
 
     signed_id = 700
     prekey_id = 701
+    sender_jid = "15550001111@s.whatsapp.net"
 
     bob_signed_prekey = Keys.generate_signed_prekey(bob_identity, signed_id)
     bob_one_time_prekey = Keys.generate_prekey(prekey_id)
@@ -457,6 +458,7 @@ defmodule ExWapp.WhatsmeowParityTest do
     bob_store =
       ExWapp.Store.Memory.new(
         initial_data: %{
+          client_info: %{jid: sender_jid},
           signal: %{
             identity_key: bob_identity,
             registration_id: 11_901,
@@ -477,8 +479,6 @@ defmodule ExWapp.WhatsmeowParityTest do
       },
       prekey: %{id: prekey_id, public: bob_one_time_prekey.public}
     }
-
-    sender_jid = "15550001111@s.whatsapp.net"
 
     history_sync_payload =
       build_history_sync_protocol_message([
@@ -575,6 +575,7 @@ defmodule ExWapp.WhatsmeowParityTest do
 
     signed_id = 705
     prekey_id = 706
+    sender_jid = "15550001111@s.whatsapp.net"
 
     bob_signed_prekey = Keys.generate_signed_prekey(bob_identity, signed_id)
     bob_one_time_prekey = Keys.generate_prekey(prekey_id)
@@ -582,6 +583,7 @@ defmodule ExWapp.WhatsmeowParityTest do
     bob_store =
       ExWapp.Store.Memory.new(
         initial_data: %{
+          client_info: %{jid: sender_jid},
           signal: %{
             identity_key: bob_identity,
             registration_id: 11_951,
@@ -603,7 +605,6 @@ defmodule ExWapp.WhatsmeowParityTest do
       prekey: %{id: prekey_id, public: bob_one_time_prekey.public}
     }
 
-    sender_jid = "15550001111@s.whatsapp.net"
     chat_jid = "111111111@s.whatsapp.net"
 
     history_sync_payload =
@@ -692,6 +693,7 @@ defmodule ExWapp.WhatsmeowParityTest do
 
     signed_id = 710
     prekey_id = 711
+    sender_jid = "15550001111@s.whatsapp.net"
 
     bob_signed_prekey = Keys.generate_signed_prekey(bob_identity, signed_id)
     bob_one_time_prekey = Keys.generate_prekey(prekey_id)
@@ -699,6 +701,7 @@ defmodule ExWapp.WhatsmeowParityTest do
     bob_store =
       ExWapp.Store.Memory.new(
         initial_data: %{
+          client_info: %{jid: sender_jid},
           signal: %{
             identity_key: bob_identity,
             registration_id: 12_001,
@@ -720,7 +723,6 @@ defmodule ExWapp.WhatsmeowParityTest do
       prekey: %{id: prekey_id, public: bob_one_time_prekey.public}
     }
 
-    sender_jid = "15550001111@s.whatsapp.net"
     group_jid = "333333333@g.us"
 
     history_sync_payload =

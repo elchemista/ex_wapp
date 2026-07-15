@@ -79,16 +79,7 @@ defmodule ExWapp.Message.Handler.Inbound do
     store = Map.get(state, :store)
 
     content
-    |> Enum.flat_map(fn
-      %Node{attrs: attrs} when is_map(attrs) ->
-        attrs
-        |> Map.values()
-        |> Enum.map(&Common.normalize_jid_with_device/1)
-        |> Enum.filter(&String.contains?(&1, "@"))
-
-      _ ->
-        []
-    end)
+    |> Enum.flat_map(&notification_device_jids/1)
     |> Enum.uniq()
     |> Enum.each(&DeviceCache.persist_observed_device(store, &1))
 
@@ -96,6 +87,21 @@ defmodule ExWapp.Message.Handler.Inbound do
   end
 
   def persist_notification_devices(_state, _content), do: :ok
+
+  defp notification_device_jids(%Node{attrs: attrs, content: content}) do
+    current =
+      (attrs || %{})
+      |> Map.values()
+      |> Enum.map(&Common.normalize_jid_with_device/1)
+      |> Enum.filter(&String.contains?(&1, "@"))
+
+    nested =
+      if is_list(content), do: Enum.flat_map(content, &notification_device_jids/1), else: []
+
+    current ++ nested
+  end
+
+  defp notification_device_jids(_node), do: []
 
   @spec maybe_decrypt_message(map(), map(), term(), term(), map()) :: {map(), map()}
   defp maybe_decrypt_message(

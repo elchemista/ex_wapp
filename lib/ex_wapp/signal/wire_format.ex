@@ -166,18 +166,16 @@ defmodule ExWapp.Signal.WireFormat do
   defp unpad_pkcs7(padded) when is_binary(padded) and byte_size(padded) > 0 do
     padding_len = :binary.last(padded)
 
-    cond do
-      padding_len == 0 or padding_len > 16 or padding_len > byte_size(padded) ->
+    if padding_len == 0 or padding_len > 16 or padding_len > byte_size(padded) do
+      {:error, :invalid_padding}
+    else
+      padding = binary_part(padded, byte_size(padded) - padding_len, padding_len)
+
+      if padding == :binary.copy(<<padding_len>>, padding_len) do
+        {:ok, binary_part(padded, 0, byte_size(padded) - padding_len)}
+      else
         {:error, :invalid_padding}
-
-      true ->
-        padding = binary_part(padded, byte_size(padded) - padding_len, padding_len)
-
-        if padding == :binary.copy(<<padding_len>>, padding_len) do
-          {:ok, binary_part(padded, 0, byte_size(padded) - padding_len)}
-        else
-          {:error, :invalid_padding}
-        end
+      end
     end
   end
 

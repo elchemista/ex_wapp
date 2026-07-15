@@ -104,6 +104,7 @@ defmodule ExWapp.Config do
       },
       protocol: %{
         strict_mode: false,
+        client_mode: :web,
         client_version: @default_client_version,
         post_auth_digest_enabled: false,
         pairing_device_props: %{

@@ -1,0 +1,21 @@
+# Encoded with node_modules/libsignal WhisperTextProtocol.
+%{
+  whisper: %{
+    encoded:
+      "0a2109231c6dbe302f21dee3a9506842b6e442030c5caeb3aaa57d3969de3555e1c4b1100518032230b5def9c4fd712435ee0a997c8db01142dbf01fa8a18924713fbc2c9064ac50eb05ceaaa4a7676cd9ce1c8949ab17e841",
+    ratchet_key: "09231c6dbe302f21dee3a9506842b6e442030c5caeb3aaa57d3969de3555e1c4b1",
+    counter: 5,
+    previous_counter: 3,
+    ciphertext:
+      "b5def9c4fd712435ee0a997c8db01142dbf01fa8a18924713fbc2c9064ac50eb05ceaaa4a7676cd9ce1c8949ab17e841"
+  },
+  prekey: %{
+    encoded:
+      "08d2091221ac34f969884ff1a5aa816e2f9cb7d7b04fb51668f4f17c32c097def8310cc00f0f1a21eda4e7b1f3bf3c1158dfdbbc4d2e4470f8c02eff2002596db530b37cff5fe3f5bc22590a2109231c6dbe302f21dee3a9506842b6e442030c5caeb3aaa57d3969de3555e1c4b1100518032230b5def9c4fd712435ee0a997c8db01142dbf01fa8a18924713fbc2c9064ac50eb05ceaaa4a7676cd9ce1c8949ab17e841288f4e3007",
+    prekey_id: 1234,
+    base_key: "ac34f969884ff1a5aa816e2f9cb7d7b04fb51668f4f17c32c097def8310cc00f0f",
+    identity_key: "eda4e7b1f3bf3c1158dfdbbc4d2e4470f8c02eff2002596db530b37cff5fe3f5bc",
+    registration_id: 9999,
+    signed_prekey_id: 7
+  }
+}

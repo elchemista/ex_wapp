@@ -12,7 +12,7 @@ defmodule ExWapp.Message.Handler.Receipt do
   alias ExWapp.Message.Handler.{Ack, Common}
 
   @spec handle_receipt(Node.t(), pid(), map()) :: {:ok, map()} | {:ok, map(), [term()]}
-  def handle_receipt(%Node{attrs: attrs, content: content}, session, state) do
+  def handle_receipt(%Node{attrs: attrs, content: content} = node, session, state) do
     from_raw = Map.get(attrs, "from", "")
     from = Common.normalize_jid(from_raw)
     id = Map.get(attrs, "id", "")
@@ -22,15 +22,44 @@ defmodule ExWapp.Message.Handler.Receipt do
 
     retry_info = extract_retry_info(content)
     target = Common.chat_target(session, state)
-    status = receipt_status(type)
 
     log_receipt(type, retry_info, from, id)
-    maybe_update_receipt_status(target, from, id, status)
+
+    node
+    |> parse_receipts()
+    |> Enum.each(fn receipt ->
+      Enum.each(receipt.message_ids, fn message_id ->
+        maybe_update_receipt_status(target, receipt.from, message_id, receipt.status)
+      end)
+    end)
 
     actions = receipt_actions(type, from, id)
     ack_actions = receipt_ack_actions(id, from_raw, participant, recipient, type)
 
     {:ok, state, actions ++ ack_actions}
+  end
+
+  @doc "Expands a receipt stanza into one entry per normal or grouped participant receipt."
+  @spec parse_receipts(Node.t()) :: [map()]
+  def parse_receipts(%Node{attrs: attrs, content: content}) do
+    type = Map.get(attrs, "type", "delivery")
+    status = receipt_status(type)
+    from = Common.normalize_jid(Map.get(attrs, "from", ""))
+    grouped = child_nodes(content, "participants")
+
+    if grouped == [] do
+      [
+        %{
+          message_ids: normal_message_ids(attrs, content),
+          from: from,
+          participant: normalize_optional_jid(Map.get(attrs, "participant")),
+          status: status,
+          timestamp: receipt_timestamp(Map.get(attrs, "t"))
+        }
+      ]
+    else
+      grouped_receipts(grouped, from, status)
+    end
   end
 
   @spec handle_ack(Node.t(), pid(), map()) :: {:ok, map()}
@@ -74,6 +103,94 @@ defmodule ExWapp.Message.Handler.Receipt do
   end
 
   defp extract_retry_info(_), do: nil
+
+  defp grouped_receipts(groups, from, status) do
+    Enum.flat_map(groups, &grouped_receipt(&1, from, status))
+  end
+
+  defp grouped_receipt(%Node{attrs: attrs, content: users}, from, status) do
+    case non_empty_binary(Map.get(attrs, "key")) do
+      nil ->
+        []
+
+      message_id ->
+        users
+        |> child_nodes("user")
+        |> Enum.flat_map(&participant_receipt(&1, message_id, from, status))
+    end
+  end
+
+  defp grouped_receipt(_node, _from, _status), do: []
+
+  defp participant_receipt(%Node{attrs: attrs}, message_id, from, status) do
+    case normalize_optional_jid(Map.get(attrs, "jid")) do
+      nil ->
+        []
+
+      participant ->
+        [
+          %{
+            message_ids: [message_id],
+            from: from,
+            participant: participant,
+            status: status,
+            timestamp: receipt_timestamp(Map.get(attrs, "t"))
+          }
+        ]
+    end
+  end
+
+  defp normal_message_ids(attrs, content) do
+    primary = non_empty_binary(Map.get(attrs, "id"))
+
+    batched =
+      content
+      |> child_nodes("list")
+      |> Enum.flat_map(fn %Node{content: items} ->
+        items
+        |> child_nodes("item")
+        |> Enum.map(fn %Node{attrs: item_attrs} ->
+          non_empty_binary(Map.get(item_attrs, "id"))
+        end)
+      end)
+
+    [primary | batched]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp child_nodes(content, tag) when is_list(content) do
+    Enum.filter(content, &match?(%Node{tag: ^tag}, &1))
+  end
+
+  defp child_nodes(_content, _tag), do: []
+
+  defp normalize_optional_jid(value) do
+    case Common.normalize_jid(value) do
+      "" -> nil
+      jid -> if(String.contains?(jid, "@"), do: jid, else: nil)
+    end
+  end
+
+  defp non_empty_binary(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp non_empty_binary(_value), do: nil
+
+  defp receipt_timestamp(value) when is_integer(value) and value >= 0, do: value
+
+  defp receipt_timestamp(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {timestamp, ""} when timestamp >= 0 -> timestamp
+      _ -> nil
+    end
+  end
+
+  defp receipt_timestamp(_value), do: nil
 
   defp log_receipt("retry", %{count: count, error: error}, from, id) do
     Logger.warning(
@@ -121,7 +238,9 @@ defmodule ExWapp.Message.Handler.Receipt do
     do: ExWapp.Chat.update_message_status(target, jid, id, status)
 
   defp receipt_status("read"), do: :read
+  defp receipt_status("read-self"), do: :read
   defp receipt_status("played"), do: :read
+  defp receipt_status("sender"), do: :sent
   defp receipt_status("retry"), do: :failed
   defp receipt_status(_), do: :delivered
 end

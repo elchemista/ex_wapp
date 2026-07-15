@@ -94,7 +94,7 @@ defmodule ExWapp.Signal.Keys do
       {:ok, ed_public} ->
         <<ed_prefix::binary-size(31), ed_last>> = ed_public
         adjusted_public = ed_prefix <> <<bor(ed_last, sign_bit)>>
-        Ed25519.valid_signature?(cleared_signature, message, adjusted_public)
+        valid_ed25519_signature?(cleared_signature, message, adjusted_public)
 
       :error ->
         false
@@ -102,6 +102,12 @@ defmodule ExWapp.Signal.Keys do
   end
 
   def verify_message(_identity_public, _message, _signature), do: false
+
+  defp valid_ed25519_signature?(signature, message, public_key) do
+    Ed25519.valid_signature?(signature, message, public_key)
+  rescue
+    _error -> false
+  end
 
   defp sign_curve25519(private_key, message, random) do
     priv_scalar = private_key |> :binary.decode_unsigned(:little)

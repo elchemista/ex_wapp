@@ -14,6 +14,7 @@ defmodule ExWapp.Noise.Engine do
   require Logger
 
   @prologue "Noise_XX_25519_AESGCM_SHA256\x00\x00\x00\x00"
+  @max_transport_counter 0xFFFF_FFFF
 
   defmodule State do
     @moduledoc """
@@ -86,8 +87,9 @@ defmodule ExWapp.Noise.Engine do
   end
 
   def encrypt({write_cipher, read_cipher, hash}, plaintext, _counter) do
-    {ciphertext, new_write_cipher} = encrypt_payload(write_cipher, hash, plaintext)
-    {:ok, {new_write_cipher, read_cipher, hash}, ciphertext}
+    with {:ok, ciphertext, new_write_cipher} <- encrypt_payload(write_cipher, hash, plaintext) do
+      {:ok, {new_write_cipher, read_cipher, hash}, ciphertext}
+    end
   end
 
   def decrypt({write_cipher, read_cipher, hash}, ciphertext, _counter) do
@@ -174,38 +176,42 @@ defmodule ExWapp.Noise.Engine do
     HandshakeMessage.encode!(msg) |> IO.iodata_to_binary()
   end
 
+  @doc false
+  @spec transport_nonce(non_neg_integer()) :: {:ok, binary()} | {:error, :counter_exhausted}
+  def transport_nonce(counter)
+      when is_integer(counter) and counter >= 0 and counter <= @max_transport_counter,
+      do: {:ok, <<0::size(64), counter::big-unsigned-32>>}
+
+  def transport_nonce(_counter), do: {:error, :counter_exhausted}
+
   defp encrypt_payload(%{key: key, counter: counter} = cipher, _hash, plaintext) do
-    iv = generate_iv(counter)
+    with {:ok, iv} <- transport_nonce(counter) do
+      {cipher_body, tag} =
+        :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, plaintext, <<>>, true)
 
-    {cipher_body, tag} =
-      :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, plaintext, <<>>, true)
-
-    payload = cipher_body <> tag
-    {payload, %{cipher | counter: counter + 1}}
-  end
-
-  defp decrypt_payload(%{key: key, counter: counter} = cipher, _hash, ciphertext) do
-    tag_len = 16
-
-    if byte_size(ciphertext) < tag_len do
-      {:error, :decrypt_failed}
-    else
-      body_len = byte_size(ciphertext) - tag_len
-      <<body::binary-size(^body_len), tag::binary-size(^tag_len)>> = ciphertext
-
-      iv = generate_iv(counter)
-
-      case :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, body, <<>>, tag, false) do
-        plaintext when is_binary(plaintext) ->
-          {:ok, plaintext, %{cipher | counter: counter + 1}}
-
-        :error ->
-          {:error, :decrypt_failed}
-      end
+      payload = cipher_body <> tag
+      {:ok, payload, %{cipher | counter: counter + 1}}
     end
   end
 
-  defp generate_iv(counter) do
-    <<0::size(64), counter::big-unsigned-32>>
+  defp decrypt_payload(_cipher, _hash, ciphertext) when byte_size(ciphertext) < 16 do
+    {:error, :ciphertext_too_short}
+  end
+
+  defp decrypt_payload(%{key: key, counter: counter} = cipher, _hash, ciphertext) do
+    body_len = byte_size(ciphertext) - 16
+    <<body::binary-size(^body_len), tag::binary-size(16)>> = ciphertext
+
+    with {:ok, iv} <- transport_nonce(counter),
+         {:ok, plaintext} <- decrypt_transport_payload(key, iv, body, tag) do
+      {:ok, plaintext, %{cipher | counter: counter + 1}}
+    end
+  end
+
+  defp decrypt_transport_payload(key, iv, body, tag) do
+    case :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, body, <<>>, tag, false) do
+      plaintext when is_binary(plaintext) -> {:ok, plaintext}
+      :error -> {:error, :decrypt_failed}
+    end
   end
 end

@@ -122,18 +122,20 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
          true
        )
        when is_binary(payload) do
-    with {:ok, keys} <- extract_app_state_keys(payload) do
-      case store_app_state_keys(state, keys) do
-        {:ok, action} when action in [:updated, :unchanged] ->
-          maybe_trigger_initial_app_state_sync(session)
+    case extract_app_state_keys(payload) do
+      {:ok, keys} ->
+        case store_app_state_keys(state, keys) do
+          {:ok, action} when action in [:updated, :unchanged] ->
+            maybe_trigger_initial_app_state_sync(session)
 
-        _ ->
-          :ok
-      end
+          _ ->
+            :ok
+        end
 
-      state
-    else
-      _ -> state
+        state
+
+      _ ->
+        state
     end
   rescue
     error ->

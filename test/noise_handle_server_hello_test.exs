@@ -70,6 +70,34 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
 
       assert_encryption_round_trip(new_noise, server_keys)
     end
+
+    test "returns a structured error for a corrupt authenticated ServerHello" do
+      store = store_fixture()
+
+      {:ok, client_hello, noise} =
+        Noise.init(store: store, certificate_verifier: fn _, _ -> :ok end)
+
+      {:ok,
+       %HandshakeMessage{clientHello: %HandshakeMessage.ClientHello{ephemeral: client_ephemeral}}} =
+        HandshakeMessage.decode(client_hello)
+
+      server = build_server_hello(client_ephemeral)
+      {:ok, %HandshakeMessage{serverHello: hello}} = HandshakeMessage.decode(server.payload)
+
+      corrupt_hello = %{hello | static: flip_last_byte(hello.static)}
+
+      corrupt_payload =
+        %HandshakeMessage{serverHello: corrupt_hello}
+        |> HandshakeMessage.encode!()
+        |> IO.iodata_to_binary()
+
+      assert {:error, {:handshake_client_finish, :decrypt_failed}} =
+               Noise.handle_server_hello(noise, corrupt_payload)
+
+      assert noise.phase == :handshake
+      assert noise.tx_counter == 0
+      assert noise.rx_counter == 0
+    end
   end
 
   defp build_server_hello(client_ephemeral) do
@@ -185,6 +213,12 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
   defp nonce(counter), do: <<0::unsigned-size(64), counter::unsigned-size(32)>>
 
   defp random_bytes(size), do: :crypto.strong_rand_bytes(size)
+
+  defp flip_last_byte(binary) do
+    size = byte_size(binary) - 1
+    <<prefix::binary-size(^size), last>> = binary
+    prefix <> <<Bitwise.bxor(last, 1)>>
+  end
 
   defp store_fixture do
     tmp_dir = Path.join(System.tmp_dir!(), "ex_wapp_tests")

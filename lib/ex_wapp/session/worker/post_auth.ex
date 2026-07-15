@@ -258,6 +258,48 @@ defmodule ExWapp.Session.Worker.PostAuth do
   end
 
   @doc """
+  Refills the server prekey pool after an `encrypt` inventory notification.
+
+  The upload restores the pool toward the configured initial size instead of
+  adding only a tiny fixed batch. An already in-flight upload is left alone.
+  """
+  @spec refill_from_notification(map(), non_neg_integer()) :: {map(), list()}
+  def refill_from_notification(%{prekey_upload_iq_id: request_id} = state, _server_count)
+      when is_binary(request_id),
+      do: {state, []}
+
+  def refill_from_notification(state, server_count)
+      when is_integer(server_count) and server_count >= 0 do
+    runtime_cfg = Map.get(state, :runtime_cfg) || %{}
+    initial_count = Config.get(runtime_cfg, [:prekeys, :initial_prekey_count], 812)
+    refill_count = Config.get(runtime_cfg, [:prekeys, :refill_prekey_count], 50)
+    upload_count = max(refill_count, initial_count - server_count)
+
+    case ExWapp.Prekeys.build_prekey_upload(state.store,
+           runtime_cfg: runtime_cfg,
+           count: upload_count
+         ) do
+      {:ok, prekey_node, prekeys} ->
+        request_id = Map.get(prekey_node.attrs, "id")
+
+        next_state =
+          state
+          |> Map.put(:prekey_upload_iq_id, request_id)
+          |> Map.put(:pending_prekey_upload, prekeys)
+
+        Logger.debug(
+          "[PREKEYS] Refilling #{length(prekeys)} keys after server inventory=#{server_count}"
+        )
+
+        {next_state, [{:send_node, prekey_node}]}
+
+      {:error, reason} ->
+        Logger.warning("[PREKEYS] Notification refill failed: #{inspect(reason)}")
+        {state, []}
+    end
+  end
+
+  @doc """
   Handles the response to the digest query and finalizes post-auth.
   """
   @spec handle_digest_response(Binary.Node.t(), String.t(), map(), (-> Binary.Node.t())) ::

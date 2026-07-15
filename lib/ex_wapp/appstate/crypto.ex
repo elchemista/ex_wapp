@@ -130,6 +130,18 @@ defmodule ExWapp.AppState.Crypto do
     :crypto.mac(:hmac, :sha256, patch_mac_key, data)
   end
 
+  @doc false
+  @spec secure_compare(binary(), binary()) :: boolean()
+  def secure_compare(left, right)
+      when is_binary(left) and is_binary(right) and byte_size(left) == byte_size(right) do
+    left
+    |> :crypto.exor(right)
+    |> :binary.bin_to_list()
+    |> Enum.reduce(0, &Bitwise.bor/2) == 0
+  end
+
+  def secure_compare(_left, _right), do: false
+
   # HKDF-SHA256 extract-then-expand
   defp hkdf_sha256(ikm, <<>>, info, length),
     do: hkdf_sha256(ikm, :binary.copy(<<0>>, 32), info, length)

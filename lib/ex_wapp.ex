@@ -171,6 +171,17 @@ defmodule ExWapp do
   def connect(server), do: Session.connect(server)
 
   @doc """
+  Requests phone-number pairing instead of displaying a QR code.
+
+  Invoke it after `connect/1` when the transport is ready for pairing. The
+  returned code is entered in WhatsApp under **Link a device with phone
+  number**.
+  """
+  @spec request_pairing_code(GenServer.server(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  defdelegate request_pairing_code(session, phone, opts \\ []), to: Session
+
+  @doc """
   Starts pairing for a high-level client.
   """
   @spec pair(Client.t()) :: {:ok, Client.t(), term()} | {:error, Error.t(), Client.t()}
@@ -182,6 +193,7 @@ defmodule ExWapp do
   Subscribe to this stream after calling `connect/1` to receive:
 
     * `{:code, data}` - New QR code payload to display (codes expire periodically)
+    * `{:pairing_code, code}` - Phone-number pairing code requested through `request_pairing_code/3`
     * `:success` - Successfully paired with phone
     * `{:error, reason}` - Pairing failed
 
@@ -595,6 +607,12 @@ defmodule ExWapp do
     do: Client.API.download_media(client, ref, opts)
 
   def download_media(session, ref, opts), do: Session.download_media(session, ref, opts)
+
+  @doc "Requests a fresh direct path for locally stored media by message ID."
+  @spec retry_media(GenServer.server(), String.t(), keyword()) ::
+          {:ok, ExWapp.Media.Ref.t()} | {:error, term()}
+  def retry_media(session, message_id, opts \\ []),
+    do: Session.retry_media(session, message_id, opts)
 
   @doc """
   Handles an inbound payload through a high-level client transport.

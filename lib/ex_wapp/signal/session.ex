@@ -8,6 +8,7 @@ defmodule ExWapp.Signal.Session do
   - AES-256-CBC + HMAC-SHA256 message encryption (proper Signal format)
   """
 
+  alias ExWapp.Signal.Crypto
   alias ExWapp.Signal.Keys
   alias ExWapp.Signal.WireFormat
 
@@ -22,12 +23,18 @@ defmodule ExWapp.Signal.Session do
   # For message key derivation
   @hkdf_info_message_keys "WhisperMessageKeys"
 
+  # libsignal bounds how far a receiver may advance a chain for one message.
+  # Keeping the same bound prevents untrusted counters from causing unbounded work.
+  @max_skipped_messages 2000
+  @max_archived_receiving_chains 5
+
   @type session_state :: %{
           remote_identity_key: binary(),
           local_identity_key: %{public: binary(), private: binary()},
           root_key: binary(),
           sending_chain: chain_state() | nil,
           receiving_chain: chain_state() | nil,
+          receiving_chains: %{optional(binary()) => chain_state()},
           previous_counter: non_neg_integer(),
           ratchet_key: %{public: binary(), private: binary()} | nil,
           remote_ratchet_key: binary() | nil
@@ -126,6 +133,7 @@ defmodule ExWapp.Signal.Session do
         root_key: sending_root_key,
         sending_chain: sending_chain,
         receiving_chain: receiving_chain,
+        receiving_chains: %{},
         previous_counter: 0,
         # The NEW ratchet key, not ephemeral
         ratchet_key: sending_ratchet_key,
@@ -215,8 +223,7 @@ defmodule ExWapp.Signal.Session do
   def decrypt(session, ciphertext) do
     case parse_signal_message(ciphertext) do
       {:ok, parsed} ->
-        session = maybe_ratchet(session, parsed.ratchet_key)
-        decrypt_inner_message(session, parsed)
+        decrypt_parsed_message(session, parsed)
 
       {:error, reason} ->
         Logger.warning("[SIGNAL] Failed to parse SignalMessage: #{inspect(reason)}")
@@ -315,45 +322,92 @@ defmodule ExWapp.Signal.Session do
     end
   end
 
-  defp maybe_ratchet(session, ratchet_key) do
-    if ratchet_key != session.remote_ratchet_key do
-      Logger.debug("[SIGNAL] Performing DH ratchet step")
-      perform_dh_ratchet(session, ratchet_key)
-    else
-      session
+  defp decrypt_parsed_message(session, parsed) do
+    case select_receiving_chain(
+           session,
+           parsed.ratchet_key,
+           parsed.previous_counter
+         ) do
+      {:active, prepared_session} ->
+        decrypt_inner_message(prepared_session, parsed)
+
+      {:archived, ratchet_key, chain, prepared_session} ->
+        decrypt_archived_message(prepared_session, ratchet_key, chain, parsed)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp select_receiving_chain(session, ratchet_key, previous_counter) do
+    archived_chains = Map.get(session, :receiving_chains, %{})
+
+    cond do
+      ratchet_key == session.remote_ratchet_key ->
+        {:active, ensure_receiving_chains(session)}
+
+      chain = Map.get(archived_chains, ratchet_key) ->
+        {:archived, ratchet_key, chain, ensure_receiving_chains(session)}
+
+      true ->
+        Logger.debug("[SIGNAL] Performing DH ratchet step")
+
+        case perform_dh_ratchet(session, ratchet_key, previous_counter) do
+          {:ok, updated_session} -> {:active, updated_session}
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
 
   defp decrypt_inner_message(session, parsed) do
-    with {:ok, message_keys, updated_chain} <-
-           get_or_derive_message_key(session.receiving_chain, parsed.counter) do
-      mac_valid =
-        WireFormat.valid_signal_mac?(
-          parsed.mac,
-          message_keys.mac_key,
-          session.remote_identity_key,
-          session.local_identity_key.public,
-          parsed.version_and_proto
-        )
-
-      Logger.debug("[SIGNAL] MAC verification: #{mac_valid}")
-
-      if mac_valid do
-        case WireFormat.decrypt_aes_cbc(
-               parsed.ciphertext,
-               message_keys.cipher_key,
-               message_keys.iv
-             ) do
-          {:ok, plaintext} ->
-            {:ok, plaintext, %{session | receiving_chain: updated_chain}}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-      else
-        {:error, :invalid_mac}
-      end
+    with {:ok, plaintext, updated_chain} <-
+           decrypt_with_chain(session, session.receiving_chain, parsed) do
+      {:ok, plaintext, %{session | receiving_chain: updated_chain}}
     end
+  end
+
+  defp decrypt_archived_message(session, ratchet_key, chain, parsed) do
+    with {:ok, plaintext, updated_chain} <- decrypt_with_chain(session, chain, parsed) do
+      archived_chains = Map.get(session, :receiving_chains, %{})
+
+      archived_chains =
+        if map_size(updated_chain.message_keys) == 0 do
+          Map.delete(archived_chains, ratchet_key)
+        else
+          Map.put(archived_chains, ratchet_key, updated_chain)
+        end
+
+      {:ok, plaintext, Map.put(session, :receiving_chains, archived_chains)}
+    end
+  end
+
+  defp decrypt_with_chain(session, chain, parsed) do
+    with {:ok, message_keys, updated_chain} <-
+           get_or_derive_message_key(chain, parsed.counter),
+         :ok <- validate_message_mac(session, parsed, message_keys),
+         {:ok, plaintext} <-
+           WireFormat.decrypt_aes_cbc(
+             parsed.ciphertext,
+             message_keys.cipher_key,
+             message_keys.iv
+           ) do
+      {:ok, plaintext, updated_chain}
+    end
+  end
+
+  defp validate_message_mac(session, parsed, message_keys) do
+    mac_valid =
+      WireFormat.valid_signal_mac?(
+        parsed.mac,
+        message_keys.mac_key,
+        session.remote_identity_key,
+        session.local_identity_key.public,
+        parsed.version_and_proto
+      )
+
+    Logger.debug("[SIGNAL] MAC verification: #{mac_valid}")
+
+    if mac_valid, do: :ok, else: {:error, :invalid_mac}
   end
 
   defp x3dh_and_decrypt(
@@ -457,6 +511,7 @@ defmodule ExWapp.Signal.Session do
       root_key: root_key,
       sending_chain: sending_chain,
       receiving_chain: nil,
+      receiving_chains: %{},
       previous_counter: 0,
       # Bob side starts from signed prekey as current ratchet private key.
       ratchet_key: %{public: signed_prekey.public, private: signed_prekey.private},
@@ -492,7 +547,13 @@ defmodule ExWapp.Signal.Session do
     end)
   end
 
-  defp perform_dh_ratchet(session, new_remote_ratchet_key) do
+  defp perform_dh_ratchet(session, new_remote_ratchet_key, remote_previous_counter) do
+    with {:ok, session} <- archive_receiving_chain(session, remote_previous_counter) do
+      do_perform_dh_ratchet(session, new_remote_ratchet_key)
+    end
+  end
+
+  defp do_perform_dh_ratchet(session, new_remote_ratchet_key) do
     # Save previous sending chain counter
     previous_counter =
       if session.sending_chain do
@@ -512,15 +573,95 @@ defmodule ExWapp.Signal.Session do
     dh_send = x25519_shared_secret(new_ratchet_key.private, new_remote_ratchet_key)
     {root_key2, send_chain_key} = hkdf_derive_ratchet(dh_send, root_key1)
 
-    %{
-      session
-      | root_key: root_key2,
-        sending_chain: %{key: send_chain_key, counter: 0, message_keys: %{}},
-        receiving_chain: %{key: recv_chain_key, counter: 0, message_keys: %{}},
-        previous_counter: previous_counter,
-        ratchet_key: new_ratchet_key,
-        remote_ratchet_key: new_remote_ratchet_key
+    {:ok,
+     %{
+       session
+       | root_key: root_key2,
+         sending_chain: %{key: send_chain_key, counter: 0, message_keys: %{}},
+         receiving_chain: %{key: recv_chain_key, counter: 0, message_keys: %{}},
+         previous_counter: previous_counter,
+         ratchet_key: new_ratchet_key,
+         remote_ratchet_key: new_remote_ratchet_key
+     }}
+  end
+
+  defp archive_receiving_chain(session, remote_previous_counter) do
+    session = ensure_receiving_chains(session)
+
+    case {session.remote_ratchet_key, session.receiving_chain} do
+      {ratchet_key, chain} when is_binary(ratchet_key) and is_map(chain) ->
+        with {:ok, closed_chain} <- close_receiving_chain(chain, remote_previous_counter) do
+          archived_chains =
+            session.receiving_chains
+            |> maybe_store_closed_chain(ratchet_key, closed_chain)
+            |> prune_archived_receiving_chains()
+
+          {:ok, %{session | receiving_chains: archived_chains}}
+        end
+
+      _ ->
+        {:ok, session}
+    end
+  end
+
+  defp close_receiving_chain(chain, previous_counter)
+       when is_integer(previous_counter) and previous_counter >= 0 do
+    with {:ok, advanced_chain} <- advance_chain_until(chain, previous_counter) do
+      {:ok,
+       advanced_chain
+       |> Map.put(:closed, true)
+       |> Map.put(:archived_at, System.monotonic_time())}
+    end
+  end
+
+  defp close_receiving_chain(_chain, _previous_counter), do: {:error, :invalid_previous_counter}
+
+  defp advance_chain_until(chain, exclusive_counter) do
+    if exclusive_counter > chain.counter + @max_skipped_messages do
+      {:error, :too_many_skipped_messages}
+    else
+      do_advance_chain_until(chain, exclusive_counter)
+    end
+  end
+
+  defp do_advance_chain_until(chain, exclusive_counter)
+       when chain.counter >= exclusive_counter,
+       do: {:ok, chain}
+
+  defp do_advance_chain_until(chain, exclusive_counter) do
+    {chain_key, message_key_seed} = hkdf_derive_chain(chain.key)
+    message_keys = derive_message_keys_from_seed(message_key_seed)
+
+    chain = %{
+      chain
+      | key: chain_key,
+        counter: chain.counter + 1,
+        message_keys: Map.put(chain.message_keys, chain.counter, message_keys)
     }
+
+    do_advance_chain_until(chain, exclusive_counter)
+  end
+
+  defp maybe_store_closed_chain(chains, _ratchet_key, %{message_keys: keys})
+       when map_size(keys) == 0,
+       do: chains
+
+  defp maybe_store_closed_chain(chains, ratchet_key, chain),
+    do: Map.put(chains, ratchet_key, chain)
+
+  defp prune_archived_receiving_chains(chains)
+       when map_size(chains) <= @max_archived_receiving_chains,
+       do: chains
+
+  defp prune_archived_receiving_chains(chains) do
+    {oldest_key, _chain} =
+      Enum.min_by(chains, fn {_key, chain} -> Map.get(chain, :archived_at, 0) end)
+
+    Map.delete(chains, oldest_key)
+  end
+
+  defp ensure_receiving_chains(session) do
+    Map.put_new(session, :receiving_chains, %{})
   end
 
   defp get_or_derive_message_key(nil, _counter), do: {:error, :no_receiving_chain}
@@ -533,6 +674,9 @@ defmodule ExWapp.Signal.Session do
         updated_chain = %{chain | message_keys: Map.delete(chain.message_keys, counter)}
         {:ok, message_key, updated_chain}
 
+      Map.get(chain, :closed, false) ->
+        {:error, :message_key_not_found}
+
       # Counter is in the future - need to advance chain
       counter >= chain.counter ->
         advance_chain_to(chain, counter)
@@ -544,7 +688,7 @@ defmodule ExWapp.Signal.Session do
   end
 
   defp advance_chain_to(chain, target_counter) do
-    if target_counter > chain.counter + 1000 do
+    if target_counter > chain.counter + @max_skipped_messages do
       {:error, :too_many_skipped_messages}
     else
       advance_chain_to_impl(chain, target_counter)
@@ -596,16 +740,7 @@ defmodule ExWapp.Signal.Session do
   end
 
   defp hkdf_derive_with_info(input_key_material, salt, info) do
-    # Extract
-    prk = :crypto.mac(:hmac, :sha256, salt, input_key_material)
-
-    # Expand to 64 bytes for root_key (32) + chain_key (32)
-    okm1 = :crypto.mac(:hmac, :sha256, prk, info <> <<1>>)
-    okm2 = :crypto.mac(:hmac, :sha256, prk, okm1 <> info <> <<2>>)
-
-    root_key = binary_part(okm1, 0, 32)
-    chain_key = binary_part(okm2, 0, 32)
-
+    [root_key, chain_key] = Crypto.derive_secrets(input_key_material, salt, info, 2)
     {root_key, chain_key}
   end
 
@@ -614,8 +749,8 @@ defmodule ExWapp.Signal.Session do
     # Signal Protocol constants (from libsignal-protocol-java):
     # MESSAGE_KEY_SEED = 0x01
     # CHAIN_KEY_SEED = 0x02
-    message_key_seed = :crypto.mac(:hmac, :sha256, chain_key, <<0x01>>)
-    new_chain_key = :crypto.mac(:hmac, :sha256, chain_key, <<0x02>>)
+    message_key_seed = Crypto.hmac_sha256(chain_key, <<0x01>>)
+    new_chain_key = Crypto.hmac_sha256(chain_key, <<0x02>>)
 
     {new_chain_key, message_key_seed}
   end
@@ -638,13 +773,13 @@ defmodule ExWapp.Signal.Session do
   defp derive_message_keys_from_seed(message_key_seed) do
     # Use HKDF to expand message_key_seed into cipher_key, mac_key, iv
     # Total: 32 + 32 + 16 = 80 bytes
-    salt = :binary.copy(<<0>>, 32)
-    prk = :crypto.mac(:hmac, :sha256, salt, message_key_seed)
-
-    # Expand to 80 bytes
-    okm1 = :crypto.mac(:hmac, :sha256, prk, @hkdf_info_message_keys <> <<1>>)
-    okm2 = :crypto.mac(:hmac, :sha256, prk, okm1 <> @hkdf_info_message_keys <> <<2>>)
-    okm3 = :crypto.mac(:hmac, :sha256, prk, okm2 <> @hkdf_info_message_keys <> <<3>>)
+    [okm1, okm2, okm3] =
+      Crypto.derive_secrets(
+        message_key_seed,
+        :binary.copy(<<0>>, 32),
+        @hkdf_info_message_keys,
+        3
+      )
 
     expanded = okm1 <> okm2 <> okm3
 

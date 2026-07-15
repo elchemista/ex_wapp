@@ -8,7 +8,8 @@ defmodule ExWapp.Session do
   alias ExWapp.Session.Worker
 
   @typedoc "Human readable events emitted during the pairing flow."
-  @type qr_event :: {:code, String.t()} | :success | {:error, term()}
+  @type qr_event ::
+          {:code, String.t()} | {:pairing_code, String.t()} | :success | {:error, term()}
 
   @typedoc "Session status"
   @type status :: :idle | :connecting | :handshaking | :connected | :disconnected
@@ -50,6 +51,17 @@ defmodule ExWapp.Session do
 
   @spec unsubscribe_qr(GenServer.server(), reference()) :: :ok
   defdelegate unsubscribe_qr(server, ref), to: Worker
+
+  @doc """
+  Requests an eight-character phone-number pairing code.
+
+  Call this after `connect/1`, once the Noise transport has entered the
+  handshaking state. `:custom_code` may be supplied and must contain exactly
+  eight bytes.
+  """
+  @spec request_pairing_code(GenServer.server(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  defdelegate request_pairing_code(server, phone, opts \\ []), to: Worker
 
   @spec send_text(GenServer.server(), binary(), iodata()) :: :ok | {:error, term()}
   def send_text(server, jid, text) do
@@ -110,6 +122,20 @@ defmodule ExWapp.Session do
           {:ok, ExWapp.Media.Download.t()} | {:error, term()}
   def download_media(server, ref, opts \\ []),
     do: GenServer.call(server, {:download_media, ref, opts}, media_timeout(opts))
+
+  @doc """
+  Asks the sender's phone to re-upload an expired media object.
+
+  The message must still exist in the local message store so its media key and
+  conversation envelope can be authenticated on the wire.
+  """
+  @spec retry_media(GenServer.server(), String.t(), keyword()) ::
+          {:ok, ExWapp.Media.Ref.t()} | {:error, term()}
+  def retry_media(server, message_id, opts \\ []) when is_binary(message_id) do
+    timeout = Keyword.get(opts, :timeout, 30_000)
+    call_timeout = if is_integer(timeout) and timeout > 0, do: timeout + 1_000, else: 31_000
+    GenServer.call(server, {:retry_media, message_id, opts}, call_timeout)
+  end
 
   @spec flush_store(GenServer.server()) :: :ok | {:error, term()}
   def flush_store(server) do

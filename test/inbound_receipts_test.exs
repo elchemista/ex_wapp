@@ -71,10 +71,11 @@ defmodule ExWapp.Message.Handler.Inbound.ReceiptsTest do
     state = %{marker: :unchanged}
 
     for reason <- [:message_key_not_found, :prekey_not_found, :key_unavailable] do
+      message_id = "duplicate-#{reason}"
+
       decrypt_status =
         {:error,
-         {:decrypt_failed_for_payload, "pkmsg",
-          {:decrypt_failed_for_candidate, from, reason}}}
+         {:decrypt_failed_for_payload, "pkmsg", {:decrypt_failed_for_candidate, from, reason}}}
 
       message_data = %{
         encrypted: true,
@@ -85,11 +86,11 @@ defmodule ExWapp.Message.Handler.Inbound.ReceiptsTest do
       assert Receipts.duplicate_decrypt_error?(decrypt_status)
 
       assert {[
-                {:send_receipt, ^from, "duplicate-#{reason}", nil, nil, %{recipient: nil}}
+                {:send_receipt, ^from, ^message_id, nil, nil, %{recipient: nil}}
               ], ^state} =
                Receipts.build_actions(
                  from,
-                 "duplicate-#{reason}",
+                 message_id,
                  nil,
                  %{},
                  message_data,
@@ -103,8 +104,7 @@ defmodule ExWapp.Message.Handler.Inbound.ReceiptsTest do
 
     decrypt_status =
       {:error,
-       {:decrypt_failed_for_payload, "msg",
-        {:decrypt_failed_for_candidate, from, :invalid_mac}}}
+       {:decrypt_failed_for_payload, "msg", {:decrypt_failed_for_candidate, from, :invalid_mac}}}
 
     refute Receipts.duplicate_decrypt_error?(decrypt_status)
 

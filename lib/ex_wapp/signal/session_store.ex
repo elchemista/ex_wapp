@@ -13,6 +13,8 @@ defmodule ExWapp.Signal.SessionStore do
 
   require Logger
 
+  @max_previous_sessions 5
+
   defmodule Ref do
     @moduledoc """
     Reference to an ETS-backed Signal session store.
@@ -482,13 +484,16 @@ defmodule ExWapp.Signal.SessionStore do
   end
 
   defp decrypt_prekey(store, jid, ciphertext, local_identity, local_prekeys) do
-    parsed_message = prekey_message_debug(ciphertext)
-    local_prekeys_meta = local_prekeys_debug(local_identity, local_prekeys)
+    debug = %{
+      payload: prekey_message_debug(ciphertext),
+      local: local_prekeys_debug(local_identity, local_prekeys)
+    }
+
     existing_session? = has_session?(store, jid)
 
     Logger.debug(
       "[SESSION_STORE] PreKey decrypt attempt jid=#{jid} existing_session=#{existing_session?} " <>
-        "payload=#{inspect(parsed_message)} local=#{inspect(local_prekeys_meta)}"
+        "payload=#{inspect(debug.payload)} local=#{inspect(debug.local)}"
     )
 
     case try_existing_session_for_prekey(store, jid, ciphertext) do
@@ -499,19 +504,31 @@ defmodule ExWapp.Signal.SessionStore do
         {:error, reason}
 
       :try_fresh ->
-        case Signal.decrypt_prekey_message(ciphertext, local_identity, local_prekeys) do
-          {:ok, plaintext, session} ->
-            Logger.debug("[SESSION_STORE] PreKey decrypt succeeded (fresh) for #{jid}")
-            {:ok, plaintext, put_session(store, jid, session)}
+        decrypt_fresh_prekey(store, jid, ciphertext, local_identity, local_prekeys, debug)
+    end
+  end
 
-          {:error, reason} ->
-            Logger.error(
-              "[SESSION_STORE] PreKey decrypt failed for #{jid}: #{inspect(reason)} " <>
-                "payload=#{inspect(parsed_message)} local=#{inspect(local_prekeys_meta)}"
-            )
+  defp decrypt_fresh_prekey(store, jid, ciphertext, local_identity, local_prekeys, debug) do
+    case Signal.decrypt_prekey_message(ciphertext, local_identity, local_prekeys) do
+      {:ok, plaintext, session} ->
+        Logger.debug("[SESSION_STORE] PreKey decrypt succeeded (fresh) for #{jid}")
+        session = retain_current_session(store, jid, session)
+        {:ok, plaintext, put_session(store, jid, session)}
 
-            {:error, reason}
-        end
+      {:error, reason} ->
+        Logger.error(
+          "[SESSION_STORE] PreKey decrypt failed for #{jid}: #{inspect(reason)} " <>
+            "payload=#{inspect(debug.payload)} local=#{inspect(debug.local)}"
+        )
+
+        {:error, reason}
+    end
+  end
+
+  defp retain_current_session(store, jid, session) do
+    case get_session(store, jid) do
+      {:ok, previous_session} -> retain_previous_session(session, previous_session)
+      :not_found -> session
     end
   end
 
@@ -554,19 +571,37 @@ defmodule ExWapp.Signal.SessionStore do
   defp decrypt_whisper(store, jid, ciphertext) do
     case get_session(store, jid) do
       {:ok, session} ->
-        case Signal.decrypt(session, ciphertext) do
-          {:ok, plaintext, updated_session} ->
-            {:ok, plaintext, update_session(store, jid, updated_session)}
-
-          {:error, reason} ->
-            Logger.error("[SESSION_STORE] Whisper decrypt failed for #{jid}: #{inspect(reason)}")
-
-            {:error, reason}
-        end
+        decrypt_whisper_session(store, jid, ciphertext, session)
 
       :not_found ->
         Logger.error("[SESSION_STORE] No session found for #{jid} (whisper message)")
         {:error, :no_session}
+    end
+  end
+
+  defp decrypt_whisper_session(store, jid, ciphertext, session) do
+    case Signal.decrypt(session, ciphertext) do
+      {:ok, plaintext, updated_session} ->
+        {:ok, plaintext, update_session(store, jid, updated_session)}
+
+      {:error, current_reason} ->
+        decrypt_whisper_previous(store, jid, ciphertext, session, current_reason)
+    end
+  end
+
+  defp decrypt_whisper_previous(store, jid, ciphertext, session, current_reason) do
+    case decrypt_with_previous_sessions(session, ciphertext) do
+      {:ok, plaintext, updated_session} ->
+        Logger.debug(
+          "[SESSION_STORE] Whisper decrypt succeeded on a previous base-key session for #{jid}"
+        )
+
+        {:ok, plaintext, update_session(store, jid, updated_session)}
+
+      {:error, previous_reasons} ->
+        reason = preferred_decrypt_error(current_reason, previous_reasons)
+        Logger.error("[SESSION_STORE] Whisper decrypt failed for #{jid}: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 
@@ -593,12 +628,80 @@ defmodule ExWapp.Signal.SessionStore do
       {:ok, session, base_key} ->
         Logger.debug("[SESSION_STORE] Created session using #{Signal.get_impl()} implementation")
 
+        session =
+          case get_session(store, jid) do
+            {:ok, previous_session} -> retain_previous_session(session, previous_session)
+            :not_found -> session
+          end
+
         updated_store = put_session(store, jid, session)
         {:ok, session, base_key, updated_store}
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp decrypt_with_previous_sessions(session, ciphertext) do
+    previous_sessions = Map.get(session, :previous_sessions, [])
+
+    previous_sessions
+    |> Enum.with_index()
+    |> Enum.reduce_while({:error, []}, fn {previous_session, index}, {:error, reasons} ->
+      case Signal.decrypt(previous_session, ciphertext) do
+        {:ok, plaintext, updated_previous_session} ->
+          updated_previous_sessions =
+            List.replace_at(
+              previous_sessions,
+              index,
+              strip_previous_sessions(updated_previous_session)
+            )
+
+          {:halt,
+           {:ok, plaintext, Map.put(session, :previous_sessions, updated_previous_sessions)}}
+
+        {:error, reason} ->
+          {:cont, {:error, [reason | reasons]}}
+      end
+    end)
+  end
+
+  defp preferred_decrypt_error(current_reason, previous_reasons) do
+    Enum.find([current_reason | previous_reasons], &duplicate_key_error?/1) || current_reason
+  end
+
+  defp duplicate_key_error?(reason),
+    do: reason in [:message_key_not_found, :prekey_not_found, :key_unavailable]
+
+  defp retain_previous_session(new_session, previous_session) do
+    if same_remote_identity?(new_session, previous_session) do
+      previous_sessions =
+        [
+          strip_previous_sessions(previous_session)
+          | Map.get(previous_session, :previous_sessions, [])
+        ]
+        |> Enum.uniq_by(&session_fingerprint/1)
+        |> Enum.take(@max_previous_sessions)
+
+      Map.put(new_session, :previous_sessions, previous_sessions)
+    else
+      new_session
+    end
+  end
+
+  defp same_remote_identity?(left, right) do
+    left_identity = Map.get(left, :remote_identity_key)
+    is_binary(left_identity) and left_identity == Map.get(right, :remote_identity_key)
+  end
+
+  defp strip_previous_sessions(session), do: Map.delete(session, :previous_sessions)
+
+  defp session_fingerprint(session) do
+    {
+      Map.get(session, :remote_identity_key),
+      Map.get(session, :remote_ratchet_key),
+      get_in(session, [:ratchet_key, :public])
+    }
   end
 
   @spec prekey_message_debug(binary()) :: map()

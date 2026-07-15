@@ -101,6 +101,58 @@ defmodule ExWapp.PairingADVTest do
              })
   end
 
+  test "rejects a tampered HMAC" do
+    %{blob: blob, adv_secret: adv_secret, identity: identity} = valid_adv_fixture(:E2EE)
+    {:ok, container} = ADVSignedDeviceIdentityHMAC.decode(blob)
+    <<first, rest::binary>> = container."HMAC"
+
+    tampered =
+      container
+      |> Map.put(:HMAC, <<Bitwise.bxor(first, 1), rest::binary>>)
+      |> then(&encode_to_binary!(ADVSignedDeviceIdentityHMAC, &1))
+
+    assert {:error, :adv_hmac_mismatch} =
+             ADV.parse_signed_device_identity(tampered, adv_secret, identity)
+  end
+
+  test "rejects a truncated HMAC without falling back to a direct identity" do
+    %{blob: blob, adv_secret: adv_secret, identity: identity} = valid_adv_fixture(:E2EE)
+    {:ok, container} = ADVSignedDeviceIdentityHMAC.decode(blob)
+
+    malformed =
+      container
+      |> Map.put(:HMAC, binary_part(container."HMAC", 0, 10))
+      |> then(&encode_to_binary!(ADVSignedDeviceIdentityHMAC, &1))
+
+    assert {:error, :adv_invalid_hmac} =
+             ADV.parse_signed_device_identity(malformed, adv_secret, identity)
+  end
+
+  test "rejects an HMAC computed under another ADV secret" do
+    %{blob: blob, identity: identity} = valid_adv_fixture(:E2EE)
+
+    assert {:error, :adv_hmac_mismatch} =
+             ADV.parse_signed_device_identity(blob, :crypto.strong_rand_bytes(32), identity)
+  end
+
+  test "signed identity encoding can retain or remove the account key" do
+    %{blob: blob, adv_secret: adv_secret, identity: identity} = valid_adv_fixture(:E2EE)
+    assert {:ok, parsed} = ADV.parse_signed_device_identity(blob, adv_secret, identity)
+
+    assert {:ok, with_key} = ADV.encode_signed_device_identity(parsed.signed)
+    assert {:ok, decoded_with_key} = ADVSignedDeviceIdentity.decode(with_key)
+    assert decoded_with_key.accountSignatureKey == parsed.signed.accountSignatureKey
+
+    assert {:ok, without_key} =
+             ADV.encode_signed_device_identity(parsed.signed, include_signature_key: false)
+
+    assert {:ok, decoded_without_key} = ADVSignedDeviceIdentity.decode(without_key)
+    assert decoded_without_key.accountSignatureKey == nil
+    assert decoded_without_key.details == parsed.signed.details
+    assert decoded_without_key.accountSignature == parsed.signed.accountSignature
+    assert decoded_without_key.deviceSignature == parsed.signed.deviceSignature
+  end
+
   defp do_adv_roundtrip(account_type) do
     # Identity keypair (Curve25519, same as runtime Signal identity)
     %{private: identity_priv, public: identity_pub} = Keys.generate_key_pair()
@@ -189,6 +241,56 @@ defmodule ExWapp.PairingADVTest do
     assert self_signed.details == details_inner
     assert self_signed.accountSignature == account_sig
     assert self_signed.deviceSignature == parsed.device_signature
+  end
+
+  defp valid_adv_fixture(account_type) do
+    %{private: identity_priv, public: identity_pub} = Keys.generate_key_pair()
+    %{private: account_priv, public: account_pub} = Keys.generate_key_pair()
+
+    details =
+      %ADVDeviceIdentity{
+        rawID: 1234,
+        timestamp: 1_725_000_000,
+        keyIndex: 7,
+        accountType: account_type,
+        deviceType: account_type
+      }
+      |> then(&encode_to_binary!(ADVDeviceIdentity, &1))
+
+    signature_prefix =
+      if account_type == :HOSTED,
+        do: @adv_hosted_prefix_device_identity_account_signature,
+        else: @adv_prefix_account_signature
+
+    signed =
+      %ADVSignedDeviceIdentity{
+        details: details,
+        accountSignatureKey: account_pub,
+        accountSignature:
+          Keys.sign_message(account_priv, signature_prefix <> details <> identity_pub)
+      }
+      |> then(&encode_to_binary!(ADVSignedDeviceIdentity, &1))
+
+    adv_secret = :crypto.strong_rand_bytes(32)
+
+    hmac_prefix =
+      if account_type == :HOSTED,
+        do: @adv_hosted_prefix_device_identity_account_signature,
+        else: <<>>
+
+    blob =
+      %ADVSignedDeviceIdentityHMAC{
+        details: signed,
+        HMAC: :crypto.mac(:hmac, :sha256, adv_secret, hmac_prefix <> signed),
+        accountType: account_type
+      }
+      |> then(&encode_to_binary!(ADVSignedDeviceIdentityHMAC, &1))
+
+    %{
+      blob: blob,
+      adv_secret: adv_secret,
+      identity: %{public: identity_pub, private: identity_priv}
+    }
   end
 
   defp do_direct_adv_roundtrip(account_type) do
