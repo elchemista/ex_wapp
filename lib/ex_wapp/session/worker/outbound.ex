@@ -204,7 +204,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     group_jid = strip_device_from_jid(normalize_jid_with_device(group_jid))
     group_fanout_retry? = Keyword.get(opts, :group_fanout_retry, false)
     own_jid = Account.local_account_base_jid(store)
-    message_id = Messages.generate_id(own_jid)
+    message_id = Direct.message_id(opts, own_jid)
     timestamp = System.system_time(:second)
 
     with {:ok, group_info} <- IQRequests.query_group_info(state, group_jid, send_node_fun(state)),

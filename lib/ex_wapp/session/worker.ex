@@ -549,6 +549,10 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_call({:send_text, jid, text}, from, state) do
+    handle_call({:send_text, jid, text, []}, from, state)
+  end
+
+  def handle_call({:send_text, jid, text, opts}, from, state) when is_list(opts) do
     with {:ok, state} <- ensure_send_enabled(state, jid),
          :ok <- ensure_connected_for_send(state),
          {:ok, policy_state} <- enforce_send_policies(state, jid) do
@@ -559,7 +563,7 @@ defmodule ExWapp.Session.Worker do
       case start_send_worker(
              policy_state,
              jid,
-             primary_send_task_fun(session_pid, policy_state, jid, text, :primary, 0),
+             primary_send_task_fun(session_pid, policy_state, jid, text, :primary, 0, opts),
              from
            ) do
         {:ok, worker, mon} ->
@@ -577,6 +581,10 @@ defmodule ExWapp.Session.Worker do
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
+  end
+
+  def handle_call({:send_text, _jid, _text, _opts}, _from, state) do
+    {:reply, {:error, :invalid_send_options}, state}
   end
 
   def handle_call({:send_content, type, jid, body, opts}, from, state)
@@ -1837,7 +1845,7 @@ defmodule ExWapp.Session.Worker do
   # Outbound message dispatch
 
   # Worker function - runs in a separate process so it can wait for IQ responses
-  defp do_send_text_worker(session_pid, state, jid, text, opts \\ []) do
+  defp do_send_text_worker(session_pid, state, jid, text, opts) do
     Outbound.send_text_worker(session_pid, state, jid, text, opts)
   end
 
@@ -2018,9 +2026,9 @@ defmodule ExWapp.Session.Worker do
     kind, reason -> {:error, {:media_download_throw, kind, reason}}
   end
 
-  defp primary_send_task_fun(session_pid, state, jid, text, strategy, attempt) do
+  defp primary_send_task_fun(session_pid, state, jid, text, strategy, attempt, opts \\ []) do
     fn ->
-      result = do_send_text_worker(session_pid, state, jid, text)
+      result = do_send_text_worker(session_pid, state, jid, text, opts)
       send(session_pid, {:send_result, jid, text, result, strategy, attempt})
       result
     end

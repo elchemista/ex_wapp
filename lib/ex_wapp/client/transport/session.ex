@@ -83,11 +83,13 @@ defmodule ExWapp.Client.Transport.Session do
   @impl true
   @spec send_message(Client.t(), Message.t()) ::
           {:ok, Client.t(), String.t()} | {:error, Client.t(), term()} | {:error, term()}
-  def send_message(%Client{} = client, %Message{type: :text, to: to, body: text, id: id}) do
+  def send_message(%Client{} = client, %Message{type: :text, to: to, body: text} = message) do
     case ensure_session(client) do
       {:ok, client, session} ->
-        case Session.send_text(session, to, text) do
-          :ok -> {:ok, client, id}
+        opts = Keyword.put(message.opts, :retry_message_id, message.id)
+
+        case Session.send_text(session, to, text, opts) do
+          {:ok, message_id} -> {:ok, client, message_id}
           {:error, reason} -> {:error, client, reason}
         end
 

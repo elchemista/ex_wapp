@@ -63,12 +63,13 @@ defmodule ExWapp.Session do
           {:ok, String.t()} | {:error, term()}
   defdelegate request_pairing_code(server, phone, opts \\ []), to: Worker
 
-  @spec send_text(GenServer.server(), binary(), iodata()) :: :ok | {:error, term()}
-  def send_text(server, jid, text) do
+  @spec send_text(GenServer.server(), binary(), iodata(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_text(server, jid, text, opts \\ []) when is_list(opts) do
     GenServer.call(
       server,
-      {:send_text, jid, IO.iodata_to_binary(text)},
-      media_timeout([])
+      {:send_text, jid, IO.iodata_to_binary(text), opts},
+      media_timeout(opts)
     )
   end
 
