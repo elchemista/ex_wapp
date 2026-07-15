@@ -98,6 +98,27 @@ defmodule ExWapp.Session.Outbound.CommandTest do
 
     assert {:error, {:unsupported_message_type, :typing}} =
              Command.prepare(Message.typing(valid.to))
+
+    assert {:error, :invalid_location} =
+             Command.prepare(%Message{
+               to: valid.to,
+               type: :location,
+               body: %{latitude: 200, longitude: 9}
+             })
+
+    assert {:error, :invalid_contact} =
+             Command.prepare(%Message{
+               to: valid.to,
+               type: :contact,
+               body: %{display_name: "", vcard: ""}
+             })
+
+    assert {:error, :invalid_event} =
+             Command.prepare(%Message{
+               to: valid.to,
+               type: :event,
+               body: %{name: "", start_time: nil}
+             })
   end
 
   test "worker-owned error replies leave no pending send operation" do
@@ -117,9 +138,12 @@ defmodule ExWapp.Session.Outbound.CommandTest do
 
     assert {:error, :invalid_location} = Session.send_message(session, message)
 
-    coordinator = :sys.get_state(session).send_coordinator
+    state = :sys.get_state(session)
+    coordinator = state.send_coordinator
     assert SendCoordinator.operation_count(coordinator) == 0
     assert SendCoordinator.iq_route_count(coordinator) == 0
+    assert state.quota.session_count == 0
+    assert state.rate_limiter.global == nil
 
     GenServer.stop(session)
   end

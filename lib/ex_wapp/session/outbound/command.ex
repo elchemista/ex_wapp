@@ -2,6 +2,7 @@ defmodule ExWapp.Session.Outbound.Command do
   @moduledoc false
 
   alias ExWapp.Message
+  alias ExWapp.Session.Outbound.Content
 
   @supported_types [:text, :image, :audio, :document, :location, :contact, :event]
 
@@ -11,7 +12,7 @@ defmodule ExWapp.Session.Outbound.Command do
          :ok <- validate_recipient(message.to),
          :ok <- validate_options(message.opts),
          :ok <- validate_message_id(message.id),
-         :ok <- validate_body(message.type, message.body) do
+         :ok <- validate_body(message) do
       {:ok, normalize_message_id(message)}
     end
   end
@@ -34,9 +35,9 @@ defmodule ExWapp.Session.Outbound.Command do
   defp validate_message_id(message_id) when is_binary(message_id) and message_id != "", do: :ok
   defp validate_message_id(_message_id), do: {:error, :invalid_message_id}
 
-  defp validate_body(:text, body) when is_binary(body), do: :ok
-  defp validate_body(:text, _body), do: {:error, :invalid_message_body}
-  defp validate_body(_type, _body), do: :ok
+  defp validate_body(%Message{type: :text, body: body}) when is_binary(body), do: :ok
+  defp validate_body(%Message{type: :text}), do: {:error, :invalid_message_body}
+  defp validate_body(%Message{} = message), do: Content.validate(message)
 
   defp normalize_message_id(%Message{id: nil, opts: options} = message) do
     case Keyword.get(options, :retry_message_id) do
