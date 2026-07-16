@@ -41,7 +41,8 @@ defmodule ExWapp.Message.Handler.Inbound.ReceiptsTest do
     assert [
              {:send_retry_receipt, ^from, "message-2", nil, "123", 1, 0,
               %{category: nil, recipient: nil}},
-             {:request_placeholder_resend, "15550001111@s.whatsapp.net", ^from, "message-2"}
+             {:request_placeholder_resend, "15550001111@s.whatsapp.net", ^from, "message-2",
+              %{from_me: false}}
            ] = actions
 
     assert map_size(state.retry_counters) == 1
@@ -121,9 +122,44 @@ defmodule ExWapp.Message.Handler.Inbound.ReceiptsTest do
     assert [
              {:send_retry_receipt, ^from, "message-invalid-mac", nil, "321", 1, 7,
               %{category: nil, recipient: nil}},
-             {:request_placeholder_resend, ^from, ^from, "message-invalid-mac"}
+             {:request_placeholder_resend, ^from, ^from, "message-invalid-mac", %{from_me: false}}
            ] = actions
 
     assert map_size(updated_state.retry_counters) == 1
+  end
+
+  test "uses the recipient chat and from-me key for an unavailable linked-device message" do
+    own_device = "15550009999:7@s.whatsapp.net"
+    recipient = "15550002222@lid"
+
+    store =
+      ExWapp.Store.Memory.new(
+        initial_data: %{
+          pairing: %{device: %{jid: "15550009999@s.whatsapp.net"}},
+          client_info: %{jid: "15550009999@s.whatsapp.net"}
+        }
+      )
+
+    decrypt_status =
+      {:error,
+       {:decrypt_failed_for_payload, "msg",
+        {:decrypt_failed_for_candidate, own_device, :no_session}}}
+
+    assert {actions, _state} =
+             Receipts.build_actions(
+               own_device,
+               "linked-device-message",
+               nil,
+               %{
+                 "recipient" => recipient,
+                 "peer_recipient_pn" => "15550002222@s.whatsapp.net",
+                 "t" => "654"
+               },
+               %{encrypted: true, decrypt_status: decrypt_status},
+               %{store: store}
+             )
+
+    assert {:request_placeholder_resend, recipient, own_device, "linked-device-message",
+            %{from_me: true}} in actions
   end
 end

@@ -2,6 +2,7 @@ defmodule ExWapp.OutboundSessionRefreshTest do
   use ExUnit.Case, async: true
 
   alias ExWapp.{Binary, Session, Signal}
+  alias ExWapp.Message.Handler.Wire.Fields
   alias ExWapp.Session.Account
   alias ExWapp.Session.Worker.Outbound
   alias ExWapp.Signal.{Encryption, SessionStore}
@@ -354,6 +355,76 @@ defmodule ExWapp.OutboundSessionRefreshTest do
     assert Enum.any?(node.content, &match?(%Binary.Node{tag: "device-identity"}, &1))
   end
 
+  test "placeholder recovery sends an encrypted peer-data request to the primary device" do
+    local_pn_device_jid = "19995550101:5@s.whatsapp.net"
+    local_lid_device_jid = "19995550202:5@lid"
+    local_pn_base_jid = "19995550101@s.whatsapp.net"
+    local_lid_base_jid = "19995550202@lid"
+    chat_jid = "19995550404@s.whatsapp.net"
+
+    %{store: store} = build_local_store(local_pn_device_jid, local_lid_device_jid)
+    primary_device = build_remote_device(local_pn_base_jid)
+
+    conn =
+      start_fake_conn(self(), %{
+        device_map: %{
+          local_pn_base_jid => [local_pn_base_jid, local_pn_device_jid],
+          local_lid_base_jid => [local_lid_base_jid, local_lid_device_jid]
+        },
+        prekey_bundles: %{local_pn_base_jid => primary_device.bundle},
+        route_via_session: true
+      })
+
+    session = start_connected_session(store, conn, SessionStore.new())
+
+    send(
+      session,
+      {:request_placeholder_resend, chat_jid, local_pn_device_jid, "UNAVAILABLE_1",
+       %{from_me: true}}
+    )
+
+    assert_receive {:message_send,
+                    %Binary.Node{tag: "message", attrs: attrs, content: content} = node},
+                   1_000
+
+    assert attrs == %{
+             "category" => "peer",
+             "id" => attrs["id"],
+             "to" => local_pn_base_jid,
+             "type" => "text"
+           }
+
+    assert is_binary(attrs["id"])
+    assert Enum.any?(content, &match?(%Binary.Node{tag: "meta"}, &1))
+    refute Enum.any?(content, &match?(%Binary.Node{tag: "participants"}, &1))
+
+    encrypted_node = Enum.find(content, &match?(%Binary.Node{tag: "enc"}, &1))
+    assert %Binary.Node{} = encrypted_node
+
+    plaintext =
+      decrypt_direct_payload(local_pn_device_jid, encrypted_node, primary_device.signal)
+
+    assert {:ok, message_fields} = Fields.decode_safe(plaintext)
+    protocol_message = Fields.first_length_delimited(message_fields, 12)
+    assert {:ok, protocol_fields} = Fields.decode_safe(protocol_message)
+    assert Fields.first_varint(protocol_fields, 2) == 16
+
+    request = Fields.first_length_delimited(protocol_fields, 16)
+    assert {:ok, request_fields} = Fields.decode_safe(request)
+    assert Fields.first_varint(request_fields, 1) == 4
+
+    [resend_request] = Fields.all_length_delimited(request_fields, 5)
+    assert {:ok, resend_fields} = Fields.decode_safe(resend_request)
+    message_key = Fields.first_length_delimited(resend_fields, 1)
+    assert {:ok, key_fields} = Fields.decode_safe(message_key)
+    assert Fields.first_length_delimited(key_fields, 1) == chat_jid
+    assert Fields.first_varint(key_fields, 2) == 1
+    assert Fields.first_length_delimited(key_fields, 3) == "UNAVAILABLE_1"
+    assert Fields.first_length_delimited(key_fields, 4) == nil
+
+    assert Enum.any?(node.content, &match?(%Binary.Node{tag: "device-identity"}, &1))
+  end
+
   test "send_text_worker returns not_connected when the runtime is disconnected" do
     assert {:error, {:not_connected, :disconnected}} =
              Outbound.send_text_worker(
@@ -484,6 +555,29 @@ defmodule ExWapp.OutboundSessionRefreshTest do
 
   defp decrypt_participant_payload(_jid, _node, _remote_devices) do
     flunk("participant node did not contain encrypted raw payload")
+  end
+
+  defp decrypt_direct_payload(
+         sender_jid,
+         %Binary.Node{attrs: attrs, content: %Binary.Raw{data: ciphertext}},
+         remote_signal
+       ) do
+    enc_type = Map.get(attrs, "type", "msg")
+
+    {:ok, padded_plaintext, _sessions} =
+      SessionStore.decrypt_message(
+        SessionStore.new(),
+        sender_jid,
+        ciphertext,
+        enc_type == "pkmsg",
+        remote_signal.identity_key,
+        %{
+          signed_prekeys: remote_signal.signed_prekeys,
+          prekeys: remote_signal.prekeys
+        }
+      )
+
+    Encryption.unpad_message(padded_plaintext)
   end
 
   defp encrypted_participant_targets(%Binary.Node{} = node) do

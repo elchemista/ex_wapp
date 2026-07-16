@@ -36,6 +36,31 @@ defmodule ExWapp.PlaceholderResendTest do
     assert field_value(key_fields, 4) == "444555666@s.whatsapp.net"
   end
 
+  test "builds a from-me placeholder request without a participant for a direct chat" do
+    proto =
+      Messages.build_placeholder_resend_proto(
+        "111222333@s.whatsapp.net",
+        "999888777:7@s.whatsapp.net",
+        "MSG_PLACEHOLDER_SELF",
+        from_me: true
+      )
+
+    payload = Message.encode!(proto)
+
+    assert {:ok, [{12, 2, protocol_message}]} = decode_fields(payload)
+    assert {:ok, protocol_fields} = decode_fields(protocol_message)
+    request_message = field_value(protocol_fields, 16)
+    assert {:ok, request_fields} = decode_fields(request_message)
+    resend_request = field_value(request_fields, 5)
+    assert {:ok, [{1, 2, message_key}]} = decode_fields(resend_request)
+    assert {:ok, key_fields} = decode_fields(message_key)
+
+    assert field_value(key_fields, 1) == "111222333@s.whatsapp.net"
+    assert field_value(key_fields, 2) == 1
+    assert field_value(key_fields, 3) == "MSG_PLACEHOLDER_SELF"
+    assert field_value(key_fields, 4) == nil
+  end
+
   test "unavailable placeholder messages request primary-device resend" do
     node = %Node{
       tag: "message",
@@ -56,7 +81,7 @@ defmodule ExWapp.PlaceholderResendTest do
     assert {:ok, _state, actions} = MessageHandler.handle_node(node, self(), state)
 
     assert {:request_placeholder_resend, "111222333@g.us", "444555666:7@s.whatsapp.net",
-            "MSG_PLACEHOLDER_2"} in actions
+            "MSG_PLACEHOLDER_2", %{from_me: false}} in actions
 
     assert Enum.any?(actions, fn
              {:send_receipt, "111222333@g.us", "MSG_PLACEHOLDER_2", "444555666:7@s.whatsapp.net",

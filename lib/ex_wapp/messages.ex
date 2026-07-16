@@ -279,14 +279,22 @@ defmodule ExWapp.Messages do
   @doc """
   Builds a protocol message requesting resend of an unavailable placeholder.
   """
-  @spec build_placeholder_resend_proto(String.t(), String.t(), String.t()) :: Message.t()
-  def build_placeholder_resend_proto(chat_jid, sender_jid, message_id) do
+  @spec build_placeholder_resend_proto(String.t(), String.t(), String.t(), keyword()) ::
+          Message.t()
+  def build_placeholder_resend_proto(chat_jid, sender_jid, message_id, opts \\ []) do
+    from_me = Keyword.get(opts, :from_me, false) == true
+
+    participant =
+      if not from_me and (JID.group?(chat_jid) or JID.broadcast?(chat_jid)) do
+        strip_device(sender_jid)
+      end
+
     message_key =
       %ExWapp.Proto.MessageKey{
         remoteJID: chat_jid,
-        fromMe: false,
+        fromMe: from_me,
         id: message_id,
-        participant: strip_device(sender_jid)
+        participant: participant
       }
       |> ExWapp.Proto.MessageKey.encode!()
 

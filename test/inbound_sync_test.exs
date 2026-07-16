@@ -1,7 +1,9 @@
 defmodule ExWapp.Message.Handler.Inbound.SyncTest do
   use ExUnit.Case, async: true
 
+  alias ExWapp.{Chat, Messages}
   alias ExWapp.Message.Handler.Inbound.Sync
+  alias ExWapp.Proto.Message
   alias ExWapp.Store
   alias ExWapp.Store.Memory
 
@@ -70,6 +72,60 @@ defmodule ExWapp.Message.Handler.Inbound.SyncTest do
              Store.get(store, :app_state_keys, %{})
   end
 
+  test "ingests a primary-device placeholder response as the original message" do
+    store = Memory.new(initial_data: %{chats: %{}})
+    state = %{store: store}
+    chat_jid = "15550002222@s.whatsapp.net"
+    message_id = "RECOVERED_MESSAGE_1"
+
+    original_message =
+      Messages.build_text_proto("recovered from primary", [])
+      |> Message.encode!()
+
+    message_key =
+      length_delimited(1, chat_jid) <>
+        varint_field(2, 1) <>
+        length_delimited(3, message_id)
+
+    web_message_info =
+      length_delimited(1, message_key) <>
+        length_delimited(2, original_message) <>
+        varint_field(3, 1_730_000_500) <>
+        length_delimited(19, "Primary device")
+
+    placeholder_response = length_delimited(1, web_message_info)
+    operation_result = length_delimited(4, placeholder_response)
+
+    peer_response =
+      varint_field(1, 4) <>
+        length_delimited(2, "PLACEHOLDER_REQUEST_1") <>
+        length_delimited(3, operation_result)
+
+    protocol_message =
+      varint_field(2, 17) <>
+        length_delimited(17, peer_response)
+
+    message_data = %{
+      message_content_type: :protocol,
+      protocol_payload: length_delimited(12, protocol_message)
+    }
+
+    assert Sync.ingest(
+             message_data,
+             self(),
+             state,
+             "15550009999@s.whatsapp.net",
+             "PLACEHOLDER_RESPONSE_1",
+             true
+           ) == state
+
+    assert_receive {:new_message, ^chat_jid,
+                    %{id: ^message_id, text: "recovered from primary", from_me: true}}
+
+    assert [%{id: ^message_id, text: "recovered from primary", from_me: true}] =
+             Chat.messages(store, chat_jid, limit: 1)
+  end
+
   defp app_state_key_share_message(key_id, key_data) do
     key_id_message = length_delimited(1, key_id)
     key_data_message = length_delimited(1, key_data)
@@ -88,8 +144,19 @@ defmodule ExWapp.Message.Handler.Inbound.SyncTest do
   end
 
   defp length_delimited(field_number, value)
-       when is_integer(field_number) and field_number > 0 and is_binary(value) and
-              byte_size(value) < 128 do
-    <<field_number * 8 + 2, byte_size(value), value::binary>>
+       when is_integer(field_number) and field_number > 0 and is_binary(value) do
+    encode_varint(field_number * 8 + 2) <> encode_varint(byte_size(value)) <> value
+  end
+
+  defp varint_field(field_number, value)
+       when is_integer(field_number) and field_number > 0 and is_integer(value) and value >= 0 do
+    encode_varint(field_number * 8) <> encode_varint(value)
+  end
+
+  defp encode_varint(value) when value < 128, do: <<value>>
+
+  defp encode_varint(value) do
+    byte = Bitwise.bor(Bitwise.band(value, 0x7F), 0x80)
+    <<byte>> <> encode_varint(Bitwise.bsr(value, 7))
   end
 end

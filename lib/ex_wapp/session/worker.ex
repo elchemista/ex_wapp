@@ -1076,6 +1076,20 @@ defmodule ExWapp.Session.Worker do
     {:noreply, state}
   end
 
+  def handle_info(
+        {:request_placeholder_resend, chat_jid, sender_jid, message_id, metadata},
+        state
+      ) do
+    {:noreply,
+     maybe_start_placeholder_resend_request(
+       state,
+       chat_jid,
+       sender_jid,
+       message_id,
+       metadata
+     )}
+  end
+
   # Inbound node routed by InboundRouter process
   def handle_info({:inbound_node, %Binary.Node{} = node}, state) do
     maybe_log_inbound_node(node)
@@ -1840,6 +1854,59 @@ defmodule ExWapp.Session.Worker do
     else
       new_state
     end
+  end
+
+  defp maybe_start_placeholder_resend_request(
+         %{status: status, conn: conn} = state,
+         chat_jid,
+         sender_jid,
+         message_id,
+         metadata
+       )
+       when status in [:connected, :syncing] and is_pid(conn) and is_binary(chat_jid) and
+              chat_jid != "" and is_binary(sender_jid) and sender_jid != "" and
+              is_binary(message_id) and message_id != "" do
+    session_pid = self()
+
+    proto =
+      Messages.build_placeholder_resend_proto(chat_jid, sender_jid, message_id,
+        from_me: is_map(metadata) and Map.get(metadata, :from_me) == true
+      )
+
+    task = fn ->
+      peer_state = Map.put(state, :outbound_iq_router, session_pid)
+      Outbound.send_peer_proto_worker(session_pid, peer_state, proto)
+    end
+
+    case start_send_worker(state, "placeholder_resend:#{message_id}", task) do
+      {:ok, worker, mon} ->
+        Logger.debug(
+          "[PLACEHOLDER] Requesting unavailable message id=#{Log.reference(message_id)} chat=#{Log.reference(chat_jid)} from primary device"
+        )
+
+        register_send_worker(state, worker, mon, {:placeholder_resend, message_id})
+
+      {:error, reason} ->
+        Logger.warning(
+          "[PLACEHOLDER] Failed to start resend request for id=#{Log.reference(message_id)}: #{Log.reason(reason)}"
+        )
+
+        state
+    end
+  end
+
+  defp maybe_start_placeholder_resend_request(
+         state,
+         _chat_jid,
+         _sender_jid,
+         message_id,
+         _metadata
+       ) do
+    Logger.warning(
+      "[PLACEHOLDER] Cannot request unavailable message id=#{Log.reference(message_id)} while status=#{inspect(Map.get(state, :status))}"
+    )
+
+    state
   end
 
   # Outbound message dispatch

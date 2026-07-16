@@ -71,6 +71,79 @@ defmodule ExWapp.Session.Worker.Outbound do
     send_text_worker(session_pid, state, jid, chat_text, Keyword.put(opts, :proto_message, proto))
   end
 
+  @doc "Sends an internal protocol message directly to the account's primary device."
+  @spec send_peer_proto_worker(pid(), map(), ExWapp.Proto.Message.t()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_peer_proto_worker(_session_pid, %{status: status}, _proto)
+      when status not in [:connected, :syncing] do
+    {:error, {:not_connected, status}}
+  end
+
+  def send_peer_proto_worker(_session_pid, %{status: status, conn: conn}, _proto)
+      when not is_pid(conn) do
+    {:error, {:not_connected, status}}
+  end
+
+  def send_peer_proto_worker(
+        session_pid,
+        %{conn: conn, store: store} = state,
+        %Message{} = proto
+      ) do
+    destination_jid = peer_destination_jid(store)
+
+    with destination when destination != "" <- destination_jid,
+         {:ok, signal_sessions, prekey_bundles, target_hints} <-
+           ensure_signal_session_worker(state, destination),
+         {target_specs, _all_usync_devices} <-
+           Direct.resolve_targets(
+             store,
+             signal_sessions,
+             destination,
+             prekey_bundles,
+             target_hints,
+             self_chat_mode: :recipient_primary
+           ),
+         {:ok, target_spec} <- select_primary_peer_target(target_specs),
+         {:ok, payloads} <- Direct.build_payloads(proto, destination, []),
+         {:ok, [participant_node], updated_sessions, include_identity} <-
+           Encryptor.encrypt_for_targets(
+             store,
+             signal_sessions,
+             [%{target_spec | payload_kind: :recipient}],
+             %{recipient: payloads.recipient},
+             prekey_bundles
+           ),
+         {:ok, encrypted_node} <- extract_peer_encrypted_node(participant_node),
+         message_id <- Direct.message_id([], destination),
+         node <-
+           build_peer_message_node(
+             destination,
+             message_id,
+             encrypted_node,
+             store,
+             include_identity
+           ),
+         :ok <- persist_signal_sessions(session_pid, updated_sessions, state),
+         :ok <- send_transport_node(state, conn, node) do
+      Logger.debug(
+        "[PLACEHOLDER] Sent peer-data request to primary device id=#{Log.reference(message_id)}"
+      )
+
+      emit_telemetry(
+        :message_sent,
+        %{message_count: 1, payload_bytes: payloads.raw_size},
+        state,
+        %{jid: destination, message_id: message_id, encryption: :peer}
+      )
+
+      {:ok, message_id}
+    else
+      "" -> {:error, :missing_local_account_jid}
+      {:error, reason} -> {:error, {:peer_send_failed, reason}}
+      other -> {:error, {:peer_send_failed, other}}
+    end
+  end
+
   @spec send_direct_text_worker(pid(), map(), String.t(), outbound_text(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   defp send_direct_text_worker(session_pid, state, jid, text, opts) do
@@ -714,6 +787,90 @@ defmodule ExWapp.Session.Worker.Outbound do
 
         Chat.update_message_status(store, jid, message_id, :failed)
         error
+    end
+  end
+
+  @spec peer_destination_jid(Store.t()) :: String.t()
+  defp peer_destination_jid(store) do
+    case Account.local_account_base_jid(store) do
+      "" -> Account.local_account_lid_jid(store)
+      jid -> jid
+    end
+  end
+
+  @spec select_primary_peer_target([map()]) :: {:ok, map()} | {:error, :no_peer_target}
+  defp select_primary_peer_target([]), do: {:error, :no_peer_target}
+
+  defp select_primary_peer_target(target_specs) when is_list(target_specs) do
+    target = Enum.min_by(target_specs, &peer_target_rank/1)
+    {:ok, target}
+  end
+
+  @spec peer_target_rank(map()) :: {non_neg_integer(), non_neg_integer()}
+  defp peer_target_rank(target_spec) do
+    jid = Map.get(target_spec, :jid, "")
+    device_id = JIDUtils.device_id(jid)
+
+    {
+      if(device_id in [nil, 0], do: 0, else: 1),
+      if(Map.get(target_spec, :payload_kind) == :recipient, do: 0, else: 1)
+    }
+  end
+
+  @spec extract_peer_encrypted_node(Binary.Node.t()) ::
+          {:ok, Binary.Node.t()} | {:error, :missing_peer_encrypted_node}
+  defp extract_peer_encrypted_node(%Binary.Node{tag: "to", content: content})
+       when is_list(content) do
+    case Enum.find(content, &match?(%Binary.Node{tag: "enc"}, &1)) do
+      %Binary.Node{} = encrypted_node -> {:ok, encrypted_node}
+      nil -> {:error, :missing_peer_encrypted_node}
+    end
+  end
+
+  defp extract_peer_encrypted_node(_participant_node),
+    do: {:error, :missing_peer_encrypted_node}
+
+  @spec build_peer_message_node(
+          String.t(),
+          String.t(),
+          Binary.Node.t(),
+          Store.t(),
+          boolean()
+        ) :: Binary.Node.t()
+  defp build_peer_message_node(
+         destination_jid,
+         message_id,
+         encrypted_node,
+         store,
+         include_identity
+       ) do
+    meta_node = %Binary.Node{
+      tag: "meta",
+      attrs: %{"appdata" => "default"},
+      content: nil
+    }
+
+    content = [meta_node, encrypted_node] ++ peer_identity_content(store, include_identity)
+
+    %Binary.Node{
+      tag: "message",
+      attrs: %{
+        "id" => message_id,
+        "type" => "text",
+        "category" => "peer",
+        "to" => destination_jid
+      },
+      content: content
+    }
+  end
+
+  @spec peer_identity_content(Store.t(), boolean()) :: [Binary.Node.t()]
+  defp peer_identity_content(_store, false), do: []
+
+  defp peer_identity_content(store, true) do
+    case Account.get_device_identity_node(store) do
+      {:ok, identity_node} -> [identity_node]
+      {:error, _reason} -> []
     end
   end
 

@@ -224,4 +224,18 @@ defmodule ExWapp.Session.Worker.NodeHandlerTest do
     assert_receive {:ex_wapp_session, :contacts_changed, ^payload}
     assert_receive {:app_state_sync_collections, ["critical_unblock_low"]}
   end
+
+  test "placeholder-resend action is forwarded to the session worker" do
+    metadata = %{from_me: true}
+
+    assert :ok =
+             NodeHandler.safe_handle_action(
+               {:request_placeholder_resend, "15550002222@lid", "15550009999:7@s.whatsapp.net",
+                "MESSAGE_1", metadata},
+               %{}
+             )
+
+    assert_receive {:request_placeholder_resend, "15550002222@lid",
+                    "15550009999:7@s.whatsapp.net", "MESSAGE_1", ^metadata}
+  end
 end

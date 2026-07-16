@@ -625,6 +625,30 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     end
   end
 
+  defp handle_pairing_action(
+         {:request_placeholder_resend, chat_jid, sender_jid, message_id, metadata},
+         _state
+       ) do
+    send(
+      self(),
+      {:request_placeholder_resend, chat_jid, sender_jid, message_id, metadata}
+    )
+
+    :ok
+  end
+
+  defp handle_pairing_action(
+         {:request_placeholder_resend, chat_jid, sender_jid, message_id},
+         _state
+       ) do
+    send(
+      self(),
+      {:request_placeholder_resend, chat_jid, sender_jid, message_id, %{}}
+    )
+
+    :ok
+  end
+
   defp handle_pairing_action({:refresh_identity_session, jid}, _state) do
     send(self(), {:refresh_identity_session, jid})
     :ok

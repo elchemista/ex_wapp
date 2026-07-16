@@ -8,6 +8,7 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
 
   require Logger
 
+  alias ExWapp.JID
   alias ExWapp.Message.Handler.Common
   alias ExWapp.Message.Handler.Inbound.Envelope
   alias ExWapp.Signal.SessionStore
@@ -68,7 +69,15 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
           {:send_retry_receipt, from, id, participant, Map.get(attrs, "t"), retry_count,
            retry_reason_code, retry_meta}
         ] ++
-          placeholder_resend_actions(from, id, participant, retry_count, message_data) ++
+          placeholder_resend_actions(
+            from,
+            id,
+            participant,
+            retry_count,
+            attrs,
+            message_data,
+            state
+          ) ++
           signal_sessions_update_actions(message_data)
       end
 
@@ -107,21 +116,68 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
 
     actions =
       [{:send_receipt, from, id, participant, receipt_type, receipt_meta}] ++
-        placeholder_resend_actions(from, id, participant, 1, message_data) ++
+        placeholder_resend_actions(from, id, participant, 1, attrs, message_data, state) ++
         signal_sessions_update_actions(message_data)
 
     {actions, state}
   end
 
-  @spec placeholder_resend_actions(term(), term(), term(), pos_integer(), map()) :: [term()]
-  defp placeholder_resend_actions(from, id, participant, retry_count, message_data) do
+  @spec placeholder_resend_actions(
+          term(),
+          term(),
+          term(),
+          pos_integer(),
+          map(),
+          map(),
+          map()
+        ) :: [term()]
+  defp placeholder_resend_actions(
+         from,
+         id,
+         participant,
+         retry_count,
+         attrs,
+         message_data,
+         state
+       ) do
     if needs_placeholder_resend_request?(message_data) and retry_count == 1 do
       sender = if is_binary(participant) and participant != "", do: participant, else: from
-      [{:request_placeholder_resend, Common.strip_device_from_jid(from), sender, id}]
+      from_me = placeholder_from_me?(attrs, from, participant, state, message_data)
+      chat_jid = placeholder_chat_jid(from, attrs, from_me)
+
+      [
+        {:request_placeholder_resend, chat_jid, sender, id, %{from_me: from_me}}
+      ]
     else
       []
     end
   end
+
+  @spec placeholder_from_me?(map(), term(), term(), map(), map()) :: boolean()
+  defp placeholder_from_me?(attrs, from, participant, state, message_data) do
+    Envelope.from_me?(attrs, from, state, message_data) or
+      Envelope.own_sender?(attrs, from, participant, state)
+  end
+
+  @spec placeholder_chat_jid(term(), map(), boolean()) :: String.t()
+  defp placeholder_chat_jid(from, attrs, true) do
+    normalized_from = Common.normalize_jid(from)
+
+    if JID.group?(normalized_from) or JID.broadcast?(normalized_from) do
+      normalized_from
+    else
+      [
+        Map.get(attrs, "recipient"),
+        Map.get(attrs, "peer_recipient_pn"),
+        Map.get(attrs, "peer_recipient_lid"),
+        from
+      ]
+      |> Enum.map(&Common.normalize_jid/1)
+      |> Enum.find("", &(&1 != ""))
+    end
+  end
+
+  defp placeholder_chat_jid(from, _attrs, false), do: Common.normalize_jid(from)
 
   @spec delivery_receipt_type(term(), map(), map()) :: binary() | nil
   defp delivery_receipt_type(from, attrs, state) do
