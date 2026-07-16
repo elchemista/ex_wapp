@@ -5,7 +5,7 @@ defmodule ExWapp.Session.Account do
 
   require Logger
 
-  alias ExWapp.{Binary, MapPath, Store}
+  alias ExWapp.{Binary, Log, MapPath, Store}
   alias ExWapp.Pairing.ADV
   alias ExWapp.Session.JIDUtils
 
@@ -64,7 +64,7 @@ defmodule ExWapp.Session.Account do
     end
   rescue
     e ->
-      Logger.warning("[ACCOUNT] local_registration_node failed: #{inspect(e)}")
+      Logger.warning("[ACCOUNT] local_registration_node failed: #{Log.reason(e)}")
       nil
   end
 
@@ -75,7 +75,7 @@ defmodule ExWapp.Session.Account do
     Store.get(store, :lid_mapping, %{})
   rescue
     e ->
-      Logger.warning("[ACCOUNT] load_lid_mapping failed: #{inspect(e)}")
+      Logger.warning("[ACCOUNT] load_lid_mapping failed: #{Log.reason(e)}")
       %{}
   end
 
@@ -91,7 +91,7 @@ defmodule ExWapp.Session.Account do
     |> JIDUtils.strip_device()
   rescue
     e ->
-      Logger.warning("[ACCOUNT] local_account_base_jid failed: #{inspect(e)}")
+      Logger.warning("[ACCOUNT] local_account_base_jid failed: #{Log.reason(e)}")
       ""
   end
 
@@ -114,7 +114,7 @@ defmodule ExWapp.Session.Account do
     end
   rescue
     e ->
-      Logger.warning("[ACCOUNT] local_account_device_id failed: #{inspect(e)}")
+      Logger.warning("[ACCOUNT] local_account_device_id failed: #{Log.reason(e)}")
       0
   end
 
@@ -130,7 +130,7 @@ defmodule ExWapp.Session.Account do
     |> JIDUtils.strip_device()
   rescue
     e ->
-      Logger.warning("[ACCOUNT] local_account_lid_jid failed: #{inspect(e)}")
+      Logger.warning("[ACCOUNT] local_account_lid_jid failed: #{Log.reason(e)}")
       ""
   end
 
@@ -171,7 +171,7 @@ defmodule ExWapp.Session.Account do
 
       case Map.get(tctokens, jid) do
         %{token: token} when is_binary(token) ->
-          Logger.debug("[SEND] Appending tctoken for #{jid}")
+          Logger.debug("[SEND] Appending tctoken for #{Log.reference(jid)}")
 
           tctoken_node = %Binary.Node{
             tag: "tctoken",
@@ -187,7 +187,7 @@ defmodule ExWapp.Session.Account do
     end
   rescue
     e ->
-      Logger.warning("[ACCOUNT] maybe_append_tctoken failed: #{inspect(e)}")
+      Logger.warning("[ACCOUNT] maybe_append_tctoken failed: #{Log.reason(e)}")
       content
   end
 
@@ -211,7 +211,7 @@ defmodule ExWapp.Session.Account do
 
           {:error, reason} ->
             Logger.warning(
-              "[SEND] Failed to encode ADV signed identity, falling back: #{inspect(reason)}"
+              "[SEND] Failed to encode ADV signed identity, falling back: #{Log.reason(reason)}"
             )
 
             get_device_identity_node_fallback(data)

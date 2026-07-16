@@ -69,6 +69,7 @@ defmodule ExWapp.Store do
   """
 
   require Logger
+  alias ExWapp.Log
   alias ExWapp.Signal.SessionStore
 
   @type data :: map()
@@ -96,6 +97,33 @@ defmodule ExWapp.Store do
   Returns `:ok` on success or `{:error, reason}` on failure.
   """
   @callback persist(store :: t(), data :: data()) :: :ok | {:error, term()}
+
+  @doc "Reads a consistent snapshot of non-specialized top-level store data."
+  @callback read(store :: t(), (data() -> term())) :: term()
+
+  @doc "Atomically updates one top-level store domain."
+  @callback update(store :: t(), key :: atom(), default :: term(), (term() -> term())) ::
+              :ok | {:error, term()}
+
+  @doc "Atomically updates one domain and returns a value from the update."
+  @callback get_and_update(
+              store :: t(),
+              key :: atom(),
+              default :: term(),
+              (term() -> {term(), term()})
+            ) :: term() | {:error, term()}
+
+  @doc "Atomically transforms all non-specialized top-level store data."
+  @callback transaction(store :: t(), (data() -> data())) :: :ok | {:error, term()}
+
+  @doc "Begins a caller-owned persistence batch."
+  @callback begin_batch(store :: t(), reason :: term()) :: :ok | {:error, term()}
+
+  @doc "Ends a caller-owned persistence batch and durably flushes pending writes."
+  @callback finish_batch(store :: t(), reason :: term()) :: :ok | {:error, term()}
+
+  @doc "Durably flushes all pending writes without closing the adapter."
+  @callback flush(store :: t()) :: :ok | {:error, term()}
 
   @doc """
   Optional callback that releases adapter-owned processes or connections.
@@ -156,6 +184,13 @@ defmodule ExWapp.Store do
 
   @optional_callbacks close: 1,
                       clear: 1,
+                      read: 2,
+                      update: 4,
+                      get_and_update: 4,
+                      transaction: 2,
+                      begin_batch: 2,
+                      finish_batch: 2,
+                      flush: 1,
                       stream_messages: 3,
                       upsert_messages: 3,
                       find_message: 3,
@@ -256,19 +291,25 @@ defmodule ExWapp.Store do
         %{}
 
       {:error, reason} ->
-        Logger.error("[STORE] load! failed store=#{inspect(store)} reason=#{inspect(reason)}")
+        Logger.error(
+          "[STORE] load! failed adapter=#{inspect(store.__struct__)} reason=#{Log.reason(reason)}"
+        )
+
         raise "ExWapp.Store.load! failed: #{inspect(reason)}"
     end
   rescue
     exception ->
       Logger.error(
-        "[STORE] load! raised store=#{inspect(store)} error=#{Exception.message(exception)}"
+        "[STORE] load! raised adapter=#{inspect(store.__struct__)} error=#{Log.reason(exception)}"
       )
 
       reraise exception, __STACKTRACE__
   catch
     :exit, reason ->
-      Logger.error("[STORE] load! exited store=#{inspect(store)} reason=#{inspect(reason)}")
+      Logger.error(
+        "[STORE] load! exited adapter=#{inspect(store.__struct__)} reason=#{Log.reason(reason)}"
+      )
+
       raise "ExWapp.Store.load! exited: #{inspect(reason)}"
   end
 
@@ -285,6 +326,107 @@ defmodule ExWapp.Store do
   """
   @spec persist(t(), data()) :: :ok | {:error, term()}
   def persist(store, data), do: store.__struct__.persist(store, data)
+
+  @doc "Reads the adapter's non-specialized data through its write owner when supported."
+  @spec read(t(), (data() -> term())) :: term()
+  def read(store, reader) when is_function(reader, 1) do
+    if function_exported?(store.__struct__, :read, 2) do
+      store.__struct__.read(store, reader)
+    else
+      reader.(load!(store))
+    end
+  end
+
+  @doc """
+  Atomically updates one top-level domain without a load/modify/persist race.
+
+  Built-in adapters execute `updater` inside their write owner. Custom adapters
+  can implement `update/4`; the compatibility fallback cannot guarantee
+  serialization across callers.
+  """
+  @spec update(t(), atom(), term(), (term() -> term())) :: :ok | {:error, term()}
+  def update(store, key, default, updater)
+      when is_atom(key) and is_function(updater, 1) do
+    if function_exported?(store.__struct__, :update, 4) do
+      store.__struct__.update(store, key, default, updater)
+    else
+      transaction(store, fn data ->
+        Map.put(data, key, updater.(Map.get(data, key, default)))
+      end)
+    end
+  end
+
+  @doc "Atomically updates one top-level domain and returns the updater's reply."
+  @spec get_and_update(t(), atom(), term(), (term() -> {term(), term()})) ::
+          term() | {:error, term()}
+  def get_and_update(store, key, default, updater)
+      when is_atom(key) and is_function(updater, 1) do
+    if function_exported?(store.__struct__, :get_and_update, 4) do
+      store.__struct__.get_and_update(store, key, default, updater)
+    else
+      current = get(store, key, default)
+      {reply, updated} = updater.(current)
+
+      case put(store, key, updated) do
+        :ok -> reply
+        {:error, _reason} = error -> error
+      end
+    end
+  end
+
+  @doc "Stores one top-level domain atomically."
+  @spec put(t(), atom(), term()) :: :ok | {:error, term()}
+  def put(store, key, value) when is_atom(key) do
+    update(store, key, nil, fn _current -> value end)
+  end
+
+  @doc """
+  Atomically transforms the adapter's non-specialized top-level data.
+
+  Prefer `update/4` for a single domain because it avoids materializing the
+  rest of the store.
+  """
+  @spec transaction(t(), (data() -> data())) :: :ok | {:error, term()}
+  def transaction(store, updater) when is_function(updater, 1) do
+    if function_exported?(store.__struct__, :transaction, 2) do
+      store.__struct__.transaction(store, updater)
+    else
+      store
+      |> load!()
+      |> updater.()
+      |> then(&persist(store, &1))
+    end
+  end
+
+  @doc "Starts a caller-owned write batch when supported by the adapter."
+  @spec begin_batch(t(), term()) :: :ok | {:error, term()}
+  def begin_batch(%module{} = store, reason) do
+    if function_exported?(module, :begin_batch, 2),
+      do: module.begin_batch(store, reason),
+      else: :ok
+  end
+
+  @doc "Finishes a caller-owned write batch and flushes it when supported."
+  @spec finish_batch(t(), term()) :: :ok | {:error, term()}
+  def finish_batch(%module{} = store, reason) do
+    if function_exported?(module, :finish_batch, 2),
+      do: module.finish_batch(store, reason),
+      else: :ok
+  end
+
+  @doc "Durably flushes pending adapter writes when the adapter supports it."
+  @spec flush(t()) :: :ok | {:error, term()}
+  def flush(%module{} = store) do
+    if function_exported?(module, :flush, 1), do: module.flush(store), else: :ok
+  end
+
+  @doc "Runs a function inside a caller-owned persistence batch."
+  @spec batch(t(), term(), (-> term())) :: term()
+  def batch(store, reason, fun) when is_function(fun, 0) do
+    with :ok <- begin_batch(store, reason) do
+      run_batch(store, reason, fun)
+    end
+  end
 
   @doc """
   Loads Signal session state from the store.
@@ -608,4 +750,21 @@ defmodule ExWapp.Store do
     do: Enum.take(messages, limit)
 
   defp take_messages(messages, _invalid), do: messages
+
+  defp run_batch(store, reason, fun) do
+    result = fun.()
+
+    case finish_batch(store, reason) do
+      :ok -> result
+      {:error, _reason} = error -> error
+    end
+  rescue
+    exception ->
+      _ = finish_batch(store, reason)
+      reraise exception, __STACKTRACE__
+  catch
+    kind, caught_reason ->
+      _ = finish_batch(store, reason)
+      :erlang.raise(kind, caught_reason, __STACKTRACE__)
+  end
 end

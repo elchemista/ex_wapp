@@ -4,6 +4,7 @@ defmodule ExWapp.Signal.PrekeyFetcher do
   """
 
   alias ExWapp.Binary
+  alias ExWapp.Log
 
   require Logger
 
@@ -19,7 +20,7 @@ defmodule ExWapp.Signal.PrekeyFetcher do
 
     node = build_prekey_request(jid, message_id)
 
-    Logger.debug("[PREKEY] Fetching prekeys for #{jid}")
+    Logger.debug("[PREKEY] Fetching prekeys for #{Log.reference(jid)}")
 
     # Register for the response
     case GenServer.call(session, {:send_iq, node, message_id}, 30_000) do
@@ -27,7 +28,7 @@ defmodule ExWapp.Signal.PrekeyFetcher do
         parse_prekey_response(response)
 
       {:error, reason} ->
-        Logger.error("[PREKEY] Failed to fetch prekeys: #{inspect(reason)}")
+        Logger.error("[PREKEY] Failed to fetch prekeys: #{Log.reason(reason)}")
         {:error, reason}
     end
   end
@@ -187,12 +188,12 @@ defmodule ExWapp.Signal.PrekeyFetcher do
       }
 
       Logger.debug(
-        "[PREKEY] Got bundle for #{jid}: reg=#{registration_id}, spk_id=#{signed_prekey.id}"
+        "[PREKEY] Got bundle for #{Log.reference(jid)}: reg=#{registration_id}, spk_id=#{signed_prekey.id}"
       )
 
       {:ok, bundle}
     else
-      Logger.warning("[PREKEY] Incomplete prekey bundle for #{jid}")
+      Logger.warning("[PREKEY] Incomplete prekey bundle for #{Log.reference(jid)}")
       {:error, :incomplete_bundle}
     end
   end

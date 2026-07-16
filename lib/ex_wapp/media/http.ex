@@ -9,13 +9,9 @@ defmodule ExWapp.Media.HTTP do
 
   alias ExWapp.Media
   alias ExWapp.Session.IQ
+  alias ExWapp.Transport.TLS
 
   @origin "https://web.whatsapp.com"
-
-  # WhatsApp media CDNs routinely close pooled HTTPS sockets after a short
-  # idle period. Request errors are still returned by :httpc; this only avoids
-  # an alarming SSL process report for a normal close_notify alert.
-  @http_options [ssl: [log_level: :none]]
 
   @doc """
   Encrypts plaintext media and uploads it to the best available media host.
@@ -90,10 +86,7 @@ defmodule ExWapp.Media.HTTP do
     token = Base.url_encode64(upload.file_enc_sha256)
     mms_type = mms_type(upload.type)
 
-    url =
-      String.to_charlist(
-        "https://#{host}/mms/#{mms_type}/#{token}?auth=#{uri(auth)}&token=#{uri(token)}"
-      )
+    url = "https://#{host}/mms/#{mms_type}/#{token}?auth=#{uri(auth)}&token=#{uri(token)}"
 
     headers = [
       {~c"origin", String.to_charlist(@origin)},
@@ -101,14 +94,14 @@ defmodule ExWapp.Media.HTTP do
       {~c"content-type", ~c"application/octet-stream"}
     ]
 
-    case :httpc.request(:post, {url, headers, ~c"application/octet-stream", body}, @http_options,
-           body_format: :binary
-         ) do
+    request = {String.to_charlist(url), headers, ~c"application/octet-stream", body}
+
+    case :httpc.request(:post, request, TLS.httpc_options(url), body_format: :binary) do
       {:ok, {{_, status, _}, _headers, response_body}} when status in 200..299 ->
         {:ok, struct(upload, parse_upload_response(response_body))}
 
       {:ok, {{_, status, _}, _headers, response_body}} ->
-        {:error, {:upload_http_error, status, response_body}}
+        {:error, {:upload_http_error, status, byte_size(response_body)}}
 
       {:error, reason} ->
         {:error, {:upload_failed, reason}}
@@ -159,12 +152,17 @@ defmodule ExWapp.Media.HTTP do
       {~c"referer", String.to_charlist(@origin <> "/")}
     ]
 
-    case :httpc.request(:get, {String.to_charlist(url), headers}, @http_options,
+    case :httpc.request(:get, {String.to_charlist(url), headers}, TLS.httpc_options(url),
            body_format: :binary
          ) do
-      {:ok, {{_, status, _}, _headers, body}} when status in 200..299 -> {:ok, body}
-      {:ok, {{_, status, _}, _headers, body}} -> {:error, {:download_http_error, status, body}}
-      {:error, reason} -> {:error, {:download_failed, reason}}
+      {:ok, {{_, status, _}, _headers, body}} when status in 200..299 ->
+        {:ok, body}
+
+      {:ok, {{_, status, _}, _headers, body}} ->
+        {:error, {:download_http_error, status, byte_size(body)}}
+
+      {:error, reason} ->
+        {:error, {:download_failed, reason}}
     end
   end
 

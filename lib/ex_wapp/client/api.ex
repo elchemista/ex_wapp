@@ -10,7 +10,7 @@ defmodule ExWapp.Client.API do
 
   require Logger
 
-  alias ExWapp.{Chat, Client, Error, Event, Message, Messages}
+  alias ExWapp.{Chat, Client, Error, Event, Log, Message, Messages}
 
   @type client_error :: {:error, Error.t(), Client.t()}
   @type message_result :: {:ok, Client.t(), String.t()} | client_error()
@@ -495,7 +495,7 @@ defmodule ExWapp.Client.API do
       %{client | status: :error, last_error: error}
       |> Client.trace(operation, %{error: reason})
 
-    Logger.error("#{operation} failed: #{inspect(reason)}")
+    Logger.error("#{operation} failed: #{Log.reason(reason)}")
 
     {:error, error, failed_client}
   end

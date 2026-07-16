@@ -5,7 +5,7 @@ defmodule ExWapp.Session.IQ do
 
   require Logger
 
-  alias ExWapp.{Binary, JID}
+  alias ExWapp.{Binary, JID, Log}
   alias ExWapp.Session.JIDUtils
 
   @spec build_prekey_request(String.t() | [String.t()], String.t()) :: Binary.Node.t()
@@ -210,11 +210,11 @@ defmodule ExWapp.Session.IQ do
           |> extract_user_jid()
           |> JIDUtils.normalize_with_device()
 
-        Logger.debug("[PREKEY] Parsed bundle for device_jid=#{inspect(device_jid)}")
+        Logger.debug("[PREKEY] Parsed bundle for device_jid=#{Log.reference(device_jid)}")
         [Map.put(bundle, :device_jid, device_jid) | acc]
 
       {:error, reason} ->
-        Logger.warning("[PREKEY] Skipping invalid bundle node: #{inspect(reason)}")
+        Logger.warning("[PREKEY] Skipping invalid bundle node: #{Log.reason(reason)}")
         acc
     end
   end

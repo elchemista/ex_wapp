@@ -2,7 +2,8 @@ defmodule ExWapp.Telemetry do
   @moduledoc """
   Telemetry helpers and canonical event list for ExWapp.
 
-  All events use the `[:ex_wapp, :session, ...]` prefix.
+  Session events use the `[:ex_wapp, :session, ...]` prefix. Store, app-state,
+  safety, quota, and client events use their corresponding ExWapp domain prefix.
   """
 
   @prefix [:ex_wapp, :session]
@@ -25,7 +26,11 @@ defmodule ExWapp.Telemetry do
     [:ex_wapp, :client, :connect, :start],
     [:ex_wapp, :client, :connect, :stop],
     [:ex_wapp, :client, :connect, :exception],
-    [:ex_wapp, :event, :emit]
+    [:ex_wapp, :event, :emit],
+    [:ex_wapp, :app_state, :external_blob],
+    [:ex_wapp, :app_state, :decode],
+    [:ex_wapp, :app_state, :dispatch],
+    [:ex_wapp, :store, :flush]
   ]
 
   @type event_name :: [atom()]

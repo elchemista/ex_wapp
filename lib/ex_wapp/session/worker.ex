@@ -53,6 +53,7 @@ defmodule ExWapp.Session.Worker do
   alias ExWapp.{
     Binary,
     Config,
+    Log,
     Media,
     Message,
     Messages,
@@ -116,6 +117,7 @@ defmodule ExWapp.Session.Worker do
   }
 
   @max_outgoing_retry_payloads 512
+  @explicit_app_state_sync_timeout :timer.minutes(5)
 
   defstruct [
     :store,
@@ -360,7 +362,8 @@ defmodule ExWapp.Session.Worker do
 
   @doc "Fetch and apply the contact app-state collection (`critical_unblock_low`)."
   @spec sync_contacts(GenServer.server()) :: :ok | {:error, term()}
-  def sync_contacts(server), do: GenServer.call(server, :sync_contacts, 30_000)
+  def sync_contacts(server),
+    do: GenServer.call(server, :sync_contacts, @explicit_app_state_sync_timeout)
 
   @doc "List all contacts."
   @spec list_contacts(GenServer.server()) :: [ExWapp.Contact.t()]
@@ -765,7 +768,7 @@ defmodule ExWapp.Session.Worker do
       start_contact_sync_worker(state, from)
     else
       Logger.debug(
-        "[APP_STATE] Contact sync skipped while app-state keys are unavailable session_id=#{inspect(state.session_id)}"
+        "[APP_STATE] Contact sync skipped while app-state keys are unavailable session=#{Log.reference(state.session_id)}"
       )
 
       {:reply, {:error, :app_state_keys_unavailable}, state}
@@ -926,23 +929,23 @@ defmodule ExWapp.Session.Worker do
 
   # Connection process exited
   def handle_info({:EXIT, pid, reason}, %__MODULE__{conn: pid} = state) do
-    Logger.warning("Connection process exited: #{inspect(reason)}")
+    Logger.warning("Connection process exited: #{Log.reason(reason)}")
     new_state = handle_connection_exit(state, reason)
     {:noreply, new_state}
   end
 
   def handle_info({:EXIT, pid, reason}, %__MODULE__{outbound_queue: pid} = state) do
-    Logger.warning("[SESSION] outbound queue exited: #{inspect(reason)}")
+    Logger.warning("[SESSION] outbound queue exited: #{Log.reason(reason)}")
     {:noreply, restart_outbound_queue(state)}
   end
 
   def handle_info({:EXIT, pid, reason}, %__MODULE__{inbound_router: pid} = state) do
-    Logger.warning("[SESSION] inbound router exited: #{inspect(reason)}")
+    Logger.warning("[SESSION] inbound router exited: #{Log.reason(reason)}")
     {:noreply, restart_inbound_router(state)}
   end
 
   def handle_info({:EXIT, pid, reason}, %__MODULE__{send_worker_sup: pid} = state) do
-    Logger.warning("[SESSION] send worker supervisor exited: #{inspect(reason)}")
+    Logger.warning("[SESSION] send worker supervisor exited: #{Log.reason(reason)}")
     state = fail_all_send_workers(state, {:send_worker_supervisor_exited, reason})
 
     case Task.Supervisor.start_link() do
@@ -951,7 +954,7 @@ defmodule ExWapp.Session.Worker do
 
       {:error, restart_reason} ->
         Logger.error(
-          "[SESSION] failed to restart send worker supervisor: #{inspect(restart_reason)}"
+          "[SESSION] failed to restart send worker supervisor: #{Log.reason(restart_reason)}"
         )
 
         {:noreply, %{state | send_worker_sup: nil}}
@@ -968,19 +971,19 @@ defmodule ExWapp.Session.Worker do
   # Connection events from Conn process
   def handle_info({:connection_event, event}, state) do
     Logger.debug(
-      "[SESSION] connection_event session_id=#{state.session_id} event=#{inspect(connection_event_summary(event))} status_before=#{inspect(state.status)} post_auth_phase=#{inspect(state.post_auth_phase)}"
+      "[SESSION] connection_event session=#{Log.reference(state.session_id)} event=#{inspect(connection_event_summary(event))} status_before=#{inspect(state.status)} post_auth_phase=#{inspect(state.post_auth_phase)}"
     )
 
     new_state = handle_connection_event(event, state)
 
     Logger.debug(
-      "[SESSION] connection_event handled session_id=#{state.session_id} event=#{inspect(connection_event_summary(event))} status_after=#{inspect(new_state.status)} post_auth_phase=#{inspect(new_state.post_auth_phase)}"
+      "[SESSION] connection_event handled session=#{Log.reference(state.session_id)} event=#{inspect(connection_event_summary(event))} status_after=#{inspect(new_state.status)} post_auth_phase=#{inspect(new_state.post_auth_phase)}"
     )
 
     {:noreply, new_state}
   catch
     kind, reason ->
-      Logger.error("Error handling connection event: #{kind} #{inspect(reason)}")
+      Logger.error("Error handling connection event: #{kind} #{Log.reason(reason)}")
       new_state = update_stats(state, :errors)
       {:noreply, new_state}
   end
@@ -995,7 +998,7 @@ defmodule ExWapp.Session.Worker do
     failure_reason = {:task_exited_without_result, reason}
 
     Logger.warning(
-      "[APP_STATE] initial sync task exited without a result session_id=#{inspect(state.session_id)} reason=#{inspect(reason)}"
+      "[APP_STATE] initial sync task exited without a result session=#{Log.reference(state.session_id)} reason=#{Log.reason(reason)}"
     )
 
     AppStateSync.broadcast_failure(
@@ -1037,7 +1040,10 @@ defmodule ExWapp.Session.Worker do
         {:noreply, new_state}
 
       {:error, reason, error_state} ->
-        Logger.warning("[SESSION] PubSub send blocked for #{jid}: #{inspect(reason)}")
+        Logger.warning(
+          "[SESSION] PubSub send blocked for #{Log.reference(jid)}: #{Log.reason(reason)}"
+        )
+
         {:noreply, error_state}
     end
   end
@@ -1052,7 +1058,7 @@ defmodule ExWapp.Session.Worker do
   # New message received - notify subscribers
   def handle_info({:new_message, jid, message}, state) do
     Logger.info(
-      "[WORKER] New message from=#{inspect(jid)} id=#{Map.get(message, :id)} text=#{inspect(String.slice(Map.get(message, :text, "") || "", 0, 80))} session_id=#{state.session_id}"
+      "[WORKER] New message from=#{Log.reference(jid)} id=#{Log.reference(Map.get(message, :id))} session=#{Log.reference(state.session_id)}"
     )
 
     emit_telemetry(
@@ -1106,14 +1112,14 @@ defmodule ExWapp.Session.Worker do
     cond do
       not AppStateSync.initial_enabled?(state) ->
         Logger.debug(
-          "[APP_STATE] Automatic initial sync disabled session_id=#{inspect(state.session_id)}"
+          "[APP_STATE] Automatic initial sync disabled session=#{Log.reference(state.session_id)}"
         )
 
         {:noreply, state}
 
       not AppStateSync.keys_available?(state.store) ->
         Logger.debug(
-          "[APP_STATE] Initial sync still waiting for app-state keys session_id=#{inspect(state.session_id)}"
+          "[APP_STATE] Initial sync still waiting for app-state keys session=#{Log.reference(state.session_id)}"
         )
 
         {:noreply, state}
@@ -1160,7 +1166,7 @@ defmodule ExWapp.Session.Worker do
       )
       when is_pid(task_pid) do
     Logger.debug(
-      "[APP_STATE] initial sync finished; marking session connected session_id=#{inspect(state.session_id)}"
+      "[APP_STATE] initial sync finished; marking session connected session=#{Log.reference(state.session_id)}"
     )
 
     state =
@@ -1178,7 +1184,7 @@ defmodule ExWapp.Session.Worker do
   def handle_info({:app_state_initial_sync, _}, state), do: {:noreply, state}
 
   def handle_info({:outbound_error, _item, reason}, state) do
-    Logger.warning("[SESSION] outbound queue error: #{inspect(reason)}")
+    Logger.warning("[SESSION] outbound queue error: #{Log.reason(reason)}")
     emit_telemetry(:error, %{reason: reason, phase: :outbound}, state)
     state = update_stats(state, :errors)
     state = increment_outbound_queue_errors(state, reason)
@@ -1224,8 +1230,11 @@ defmodule ExWapp.Session.Worker do
            result = PrekeyFetcher.fetch_prekeys(session, jid)
            send(session, {:identity_prekey_bundle, jid, result})
          end) do
-      {:ok, _pid} -> :ok
-      {:error, reason} -> Logger.warning("[IDENTITY] Refresh worker failed: #{inspect(reason)}")
+      {:ok, _pid} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[IDENTITY] Refresh worker failed: #{Log.reason(reason)}")
     end
 
     {:noreply, state}
@@ -1238,7 +1247,7 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_info({:identity_prekey_bundle, jid, {:error, reason}}, state) do
-    Logger.warning("[IDENTITY] Could not refresh #{jid}: #{inspect(reason)}")
+    Logger.warning("[IDENTITY] Could not refresh #{Log.reference(jid)}: #{Log.reason(reason)}")
     {:noreply, state}
   end
 
@@ -1336,13 +1345,13 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_info(msg, state) do
-    Logger.debug("Unhandled message: #{inspect(msg)}")
+    Logger.debug("Unhandled message: #{Log.term_summary(msg)}")
     {:noreply, state}
   end
 
   @impl true
   def terminate(reason, state) do
-    Logger.debug("Session terminating: #{inspect(reason)}")
+    Logger.debug("Session terminating: #{Log.reason(reason)}")
     emit_telemetry(:terminate, %{reason: reason}, state)
 
     Subscribers.broadcast_lifecycle(
@@ -1368,6 +1377,15 @@ defmodule ExWapp.Session.Worker do
     :ok
   end
 
+  @impl true
+  def format_status(status) when is_map(status) do
+    status
+    |> Map.update(:reason, :redacted, &Log.safe_term/1)
+    |> Map.update(:message, :redacted, &Log.safe_term/1)
+    |> Map.update(:state, :redacted, &format_status_state/1)
+    |> Map.put(:log, [])
+  end
+
   # Establishing and closing connections
 
   defp do_connect(%__MODULE__{status: status} = state)
@@ -1378,7 +1396,7 @@ defmodule ExWapp.Session.Worker do
 
   defp do_connect(%__MODULE__{} = state) do
     Logger.debug("[SESSION] do_connect starting connection...")
-    Logger.debug("[SESSION] store=#{inspect(state.store)}")
+    Logger.debug("[SESSION] store_adapter=#{inspect(state.store.__struct__)}")
     emit_telemetry(:connect, %{attempt: state.reconnect_attempts}, state)
 
     case safe_start_connection(state) do
@@ -1396,8 +1414,8 @@ defmodule ExWapp.Session.Worker do
         |> schedule_health_check()
 
       {:error, reason} ->
-        Logger.debug("[SESSION] ✗ Connection FAILED: #{inspect(reason)}")
-        Logger.error("Failed to start connection: #{inspect(reason)}")
+        Logger.debug("[SESSION] ✗ Connection FAILED: #{Log.reason(reason)}")
+        Logger.error("Failed to start connection: #{Log.reason(reason)}")
         emit_telemetry(:error, %{reason: reason, phase: :connect}, state)
 
         if vext_managed_runtime?(state) do
@@ -1432,15 +1450,15 @@ defmodule ExWapp.Session.Worker do
     result =
       state.transport_mod.start_link(session: self(), store: state.store, noise: noise_opts)
 
-    Logger.debug("[SESSION] transport.start_link result: #{inspect(result)}")
+    Logger.debug("[SESSION] transport.start_link result: #{Log.reason(result)}")
     result
   rescue
     e ->
-      Logger.debug("[SESSION] ✗ transport.start_link EXCEPTION: #{inspect(e)}")
+      Logger.debug("[SESSION] ✗ transport.start_link EXCEPTION: #{Log.reason(e)}")
       {:error, {:exception, e}}
   catch
     :exit, reason ->
-      Logger.debug("[SESSION] ✗ transport.start_link EXIT: #{inspect(reason)}")
+      Logger.debug("[SESSION] ✗ transport.start_link EXIT: #{Log.reason(reason)}")
       {:error, {:exit, reason}}
   end
 
@@ -1565,7 +1583,7 @@ defmodule ExWapp.Session.Worker do
       |> schedule_connect(0)
     else
       Logger.error(
-        "[SESSION] Immediate reconnect suppressed: reconnect disabled, reason=#{inspect(reason)}"
+        "[SESSION] Immediate reconnect suppressed: reconnect disabled, reason=#{Log.reason(reason)}"
       )
 
       state
@@ -1760,7 +1778,7 @@ defmodule ExWapp.Session.Worker do
   defp handle_connection_event({:connection_binary, _payload}, state), do: state
 
   defp handle_connection_event({:error, reason}, state) do
-    Logger.warning("Connection error: #{inspect(reason)}")
+    Logger.warning("Connection error: #{Log.reason(reason)}")
     emit_telemetry(:error, %{reason: reason}, state)
     state = update_stats(state, :errors)
 
@@ -2007,7 +2025,7 @@ defmodule ExWapp.Session.Worker do
     |> normalize_persisted_signal_sessions()
   rescue
     error ->
-      Logger.warning("[SESSION] Failed to load persisted signal sessions: #{inspect(error)}")
+      Logger.warning("[SESSION] Failed to load persisted signal sessions: #{Log.reason(error)}")
       nil
   end
 
@@ -2034,7 +2052,7 @@ defmodule ExWapp.Session.Worker do
           :ok
 
         {:error, reason} ->
-          Logger.warning("[SESSION] Failed to persist signal sessions: #{inspect(reason)}")
+          Logger.warning("[SESSION] Failed to persist signal sessions: #{Log.reason(reason)}")
           :ok
       end
     else
@@ -2042,7 +2060,7 @@ defmodule ExWapp.Session.Worker do
     end
   rescue
     error ->
-      Logger.warning("[SESSION] Failed to persist signal sessions: #{inspect(error)}")
+      Logger.warning("[SESSION] Failed to persist signal sessions: #{Log.reason(error)}")
       :ok
   end
 
@@ -2068,13 +2086,16 @@ defmodule ExWapp.Session.Worker do
       %{state | signal_sessions: sessions}
     else
       reason ->
-        Logger.warning("[IDENTITY] Invalid refreshed bundle for #{jid}: #{inspect(reason)}")
+        Logger.warning(
+          "[IDENTITY] Invalid refreshed bundle for #{Log.reference(jid)}: #{Log.reason(reason)}"
+        )
+
         state
     end
   rescue
     error ->
       Logger.warning(
-        "[IDENTITY] Failed installing refreshed bundle for #{jid}: #{inspect(error)}"
+        "[IDENTITY] Failed installing refreshed bundle for #{Log.reference(jid)}: #{Log.reason(error)}"
       )
 
       state
@@ -2104,17 +2125,13 @@ defmodule ExWapp.Session.Worker do
   defp flush_store(nil), do: :ok
 
   defp flush_store(store) do
-    if function_exported?(store.__struct__, :flush, 1) do
-      case store.__struct__.flush(store) do
-        :ok -> :ok
-        {:error, reason} -> Logger.warning("[SESSION] Failed flushing store: #{inspect(reason)}")
-      end
-    else
-      :ok
+    case Store.flush(store) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("[SESSION] Failed flushing store: #{Log.reason(reason)}")
     end
   rescue
     error ->
-      Logger.warning("[SESSION] Failed flushing store: #{inspect(error)}")
+      Logger.warning("[SESSION] Failed flushing store: #{Log.reason(error)}")
       :ok
   end
 
@@ -2130,11 +2147,11 @@ defmodule ExWapp.Session.Worker do
     :ok
   rescue
     exception ->
-      Logger.warning("[SESSION] Failed stopping #{label}: #{Exception.message(exception)}")
+      Logger.warning("[SESSION] Failed stopping #{label}: #{Log.reason(exception)}")
       :ok
   catch
     :exit, reason ->
-      Logger.warning("[SESSION] Failed stopping #{label}: #{inspect(reason)}")
+      Logger.warning("[SESSION] Failed stopping #{label}: #{Log.reason(reason)}")
       :ok
   end
 
@@ -2145,14 +2162,12 @@ defmodule ExWapp.Session.Worker do
     :ok
   rescue
     exception ->
-      Logger.warning(
-        "[SESSION] Failed stopping send worker supervisor: #{Exception.message(exception)}"
-      )
+      Logger.warning("[SESSION] Failed stopping send worker supervisor: #{Log.reason(exception)}")
 
       :ok
   catch
     :exit, reason ->
-      Logger.warning("[SESSION] Failed stopping send worker supervisor: #{inspect(reason)}")
+      Logger.warning("[SESSION] Failed stopping send worker supervisor: #{Log.reason(reason)}")
 
       :ok
   end
@@ -2162,15 +2177,15 @@ defmodule ExWapp.Session.Worker do
   defp close_owned_store(%{store_owned?: true, store: store}) do
     case Store.close(store) do
       :ok -> :ok
-      {:error, reason} -> Logger.warning("[SESSION] Failed closing store: #{inspect(reason)}")
+      {:error, reason} -> Logger.warning("[SESSION] Failed closing store: #{Log.reason(reason)}")
     end
   rescue
     exception ->
-      Logger.warning("[SESSION] Failed closing store: #{Exception.message(exception)}")
+      Logger.warning("[SESSION] Failed closing store: #{Log.reason(exception)}")
       :ok
   catch
     kind, reason ->
-      Logger.warning("[SESSION] Failed closing store: #{inspect({kind, reason})}")
+      Logger.warning("[SESSION] Failed closing store: #{Log.reason({kind, reason})}")
       :ok
   end
 
@@ -2253,7 +2268,7 @@ defmodule ExWapp.Session.Worker do
         {:ok, worker, mon}
 
       {:error, reason} ->
-        Logger.warning("[SEND] Failed to start worker for #{label}: #{inspect(reason)}")
+        Logger.warning("[SEND] Failed to start worker for #{label}: #{Log.reason(reason)}")
         {:error, reason}
     end
   end
@@ -2295,7 +2310,7 @@ defmodule ExWapp.Session.Worker do
         reply_send_caller(operation.from, result)
 
         Logger.warning(
-          "[SEND] Worker exited label=#{inspect(operation.label)} reason=#{inspect(reason)}"
+          "[SEND] Worker exited label=#{inspect(operation.label)} reason=#{Log.reason(reason)}"
         )
 
         {:ok, %{state | send_coordinator: coordinator}}
@@ -2346,7 +2361,7 @@ defmodule ExWapp.Session.Worker do
   defp cancel_session_tasks(state, reason) do
     if InitialSync.active?(state.initial_sync) do
       Logger.debug(
-        "[APP_STATE] cancelling initial sync session_id=#{inspect(state.session_id)} reason=#{inspect(reason)}"
+        "[APP_STATE] cancelling initial sync session=#{Log.reference(state.session_id)} reason=#{Log.reason(reason)}"
       )
     end
 
@@ -2816,14 +2831,29 @@ defmodule ExWapp.Session.Worker do
   defp connection_event_summary({:transport, {:closed, reason}}),
     do: {:transport, {:closed, connection_close_reason_summary(reason)}}
 
-  defp connection_event_summary(event), do: event
+  defp connection_event_summary(event), do: Log.safe_term(event)
 
   defp connection_close_reason_summary(%{__struct__: module}),
     do: %{type: inspect(module)}
 
   defp connection_close_reason_summary(reason) when is_map(reason) do
-    Map.take(reason, [:reason, :attempt_number, :code])
+    reason
+    |> Map.take([:reason, :attempt_number, :code])
+    |> Map.new(fn {key, value} -> {key, Log.safe_term(value)} end)
   end
 
-  defp connection_close_reason_summary(reason), do: reason
+  defp connection_close_reason_summary(reason), do: Log.safe_term(reason)
+
+  defp format_status_state(state) when is_map(state) do
+    %{
+      status: Map.get(state, :status),
+      session: Log.reference(Map.get(state, :session_id)),
+      transport_connected?: is_pid(Map.get(state, :conn)),
+      pending_iqs: state |> Map.get(:pending_iqs, %{}) |> map_size(),
+      message_subscribers: state |> Map.get(:message_subscribers, %{}) |> map_size(),
+      qr_subscribers: state |> Map.get(:qr_subscribers, %{}) |> map_size()
+    }
+  end
+
+  defp format_status_state(_state), do: :redacted
 end

@@ -16,6 +16,7 @@ defmodule ExWapp.Pairing.ADV do
 
   require Logger
 
+  alias ExWapp.Log
   alias ExWapp.Signal.Keys, as: SignalKeys
   alias WAAdv.{ADVDeviceIdentity, ADVSignedDeviceIdentity, ADVSignedDeviceIdentityHMAC}
 
@@ -66,7 +67,7 @@ defmodule ExWapp.Pairing.ADV do
 
         {:error, {:adv_container_decode, container_error}} ->
           Logger.warning(
-            "[ADV] HMAC container decode failed: #{inspect(container_error)}, trying direct signed identity"
+            "[ADV] HMAC container decode failed: #{Log.reason(container_error)}, trying direct signed identity"
           )
 
           parse_direct_signed_identity(adv_bytes, identity_pub, identity_priv)
@@ -116,7 +117,7 @@ defmodule ExWapp.Pairing.ADV do
         parse_hmac_wrapped(container, adv_secret, identity_pub, identity_priv)
 
       {:error, container_error} ->
-        Logger.error("[ADV] HMAC container decode failed: #{inspect(container_error)}")
+        Logger.error("[ADV] HMAC container decode failed: #{Log.reason(container_error)}")
         {:error, container_error}
     end
   end
@@ -169,7 +170,7 @@ defmodule ExWapp.Pairing.ADV do
       )
     else
       {:error, reason} = err ->
-        Logger.error("[ADV] parse_direct_signed_identity failed: #{inspect(reason)}")
+        Logger.error("[ADV] parse_direct_signed_identity failed: #{Log.reason(reason)}")
         err
     end
   end
@@ -331,7 +332,7 @@ defmodule ExWapp.Pairing.ADV do
       {:ok, signature}
     rescue
       e ->
-        Logger.error("[ADV] Device signature failed: #{inspect(e)}")
+        Logger.error("[ADV] Device signature failed: #{Log.reason(e)}")
         {:error, :adv_device_signature_failed}
     end
   end
@@ -353,7 +354,7 @@ defmodule ExWapp.Pairing.ADV do
 
       Logger.warning(
         "[ADV] decode_details_relaxed: falling back to partial details, " <>
-          "keyIndex=#{inspect(key_index)} reason=#{inspect(reason)}"
+          "keyIndex=#{inspect(key_index)} reason=#{Log.reason(reason)}"
       )
 
       {:ok, %{keyIndex: key_index, decode_error: reason}}

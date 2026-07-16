@@ -5,7 +5,7 @@ defmodule ExWapp.Session.Worker.Retry do
 
   require Logger
 
-  alias ExWapp.Chat
+  alias ExWapp.{Chat, Log}
 
   @type start_worker_fun :: (map(), binary(), (-> any()) ->
                                {:ok, pid(), reference()} | {:error, term()})
@@ -47,13 +47,13 @@ defmodule ExWapp.Session.Worker.Retry do
 
         if attempts >= context.max_attempts do
           Logger.warning(
-            "[SEND] Skipping retry for message id=#{message_id} to=#{retry_jid}: max attempts reached (requested_by=#{jid})"
+            "[SEND] Skipping retry for message id=#{Log.reference(message_id)} to=#{Log.reference(retry_jid)}: max attempts reached (requested_by=#{Log.reference(jid)})"
           )
 
           state
         else
           Logger.warning(
-            "[SEND] Retrying outbound message id=#{message_id} to=#{retry_jid} (requested_by=#{jid}, recipient=#{inspect(Map.get(context.retry_meta, :recipient))}, attempt #{attempts + 1}/#{context.max_attempts})"
+            "[SEND] Retrying outbound message id=#{Log.reference(message_id)} to=#{Log.reference(retry_jid)} (requested_by=#{Log.reference(jid)}, recipient=#{Log.reference(Map.get(context.retry_meta, :recipient))}, attempt #{attempts + 1}/#{context.max_attempts})"
           )
 
           spawn_retry_worker(state, retry_jid, message_id, attempts, text, context)
@@ -61,7 +61,7 @@ defmodule ExWapp.Session.Worker.Retry do
 
       {:error, reason} ->
         Logger.warning(
-          "[SEND] Cannot retry message id=#{message_id} for #{jid}: #{inspect(reason)}"
+          "[SEND] Cannot retry message id=#{Log.reference(message_id)} for #{Log.reference(jid)}: #{Log.reason(reason)}"
         )
 
         state
@@ -80,7 +80,7 @@ defmodule ExWapp.Session.Worker.Retry do
 
       {:error, reason} ->
         Logger.warning(
-          "[SEND] Cannot retry message id=#{message_id} for #{jid}: #{inspect(reason)}"
+          "[SEND] Cannot retry message id=#{Log.reference(message_id)} for #{Log.reference(jid)}: #{Log.reason(reason)}"
         )
 
         state
@@ -88,11 +88,15 @@ defmodule ExWapp.Session.Worker.Retry do
   end
 
   defp log_retry_result({:ok, new_id}, message_id) do
-    Logger.debug("[SEND] Retry for message id=#{message_id} succeeded with new id=#{new_id}")
+    Logger.debug(
+      "[SEND] Retry for message id=#{Log.reference(message_id)} succeeded with new id=#{Log.reference(new_id)}"
+    )
   end
 
   defp log_retry_result({:error, reason}, message_id) do
-    Logger.warning("[SEND] Retry for message id=#{message_id} failed: #{inspect(reason)}")
+    Logger.warning(
+      "[SEND] Retry for message id=#{Log.reference(message_id)} failed: #{Log.reason(reason)}"
+    )
   end
 
   defp outbound_retry_counter_key(jid, message_id) do

@@ -231,7 +231,8 @@ defmodule ExWapp do
       # Send to group
       ExWapp.send_text(session, "123456789-987654321@g.us", "Hello group!")
   """
-  @spec send_text(GenServer.server(), binary(), iodata()) :: :ok | {:error, term()}
+  @spec send_text(GenServer.server(), binary(), iodata()) ::
+          {:ok, String.t()} | {:error, term()}
   defdelegate send_text(server, jid, text), to: Session
 
   @doc """

@@ -9,7 +9,7 @@ defmodule ExWapp.Session.Outbound.Encryptor do
 
   require Logger
 
-  alias ExWapp.{Binary, Store}
+  alias ExWapp.{Binary, Log, Store}
   alias ExWapp.Session.{Account, JIDUtils, MessageNode}
   alias ExWapp.Session.Outbound.Direct
   alias ExWapp.Signal.{Encryption, SessionStore, WireFormat}
@@ -132,7 +132,9 @@ defmodule ExWapp.Session.Outbound.Encryptor do
         else: acc.sessions
 
     if signal_jid != target_jid do
-      Logger.debug("[SEND] Encrypting wire_jid=#{target_jid} using signal_jid=#{signal_jid}")
+      Logger.debug(
+        "[SEND] Encrypting wire_jid=#{Log.reference(target_jid)} using signal_jid=#{Log.reference(signal_jid)}"
+      )
     end
 
     padded_payload = Map.get(payloads, kind, Map.get(payloads, :recipient))
@@ -150,7 +152,10 @@ defmodule ExWapp.Session.Outbound.Encryptor do
         bundle_for_encrypt
       )
     else
-      Logger.warning("[SEND] Missing payload for target=#{target_jid} kind=#{kind}")
+      Logger.warning(
+        "[SEND] Missing payload for target=#{Log.reference(target_jid)} kind=#{kind}"
+      )
+
       %{acc | errors: [{target_jid, :missing_payload} | acc.errors]}
     end
   end
@@ -184,7 +189,10 @@ defmodule ExWapp.Session.Outbound.Encryptor do
         )
 
       {:error, reason} ->
-        Logger.warning("[SEND] Failed to encrypt for wire_jid=#{target_jid}: #{inspect(reason)}")
+        Logger.warning(
+          "[SEND] Failed to encrypt for wire_jid=#{Log.reference(target_jid)}: #{Log.reason(reason)}"
+        )
+
         %{acc | errors: [{target_jid, reason} | acc.errors]}
     end
   end
@@ -201,7 +209,10 @@ defmodule ExWapp.Session.Outbound.Encryptor do
   defp encrypt_for_target_with_fallback(store, sessions, target_jid, signal_jid, payload, bundle) do
     case Encryption.encrypt_for_recipient_sync(store, sessions, signal_jid, payload, bundle) do
       {:error, :missing_bundle} when signal_jid != target_jid ->
-        Logger.debug("[SEND] No session for signal_jid=#{signal_jid}, retrying with wire jid")
+        Logger.debug(
+          "[SEND] No session for signal_jid=#{Log.reference(signal_jid)}, retrying with wire jid"
+        )
+
         Encryption.encrypt_for_recipient_sync(store, sessions, target_jid, payload, bundle)
 
       other ->
@@ -250,12 +261,12 @@ defmodule ExWapp.Session.Outbound.Encryptor do
     case WireFormat.parse_prekey_signal_message(ciphertext) do
       {:ok, parsed} ->
         Logger.debug(
-          "[SEND] pkmsg wire fields target=#{target_jid} reg_id=#{parsed.registration_id} signed_prekey_id=#{parsed.signed_prekey_id} prekey_id=#{inspect(parsed.prekey_id)} base_key_size=#{byte_size(parsed.base_key)} inner_size=#{byte_size(parsed.message)}"
+          "[SEND] pkmsg wire fields target=#{Log.reference(target_jid)} reg_id=#{parsed.registration_id} signed_prekey_id=#{parsed.signed_prekey_id} prekey_id=#{inspect(parsed.prekey_id)} base_key_size=#{byte_size(parsed.base_key)} inner_size=#{byte_size(parsed.message)}"
         )
 
       {:error, reason} ->
         Logger.warning(
-          "[SEND] pkmsg wire parse failed for target=#{target_jid}: #{inspect(reason)}"
+          "[SEND] pkmsg wire parse failed for target=#{Log.reference(target_jid)}: #{Log.reason(reason)}"
         )
     end
   end
@@ -276,7 +287,10 @@ defmodule ExWapp.Session.Outbound.Encryptor do
       true ->
         case SessionStore.get_session(signal_sessions, source_jid) do
           {:ok, session} ->
-            Logger.debug("[SEND] Migrating session #{source_jid} -> #{alias_jid}")
+            Logger.debug(
+              "[SEND] Migrating session #{Log.reference(source_jid)} -> #{Log.reference(alias_jid)}"
+            )
+
             SessionStore.put_session(signal_sessions, alias_jid, session)
 
           :not_found ->

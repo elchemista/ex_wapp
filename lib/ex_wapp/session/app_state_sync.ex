@@ -4,7 +4,7 @@ defmodule ExWapp.Session.AppStateSync do
   require Logger
 
   alias ExWapp.AppState.Engine
-  alias ExWapp.{Config, Store}
+  alias ExWapp.{Config, Log, Store}
   alias ExWapp.Session.Worker.Subscribers
 
   @type source :: :initial | :notification
@@ -14,7 +14,7 @@ defmodule ExWapp.Session.AppStateSync do
     cond do
       not initial_enabled?(state) ->
         Logger.debug(
-          "[APP_STATE] Automatic initial sync disabled session_id=#{inspect(state.session_id)}"
+          "[APP_STATE] Automatic initial sync disabled session=#{Log.reference(state.session_id)}"
         )
 
       keys_available?(state.store) ->
@@ -22,7 +22,7 @@ defmodule ExWapp.Session.AppStateSync do
 
       true ->
         Logger.debug(
-          "[APP_STATE] Deferring initial sync until app-state keys are available session_id=#{inspect(state.session_id)}"
+          "[APP_STATE] Deferring initial sync until app-state keys are available session=#{Log.reference(state.session_id)}"
         )
     end
 
@@ -71,7 +71,7 @@ defmodule ExWapp.Session.AppStateSync do
 
       {:error, reason} ->
         Logger.warning(
-          "[APP_STATE] Failed to start collection refresh source=#{source}: #{inspect(reason)}"
+          "[APP_STATE] Failed to start collection refresh source=#{source}: #{Log.reason(reason)}"
         )
 
         {:error, reason}
@@ -88,7 +88,7 @@ defmodule ExWapp.Session.AppStateSync do
   rescue
     exception ->
       Logger.warning(
-        "[APP_STATE] failed to broadcast initial sync failure: #{Exception.message(exception)}"
+        "[APP_STATE] failed to broadcast initial sync failure: #{Log.reason(exception)}"
       )
 
       :ok
@@ -113,10 +113,10 @@ defmodule ExWapp.Session.AppStateSync do
     run_refresh(session_pid, store, names, source, session_id)
   rescue
     exception ->
-      reason = {:exception, Exception.message(exception)}
+      reason = {:exception, exception.__struct__}
 
       Logger.warning(
-        "[APP_STATE] collection refresh crashed source=#{source} reason=#{inspect(reason)}"
+        "[APP_STATE] collection refresh crashed source=#{source} reason=#{Log.reason(reason)}"
       )
 
       maybe_broadcast_unexpected_failure(source, session_id, session_pid, reason)
@@ -126,7 +126,7 @@ defmodule ExWapp.Session.AppStateSync do
       reason = {kind, caught_reason}
 
       Logger.warning(
-        "[APP_STATE] collection refresh stopped source=#{source} reason=#{inspect(reason)}"
+        "[APP_STATE] collection refresh stopped source=#{source} reason=#{Log.reason(reason)}"
       )
 
       maybe_broadcast_unexpected_failure(source, session_id, session_pid, reason)
@@ -313,24 +313,14 @@ defmodule ExWapp.Session.AppStateSync do
   defp sync_outcome(_failures, _flush_result), do: :failed
 
   @spec begin_store_batch(term(), atom()) :: :ok | {:error, term()}
-  defp begin_store_batch(%module{} = store, reason) when is_atom(reason) do
-    if function_exported?(module, :begin_batch, 2) do
-      module.begin_batch(store, reason)
-    else
-      :ok
-    end
-  end
+  defp begin_store_batch(%_{} = store, reason) when is_atom(reason),
+    do: Store.begin_batch(store, reason)
 
   defp begin_store_batch(_store, _reason), do: :ok
 
   @spec finish_store_batch(term(), atom()) :: :ok | {:error, term()}
-  defp finish_store_batch(%module{} = store, reason) when is_atom(reason) do
-    if function_exported?(module, :finish_batch, 2) do
-      module.finish_batch(store, reason)
-    else
-      :ok
-    end
-  end
+  defp finish_store_batch(%_{} = store, reason) when is_atom(reason),
+    do: Store.finish_batch(store, reason)
 
   defp finish_store_batch(_store, _reason), do: :ok
 
@@ -341,19 +331,20 @@ defmodule ExWapp.Session.AppStateSync do
         :ok
 
       {:error, reason} ->
-        Logger.warning("[APP_STATE] Failed to fetch #{collection_name}: #{inspect(reason)}")
+        Logger.warning("[APP_STATE] Failed to fetch #{collection_name}: #{Log.reason(reason)}")
         {:error, reason}
     end
   rescue
     error ->
-      Logger.warning(
-        "[APP_STATE] Failed to fetch #{collection_name}: #{Exception.message(error)}"
-      )
+      Logger.warning("[APP_STATE] Failed to fetch #{collection_name}: #{Log.reason(error)}")
 
       {:error, {:exception, error}}
   catch
     kind, reason ->
-      Logger.warning("[APP_STATE] Failed to fetch #{collection_name}: #{inspect({kind, reason})}")
+      Logger.warning(
+        "[APP_STATE] Failed to fetch #{collection_name}: #{Log.reason({kind, reason})}"
+      )
+
       {:error, {kind, reason}}
   end
 

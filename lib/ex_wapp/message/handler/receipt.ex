@@ -9,6 +9,7 @@ defmodule ExWapp.Message.Handler.Receipt do
   require Logger
 
   alias ExWapp.Binary.Node
+  alias ExWapp.Log
   alias ExWapp.Message.Handler.{Ack, Common}
 
   @spec handle_receipt(Node.t(), pid(), map()) :: {:ok, map()} | {:ok, map(), [term()]}
@@ -194,16 +195,18 @@ defmodule ExWapp.Message.Handler.Receipt do
 
   defp log_receipt("retry", %{count: count, error: error}, from, id) do
     Logger.warning(
-      "[RECEIPT] Retry requested from=#{from} id=#{id} count=#{inspect(count)} error=#{inspect(error)}"
+      "[RECEIPT] Retry requested from=#{Log.reference(from)} id=#{Log.reference(id)} count=#{inspect(count)} error=#{Log.reason(error)}"
     )
   end
 
   defp log_receipt("retry", _retry_info, from, id) do
-    Logger.warning("[RECEIPT] Retry requested from=#{from} id=#{id}")
+    Logger.warning(
+      "[RECEIPT] Retry requested from=#{Log.reference(from)} id=#{Log.reference(id)}"
+    )
   end
 
   defp log_receipt(type, _retry_info, from, id) do
-    Logger.debug("[RECEIPT] type=#{type} from=#{from} id=#{id}")
+    Logger.debug("[RECEIPT] type=#{type} from=#{Log.reference(from)} id=#{Log.reference(id)}")
   end
 
   defp maybe_update_receipt_status(nil, _from, _id, _status), do: :ok
@@ -223,7 +226,7 @@ defmodule ExWapp.Message.Handler.Receipt do
 
   defp log_ack(class, type, id, from, to, error) do
     Logger.debug(
-      "[ACK] class=#{class} type=#{type} id=#{id} from=#{from} to=#{to} error=#{inspect(error)}"
+      "[ACK] class=#{class} type=#{type} id=#{Log.reference(id)} from=#{Log.reference(from)} to=#{Log.reference(to)} error=#{Log.reason(error)}"
     )
   end
 

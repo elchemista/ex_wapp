@@ -3,6 +3,7 @@ defmodule ExWapp.Noise.Engine do
   Pure Elixir implementation of the Noise handshake engine.
   """
 
+  alias ExWapp.Log
   alias ExWapp.Noise.Handshake
   alias ExWapp.Noise.HandshakeSecrets
   alias ExWapp.Transport.Frame
@@ -43,7 +44,7 @@ defmodule ExWapp.Noise.Engine do
     noise = Handshake.authenticate(noise, e_kp.public)
 
     Logger.debug(
-      "[NOISE] engine init: header=#{Base.encode16(wa_header, case: :lower)} eph_pub=#{Base.encode16(e_kp.public, case: :lower)} payload_len=#{byte_size(payload)}"
+      "[NOISE] engine init: header_bytes=#{byte_size(wa_header)} eph_pub_bytes=#{byte_size(e_kp.public)} payload_len=#{byte_size(payload)}"
     )
 
     state = %State{
@@ -148,7 +149,7 @@ defmodule ExWapp.Noise.Engine do
       {:ok, new_state, client_finish}
     else
       {:error, reason} ->
-        Logger.error("process_server_hello failed: #{inspect(reason)}")
+        Logger.error("process_server_hello failed: #{Log.reason(reason)}")
         {:error, reason}
     end
   end

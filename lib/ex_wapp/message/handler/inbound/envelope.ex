@@ -9,7 +9,7 @@ defmodule ExWapp.Message.Handler.Inbound.Envelope do
 
   require Logger
 
-  alias ExWapp.{MapPath, Store}
+  alias ExWapp.{Log, MapPath, Store}
   alias ExWapp.Message.Handler.Common
   alias ExWapp.Session.{Account, DeviceCache, JIDUtils}
   alias ExWapp.Signal.SessionStore
@@ -47,7 +47,7 @@ defmodule ExWapp.Message.Handler.Inbound.Envelope do
     end
   rescue
     error ->
-      Logger.warning("[DECRYPT] Failed storing envelope LID mappings: #{inspect(error)}")
+      Logger.warning("[DECRYPT] Failed storing envelope LID mappings: #{Log.reason(error)}")
       state
   end
 
@@ -144,19 +144,13 @@ defmodule ExWapp.Message.Handler.Inbound.Envelope do
 
   @spec persist_normalized_lid_mappings(term(), [{String.t(), String.t()}]) :: :ok
   defp persist_normalized_lid_mappings(store, normalized_mappings) do
-    data = Store.load!(store)
-    existing_mappings = Map.get(data, :lid_mapping, %{})
-
-    updated_mappings =
+    Store.update(store, :lid_mapping, %{}, fn existing_mappings ->
       Enum.reduce(normalized_mappings, existing_mappings, fn {lid, pn}, acc ->
         acc
         |> Map.put({:pn_to_lid, pn}, lid)
         |> Map.put({:lid_to_pn, lid}, pn)
       end)
-
-    if updated_mappings != existing_mappings do
-      Store.persist(store, Map.put(data, :lid_mapping, updated_mappings))
-    end
+    end)
 
     :ok
   end

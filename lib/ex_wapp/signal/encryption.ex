@@ -9,6 +9,7 @@ defmodule ExWapp.Signal.Encryption do
   4. Decrypting incoming messages
   """
 
+  alias ExWapp.Log
   alias ExWapp.Signal.{PrekeyFetcher, SessionStore, WireFormat}
 
   require Logger
@@ -21,7 +22,7 @@ defmodule ExWapp.Signal.Encryption do
   @spec encrypt_for_recipient_sync(any(), any(), String.t(), binary(), map()) ::
           {:ok, binary(), :prekey | :whisper, any()} | {:error, term()}
   def encrypt_for_recipient_sync(store, signal_sessions, jid, plaintext, remote_bundle \\ %{}) do
-    Logger.debug("[ENCRYPTION] Attempting to encrypt message for #{jid} (sync)")
+    Logger.debug("[ENCRYPTION] Attempting to encrypt message for #{Log.reference(jid)} (sync)")
 
     # Load data from store
     data = ExWapp.Store.load!(store)
@@ -51,7 +52,7 @@ defmodule ExWapp.Signal.Encryption do
           {:ok, ciphertext, type, updated_store}
 
         {:error, reason} ->
-          Logger.error("[ENCRYPTION] Encrypt failed: #{inspect(reason)}")
+          Logger.error("[ENCRYPTION] Encrypt failed: #{Log.reason(reason)}")
           {:error, reason}
       end
     else
@@ -69,7 +70,7 @@ defmodule ExWapp.Signal.Encryption do
   @spec encrypt_for_recipient(pid(), String.t(), binary()) ::
           {:ok, binary(), :prekey | :whisper} | {:error, term()}
   def encrypt_for_recipient(session, jid, plaintext) do
-    Logger.debug("[ENCRYPTION] Attempting to encrypt message for #{jid}")
+    Logger.debug("[ENCRYPTION] Attempting to encrypt message for #{Log.reference(jid)}")
 
     # Get local identity and signal sessions from session
     case get_local_keys(session) do
@@ -90,12 +91,12 @@ defmodule ExWapp.Signal.Encryption do
           )
         else
           {:error, reason} ->
-            Logger.error("[ENCRYPTION] Failed to get remote bundle: #{inspect(reason)}")
+            Logger.error("[ENCRYPTION] Failed to get remote bundle: #{Log.reason(reason)}")
             {:error, reason}
         end
 
       {:error, reason} ->
-        Logger.error("[ENCRYPTION] Failed to get local keys: #{inspect(reason)}")
+        Logger.error("[ENCRYPTION] Failed to get local keys: #{Log.reason(reason)}")
         {:error, reason}
     end
   end
@@ -112,11 +113,14 @@ defmodule ExWapp.Signal.Encryption do
     case decrypt_from_sender_sync(store, signal_store, jid, ciphertext, enc_type) do
       {:ok, plaintext, updated_store} ->
         GenServer.call(session, {:update_signal_sessions, updated_store})
-        Logger.debug("[ENCRYPTION] Decrypted message from #{jid}")
+        Logger.debug("[ENCRYPTION] Decrypted message from #{Log.reference(jid)}")
         {:ok, plaintext}
 
       {:error, reason} ->
-        Logger.error("[ENCRYPTION] Failed to decrypt from #{jid}: #{inspect(reason)}")
+        Logger.error(
+          "[ENCRYPTION] Failed to decrypt from #{Log.reference(jid)}: #{Log.reason(reason)}"
+        )
+
         {:error, reason}
     end
   end
@@ -130,7 +134,7 @@ defmodule ExWapp.Signal.Encryption do
     is_prekey = prekey_message?(enc_type)
 
     Logger.debug(
-      "[ENCRYPTION] decrypt_from_sender_sync: jid=#{jid} enc_type=#{inspect(enc_type)} is_prekey=#{is_prekey} ct_size=#{byte_size(ciphertext)}"
+      "[ENCRYPTION] decrypt_from_sender_sync: jid=#{Log.reference(jid)} enc_type=#{inspect(enc_type)} is_prekey=#{is_prekey} ct_size=#{byte_size(ciphertext)}"
     )
 
     case get_local_keys_from_store(store) do
@@ -155,12 +159,12 @@ defmodule ExWapp.Signal.Encryption do
             {:ok, plaintext, updated_store}
 
           {:error, reason} ->
-            Logger.error("[ENCRYPTION] Decrypt failed: #{inspect(reason)}")
+            Logger.error("[ENCRYPTION] Decrypt failed: #{Log.reason(reason)}")
             {:error, reason}
         end
 
       {:error, reason} ->
-        Logger.error("[ENCRYPTION] get_local_keys failed: #{inspect(reason)}")
+        Logger.error("[ENCRYPTION] get_local_keys failed: #{Log.reason(reason)}")
         {:error, reason}
     end
   end
@@ -247,13 +251,13 @@ defmodule ExWapp.Signal.Encryption do
         GenServer.call(session, {:update_signal_sessions, updated_store})
 
         Logger.debug(
-          "[ENCRYPTION] Encrypted message for #{jid}, type=#{type}, size=#{byte_size(ciphertext)}"
+          "[ENCRYPTION] Encrypted message for #{Log.reference(jid)}, type=#{type}, size=#{byte_size(ciphertext)}"
         )
 
         {:ok, ciphertext, type}
 
       {:error, reason} ->
-        Logger.error("[ENCRYPTION] SessionStore.encrypt_message failed: #{inspect(reason)}")
+        Logger.error("[ENCRYPTION] SessionStore.encrypt_message failed: #{Log.reason(reason)}")
         {:error, reason}
     end
   end
@@ -299,7 +303,7 @@ defmodule ExWapp.Signal.Encryption do
       {:ok, identity, prekeys}
     else
       Logger.error(
-        "[ENCRYPTION] No identity key found in store. Signal data: #{inspect(signal_data)}"
+        "[ENCRYPTION] No identity key found in store; signal_keys=#{inspect(Map.keys(signal_data))}"
       )
 
       {:error, :no_identity_key}
@@ -313,32 +317,42 @@ defmodule ExWapp.Signal.Encryption do
     with {:ok, %{prekey_id: prekey_id}}
          when is_integer(prekey_id) and prekey_id > 0 <-
            WireFormat.parse_prekey_signal_message(ciphertext),
-         :ok <- persist_session_before_prekey_delete(store, sessions, prekey_id),
-         data when is_map(data) <- ExWapp.Store.load!(store),
-         signal when is_map(signal) <- Map.get(data, :signal, %{}),
-         prekeys when is_map(prekeys) <- Map.get(signal, :prekeys, %{}),
-         true <- Map.has_key?(prekeys, prekey_id) do
-      updated_signal = Map.put(signal, :prekeys, Map.delete(prekeys, prekey_id))
-
-      case ExWapp.Store.persist(store, Map.put(data, :signal, updated_signal)) do
-        :ok ->
-          Logger.debug("[SIGNAL] Consumed one-time prekey #{prekey_id}")
-          :ok
-
-        {:error, reason} ->
-          Logger.warning(
-            "[SIGNAL] Failed persisting consumed one-time prekey #{prekey_id}: #{inspect(reason)}"
-          )
-
-          :ok
-      end
+         :ok <- persist_session_before_prekey_delete(store, sessions, prekey_id) do
+      store
+      |> ExWapp.Store.get_and_update(:signal, %{}, &delete_prekey(&1, prekey_id))
+      |> log_prekey_consumption(prekey_id)
     else
       _ -> :ok
     end
   rescue
     error ->
-      Logger.warning("[SIGNAL] Failed consuming one-time prekey: #{inspect(error)}")
+      Logger.warning("[SIGNAL] Failed consuming one-time prekey: #{Log.reason(error)}")
       :ok
+  end
+
+  defp delete_prekey(signal, prekey_id) do
+    prekeys = Map.get(signal, :prekeys, %{})
+
+    if Map.has_key?(prekeys, prekey_id) do
+      {:consumed, Map.put(signal, :prekeys, Map.delete(prekeys, prekey_id))}
+    else
+      {:missing, signal}
+    end
+  end
+
+  defp log_prekey_consumption(:consumed, prekey_id) do
+    Logger.debug("[SIGNAL] Consumed one-time prekey #{prekey_id}")
+    :ok
+  end
+
+  defp log_prekey_consumption(:missing, _prekey_id), do: :ok
+
+  defp log_prekey_consumption({:error, reason}, prekey_id) do
+    Logger.warning(
+      "[SIGNAL] Failed persisting consumed one-time prekey #{prekey_id}: #{Log.reason(reason)}"
+    )
+
+    :ok
   end
 
   @spec persist_session_before_prekey_delete(term(), SessionStore.t(), pos_integer()) ::
@@ -350,7 +364,7 @@ defmodule ExWapp.Signal.Encryption do
 
       {:error, reason} = error ->
         Logger.warning(
-          "[SIGNAL] Keeping one-time prekey #{prekey_id} because session persistence failed: #{inspect(reason)}"
+          "[SIGNAL] Keeping one-time prekey #{prekey_id} because session persistence failed: #{Log.reason(reason)}"
         )
 
         error
@@ -374,7 +388,7 @@ defmodule ExWapp.Signal.Encryption do
       {:ok, %{}}
     else
       # Need to fetch prekeys
-      Logger.debug("[ENCRYPTION] Fetching prekeys for #{jid}")
+      Logger.debug("[ENCRYPTION] Fetching prekeys for #{Log.reference(jid)}")
       PrekeyFetcher.fetch_prekeys(session, jid)
     end
   end

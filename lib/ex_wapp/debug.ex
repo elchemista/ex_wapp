@@ -22,6 +22,7 @@ defmodule ExWapp.Debug do
   alias WAWebProtobufsWa6.HandshakeMessage
   alias WAWebProtobufsWa6.HandshakeMessage.ClientHello
   alias ExWapp.Noise.Handshake
+  alias ExWapp.Transport.TLS
 
   def test_full_handshake do
     Logger.info("=== Full Handshake Test ===")
@@ -32,8 +33,8 @@ defmodule ExWapp.Debug do
     # static (for new device)
     s_kp = ExWapp.Signal.Keys.generate_key_pair()
 
-    Logger.info("Ephemeral public: #{Base.encode16(e_kp.public, case: :lower)}")
-    Logger.info("Static public: #{Base.encode16(s_kp.public, case: :lower)}")
+    Logger.info("Ephemeral public key generated (bytes=#{byte_size(e_kp.public)})")
+    Logger.info("Static public key loaded (bytes=#{byte_size(s_kp.public)})")
 
     # Initialize noise handshake
     noise = Handshake.new(@noise_pattern, @wa_header)
@@ -47,6 +48,8 @@ defmodule ExWapp.Debug do
 
     headers = [{"Origin", @origin}]
 
+    websockex_opts = Keyword.put(TLS.websockex_options(@url), :extra_headers, headers)
+
     case WebSockex.start_link(
            @url,
            __MODULE__.FullClient,
@@ -57,7 +60,7 @@ defmodule ExWapp.Debug do
              noise: noise,
              frame: frame
            },
-           extra_headers: headers
+           websockex_opts
          ) do
       {:ok, pid} ->
         Logger.info("WebSocket connected")
@@ -72,7 +75,7 @@ defmodule ExWapp.Debug do
         end
 
       {:error, reason} ->
-        Logger.error("Failed to connect: #{inspect(reason)}")
+        Logger.error("Failed to connect: #{ExWapp.Log.reason(reason)}")
         {:error, reason}
     end
   end
@@ -109,12 +112,12 @@ defmodule ExWapp.Debug do
           process_server_hello(state, server_hello)
 
         {:ok, other} ->
-          Logger.error("Unexpected message: #{inspect(other)}")
+          Logger.error("Unexpected message: #{ExWapp.Log.term_summary(other)}")
           send(state.parent, {:result, {:error, :unexpected_message}})
           {:close, state}
 
         {:error, reason} ->
-          Logger.error("Failed to decode: #{inspect(reason)}")
+          Logger.error("Failed to decode: #{ExWapp.Log.reason(reason)}")
           send(state.parent, {:result, {:error, reason}})
           {:close, state}
       end
@@ -122,21 +125,19 @@ defmodule ExWapp.Debug do
 
     def handle_frame({:binary, data}, %{phase: :waiting_response} = state) do
       Logger.info("Received post-handshake response: #{byte_size(data)} bytes")
-      Logger.info("Response hex: #{Base.encode16(data, case: :lower) |> String.slice(0, 200)}...")
+      Logger.info("Response payload received (bytes=#{byte_size(data)})")
 
       # Try to decrypt with transport keys
       case decrypt_response(state, data) do
         {:ok, plaintext} ->
           Logger.info("Decrypted response: #{byte_size(plaintext)} bytes")
 
-          Logger.info(
-            "Plaintext hex: #{Base.encode16(plaintext, case: :lower) |> String.slice(0, 200)}..."
-          )
+          Logger.info("Plaintext retained in memory only; bytes=#{byte_size(plaintext)}")
 
           send(state.parent, {:result, {:ok, plaintext}})
 
         {:error, reason} ->
-          Logger.error("Failed to decrypt: #{inspect(reason)}")
+          Logger.error("Failed to decrypt: #{ExWapp.Log.reason(reason)}")
           send(state.parent, {:result, {:error, {:decrypt_failed, reason}}})
       end
 
@@ -144,12 +145,12 @@ defmodule ExWapp.Debug do
     end
 
     def handle_frame(frame, state) do
-      Logger.warning("Unexpected frame: #{inspect(frame)}")
+      Logger.warning("Unexpected frame: #{ExWapp.Log.term_summary(frame)}")
       {:ok, state}
     end
 
     def handle_disconnect(reason, state) do
-      Logger.info("Disconnected: #{inspect(reason)}")
+      Logger.info("Disconnected: #{ExWapp.Log.reason(reason)}")
       send(state.parent, {:result, {:error, {:disconnected, reason}}})
       {:ok, state}
     end
@@ -163,7 +164,7 @@ defmodule ExWapp.Debug do
       rs_ct = server_hello.static
       cert_ct = server_hello.payload
 
-      Logger.info("Server ephemeral: #{Base.encode16(re, case: :lower)}")
+      Logger.info("Server ephemeral key received (bytes=#{byte_size(re)})")
 
       noise = state.noise
       e_kp = state.e_kp
@@ -184,7 +185,7 @@ defmodule ExWapp.Debug do
            {noise, s_pub_ct} <- ExWapp.Noise.Handshake.encrypt(noise, s_kp.public),
            # 7. Mix DH(s, re)
            {:ok, noise} <- ExWapp.Noise.Handshake.mix_shared_secret(noise, s_kp.private, re) do
-        Logger.info("Decrypted server static: #{Base.encode16(rs, case: :lower)}")
+        Logger.info("Decrypted server static key (bytes=#{byte_size(rs)})")
         Logger.info("Encrypted our static: #{byte_size(s_pub_ct)} bytes")
 
         # Build a real ClientPayload like Go does
@@ -214,7 +215,7 @@ defmodule ExWapp.Debug do
         {:reply, {:binary, frame}, new_state}
       else
         {:error, reason} ->
-          Logger.error("Handshake processing failed: #{inspect(reason)}")
+          Logger.error("Handshake processing failed: #{ExWapp.Log.reason(reason)}")
           send(state.parent, {:result, {:error, reason}})
           {:close, state}
       end
@@ -363,11 +364,11 @@ defmodule ExWapp.Debug do
     Logger.info("=== ExWapp Debug Handshake Test ===")
     Logger.info("URL: #{@url}")
     Logger.info("Origin: #{@origin}")
-    Logger.info("WA Header hex: #{Base.encode16(@wa_header, case: :lower)}")
+    Logger.info("WA header bytes: #{byte_size(@wa_header)}")
 
     # Generate ephemeral key pair
     e_kp = ExWapp.Signal.Keys.generate_key_pair()
-    Logger.info("Ephemeral public key (32 bytes): #{Base.encode16(e_kp.public, case: :lower)}")
+    Logger.info("Ephemeral public key generated (bytes=#{byte_size(e_kp.public)})")
 
     # Build client hello protobuf
     client_hello_msg = %HandshakeMessage{
@@ -378,21 +379,19 @@ defmodule ExWapp.Debug do
 
     client_hello = HandshakeMessage.encode!(client_hello_msg) |> IO.iodata_to_binary()
 
-    Logger.info(
-      "ClientHello protobuf (#{byte_size(client_hello)} bytes): #{Base.encode16(client_hello, case: :lower)}"
-    )
+    Logger.info("ClientHello protobuf prepared (bytes=#{byte_size(client_hello)})")
 
     # Build frame: header + 3-byte length + payload
     frame = build_frame(@wa_header, client_hello)
-    Logger.info("Full frame (#{byte_size(frame)} bytes): #{Base.encode16(frame, case: :lower)}")
+    Logger.info("Full frame prepared (bytes=#{byte_size(frame)})")
 
     # Connect with minimal headers (only Origin, like Go)
     headers = [{"Origin", @origin}]
-    Logger.info("HTTP headers: #{inspect(headers)}")
+    Logger.info("HTTP request headers: count=#{length(headers)}")
 
-    case WebSockex.start_link(@url, __MODULE__.DebugClient, %{parent: self()},
-           extra_headers: headers
-         ) do
+    websockex_opts = Keyword.put(TLS.websockex_options(@url), :extra_headers, headers)
+
+    case WebSockex.start_link(@url, __MODULE__.DebugClient, %{parent: self()}, websockex_opts) do
       {:ok, pid} ->
         Logger.info("WebSocket connected, sending frame...")
 
@@ -403,9 +402,7 @@ defmodule ExWapp.Debug do
         # Wait for response
         receive do
           {:ws_frame, data} ->
-            Logger.info(
-              "Received response (#{byte_size(data)} bytes): #{Base.encode16(data, case: :lower) |> String.slice(0, 200)}..."
-            )
+            Logger.info("Received response (bytes=#{byte_size(data)})")
 
             parse_server_response(data)
 
@@ -424,7 +421,7 @@ defmodule ExWapp.Debug do
             end
 
           {:ws_error, reason} ->
-            Logger.error("WebSocket error: #{inspect(reason)}")
+            Logger.error("WebSocket error: #{ExWapp.Log.reason(reason)}")
             {:error, reason}
         after
           15_000 ->
@@ -434,7 +431,7 @@ defmodule ExWapp.Debug do
         end
 
       {:error, reason} ->
-        Logger.error("Failed to connect: #{inspect(reason)}")
+        Logger.error("Failed to connect: #{ExWapp.Log.reason(reason)}")
         {:error, reason}
     end
   end
@@ -469,9 +466,7 @@ defmodule ExWapp.Debug do
     else
       payload = binary_part(rest, 0, len)
 
-      Logger.info(
-        "Server payload (#{byte_size(payload)} bytes): #{Base.encode16(payload, case: :lower) |> String.slice(0, 200)}..."
-      )
+      Logger.info("Server payload received (bytes=#{byte_size(payload)})")
 
       case HandshakeMessage.decode(payload) do
         {:ok, %HandshakeMessage{serverHello: nil}} ->
@@ -481,16 +476,14 @@ defmodule ExWapp.Debug do
         {:ok, %HandshakeMessage{serverHello: server_hello}} ->
           Logger.info("✅ Got ServerHello!")
 
-          Logger.info(
-            "  Ephemeral: #{Base.encode16(server_hello.ephemeral || <<>>, case: :lower)}"
-          )
+          Logger.info("  Ephemeral bytes: #{byte_size(server_hello.ephemeral || <<>>)}")
 
           Logger.info("  Static (encrypted): #{byte_size(server_hello.static || <<>>)} bytes")
           Logger.info("  Payload (encrypted): #{byte_size(server_hello.payload || <<>>)} bytes")
           {:ok, server_hello}
 
         {:error, reason} ->
-          Logger.error("Failed to decode ServerHello: #{inspect(reason)}")
+          Logger.error("Failed to decode ServerHello: #{ExWapp.Log.reason(reason)}")
           {:error, reason}
       end
     end

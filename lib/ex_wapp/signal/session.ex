@@ -8,6 +8,7 @@ defmodule ExWapp.Signal.Session do
   - AES-256-CBC + HMAC-SHA256 message encryption (proper Signal format)
   """
 
+  alias ExWapp.Log
   alias ExWapp.Signal.Crypto
   alias ExWapp.Signal.Keys
   alias ExWapp.Signal.WireFormat
@@ -226,7 +227,7 @@ defmodule ExWapp.Signal.Session do
         decrypt_parsed_message(session, parsed)
 
       {:error, reason} ->
-        Logger.warning("[SIGNAL] Failed to parse SignalMessage: #{inspect(reason)}")
+        Logger.warning("[SIGNAL] Failed to parse SignalMessage: #{Log.reason(reason)}")
         {:error, reason}
     end
   end
@@ -237,9 +238,7 @@ defmodule ExWapp.Signal.Session do
   @spec decrypt_prekey_message(binary(), map(), map()) ::
           {:ok, binary(), session_state()} | {:error, term()}
   def decrypt_prekey_message(message, local_identity, local_prekeys) do
-    Logger.debug(
-      "[SIGNAL] decrypt_prekey_message: msg_size=#{byte_size(message)} first_byte=0x#{Base.encode16(binary_part(message, 0, 1))}"
-    )
+    Logger.debug("[SIGNAL] decrypt_prekey_message: msg_size=#{byte_size(message)}")
 
     case parse_prekey_signal_message(message) do
       {:ok, reg_id, prekey_id, signed_prekey_id, base_key, remote_identity, inner_ciphertext} ->
@@ -260,7 +259,7 @@ defmodule ExWapp.Signal.Session do
         )
 
       {:error, reason} ->
-        Logger.warning("[SIGNAL] Failed to parse PreKeySignalMessage: #{inspect(reason)}")
+        Logger.warning("[SIGNAL] Failed to parse PreKeySignalMessage: #{Log.reason(reason)}")
         {:error, reason}
     end
   end
@@ -442,7 +441,7 @@ defmodule ExWapp.Signal.Session do
         {:ok, plaintext, updated_session}
 
       {:error, reason} ->
-        Logger.warning("[SIGNAL] Inner decrypt failed: #{inspect(reason)}")
+        Logger.warning("[SIGNAL] Inner decrypt failed: #{Log.reason(reason)}")
         {:error, reason}
     end
   end
@@ -464,8 +463,7 @@ defmodule ExWapp.Signal.Session do
       {root_key, chain_key} = hkdf_derive_initial(shared_secret)
 
       Logger.debug(
-        "[SIGNAL] Trying #{variant}: root_key=#{Base.encode16(binary_part(root_key, 0, 4))}... " <>
-          "chain_key=#{Base.encode16(binary_part(chain_key, 0, 4))}..."
+        "[SIGNAL] Trying #{variant}: root_key_bytes=#{byte_size(root_key)} chain_key_bytes=#{byte_size(chain_key)}"
       )
 
       session =

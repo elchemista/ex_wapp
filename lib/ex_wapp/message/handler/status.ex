@@ -4,13 +4,14 @@ defmodule ExWapp.Message.Handler.Status do
   require Logger
 
   alias ExWapp.Binary.Node
+  alias ExWapp.Log
 
   @spec handle_presence(Node.t(), map()) :: {:ok, map()}
   def handle_presence(%Node{attrs: attrs}, state) do
     from = Map.get(attrs, "from", "")
     type = Map.get(attrs, "type", "available")
 
-    Logger.debug("Presence from=#{from} type=#{type}")
+    Logger.debug("Presence from=#{Log.reference(from)} type=#{type}")
     {:ok, state}
   end
 
@@ -25,7 +26,7 @@ defmodule ExWapp.Message.Handler.Status do
         _ -> :unknown
       end
 
-    Logger.debug("Chatstate from=#{from} state=#{chatstate}")
+    Logger.debug("Chatstate from=#{Log.reference(from)} state=#{chatstate}")
     {:ok, state}
   end
 end

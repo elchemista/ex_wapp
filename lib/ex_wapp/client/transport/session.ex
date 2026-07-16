@@ -33,7 +33,10 @@ defmodule ExWapp.Client.Transport.Session do
   @spec connect(Client.t()) :: {:ok, Client.t()} | {:error, term()}
   def connect(%Client{} = client) do
     with {:ok, client, session} <- ensure_session(client) do
-      Logger.info("[ExWapp.SessionTransport] connect session_id=#{inspect(client.session_id)}")
+      Logger.info(
+        "[ExWapp.SessionTransport] connect session=#{ExWapp.Log.reference(client.session_id)}"
+      )
+
       :ok = Session.connect(session)
       {:ok, %{client | status: :connecting}}
     end
@@ -69,7 +72,7 @@ defmodule ExWapp.Client.Transport.Session do
     case session_pid(client) do
       pid when is_pid(pid) ->
         Logger.info(
-          "[ExWapp.SessionTransport] disconnect session_id=#{inspect(client.session_id)}"
+          "[ExWapp.SessionTransport] disconnect session=#{ExWapp.Log.reference(client.session_id)}"
         )
 
         Session.disconnect(pid)

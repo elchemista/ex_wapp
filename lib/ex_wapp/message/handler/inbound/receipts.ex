@@ -85,7 +85,9 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
          message_data,
          state
        ) do
-    Logger.debug("[DECRYPT] Treating #{inspect(id)} as an already-decrypted Signal duplicate")
+    Logger.debug(
+      "[DECRYPT] Treating #{ExWapp.Log.reference(id)} as an already-decrypted Signal duplicate"
+    )
 
     receipt_type = delivery_receipt_type(from, attrs, state)
     receipt_meta = %{recipient: Map.get(attrs, "recipient")}

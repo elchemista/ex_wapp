@@ -15,9 +15,10 @@ defmodule ExWapp.Transport.WebSocket do
   use WebSockex
   require Logger
 
-  alias ExWapp.{Binary, Client, Noise, Store}
+  alias ExWapp.{Binary, Client, Log, Noise, Store}
   alias ExWapp.Noise.ClientPayload
   alias ExWapp.Transport.Frame
+  alias ExWapp.Transport.TLS
   alias ExWapp.Transport.WebSocket.State
 
   @url "wss://web.whatsapp.com/ws/chat"
@@ -52,7 +53,7 @@ defmodule ExWapp.Transport.WebSocket do
     }
 
     Logger.info(
-      "[ExWapp.Transport.WebSocket] connecting session_id=#{inspect(client.session_id)}"
+      "[ExWapp.Transport.WebSocket] connecting session=#{Log.reference(client.session_id)}"
     )
 
     ExWapp.Telemetry.execute([:ex_wapp, :transport, :websocket, :connect], %{count: 1}, %{
@@ -60,7 +61,8 @@ defmodule ExWapp.Transport.WebSocket do
       url: url
     })
 
-    WebSockex.start_link(url, __MODULE__, state, extra_headers: headers)
+    websockex_opts = Keyword.put(TLS.websockex_options(url), :extra_headers, headers)
+    WebSockex.start_link(url, __MODULE__, state, websockex_opts)
   end
 
   @doc """
@@ -191,7 +193,7 @@ defmodule ExWapp.Transport.WebSocket do
   @impl true
   @spec handle_disconnect(term(), State.t()) :: {:ok, State.t()}
   def handle_disconnect(reason, %State{} = state) do
-    Logger.info("[ExWapp.Transport.WebSocket] disconnected reason=#{inspect(reason)}")
+    Logger.info("[ExWapp.Transport.WebSocket] disconnected reason=#{Log.reason(reason)}")
     notify_owner(state, {:disconnected, reason})
 
     ExWapp.Telemetry.execute([:ex_wapp, :transport, :websocket, :disconnect], %{count: 1}, %{
@@ -230,7 +232,10 @@ defmodule ExWapp.Transport.WebSocket do
   end
 
   def handle_frame(frame, %State{} = state) do
-    Logger.debug("[ExWapp.Transport.WebSocket] ignoring non-binary frame=#{inspect(frame)}")
+    Logger.debug(
+      "[ExWapp.Transport.WebSocket] ignoring non-binary frame=#{Log.term_summary(frame)}"
+    )
+
     {:ok, state}
   end
 
@@ -307,7 +312,7 @@ defmodule ExWapp.Transport.WebSocket do
 
   @spec handle_transport_error(State.t(), term()) :: {:ok, State.t()}
   defp handle_transport_error(%State{} = state, reason) do
-    Logger.error("[ExWapp.Transport.WebSocket] error=#{inspect(reason)}")
+    Logger.error("[ExWapp.Transport.WebSocket] error=#{Log.reason(reason)}")
     notify_owner(state, {:error, reason})
 
     ExWapp.Telemetry.execute([:ex_wapp, :transport, :websocket, :error], %{count: 1}, %{

@@ -5,7 +5,7 @@ defmodule ExWapp.Session.Worker.ReceiptBuilder do
 
   require Logger
 
-  alias ExWapp.{Binary, Store}
+  alias ExWapp.{Binary, Log, Store}
   alias ExWapp.Session.Account
   alias ExWapp.Signal.Keys
 
@@ -92,7 +92,7 @@ defmodule ExWapp.Session.Worker.ReceiptBuilder do
             content ++ [keys_node]
 
           {:error, reason} ->
-            Logger.warning("[SESSION] Retry keys unavailable: #{inspect(reason)}")
+            Logger.warning("[SESSION] Retry keys unavailable: #{Log.reason(reason)}")
             content
         end
       else
@@ -150,7 +150,7 @@ defmodule ExWapp.Session.Worker.ReceiptBuilder do
 
     with {:ok, identity_pub} <- local_identity_public(signal),
          {:ok, signed_prekey} <- local_signed_prekey(signal),
-         {:ok, prekey_id, prekey_public} <- generate_retry_prekey(store, data, signal),
+         {:ok, prekey_id, prekey_public} <- generate_retry_prekey(store),
          {:ok, device_identity_node} <- Account.get_device_identity_node(store),
          %Binary.Node{content: %Binary.Raw{data: device_identity_payload}} <-
            device_identity_node do
@@ -212,31 +212,31 @@ defmodule ExWapp.Session.Worker.ReceiptBuilder do
 
   defp local_signed_prekey(_), do: {:error, :missing_signed_prekey}
 
-  defp generate_retry_prekey(store, data, signal) do
-    next_id =
-      cond do
-        is_integer(signal[:next_prekey_id]) and signal[:next_prekey_id] > 0 ->
-          signal[:next_prekey_id]
+  defp generate_retry_prekey(store) do
+    Store.get_and_update(store, :signal, %{}, fn signal ->
+      next_id =
+        cond do
+          is_integer(signal[:next_prekey_id]) and signal[:next_prekey_id] > 0 ->
+            signal[:next_prekey_id]
 
-        is_map(signal[:prekeys]) and map_size(signal[:prekeys]) > 0 ->
-          signal[:prekeys] |> Map.keys() |> Enum.max() |> Kernel.+(1)
+          is_map(signal[:prekeys]) and map_size(signal[:prekeys]) > 0 ->
+            signal[:prekeys] |> Map.keys() |> Enum.max() |> Kernel.+(1)
 
-        true ->
-          1
-      end
+          true ->
+            1
+        end
 
-    prekey = Keys.generate_prekey(next_id)
-    prekeys = Map.get(signal, :prekeys, %{}) |> Map.put(next_id, prekey)
+      prekey = Keys.generate_prekey(next_id)
+      prekeys = Map.get(signal, :prekeys, %{}) |> Map.put(next_id, prekey)
 
-    updated_signal =
-      signal
-      |> Map.put(:prekeys, prekeys)
-      |> Map.put(:next_prekey_id, next_id + 1)
-      |> Map.put(:updated_at, System.system_time(:second))
+      updated_signal =
+        signal
+        |> Map.put(:prekeys, prekeys)
+        |> Map.put(:next_prekey_id, next_id + 1)
+        |> Map.put(:updated_at, System.system_time(:second))
 
-    :ok = Store.persist(store, Map.put(data, :signal, updated_signal))
-
-    {:ok, next_id, prekey.public}
+      {{:ok, next_id, prekey.public}, updated_signal}
+    end)
   end
 
   defp local_registration_node(store), do: Account.local_registration_node(store)

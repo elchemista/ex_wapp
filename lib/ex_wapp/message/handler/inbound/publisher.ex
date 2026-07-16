@@ -8,7 +8,7 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
 
   require Logger
 
-  alias ExWapp.{Chat, JID}
+  alias ExWapp.{Chat, JID, Log}
   alias ExWapp.Message.Handler.Common
   alias ExWapp.Message.Handler.Inbound.Projection
 
@@ -126,7 +126,7 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
 
   defp log_suppressed_message(_is_protocol, true, envelope, message_data) do
     Logger.debug(
-      "[DECRYPT] Suppressing undecryptable encrypted placeholder from=#{Common.normalize_jid_with_device(Map.fetch!(envelope, :from))} id=#{Map.fetch!(envelope, :id)} reason=#{inspect(Map.get(message_data, :decrypt_status))}"
+      "[DECRYPT] Suppressing undecryptable encrypted placeholder from=#{Log.reference(Map.fetch!(envelope, :from))} id=#{Log.reference(Map.fetch!(envelope, :id))} reason=#{Log.reason(Map.get(message_data, :decrypt_status))}"
     )
   end
 

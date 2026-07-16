@@ -13,6 +13,7 @@ defmodule ExWapp.Message.Handler.Inbound do
 
   alias ExWapp.Binary.Node
   alias ExWapp.JID
+  alias ExWapp.Log
   alias ExWapp.Message.Handler.{Common, Wire}
 
   alias ExWapp.Message.Handler.Inbound.{
@@ -31,7 +32,9 @@ defmodule ExWapp.Message.Handler.Inbound do
   def handle_message(%Node{attrs: attrs, content: content}, session, state) do
     envelope = build_envelope(attrs)
 
-    Logger.debug("Received message from=#{envelope.from} id=#{envelope.id} type=#{envelope.type}")
+    Logger.debug(
+      "Received message from=#{Log.reference(envelope.from)} id=#{Log.reference(envelope.id)} type=#{envelope.type}"
+    )
 
     state = persist_envelope_metadata(state, attrs, envelope)
 
@@ -141,19 +144,19 @@ defmodule ExWapp.Message.Handler.Inbound do
   @spec record_phase_failure(map(), atom(), map(), term()) :: map()
   defp record_phase_failure(state, phase, envelope, reason) do
     Logger.error(
-      "[INBOUND] phase=#{phase} failed from=#{Common.normalize_jid_with_device(envelope.from)} id=#{inspect(envelope.id)} reason=#{format_failure(reason)}"
+      "[INBOUND] phase=#{phase} failed from=#{Log.reference(envelope.from)} id=#{Log.reference(envelope.id)} reason=#{format_failure(reason)}"
     )
 
     Common.update_stats(state, :errors)
   end
 
   @spec format_failure(term()) :: String.t()
-  defp format_failure({:exception, exception}), do: Exception.message(exception)
+  defp format_failure({:exception, exception}), do: Log.reason(exception)
 
   defp format_failure({:caught, kind, reason}),
-    do: "#{kind}: #{inspect(reason)}"
+    do: "#{kind}: #{Log.reason(reason)}"
 
-  defp format_failure(reason), do: inspect(reason)
+  defp format_failure(reason), do: Log.reason(reason)
 
   @doc "Records device JIDs advertised by a notification in the session cache."
   @spec persist_notification_devices(map(), term()) :: :ok

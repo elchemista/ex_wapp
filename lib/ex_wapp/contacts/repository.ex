@@ -15,16 +15,14 @@ defmodule ExWapp.Domains.Contacts.Repository do
   @spec list(struct()) :: [Contact.t()]
   def list(store) do
     store
-    |> Store.load!()
-    |> Map.get(:contacts, %{})
+    |> Store.get(:contacts, %{})
     |> Map.values()
   end
 
   @doc "Fetches a contact by JID, including records stored under legacy aliases."
   @spec get(struct(), String.t()) :: Contact.t() | nil
   def get(store, jid) do
-    data = Store.load!(store)
-    contacts = Map.get(data, :contacts, %{})
+    contacts = Store.get(store, :contacts, %{})
     normalized = JID.normalize(jid)
 
     Map.get(contacts, normalized) || find_legacy_contact(contacts, normalized)
@@ -43,10 +41,11 @@ defmodule ExWapp.Domains.Contacts.Repository do
   @doc "Deletes a contact and every legacy alias for the same JID."
   @spec delete(struct(), String.t()) :: :ok
   def delete(store, jid) do
-    data = Store.load!(store)
     normalized = JID.normalize(jid)
-    contacts = data |> Map.get(:contacts, %{}) |> remove_contact_aliases(normalized)
-    Store.persist(store, Map.put(data, :contacts, contacts))
+
+    Store.update(store, :contacts, %{}, fn contacts ->
+      remove_contact_aliases(contacts, normalized)
+    end)
   end
 
   @doc "Updates the push name associated with a contact."
@@ -80,19 +79,16 @@ defmodule ExWapp.Domains.Contacts.Repository do
 
   @spec persist_contact(struct(), String.t(), (Contact.t() -> Contact.t())) :: :ok
   defp persist_contact(store, normalized, update_fun) do
-    data = Store.load!(store)
-    contacts = Map.get(data, :contacts, %{})
+    Store.update(store, :contacts, %{}, fn contacts ->
+      existing =
+        Map.get(contacts, normalized) || find_legacy_contact(contacts, normalized) ||
+          %Contact{jid: normalized}
 
-    existing =
-      Map.get(contacts, normalized) || find_legacy_contact(contacts, normalized) ||
-        %Contact{jid: normalized}
-
-    # Alias cleanup prevents duplicate records when the same contact was stored
-    # under older JID forms such as `+1555@whatsapp.net`.
-    contacts = remove_contact_aliases(contacts, normalized)
-    updated = update_fun.(existing)
-
-    Store.persist(store, Map.put(data, :contacts, Map.put(contacts, normalized, updated)))
+      # Alias cleanup prevents duplicate records when the same contact was stored
+      # under older JID forms such as `+1555@whatsapp.net`.
+      contacts = remove_contact_aliases(contacts, normalized)
+      Map.put(contacts, normalized, update_fun.(existing))
+    end)
   end
 
   @spec maybe_set(Contact.t(), atom(), term() | nil) :: Contact.t()

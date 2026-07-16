@@ -7,9 +7,10 @@ defmodule ExWapp.Signal.SessionStore do
   Uses `ExWapp.Signal.Adapter` to switch between Signal implementations.
   """
 
+  alias ExWapp.Log
+  alias ExWapp.Session.JIDUtils
   alias ExWapp.Signal.Adapter, as: Signal
   alias ExWapp.Signal.WireFormat
-  alias ExWapp.Session.JIDUtils
 
   require Logger
 
@@ -169,7 +170,7 @@ defmodule ExWapp.Signal.SessionStore do
   @spec put_session(t(), String.t(), map()) :: t()
   def put_session(%Ref{table: table} = store, jid, session) do
     jid = normalize_jid(jid)
-    Logger.debug("[SESSION_STORE] Stored session for #{jid}")
+    Logger.debug("[SESSION_STORE] Stored session for #{Log.reference(jid)}")
     touched_at_ms = System.system_time(:millisecond)
     :ets.insert(table, {{:session, jid}, session})
     :ets.insert(table, {{:touched_at_ms, jid}, touched_at_ms})
@@ -178,7 +179,7 @@ defmodule ExWapp.Signal.SessionStore do
 
   def put_session(store, jid, session) do
     jid = normalize_jid(jid)
-    Logger.debug("[SESSION_STORE] Stored session for #{jid}")
+    Logger.debug("[SESSION_STORE] Stored session for #{Log.reference(jid)}")
     touched_at_ms = System.system_time(:millisecond)
 
     %{
@@ -444,7 +445,7 @@ defmodule ExWapp.Signal.SessionStore do
     jid = normalize_jid(jid)
 
     Logger.debug(
-      "[SESSION_STORE] decrypt_message: jid=#{jid} is_prekey=#{is_prekey_message} ct_size=#{byte_size(ciphertext)} existing_session=#{has_session?(store, jid)}"
+      "[SESSION_STORE] decrypt_message: jid=#{Log.reference(jid)} is_prekey=#{is_prekey_message} ct_size=#{byte_size(ciphertext)} existing_session=#{has_session?(store, jid)}"
     )
 
     if is_prekey_message do
@@ -492,7 +493,7 @@ defmodule ExWapp.Signal.SessionStore do
     existing_session? = has_session?(store, jid)
 
     Logger.debug(
-      "[SESSION_STORE] PreKey decrypt attempt jid=#{jid} existing_session=#{existing_session?} " <>
+      "[SESSION_STORE] PreKey decrypt attempt jid=#{Log.reference(jid)} existing_session=#{existing_session?} " <>
         "payload=#{inspect(debug.payload)} local=#{inspect(debug.local)}"
     )
 
@@ -511,13 +512,13 @@ defmodule ExWapp.Signal.SessionStore do
   defp decrypt_fresh_prekey(store, jid, ciphertext, local_identity, local_prekeys, debug) do
     case Signal.decrypt_prekey_message(ciphertext, local_identity, local_prekeys) do
       {:ok, plaintext, session} ->
-        Logger.debug("[SESSION_STORE] PreKey decrypt succeeded (fresh) for #{jid}")
+        Logger.debug("[SESSION_STORE] PreKey decrypt succeeded (fresh) for #{Log.reference(jid)}")
         session = retain_current_session(store, jid, session)
         {:ok, plaintext, put_session(store, jid, session)}
 
       {:error, reason} ->
         Logger.error(
-          "[SESSION_STORE] PreKey decrypt failed for #{jid}: #{inspect(reason)} " <>
+          "[SESSION_STORE] PreKey decrypt failed for #{Log.reference(jid)}: #{Log.reason(reason)} " <>
             "payload=#{inspect(debug.payload)} local=#{inspect(debug.local)}"
         )
 
@@ -536,27 +537,27 @@ defmodule ExWapp.Signal.SessionStore do
     case get_session(store, jid) do
       {:ok, session} ->
         Logger.debug(
-          "[SESSION_STORE] Trying existing session ratchet for prekey msg from #{jid} session=#{inspect(session_debug(session))}"
+          "[SESSION_STORE] Trying existing session ratchet for prekey msg from #{Log.reference(jid)} session=#{inspect(session_debug(session))}"
         )
 
         case Signal.decrypt_prekey_message_with_session(session, ciphertext) do
           {:ok, plaintext, updated_session} ->
             Logger.debug(
-              "[SESSION_STORE] PreKey decrypt succeeded on existing session for #{jid}"
+              "[SESSION_STORE] PreKey decrypt succeeded on existing session for #{Log.reference(jid)}"
             )
 
             {:ok, plaintext, updated_session}
 
           {:error, reason} when reason in [:message_key_not_found, :prekey_not_found] ->
             Logger.debug(
-              "[SESSION_STORE] Prekey message for #{jid} references already-consumed key material: #{inspect(reason)}"
+              "[SESSION_STORE] Prekey message for #{Log.reference(jid)} references already-consumed key material: #{inspect(reason)}"
             )
 
             {:error, reason}
 
           {:error, reason} ->
             Logger.debug(
-              "[SESSION_STORE] Existing session prekey decrypt failed for #{jid}, trying fresh X3DH: #{inspect(reason)} " <>
+              "[SESSION_STORE] Existing session prekey decrypt failed for #{Log.reference(jid)}, trying fresh X3DH: #{Log.reason(reason)} " <>
                 "session=#{inspect(session_debug(session))}"
             )
 
@@ -574,7 +575,10 @@ defmodule ExWapp.Signal.SessionStore do
         decrypt_whisper_session(store, jid, ciphertext, session)
 
       :not_found ->
-        Logger.error("[SESSION_STORE] No session found for #{jid} (whisper message)")
+        Logger.error(
+          "[SESSION_STORE] No session found for #{Log.reference(jid)} (whisper message)"
+        )
+
         {:error, :no_session}
     end
   end
@@ -593,14 +597,18 @@ defmodule ExWapp.Signal.SessionStore do
     case decrypt_with_previous_sessions(session, ciphertext) do
       {:ok, plaintext, updated_session} ->
         Logger.debug(
-          "[SESSION_STORE] Whisper decrypt succeeded on a previous base-key session for #{jid}"
+          "[SESSION_STORE] Whisper decrypt succeeded on a previous base-key session for #{Log.reference(jid)}"
         )
 
         {:ok, plaintext, update_session(store, jid, updated_session)}
 
       {:error, previous_reasons} ->
         reason = preferred_decrypt_error(current_reason, previous_reasons)
-        Logger.error("[SESSION_STORE] Whisper decrypt failed for #{jid}: #{inspect(reason)}")
+
+        Logger.error(
+          "[SESSION_STORE] Whisper decrypt failed for #{Log.reference(jid)}: #{Log.reason(reason)}"
+        )
+
         {:error, reason}
     end
   end
@@ -713,8 +721,7 @@ defmodule ExWapp.Signal.SessionStore do
           prekey_id: parsed.prekey_id,
           signed_prekey_id: parsed.signed_prekey_id,
           base_key_size: byte_size(parsed.base_key),
-          base_key_prefix: binary_prefix(parsed.base_key),
-          identity_key_prefix: binary_prefix(parsed.identity_key),
+          identity_key_size: byte_size(parsed.identity_key),
           inner_size: byte_size(parsed.message)
         }
 
@@ -729,7 +736,7 @@ defmodule ExWapp.Signal.SessionStore do
     prekeys = Map.get(local_prekeys, :prekeys, %{})
 
     %{
-      local_identity_prefix: binary_prefix(Map.get(local_identity, :public)),
+      local_identity_present?: is_binary(Map.get(local_identity, :public)),
       signed_prekey_count: map_size(signed_prekeys),
       signed_prekey_ids: signed_prekeys |> Map.keys() |> Enum.sort() |> Enum.take(12),
       prekey_count: map_size(prekeys),
@@ -740,14 +747,14 @@ defmodule ExWapp.Signal.SessionStore do
   @spec session_debug(map()) :: map()
   defp session_debug(session) when is_map(session) do
     %{
-      remote_identity_prefix: binary_prefix(Map.get(session, :remote_identity_key)),
-      local_identity_prefix:
+      remote_identity_present?: is_binary(Map.get(session, :remote_identity_key)),
+      local_identity_present?:
         session
         |> Map.get(:local_identity_key, %{})
         |> Map.get(:public)
-        |> binary_prefix(),
-      root_key_prefix: binary_prefix(Map.get(session, :root_key)),
-      remote_ratchet_prefix: binary_prefix(Map.get(session, :remote_ratchet_key)),
+        |> is_binary(),
+      root_key_present?: is_binary(Map.get(session, :root_key)),
+      remote_ratchet_present?: is_binary(Map.get(session, :remote_ratchet_key)),
       sending_counter:
         session
         |> Map.get(:sending_chain)
@@ -762,14 +769,4 @@ defmodule ExWapp.Signal.SessionStore do
   @spec chain_counter(map() | nil) :: non_neg_integer() | nil
   defp chain_counter(%{counter: counter}) when is_integer(counter), do: counter
   defp chain_counter(_), do: nil
-
-  @spec binary_prefix(binary() | term(), non_neg_integer()) :: String.t() | nil
-  defp binary_prefix(value, bytes \\ 6)
-  defp binary_prefix(value, _bytes) when not is_binary(value), do: nil
-
-  defp binary_prefix(value, bytes) when is_binary(value) and is_integer(bytes) and bytes > 0 do
-    value
-    |> binary_part(0, min(byte_size(value), bytes))
-    |> Base.encode16(case: :lower)
-  end
 end

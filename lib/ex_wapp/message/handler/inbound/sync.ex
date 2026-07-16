@@ -9,7 +9,7 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
   require Logger
 
   alias ExWapp.AppState.Engine
-  alias ExWapp.{Chat, Store}
+  alias ExWapp.{Chat, Log, Store}
   alias ExWapp.Message.Content, as: MessageContent
   alias ExWapp.Message.Handler.Common
   alias ExWapp.Message.Handler.Inbound.{Content, Projection}
@@ -70,7 +70,7 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
         persist_history_sync_lid_mappings(state, lid_mappings)
 
         Logger.debug(
-          "[HISTORY_SYNC] Applied protocol history sync from=#{Common.normalize_jid(from)} id=#{id} sync_type=#{inspect(sync_type)} conversations=#{length(conversations)} messages=#{history_message_count} lid_mappings=#{length(lid_mappings)}"
+          "[HISTORY_SYNC] Applied protocol history sync from=#{Log.reference(from)} id=#{Log.reference(id)} sync_type=#{inspect(sync_type)} conversations=#{length(conversations)} messages=#{history_message_count} lid_mappings=#{length(lid_mappings)}"
         )
 
         state
@@ -80,14 +80,14 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
 
       {:error, :history_sync_download_required} ->
         Logger.debug(
-          "[HISTORY_SYNC] History sync notification requires blob download (inline payload missing) from=#{Common.normalize_jid(from)} id=#{id}"
+          "[HISTORY_SYNC] History sync notification requires blob download (inline payload missing) from=#{Log.reference(from)} id=#{Log.reference(id)}"
         )
 
         state
 
       {:error, reason} ->
         Logger.warning(
-          "[HISTORY_SYNC] Failed to parse protocol history sync from=#{Common.normalize_jid(from)} id=#{id}: #{inspect(reason)}"
+          "[HISTORY_SYNC] Failed to parse protocol history sync from=#{Log.reference(from)} id=#{Log.reference(id)}: #{Log.reason(reason)}"
         )
 
         state
@@ -139,7 +139,7 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
     end
   rescue
     error ->
-      Logger.warning("[APP_STATE] Failed to ingest app state keys: #{inspect(error)}")
+      Logger.warning("[APP_STATE] Failed to ingest app state keys: #{Log.reason(error)}")
       state
   end
 
@@ -197,12 +197,12 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
         state
 
       {:error, reason} ->
-        Logger.warning("[PLACEHOLDER] Failed to parse resend response: #{inspect(reason)}")
+        Logger.warning("[PLACEHOLDER] Failed to parse resend response: #{Log.reason(reason)}")
         state
     end
   rescue
     error ->
-      Logger.warning("[PLACEHOLDER] Failed to ingest resend response: #{inspect(error)}")
+      Logger.warning("[PLACEHOLDER] Failed to ingest resend response: #{Log.reason(error)}")
       state
   end
 
@@ -359,21 +359,30 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
       Logger.warning("[APP_STATE] No store available, cannot persist app state keys")
       {:error, :missing_store}
     else
-      data = Store.load!(store)
-      existing_keys = Map.get(data, :app_state_keys, %{})
-      updated_keys = Enum.reduce(keys, existing_keys, &maybe_put_app_state_key/2)
-
-      if updated_keys != existing_keys do
-        Store.persist(store, Map.put(data, :app_state_keys, updated_keys))
-        {:ok, :updated}
-      else
-        {:ok, :unchanged}
-      end
+      persist_app_state_keys(store, keys)
     end
   rescue
     error ->
-      Logger.warning("[APP_STATE] Failed to store app state keys: #{inspect(error)}")
+      Logger.warning("[APP_STATE] Failed to store app state keys: #{Log.reason(error)}")
       {:error, {:store_failed, error}}
+  end
+
+  defp persist_app_state_keys(store, keys) do
+    case Store.get_and_update(
+           store,
+           :app_state_keys,
+           %{},
+           &merge_app_state_keys(&1, keys)
+         ) do
+      status when status in [:updated, :unchanged] -> {:ok, status}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp merge_app_state_keys(existing_keys, keys) do
+    updated_keys = Enum.reduce(keys, existing_keys, &maybe_put_app_state_key/2)
+    status = if updated_keys == existing_keys, do: :unchanged, else: :updated
+    {status, updated_keys}
   end
 
   @spec maybe_put_app_state_key(map(), map()) :: map()
@@ -389,7 +398,7 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
         })
 
       :error ->
-        Logger.warning("[APP_STATE] Skipping malformed key: #{inspect(key)}")
+        Logger.warning("[APP_STATE] Skipping malformed key: #{Log.term_summary(key)}")
         acc
     end
   end
@@ -572,29 +581,30 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
         :ok
 
       {store, normalized_mappings} ->
-        data = Store.load!(store)
-        existing_mappings = Map.get(data, :lid_mapping, %{})
-
-        updated_mappings =
-          Enum.reduce(normalized_mappings, existing_mappings, fn {lid, pn}, acc ->
-            acc
-            |> Map.put({:pn_to_lid, pn}, lid)
-            |> Map.put({:lid_to_pn, lid}, pn)
-          end)
-
-        if updated_mappings != existing_mappings do
-          Store.persist(store, Map.put(data, :lid_mapping, updated_mappings))
-        end
+        Store.update(
+          store,
+          :lid_mapping,
+          %{},
+          &merge_lid_mappings(&1, normalized_mappings)
+        )
 
         :ok
     end
   rescue
     error ->
-      Logger.warning("[HISTORY_SYNC] Failed storing LID mappings: #{inspect(error)}")
+      Logger.warning("[HISTORY_SYNC] Failed storing LID mappings: #{Log.reason(error)}")
       :ok
   end
 
   defp persist_history_sync_lid_mappings(_state, _lid_mappings), do: :ok
+
+  defp merge_lid_mappings(existing_mappings, normalized_mappings) do
+    Enum.reduce(normalized_mappings, existing_mappings, fn {lid, pn}, acc ->
+      acc
+      |> Map.put({:pn_to_lid, pn}, lid)
+      |> Map.put({:lid_to_pn, lid}, pn)
+    end)
+  end
 
   @spec normalize_lid_mappings(list()) :: [{binary(), binary()}]
   defp normalize_lid_mappings(lid_mappings) when is_list(lid_mappings) do

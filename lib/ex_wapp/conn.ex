@@ -10,11 +10,12 @@ defmodule ExWapp.Conn do
   @behaviour ExWapp.Transport
   require Logger
 
-  alias ExWapp.{Binary, Noise, Store}
+  alias ExWapp.{Binary, Log, Noise, Store}
   alias ExWapp.Binary.Node
   alias ExWapp.Binary.Raw
   alias ExWapp.Noise.ClientPayload
   alias ExWapp.Transport.Frame
+  alias ExWapp.Transport.TLS
 
   @url "wss://web.whatsapp.com/ws/chat"
   @origin "https://web.whatsapp.com"
@@ -78,8 +79,9 @@ defmodule ExWapp.Conn do
       noise_opts: noise_opts
     }
 
-    result = WebSockex.start_link(@url, __MODULE__, state, extra_headers: headers)
-    Logger.debug("[CONN] WebSockex.start_link result: #{inspect(result)}")
+    websockex_opts = Keyword.put(TLS.websockex_options(@url), :extra_headers, headers)
+    result = WebSockex.start_link(@url, __MODULE__, state, websockex_opts)
+    Logger.debug("[CONN] WebSockex.start_link result: #{Log.reason(result)}")
     result
   end
 
@@ -125,14 +127,13 @@ defmodule ExWapp.Conn do
           {:ok, state}
 
         {:error, reason} ->
-          Logger.error("[CONN] Noise.init failed: #{inspect(reason)}")
+          Logger.error("[CONN] Noise.init failed: #{Log.reason(reason)}")
           notify_session(state.session, {:error, reason})
           {:close, state}
       end
     rescue
       e in _ ->
-        stacktrace = __STACKTRACE__
-        Logger.error("[CONN] Noise.init crashed: #{Exception.format(:error, e, stacktrace)}")
+        Logger.error("[CONN] Noise.init crashed: #{Log.reason(e)}")
         notify_session(state.session, {:error, {:crash, e}})
         {:close, state}
     end
@@ -142,7 +143,7 @@ defmodule ExWapp.Conn do
   @doc false
   @spec handle_disconnect(term(), State.t()) :: {:ok, State.t()}
   def handle_disconnect(reason, state) do
-    Logger.warning("[CONN] WebSocket disconnected: #{inspect(reason)}")
+    Logger.warning("[CONN] WebSocket disconnected: #{Log.reason(reason)}")
     notify_session(state.session, {:transport, {:closed, reason}})
     # Returning {:ok, state} allows WebSockex to terminate this process.
     {:ok, state}
@@ -185,7 +186,7 @@ defmodule ExWapp.Conn do
   end
 
   defp handle_binary_frame(other, state) do
-    Logger.warning("Received non-binary frame: #{inspect(other)}")
+    Logger.warning("Received non-binary frame: #{Log.term_summary(other)}")
     {:ok, state}
   end
 
@@ -203,7 +204,7 @@ defmodule ExWapp.Conn do
       {:reply, reply, state}
     else
       {:error, reason} ->
-        Logger.error("cannot send node: #{inspect(reason)}")
+        Logger.error("cannot send node: #{Log.reason(reason)}")
         notify_session(state.session, {:error, reason})
         {:ok, state}
     end
@@ -241,7 +242,7 @@ defmodule ExWapp.Conn do
   end
 
   def handle_info(msg, state) do
-    Logger.warning("Unexpected message in Conn: #{inspect(msg)}")
+    Logger.warning("Unexpected message in Conn: #{Log.term_summary(msg)}")
     {:ok, state}
   end
 
@@ -275,7 +276,7 @@ defmodule ExWapp.Conn do
         {:ok, state, []}
 
       {:error, reason} ->
-        Logger.error("[CONN] Noise handshake failed: #{inspect(reason)}")
+        Logger.error("[CONN] Noise handshake failed: #{Log.reason(reason)}")
         notify_session(state.session, {:error, reason})
         {:close, state}
     end
@@ -291,7 +292,7 @@ defmodule ExWapp.Conn do
         handle_decrypted_payload(state, plaintext)
 
       {:error, reason} ->
-        Logger.warning("[CONN] Decrypt failed: #{inspect(reason)}")
+        Logger.warning("[CONN] Decrypt failed: #{Log.reason(reason)}")
         notify_session(state.session, {:error, {:decrypt_failed, reason, frame}})
         {:ok, state, []}
     end
@@ -316,7 +317,7 @@ defmodule ExWapp.Conn do
       {:ok, state, []}
     else
       {:error, reason} ->
-        Logger.warning("[CONN] Failed to decode payload: #{inspect(reason)}")
+        Logger.warning("[CONN] Failed to decode payload: #{Log.reason(reason)}")
         notify_session(state.session, {:connection_binary, plaintext})
         {:ok, state, []}
     end
@@ -368,7 +369,7 @@ defmodule ExWapp.Conn do
     with {:ok, stream_start} <- build_stream_start_node(state),
          {:ok, stream_bin} <- Binary.encode(stream_start),
          _ =
-           Logger.debug("[CONN] stream_start binary: #{Base.encode16(stream_bin, case: :lower)}"),
+           Logger.debug("[CONN] stream_start bytes=#{byte_size(stream_bin)}"),
          {:ok, stream_cipher, noise_state} <- Noise.encrypt(noise, stream_bin),
          {new_state, stream_reply} <-
            build_reply(%{state | noise: noise_state, stream_started?: true}, stream_cipher) do
@@ -376,7 +377,7 @@ defmodule ExWapp.Conn do
       {:ok, new_state, [stream_reply]}
     else
       {:error, reason} ->
-        Logger.error("[CONN] failed to send stream start: #{inspect(reason)}")
+        Logger.error("[CONN] failed to send stream start: #{Log.reason(reason)}")
         {:ok, state, []}
     end
   end
@@ -391,19 +392,12 @@ defmodule ExWapp.Conn do
     {:ok, state, []}
   end
 
-  defp log_outgoing_node(node, encoded) do
-    case Binary.decode(encoded) do
-      {:ok, decoded} ->
-        log_outgoing_node_line(node, "Sending node: #{node_to_xml(decoded)}")
-
-      {:error, _} ->
-        log_outgoing_node_line(node, "Sending node: #{inspect(node)}")
-    end
-
+  defp log_outgoing_node(node, _encoded) do
+    log_outgoing_node_line(node, "Sending node: #{node_to_xml(node)}")
     :ok
   rescue
     _ ->
-      log_outgoing_node_line(node, "Sending node: #{inspect(node)}")
+      log_outgoing_node_line(node, "Sending node: #{Log.term_summary(node)}")
       :ok
   end
 
@@ -457,15 +451,14 @@ defmodule ExWapp.Conn do
     "<#{tag}#{attrs_to_string(attrs)}>#{inner}</#{tag}>"
   end
 
-  defp node_to_xml(other), do: inspect(other)
+  defp node_to_xml(other), do: Log.term_summary(other)
 
   defp attrs_to_string(attrs) do
-    Enum.map_join(attrs, "", fn
+    attrs
+    |> Log.attrs()
+    |> Enum.map_join("", fn
       {key, true} ->
         " #{key}"
-
-      {key, _value} when key in ["auth", "ip_token", "token", "companion_enc_static"] ->
-        " #{key}=\"[FILTERED]\""
 
       {key, value} ->
         " #{key}=\"#{value}\""
