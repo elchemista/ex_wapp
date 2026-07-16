@@ -32,6 +32,7 @@ defmodule ExWapp.BinaryProtocolParityTest do
         |> Binary.decode!()
 
       assert length(decoded.content) == 300
+
       assert %Node{attrs: %{"id" => "0"}, content: %Raw{data: <<0::16>>}} =
                hd(decoded.content)
 

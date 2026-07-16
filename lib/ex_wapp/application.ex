@@ -42,6 +42,9 @@ defmodule ExWapp.Application do
   @impl true
   def start(_type, _args) do
     children = [
+      # Serializes stateful Signal ratchet mutations without running crypto in
+      # the coordinator or allocating one process per recipient.
+      ExWapp.Signal.MutationLock,
       # PubSub for message broadcasting
       {Phoenix.PubSub, name: ExWapp.PubSub},
       # Registry for session lookup by ID

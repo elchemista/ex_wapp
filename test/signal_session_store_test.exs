@@ -1,7 +1,172 @@
 defmodule ExWapp.SignalSessionStoreTest do
   use ExUnit.Case, async: true
 
-  alias ExWapp.Signal.{Keys, SessionStore}
+  alias ExWapp.Signal.{Keys, SessionStore, WireFormat}
+
+  test "serializes concurrent ETS encryptions for one recipient" do
+    local_identity = Keys.generate_key_pair()
+    remote = remote_device(5_001, 201, 231)
+    jid = "15550003001:7@s.whatsapp.net"
+    message_count = 64
+
+    store = SessionStore.new_ets()
+
+    assert {:ok, _session, _base_key, ^store} =
+             SessionStore.get_or_create_session(
+               store,
+               jid,
+               local_identity,
+               remote.bundle,
+               3_001
+             )
+
+    results =
+      1..message_count
+      |> Enum.map(fn index ->
+        fn ->
+          SessionStore.encrypt_message(
+            store,
+            jid,
+            "concurrent-#{index}",
+            local_identity,
+            3_001,
+            %{}
+          )
+        end
+      end)
+      |> run_concurrently()
+
+    counters =
+      Enum.map(results, fn {:ok, ciphertext, type, ^store} ->
+        signal_message_counter(ciphertext, type)
+      end)
+
+    assert Enum.sort(counters) == Enum.to_list(0..(message_count - 1))
+    assert {:ok, session} = SessionStore.get_session(store, jid)
+    assert session.sending_chain.counter == message_count
+  end
+
+  test "serializes concurrent ETS send and receive ratchet mutations" do
+    alice_identity = Keys.generate_key_pair()
+    bob = remote_device(5_002, 202, 232)
+    alice_jid = "15550003002:3@s.whatsapp.net"
+    bob_jid = "15550003003:9@s.whatsapp.net"
+    alice_store = SessionStore.new_ets()
+    bob_store = SessionStore.new_ets()
+
+    assert {:ok, opening, :prekey, ^alice_store} =
+             SessionStore.encrypt_message(
+               alice_store,
+               bob_jid,
+               "opening",
+               alice_identity,
+               3_002,
+               bob.bundle
+             )
+
+    assert {:ok, "opening", ^bob_store} =
+             SessionStore.decrypt_message(
+               bob_store,
+               alice_jid,
+               opening,
+               true,
+               bob.identity,
+               bob.local_prekeys
+             )
+
+    assert {:ok, acknowledgement, :whisper, ^bob_store} =
+             SessionStore.encrypt_message(
+               bob_store,
+               alice_jid,
+               "acknowledgement",
+               bob.identity,
+               4_002,
+               %{}
+             )
+
+    assert {:ok, "acknowledgement", ^alice_store} =
+             SessionStore.decrypt_message(
+               alice_store,
+               bob_jid,
+               acknowledgement,
+               false,
+               alice_identity,
+               empty_prekeys()
+             )
+
+    Enum.each(1..24, fn round ->
+      expected_inbound = "inbound-#{round}"
+      expected_outbound = "outbound-#{round}"
+
+      assert {:ok, inbound, :whisper, ^bob_store} =
+               SessionStore.encrypt_message(
+                 bob_store,
+                 alice_jid,
+                 expected_inbound,
+                 bob.identity,
+                 4_002,
+                 %{}
+               )
+
+      assert {:ok, before_session} = SessionStore.get_session(alice_store, bob_jid)
+      before_sending_counter = before_session.sending_chain.counter
+      before_receiving_counter = before_session.receiving_chain.counter
+      before_remote_ratchet_key = before_session.remote_ratchet_key
+      assert {:ok, inbound_message} = WireFormat.parse_signal_message(inbound)
+
+      [send_result, receive_result] =
+        run_concurrently([
+          fn ->
+            SessionStore.encrypt_message(
+              alice_store,
+              bob_jid,
+              expected_outbound,
+              alice_identity,
+              3_002,
+              %{}
+            )
+          end,
+          fn ->
+            SessionStore.decrypt_message(
+              alice_store,
+              bob_jid,
+              inbound,
+              false,
+              alice_identity,
+              empty_prekeys()
+            )
+          end
+        ])
+
+      assert {:ok, outbound, :whisper, ^alice_store} = send_result
+      assert {:ok, ^expected_inbound, ^alice_store} = receive_result
+
+      assert {:ok, after_session} = SessionStore.get_session(alice_store, bob_jid)
+
+      if inbound_message.ratchet_key == before_remote_ratchet_key do
+        assert after_session.sending_chain.counter == before_sending_counter + 1
+        assert after_session.receiving_chain.counter == before_receiving_counter + 1
+      else
+        assert after_session.remote_ratchet_key == inbound_message.ratchet_key
+        assert after_session.receiving_chain.counter == inbound_message.counter + 1
+
+        assert (after_session.sending_chain.counter == 0 and
+                  after_session.previous_counter == before_sending_counter + 1) or
+                 (after_session.sending_chain.counter == 1 and
+                    after_session.previous_counter == before_sending_counter)
+      end
+
+      assert {:ok, ^expected_outbound, ^bob_store} =
+               SessionStore.decrypt_message(
+                 bob_store,
+                 alice_jid,
+                 outbound,
+                 false,
+                 bob.identity,
+                 bob.local_prekeys
+               )
+    end)
+  end
 
   test "encrypt_message wraps as prekey when base_key is provided for an already-created session" do
     local_identity = Keys.generate_key_pair()
@@ -470,5 +635,43 @@ defmodule ExWapp.SignalSessionStoreTest do
         prekeys: %{prekey_id => one_time_prekey}
       }
     }
+  end
+
+  defp signal_message_counter(ciphertext, :prekey) do
+    {:ok, prekey_message} = WireFormat.parse_prekey_signal_message(ciphertext)
+    signal_message_counter(prekey_message.message, :whisper)
+  end
+
+  defp signal_message_counter(ciphertext, :whisper) do
+    {:ok, signal_message} = WireFormat.parse_signal_message(ciphertext)
+    signal_message.counter
+  end
+
+  defp empty_prekeys, do: %{signed_prekeys: %{}, prekeys: %{}}
+
+  defp run_concurrently(functions) do
+    owner = self()
+    gate = make_ref()
+
+    tasks =
+      Enum.map(functions, fn fun ->
+        Task.async(fn ->
+          send(owner, {:concurrency_test_ready, gate, self()})
+
+          receive do
+            {:concurrency_test_go, ^gate} -> fun.()
+          end
+        end)
+      end)
+
+    task_pids =
+      Enum.map(tasks, fn _task ->
+        receive do
+          {:concurrency_test_ready, ^gate, task_pid} -> task_pid
+        end
+      end)
+
+    Enum.each(task_pids, &send(&1, {:concurrency_test_go, gate}))
+    Task.await_many(tasks, 30_000)
   end
 end

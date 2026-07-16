@@ -12,6 +12,7 @@ defmodule ExWapp.Signal.WireFormatTest do
       assert WireFormat.serialize_public_key(serialized) == serialized
       assert {:ok, ^key} = WireFormat.deserialize_public_key(serialized)
       assert {:ok, ^key} = WireFormat.deserialize_public_key(key)
+
       assert {:error, :invalid_key_format} =
                WireFormat.deserialize_public_key(<<4, key::binary>>)
 

@@ -796,6 +796,7 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_call({:update_signal_sessions, sessions}, _from, state) do
+    sessions = normalize_persisted_signal_sessions(sessions)
     persist_signal_sessions_store(state.store, sessions)
     {:reply, :ok, %{state | signal_sessions: sessions}}
   end
@@ -1222,6 +1223,7 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_info({:signal_sessions_updated, sessions}, state) do
+    sessions = normalize_persisted_signal_sessions(sessions)
     session_count = sessions |> SessionStore.list_sessions() |> length()
     Logger.debug("[SEND] Async signal session update received (sessions=#{session_count})")
     persist_signal_sessions_store(state.store, sessions)
@@ -2096,18 +2098,21 @@ defmodule ExWapp.Session.Worker do
       nil
   end
 
-  defp normalize_persisted_signal_sessions(nil), do: nil
+  defp normalize_persisted_signal_sessions(nil), do: SessionStore.new_ets()
   defp normalize_persisted_signal_sessions(%SessionStore.Ref{} = persisted), do: persisted
 
   defp normalize_persisted_signal_sessions(%{sessions: sessions} = persisted)
        when is_map(sessions) do
-    SessionStore.new()
-    |> Map.merge(persisted)
-    |> Map.put(:pending_prekeys, Map.get(persisted, :pending_prekeys, %{}))
-    |> Map.put(:session_touched_at_ms, Map.get(persisted, :session_touched_at_ms, %{}))
+    normalized =
+      SessionStore.new()
+      |> Map.merge(persisted)
+      |> Map.put(:pending_prekeys, Map.get(persisted, :pending_prekeys, %{}))
+      |> Map.put(:session_touched_at_ms, Map.get(persisted, :session_touched_at_ms, %{}))
+
+    SessionStore.new_ets(normalized)
   end
 
-  defp normalize_persisted_signal_sessions(_), do: nil
+  defp normalize_persisted_signal_sessions(_), do: SessionStore.new_ets()
 
   defp persist_signal_sessions_store(nil, _sessions), do: :ok
 

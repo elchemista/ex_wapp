@@ -112,6 +112,7 @@ defmodule ExWapp.Noise.HandshakeParityTest do
 
     test "derive_transport_keys/1 is deterministic and matches the HKDF split" do
       state = Handshake.new(@pattern, "header") |> Handshake.mix_into_key("shared secret")
+
       <<expected_write::binary-size(32), expected_read::binary-size(32)>> =
         hkdf(state.salt, <<>>)
 

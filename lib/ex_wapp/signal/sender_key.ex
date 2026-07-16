@@ -12,7 +12,7 @@ defmodule ExWapp.Signal.SenderKey do
   require Logger
 
   alias ExWapp.{JID, Log, Store}
-  alias ExWapp.Signal.{Keys, WireFormat}
+  alias ExWapp.Signal.{Keys, MutationLock, WireFormat}
 
   @current_version 3
   @max_future_messages 2000
@@ -71,6 +71,12 @@ defmodule ExWapp.Signal.SenderKey do
   defp process_single_distribution(_store, _distribution, "", _sender), do: 0
 
   defp process_single_distribution(store, distribution, group_jid, sender) do
+    with_sender_key_lock(store, group_jid, sender, fn ->
+      do_process_single_distribution(store, distribution, group_jid, sender)
+    end)
+  end
+
+  defp do_process_single_distribution(store, distribution, group_jid, sender) do
     case parse_axolotl_distribution_message(distribution.axolotl_distribution) do
       {:ok, parsed} ->
         store_parsed_distribution(store, parsed, group_jid, sender, distribution.source_field)
@@ -122,8 +128,26 @@ defmodule ExWapp.Signal.SenderKey do
     normalized_sender = normalize_jid(sender_jid)
 
     with true <- normalized_group != "" or {:error, :invalid_group_jid},
-         true <- normalized_sender != "" or {:error, :invalid_sender_jid},
-         {:ok, parsed_message} <- parse_sender_key_message(ciphertext),
+         true <- normalized_sender != "" or {:error, :invalid_sender_jid} do
+      with_sender_key_lock(store, normalized_group, normalized_sender, fn ->
+        do_decrypt_group_message(
+          store,
+          normalized_group,
+          normalized_sender,
+          ciphertext
+        )
+      end)
+    else
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def decrypt_group_message(_store, _group_jid, _sender_jid, _ciphertext),
+    do: {:error, :invalid_ciphertext}
+
+  defp do_decrypt_group_message(store, normalized_group, normalized_sender, ciphertext) do
+    with {:ok, parsed_message} <- parse_sender_key_message(ciphertext),
          {:ok, record, sender_state} <-
            get_sender_key_state(store, normalized_group, normalized_sender, parsed_message.id),
          :ok <- verify_sender_key_signature(parsed_message, sender_state.signing_key),
@@ -145,14 +169,8 @@ defmodule ExWapp.Signal.SenderKey do
              record
            ) do
       {:ok, plaintext}
-    else
-      {:error, reason} ->
-        {:error, reason}
     end
   end
-
-  def decrypt_group_message(_store, _group_jid, _sender_jid, _ciphertext),
-    do: {:error, :invalid_ciphertext}
 
   @doc """
   Creates (or reuses) the local outbound sender-key state and returns a WA message
@@ -162,8 +180,15 @@ defmodule ExWapp.Signal.SenderKey do
           {:ok, binary()} | {:error, term()}
   def create_outbound_distribution_message(store, group_jid, sender_jid) do
     with {:ok, normalized_group, normalized_sender} <-
-           normalize_outbound_sender_key_ids(group_jid, sender_jid),
-         {:ok, _record, sender_state} <-
+           normalize_outbound_sender_key_ids(group_jid, sender_jid) do
+      with_sender_key_lock(store, normalized_group, normalized_sender, fn ->
+        do_create_outbound_distribution_message(store, normalized_group, normalized_sender)
+      end)
+    end
+  end
+
+  defp do_create_outbound_distribution_message(store, normalized_group, normalized_sender) do
+    with {:ok, _record, sender_state} <-
            ensure_outbound_sender_state(store, normalized_group, normalized_sender) do
       axolotl_distribution = encode_axolotl_distribution_message(sender_state)
       {:ok, encode_wa_sender_key_distribution_message(normalized_group, axolotl_distribution)}
@@ -178,8 +203,28 @@ defmodule ExWapp.Signal.SenderKey do
   def encrypt_outbound_group_message(store, group_jid, sender_jid, plaintext)
       when is_binary(plaintext) do
     with {:ok, normalized_group, normalized_sender} <-
-           normalize_outbound_sender_key_ids(group_jid, sender_jid),
-         {:ok, record, sender_state} <-
+           normalize_outbound_sender_key_ids(group_jid, sender_jid) do
+      with_sender_key_lock(store, normalized_group, normalized_sender, fn ->
+        do_encrypt_outbound_group_message(
+          store,
+          normalized_group,
+          normalized_sender,
+          plaintext
+        )
+      end)
+    end
+  end
+
+  def encrypt_outbound_group_message(_store, _group_jid, _sender_jid, _plaintext),
+    do: {:error, :invalid_plaintext}
+
+  defp do_encrypt_outbound_group_message(
+         store,
+         normalized_group,
+         normalized_sender,
+         plaintext
+       ) do
+    with {:ok, record, sender_state} <-
            ensure_outbound_sender_state(store, normalized_group, normalized_sender),
          true <- is_binary(sender_state.signing_private) or {:error, :missing_signing_private_key} do
       {message_keys, updated_state} = derive_current_message_key(sender_state)
@@ -207,8 +252,14 @@ defmodule ExWapp.Signal.SenderKey do
     end
   end
 
-  def encrypt_outbound_group_message(_store, _group_jid, _sender_jid, _plaintext),
-    do: {:error, :invalid_plaintext}
+  defp with_sender_key_lock(store, group_jid, sender_jid, fun) do
+    key = {:signal_sender_key, store_lock_identity(store), group_jid, sender_jid}
+    MutationLock.with_lock(key, fun)
+  end
+
+  defp store_lock_identity(%{writer: writer}) when is_pid(writer), do: {:writer, writer}
+  defp store_lock_identity(%{agent: agent}) when is_pid(agent), do: {:agent, agent}
+  defp store_lock_identity(store), do: {:store, store}
 
   # Sender-key record persistence
 

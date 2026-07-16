@@ -108,6 +108,59 @@ defmodule ExWapp.SignalSenderKeyTest do
              SenderKey.decrypt_group_message(receiver_store, group_jid, sender_jid, second_skmsg)
   end
 
+  test "serializes concurrent outbound sender-key encryption" do
+    sender_store = ExWapp.Store.Memory.new(initial_data: %{signal: %{}})
+    receiver_store = ExWapp.Store.Memory.new(initial_data: %{signal: %{}})
+    group_jid = "120363043214477338@g.us"
+    sender_jid = "199316597694687@lid"
+    message_count = 48
+
+    assert {:ok, distribution_payload} =
+             SenderKey.create_outbound_distribution_message(sender_store, group_jid, sender_jid)
+
+    assert {:ok, 1} =
+             SenderKey.process_distributions_from_plaintext(
+               receiver_store,
+               group_jid,
+               sender_jid,
+               distribution_payload
+             )
+
+    results =
+      1..message_count
+      |> Enum.map(fn index ->
+        fn ->
+          plaintext = "concurrent-group-#{index}"
+
+          {:ok, ciphertext} =
+            SenderKey.encrypt_outbound_group_message(
+              sender_store,
+              group_jid,
+              sender_jid,
+              plaintext
+            )
+
+          {plaintext, ciphertext}
+        end
+      end)
+      |> run_concurrently()
+
+    sender_data = ExWapp.Store.load!(sender_store)
+    sender_record = get_in(sender_data, [:signal, :sender_keys, {group_jid, sender_jid}])
+    sender_state = get_in(sender_record, [:states, sender_record.current_id])
+    assert sender_state.iteration == message_count
+
+    Enum.each(results, fn {plaintext, ciphertext} ->
+      assert {:ok, ^plaintext} =
+               SenderKey.decrypt_group_message(
+                 receiver_store,
+                 group_jid,
+                 sender_jid,
+                 ciphertext
+               )
+    end)
+  end
+
   test "simulated outbound chain yields pkmsg distribution and signed skmsg" do
     sender_identity = Keys.generate_key_pair()
     receiver_identity = Keys.generate_key_pair()
@@ -628,5 +681,31 @@ defmodule ExWapp.SignalSenderKeyTest do
   defp encode_bytes_field(field_num, value) when is_binary(value) do
     tag = bor(field_num <<< 3, 2)
     WireFormat.encode_varint(tag) <> WireFormat.encode_varint(byte_size(value)) <> value
+  end
+
+  defp run_concurrently(functions) do
+    owner = self()
+    gate = make_ref()
+
+    tasks =
+      Enum.map(functions, fn fun ->
+        Task.async(fn ->
+          send(owner, {:sender_key_test_ready, gate, self()})
+
+          receive do
+            {:sender_key_test_go, ^gate} -> fun.()
+          end
+        end)
+      end)
+
+    task_pids =
+      Enum.map(tasks, fn _task ->
+        receive do
+          {:sender_key_test_ready, ^gate, task_pid} -> task_pid
+        end
+      end)
+
+    Enum.each(task_pids, &send(&1, {:sender_key_test_go, gate}))
+    Task.await_many(tasks, 30_000)
   end
 end

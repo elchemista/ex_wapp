@@ -10,6 +10,7 @@ defmodule ExWapp.Signal.SessionStore do
   alias ExWapp.Log
   alias ExWapp.Session.JIDUtils
   alias ExWapp.Signal.Adapter, as: Signal
+  alias ExWapp.Signal.MutationLock
   alias ExWapp.Signal.WireFormat
 
   require Logger
@@ -264,6 +265,12 @@ defmodule ExWapp.Signal.SessionStore do
     source_jid = normalize_jid(source_jid)
     alias_jid = normalize_jid(alias_jid)
 
+    with_session_mutation(store, [source_jid, alias_jid], [], fn ->
+      do_copy_session(store, source_jid, alias_jid)
+    end)
+  end
+
+  defp do_copy_session(store, source_jid, alias_jid) do
     cond do
       source_jid == alias_jid ->
         store
@@ -285,17 +292,22 @@ defmodule ExWapp.Signal.SessionStore do
   Removes a session for a recipient JID.
   """
   @spec delete_session(t(), String.t()) :: t()
-  def delete_session(%Ref{table: table} = store, jid) do
+  def delete_session(store, jid) do
     jid = normalize_jid(jid)
+
+    with_session_mutation(store, [jid], [], fn ->
+      do_delete_session(store, jid)
+    end)
+  end
+
+  defp do_delete_session(%Ref{table: table} = store, jid) do
     :ets.delete(table, {:session, jid})
     :ets.delete(table, {:touched_at_ms, jid})
     :ets.delete(table, {:pending_prekey, jid})
     store
   end
 
-  def delete_session(store, jid) do
-    jid = normalize_jid(jid)
-
+  defp do_delete_session(store, jid) do
     %{
       store
       | sessions: Map.delete(store.sessions, jid),
@@ -464,6 +476,20 @@ defmodule ExWapp.Signal.SessionStore do
         opts
       ) do
     jid = normalize_jid(jid)
+    identity_hints = remote_identity_hints(remote_bundle)
+
+    with_session_mutation(store, [jid], identity_hints, fn ->
+      do_get_or_create_session(
+        store,
+        jid,
+        local_identity,
+        remote_bundle,
+        opts
+      )
+    end)
+  end
+
+  defp do_get_or_create_session(store, jid, local_identity, remote_bundle, opts) do
     force? = Keyword.get(opts, :force, false)
 
     cond do
@@ -503,13 +529,33 @@ defmodule ExWapp.Signal.SessionStore do
   def encrypt_message(store, jid, plaintext, local_identity, local_registration_id, remote_bundle) do
     jid = normalize_jid(jid)
 
+    with_session_mutation(store, [jid], remote_identity_hints(remote_bundle), fn ->
+      do_encrypt_message(
+        store,
+        jid,
+        plaintext,
+        local_identity,
+        local_registration_id,
+        remote_bundle
+      )
+    end)
+  end
+
+  defp do_encrypt_message(
+         store,
+         jid,
+         plaintext,
+         local_identity,
+         local_registration_id,
+         remote_bundle
+       ) do
     with {:ok, session, base_key, store} <-
-           get_or_create_session(
+           do_get_or_create_session(
              store,
              jid,
              local_identity,
              remote_bundle,
-             local_registration_id
+             []
            ) do
       {session, store} =
         ensure_outbound_pending_prekey(store, jid, session, base_key, remote_bundle)
@@ -537,6 +583,31 @@ defmodule ExWapp.Signal.SessionStore do
   def decrypt_message(store, jid, ciphertext, is_prekey_message, local_identity, local_prekeys) do
     jid = normalize_jid(jid)
 
+    with_session_mutation(
+      store,
+      [jid],
+      prekey_identity_hints(ciphertext, is_prekey_message),
+      fn ->
+        do_decrypt_message(
+          store,
+          jid,
+          ciphertext,
+          is_prekey_message,
+          local_identity,
+          local_prekeys
+        )
+      end
+    )
+  end
+
+  defp do_decrypt_message(
+         store,
+         jid,
+         ciphertext,
+         is_prekey_message,
+         local_identity,
+         local_prekeys
+       ) do
     Logger.debug(
       "[SESSION_STORE] decrypt_message: jid=#{Log.reference(jid)} is_prekey=#{is_prekey_message} ct_size=#{byte_size(ciphertext)} existing_session=#{has_session?(store, jid)}"
     )
@@ -815,15 +886,9 @@ defmodule ExWapp.Signal.SessionStore do
     }
   end
 
-  defp bundle_base_key(remote_bundle) when is_map(remote_bundle),
-    do: Map.get(remote_bundle, :base_key)
+  defp bundle_base_key(remote_bundle), do: Map.get(remote_bundle, :base_key)
 
-  defp bundle_base_key(_remote_bundle), do: nil
-
-  defp bundle_value(remote_bundle, path) when is_map(remote_bundle),
-    do: get_in(remote_bundle, path)
-
-  defp bundle_value(_remote_bundle, _path), do: nil
+  defp bundle_value(remote_bundle, path), do: get_in(remote_bundle, path)
 
   # Normalize JID to consistent format
   defp normalize_jid(jid) when is_binary(jid) do
@@ -842,6 +907,68 @@ defmodule ExWapp.Signal.SessionStore do
   end
 
   defp normalize_jid(%{user: user}), do: "#{user}@s.whatsapp.net"
+
+  defp with_session_mutation(%Ref{} = store, jids, identity_hints, fun) do
+    lock_keys = session_mutation_lock_keys(store, jids, identity_hints)
+
+    case MutationLock.with_locks(lock_keys, fn ->
+           refreshed_keys = session_mutation_lock_keys(store, jids, identity_hints)
+
+           if Enum.all?(refreshed_keys, &(&1 in lock_keys)) do
+             {:mutation_result, fun.()}
+           else
+             :retry_mutation_lock
+           end
+         end) do
+      {:mutation_result, result} -> result
+      :retry_mutation_lock -> with_session_mutation(store, jids, identity_hints, fun)
+    end
+  end
+
+  defp with_session_mutation(_store, _jids, _identity_hints, fun), do: fun.()
+
+  defp session_mutation_lock_keys(%Ref{table: table} = store, jids, identity_hints) do
+    normalized_jids = jids |> Enum.map(&normalize_jid/1) |> Enum.uniq()
+
+    jid_keys =
+      Enum.map(normalized_jids, &{:signal_session, table, {:jid, &1}})
+
+    stored_identities =
+      Enum.flat_map(normalized_jids, fn jid ->
+        case get_session(store, jid) do
+          {:ok, %{remote_identity_key: identity}}
+          when is_binary(identity) and byte_size(identity) > 0 ->
+            [identity]
+
+          _other ->
+            []
+        end
+      end)
+
+    identity_keys =
+      stored_identities
+      |> Kernel.++(identity_hints)
+      |> Enum.filter(&(is_binary(&1) and byte_size(&1) > 0))
+      |> Enum.uniq()
+      |> Enum.map(&{:signal_session, table, {:remote_identity, &1}})
+
+    jid_keys ++ identity_keys
+  end
+
+  defp remote_identity_hints(%{identity_key: identity})
+       when is_binary(identity) and byte_size(identity) > 0,
+       do: [identity]
+
+  defp remote_identity_hints(_remote_bundle), do: []
+
+  defp prekey_identity_hints(ciphertext, true) do
+    case WireFormat.parse_prekey_signal_message(ciphertext) do
+      {:ok, %{identity_key: identity}} when is_binary(identity) -> [identity]
+      _other -> []
+    end
+  end
+
+  defp prekey_identity_hints(_ciphertext, false), do: []
 
   defp create_session_from_bundle(store, jid, local_identity, remote_bundle) do
     case Signal.create_session(local_identity, remote_bundle) do

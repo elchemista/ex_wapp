@@ -171,6 +171,7 @@ defmodule ExWapp.AppState.CryptoTest do
 
     test "patch MAC preserves value-MAC ordering" do
       snapshot = :crypto.hash(:sha256, "snapshot")
+
       value_macs = [
         :crypto.hash(:sha256, "first"),
         :crypto.hash(:sha256, "second")
