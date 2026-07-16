@@ -6,7 +6,7 @@ defmodule ExWapp.InboundDeviceSessionRestoreTest do
   alias ExWapp.MessageHandler
   alias ExWapp.Signal.{Encryption, Keys, SessionStore}
 
-  test "decrypts whisper via persisted device-specific session when inbound envelope omits device suffix" do
+  test "decrypts repeated prekey via persisted device session when envelope omits device suffix" do
     alice_identity = Keys.generate_key_pair()
     bob_identity = Keys.generate_key_pair()
 
@@ -84,7 +84,7 @@ defmodule ExWapp.InboundDeviceSessionRestoreTest do
       ExWapp.Messages.build_text_proto("device-specific session survived restart", [])
       |> ExWapp.Proto.Message.encode()
 
-    {:ok, second_ciphertext, :whisper, _alice_sessions_2} =
+    {:ok, second_ciphertext, :prekey, _alice_sessions_2} =
       SessionStore.encrypt_message(
         alice_sessions,
         sender_device_jid,
@@ -106,7 +106,7 @@ defmodule ExWapp.InboundDeviceSessionRestoreTest do
       content: [
         %Node{
           tag: "enc",
-          attrs: %{"type" => "msg", "v" => "2"},
+          attrs: %{"type" => "pkmsg", "v" => "2"},
           content: Binary.raw(second_ciphertext)
         }
       ]

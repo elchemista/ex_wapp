@@ -175,7 +175,7 @@ defmodule ExWapp.OutboundSessionRefreshTest do
     assert List.last(content) == meta
   end
 
-  test "encrypted DM fans out to recipient devices and own PN devices" do
+  test "consecutive encrypted DMs keep every unconfirmed recipient device in the fanout" do
     local_pn_device_jid = "19995550101:5@s.whatsapp.net"
     local_lid_device_jid = "19995550202:5@lid"
     local_pn_base_jid = "19995550101@s.whatsapp.net"
@@ -247,6 +247,27 @@ defmodule ExWapp.OutboundSessionRefreshTest do
                )
            end)
 
+    first_enc_types = participant_enc_types(node)
+    assert first_enc_types[recipient_base_jid] == "pkmsg"
+    assert first_enc_types[recipient_linked_jid] == "pkmsg"
+    assert first_enc_types[local_pn_base_jid] == "pkmsg"
+    assert first_enc_types[local_pn_linked_jid] == "pkmsg"
+
+    assert {:ok, second_message_id} =
+             Session.send_text(session, recipient_base_jid, "hello md again")
+
+    assert is_binary(second_message_id)
+
+    assert_receive {:message_send, %Binary.Node{tag: "message"} = second_node}
+
+    assert Enum.sort(encrypted_participant_targets(second_node)) == Enum.sort(target_jids)
+
+    second_enc_types = participant_enc_types(second_node)
+    assert second_enc_types[recipient_base_jid] == "pkmsg"
+    assert second_enc_types[recipient_linked_jid] == "pkmsg"
+    assert second_enc_types[local_pn_base_jid] == "pkmsg"
+    assert second_enc_types[local_pn_linked_jid] == "pkmsg"
+
     decrypted_payloads =
       node
       |> encrypted_participant_nodes()
@@ -272,6 +293,133 @@ defmodule ExWapp.OutboundSessionRefreshTest do
 
     assert Enum.any?(node.content, &match?(%Binary.Node{tag: "device-identity"}, &1))
     assert local_signal.device_id == 5
+  end
+
+  test "consecutive group sends distribute the sender key to every participant and own device" do
+    group_jid = "120363099999999999@g.us"
+
+    local_pn_device_jid = "19995550101:5@s.whatsapp.net"
+    local_lid_device_jid = "19995550202:5@lid"
+    local_pn_base_jid = "19995550101@s.whatsapp.net"
+    local_pn_linked_jid = "19995550101:91@s.whatsapp.net"
+
+    first_participant_base_jid = "19995550303@s.whatsapp.net"
+    first_participant_linked_jid = "19995550303:17@s.whatsapp.net"
+    second_participant_base_jid = "19995550404@s.whatsapp.net"
+    second_participant_linked_jid = "19995550404:45@s.whatsapp.net"
+
+    %{store: store} = build_local_store(local_pn_device_jid, local_lid_device_jid)
+
+    target_jids = [
+      first_participant_base_jid,
+      first_participant_linked_jid,
+      second_participant_base_jid,
+      second_participant_linked_jid,
+      local_pn_base_jid,
+      local_pn_linked_jid
+    ]
+
+    remote_devices =
+      target_jids
+      |> Enum.map(fn jid -> {jid, build_remote_device(jid)} end)
+      |> Map.new()
+
+    prekey_bundles =
+      remote_devices
+      |> Enum.map(fn {jid, %{bundle: bundle}} -> {jid, bundle} end)
+      |> Map.new()
+
+    group_participants = [
+      first_participant_base_jid,
+      second_participant_base_jid,
+      local_pn_base_jid
+    ]
+
+    conn =
+      start_fake_conn(self(), %{
+        device_map: %{
+          first_participant_base_jid => [
+            first_participant_base_jid,
+            first_participant_linked_jid
+          ],
+          second_participant_base_jid => [
+            second_participant_base_jid,
+            second_participant_linked_jid
+          ],
+          local_pn_base_jid => [
+            local_pn_base_jid,
+            local_pn_device_jid,
+            local_pn_linked_jid
+          ]
+        },
+        group_info: %{participants: group_participants, addressing_mode: "pn"},
+        prekey_bundles: prekey_bundles,
+        route_via_session: true
+      })
+
+    session = start_connected_session(store, conn, SessionStore.new())
+
+    assert {:ok, first_message_id} = Session.send_text(session, group_jid, "hello group md")
+    assert is_binary(first_message_id)
+
+    assert_receive {:group_info_query, ^group_jid}
+    assert_receive {:usync_query, queried_jids}
+    assert Enum.sort(queried_jids) == Enum.sort(group_participants)
+
+    assert_receive {:prekey_request, requested_jids}
+    assert Enum.sort(requested_jids) == Enum.sort(target_jids)
+
+    assert_receive {:message_send, %Binary.Node{tag: "message", attrs: first_attrs} = first_node}
+
+    assert first_attrs["to"] == group_jid
+    assert first_attrs["addressing_mode"] == "pn"
+    assert is_binary(first_attrs["phash"])
+    assert Enum.sort(encrypted_participant_targets(first_node)) == Enum.sort(target_jids)
+    refute local_pn_device_jid in encrypted_participant_targets(first_node)
+
+    first_enc_types = participant_enc_types(first_node)
+    assert Enum.all?(target_jids, &(first_enc_types[&1] == "pkmsg"))
+
+    assert %Binary.Node{content: %Binary.Raw{data: first_skmsg}} =
+             group_sender_key_node(first_node)
+
+    assert byte_size(first_skmsg) > 0
+
+    distribution_payloads =
+      first_node
+      |> encrypted_participant_nodes()
+      |> Map.new(fn %Binary.Node{attrs: %{"jid" => jid}, content: [enc_node]} ->
+        {jid, decrypt_participant_payload(jid, enc_node, remote_devices)}
+      end)
+
+    for jid <- target_jids do
+      plaintext = Map.fetch!(distribution_payloads, jid)
+      assert :binary.match(plaintext, group_jid) != :nomatch
+      refute :binary.match(plaintext, "hello group md") != :nomatch
+    end
+
+    assert Enum.any?(first_node.content, &match?(%Binary.Node{tag: "device-identity"}, &1))
+
+    assert {:ok, second_message_id} =
+             Session.send_text(session, group_jid, "hello group md again")
+
+    assert is_binary(second_message_id)
+
+    assert_receive {:group_info_query, ^group_jid}
+    assert_receive {:usync_query, second_queried_jids}
+    assert Enum.sort(second_queried_jids) == Enum.sort(group_participants)
+
+    assert_receive {:message_send, %Binary.Node{tag: "message"} = second_node}
+
+    assert Enum.sort(encrypted_participant_targets(second_node)) == Enum.sort(target_jids)
+
+    second_enc_types = participant_enc_types(second_node)
+    assert Enum.all?(target_jids, &(second_enc_types[&1] == "pkmsg"))
+
+    assert %Binary.Node{content: %Binary.Raw{data: second_skmsg}} =
+             group_sender_key_node(second_node)
+
+    assert byte_size(second_skmsg) > 0
   end
 
   test "self-send fans out to all non-current own devices with own-device payloads" do
@@ -461,6 +609,7 @@ defmodule ExWapp.OutboundSessionRefreshTest do
            store: store,
            transport: FakeTransport,
            runtime: %{
+             throttle: %{enabled: false},
              iq: %{
                default_timeout_ms: 500,
                prekey_timeout_ms: 500,
@@ -600,6 +749,23 @@ defmodule ExWapp.OutboundSessionRefreshTest do
 
   defp encrypted_participant_nodes(_node), do: []
 
+  defp participant_enc_types(node) do
+    node
+    |> encrypted_participant_nodes()
+    |> Map.new(fn %Binary.Node{attrs: %{"jid" => jid}, content: [enc_node]} ->
+      {jid, enc_node.attrs["type"]}
+    end)
+  end
+
+  defp group_sender_key_node(%Binary.Node{content: content}) when is_list(content) do
+    Enum.find(content, fn
+      %Binary.Node{tag: "enc", attrs: %{"type" => "skmsg"}} -> true
+      _ -> false
+    end)
+  end
+
+  defp group_sender_key_node(_node), do: nil
+
   defp build_existing_session(local_signal, recipient_jid, recipient_bundle) do
     {:ok, _session, _base_key, signal_sessions} =
       SessionStore.get_or_create_session(
@@ -620,6 +786,17 @@ defmodule ExWapp.OutboundSessionRefreshTest do
 
   defp fake_conn_loop(owner, responses) do
     receive do
+      {:transport_send, caller,
+       %Binary.Node{
+         tag: "iq",
+         attrs: %{"xmlns" => "w:g2", "id" => id, "to" => group_jid}
+       }} ->
+        send(owner, {:group_info_query, group_jid})
+
+        response = build_group_info_response(id, Map.fetch!(responses, :group_info))
+        deliver_iq_response(caller, id, response, responses)
+        fake_conn_loop(owner, responses)
+
       {:transport_send, caller,
        %Binary.Node{tag: "iq", attrs: %{"xmlns" => "usync", "id" => id}} = node} ->
         send(owner, {:usync_query, extract_query_jids(node)})
@@ -694,6 +871,33 @@ defmodule ExWapp.OutboundSessionRefreshTest do
               content: Enum.map(device_map, &build_usync_user_node/1)
             }
           ]
+        }
+      ]
+    }
+  end
+
+  defp build_group_info_response(id, group_info) do
+    group_attrs =
+      case Map.get(group_info, :addressing_mode) do
+        mode when mode in ["lid", "pn"] -> %{"addressing_mode" => mode}
+        _ -> %{}
+      end
+
+    %Binary.Node{
+      tag: "iq",
+      attrs: %{"id" => id, "type" => "result"},
+      content: [
+        %Binary.Node{
+          tag: "group",
+          attrs: group_attrs,
+          content:
+            Enum.map(Map.fetch!(group_info, :participants), fn participant_jid ->
+              %Binary.Node{
+                tag: "participant",
+                attrs: %{"jid" => participant_jid},
+                content: nil
+              }
+            end)
         }
       ]
     }

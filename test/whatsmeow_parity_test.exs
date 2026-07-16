@@ -7,7 +7,7 @@ defmodule ExWapp.WhatsmeowParityTest do
   alias ExWapp.MessageHandler
   alias ExWapp.Signal.{Keys, SessionStore}
 
-  test "message proto encode/decode via signal prekey+whisper through handler" do
+  test "message proto encode/decode via repeated signal prekeys through handler" do
     alice_identity = Keys.generate_key_pair()
     bob_identity = Keys.generate_key_pair()
 
@@ -91,7 +91,7 @@ defmodule ExWapp.WhatsmeowParityTest do
       ExWapp.Messages.build_text_proto("second message", [])
       |> ExWapp.Proto.Message.encode()
 
-    {:ok, second_ciphertext, :whisper, _alice_sessions_2} =
+    {:ok, second_ciphertext, :prekey, _alice_sessions_2} =
       SessionStore.encrypt_message(
         alice_sessions,
         sender_jid,
@@ -112,7 +112,7 @@ defmodule ExWapp.WhatsmeowParityTest do
       content: [
         %Node{
           tag: "enc",
-          attrs: %{"type" => "msg", "v" => "2"},
+          attrs: %{"type" => "pkmsg", "v" => "2"},
           content: Binary.raw(second_ciphertext)
         }
       ]

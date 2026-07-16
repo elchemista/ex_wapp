@@ -240,7 +240,7 @@ defmodule ExWapp.Session.Outbound.Encryptor do
 
     updated_sessions =
       if signal_jid != target_jid,
-        do: ensure_signal_session_alias(updated_sessions, signal_jid, target_jid),
+        do: SessionStore.copy_session(updated_sessions, signal_jid, target_jid),
         else: updated_sessions
 
     node = MessageNode.build_participant_encrypted_node(target_jid, ciphertext, enc_type)
@@ -286,12 +286,12 @@ defmodule ExWapp.Session.Outbound.Encryptor do
 
       true ->
         case SessionStore.get_session(signal_sessions, source_jid) do
-          {:ok, session} ->
+          {:ok, _session} ->
             Logger.debug(
               "[SEND] Migrating session #{Log.reference(source_jid)} -> #{Log.reference(alias_jid)}"
             )
 
-            SessionStore.put_session(signal_sessions, alias_jid, session)
+            SessionStore.copy_session(signal_sessions, source_jid, alias_jid)
 
           :not_found ->
             signal_sessions

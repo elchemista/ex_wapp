@@ -16,6 +16,12 @@ defmodule ExWapp.Signal.SessionStore do
 
   @max_previous_sessions 5
 
+  @type pending_prekey :: %{
+          required(:base_key) => binary(),
+          required(:signed_prekey_id) => non_neg_integer(),
+          optional(:prekey_id) => non_neg_integer() | nil
+        }
+
   defmodule Ref do
     @moduledoc """
     Reference to an ETS-backed Signal session store.
@@ -191,6 +197,91 @@ defmodule ExWapp.Signal.SessionStore do
   end
 
   @doc """
+  Gets the pending outbound pre-key wrapper for a device session.
+
+  A pending wrapper remains active until that same device proves the Signal
+  session by sending a message that decrypts successfully.
+  """
+  @spec get_pending_prekey(t(), String.t()) :: {:ok, pending_prekey()} | :not_found
+  def get_pending_prekey(%Ref{table: table}, jid) do
+    case :ets.lookup(table, {:pending_prekey, normalize_jid(jid)}) do
+      [{{:pending_prekey, _jid}, pending_prekey}] -> {:ok, pending_prekey}
+      [] -> :not_found
+    end
+  end
+
+  def get_pending_prekey(store, jid) do
+    case store
+         |> Map.get(:pending_prekeys, %{})
+         |> Map.get(normalize_jid(jid)) do
+      nil -> :not_found
+      pending_prekey -> {:ok, pending_prekey}
+    end
+  end
+
+  @doc """
+  Stores the pending outbound pre-key wrapper for one device session.
+  """
+  @spec put_pending_prekey(t(), String.t(), pending_prekey()) :: t()
+  def put_pending_prekey(%Ref{table: table} = store, jid, pending_prekey)
+      when is_map(pending_prekey) do
+    :ets.insert(table, {{:pending_prekey, normalize_jid(jid)}, pending_prekey})
+    store
+  end
+
+  def put_pending_prekey(store, jid, pending_prekey) when is_map(pending_prekey) do
+    pending_prekeys =
+      store
+      |> Map.get(:pending_prekeys, %{})
+      |> Map.put(normalize_jid(jid), pending_prekey)
+
+    Map.put(store, :pending_prekeys, pending_prekeys)
+  end
+
+  @doc """
+  Removes the pending outbound pre-key wrapper for one device session.
+  """
+  @spec delete_pending_prekey(t(), String.t()) :: t()
+  def delete_pending_prekey(%Ref{table: table} = store, jid) do
+    :ets.delete(table, {:pending_prekey, normalize_jid(jid)})
+    store
+  end
+
+  def delete_pending_prekey(store, jid) do
+    pending_prekeys =
+      store
+      |> Map.get(:pending_prekeys, %{})
+      |> Map.delete(normalize_jid(jid))
+
+    Map.put(store, :pending_prekeys, pending_prekeys)
+  end
+
+  @doc """
+  Copies a device session and its pending pre-key state to a PN/LID alias.
+  """
+  @spec copy_session(t(), String.t(), String.t()) :: t()
+  def copy_session(store, source_jid, alias_jid) do
+    source_jid = normalize_jid(source_jid)
+    alias_jid = normalize_jid(alias_jid)
+
+    cond do
+      source_jid == alias_jid ->
+        store
+
+      true ->
+        case get_session(store, source_jid) do
+          {:ok, session} ->
+            store
+            |> put_session(alias_jid, session)
+            |> copy_pending_prekey(source_jid, alias_jid)
+
+          :not_found ->
+            store
+        end
+    end
+  end
+
+  @doc """
   Removes a session for a recipient JID.
   """
   @spec delete_session(t(), String.t()) :: t()
@@ -208,6 +299,7 @@ defmodule ExWapp.Signal.SessionStore do
     %{
       store
       | sessions: Map.delete(store.sessions, jid),
+        pending_prekeys: Map.delete(Map.get(store, :pending_prekeys, %{}), jid),
         session_touched_at_ms: Map.delete(Map.get(store, :session_touched_at_ms, %{}), jid)
     }
   end
@@ -419,15 +511,16 @@ defmodule ExWapp.Signal.SessionStore do
              remote_bundle,
              local_registration_id
            ) do
+      {session, store} =
+        ensure_outbound_pending_prekey(store, jid, session, base_key, remote_bundle)
+
       case Signal.encrypt(session, plaintext) do
         {:ok, ciphertext, updated_session} ->
           updated_store = update_session(store, jid, updated_session)
-          prekey_base_key = base_key || Map.get(remote_bundle, :base_key)
 
           wrap_encrypted(
             ciphertext,
-            prekey_base_key,
-            remote_bundle,
+            active_pending_prekey(updated_store, jid, updated_session),
             local_identity,
             local_registration_id,
             updated_store
@@ -463,20 +556,19 @@ defmodule ExWapp.Signal.SessionStore do
     end
   end
 
-  # If we have a prekey base_key, wrap as PreKeySignalMessage; otherwise return whisper.
-  defp wrap_encrypted(ciphertext, nil, _remote_bundle, _local_identity, _reg_id, store),
+  # Keep wrapping for this specific device until it proves the session by sending
+  # a message that decrypts successfully. Transport ACKs are intentionally not
+  # part of this lifecycle.
+  defp wrap_encrypted(ciphertext, nil, _local_identity, _reg_id, store),
     do: {:ok, ciphertext, :whisper, store}
 
-  defp wrap_encrypted(ciphertext, prekey_base_key, remote_bundle, local_identity, reg_id, store) do
-    prekey_id = get_in(remote_bundle, [:prekey, :id]) || 0
-    signed_prekey_id = get_in(remote_bundle, [:signed_prekey, :id]) || 0
-
+  defp wrap_encrypted(ciphertext, pending_prekey, local_identity, reg_id, store) do
     wrapped =
       WireFormat.serialize_prekey_signal_message(
         reg_id,
-        prekey_id,
-        signed_prekey_id,
-        prekey_base_key,
+        Map.get(pending_prekey, :prekey_id),
+        Map.fetch!(pending_prekey, :signed_prekey_id),
+        Map.fetch!(pending_prekey, :base_key),
         local_identity.public,
         ciphertext
       )
@@ -499,7 +591,7 @@ defmodule ExWapp.Signal.SessionStore do
 
     case try_existing_session_for_prekey(store, jid, ciphertext) do
       {:ok, plaintext, session} ->
-        {:ok, plaintext, put_session(store, jid, session)}
+        {:ok, plaintext, store_decrypted_session(store, jid, session, session)}
 
       {:error, reason} ->
         {:error, reason}
@@ -514,7 +606,7 @@ defmodule ExWapp.Signal.SessionStore do
       {:ok, plaintext, session} ->
         Logger.debug("[SESSION_STORE] PreKey decrypt succeeded (fresh) for #{Log.reference(jid)}")
         session = retain_current_session(store, jid, session)
-        {:ok, plaintext, put_session(store, jid, session)}
+        {:ok, plaintext, store_decrypted_session(store, jid, session, session)}
 
       {:error, reason} ->
         Logger.error(
@@ -586,7 +678,7 @@ defmodule ExWapp.Signal.SessionStore do
   defp decrypt_whisper_session(store, jid, ciphertext, session) do
     case Signal.decrypt(session, ciphertext) do
       {:ok, plaintext, updated_session} ->
-        {:ok, plaintext, update_session(store, jid, updated_session)}
+        {:ok, plaintext, store_decrypted_session(store, jid, updated_session, updated_session)}
 
       {:error, current_reason} ->
         decrypt_whisper_previous(store, jid, ciphertext, session, current_reason)
@@ -595,12 +687,12 @@ defmodule ExWapp.Signal.SessionStore do
 
   defp decrypt_whisper_previous(store, jid, ciphertext, session, current_reason) do
     case decrypt_with_previous_sessions(session, ciphertext) do
-      {:ok, plaintext, updated_session} ->
+      {:ok, plaintext, updated_session, decrypted_session} ->
         Logger.debug(
           "[SESSION_STORE] Whisper decrypt succeeded on a previous base-key session for #{Log.reference(jid)}"
         )
 
-        {:ok, plaintext, update_session(store, jid, updated_session)}
+        {:ok, plaintext, store_decrypted_session(store, jid, updated_session, decrypted_session)}
 
       {:error, previous_reasons} ->
         reason = preferred_decrypt_error(current_reason, previous_reasons)
@@ -612,6 +704,126 @@ defmodule ExWapp.Signal.SessionStore do
         {:error, reason}
     end
   end
+
+  defp ensure_outbound_pending_prekey(store, jid, session, base_key, remote_bundle) do
+    case get_pending_prekey(store, jid) do
+      {:ok, %{base_key: pending_base_key}} when is_binary(pending_base_key) ->
+        if Map.get(session, :initiator_base_key) do
+          {session, store}
+        else
+          session = Map.put(session, :initiator_base_key, pending_base_key)
+          {session, update_session(store, jid, session)}
+        end
+
+      _ ->
+        pending_base_key = base_key || bundle_base_key(remote_bundle)
+
+        if is_binary(pending_base_key) do
+          session = Map.put(session, :initiator_base_key, pending_base_key)
+
+          store =
+            store
+            |> update_session(jid, session)
+            |> put_pending_prekey(
+              jid,
+              pending_prekey_from_bundle(pending_base_key, remote_bundle)
+            )
+
+          {session, store}
+        else
+          {session, store}
+        end
+    end
+  end
+
+  defp active_pending_prekey(store, jid, session) do
+    session_base_key = Map.get(session, :initiator_base_key)
+
+    case get_pending_prekey(store, jid) do
+      {:ok, %{base_key: ^session_base_key} = pending_prekey}
+      when is_binary(session_base_key) ->
+        pending_prekey
+
+      _ ->
+        nil
+    end
+  end
+
+  defp store_decrypted_session(store, jid, updated_session, decrypted_session) do
+    store
+    |> update_session(jid, updated_session)
+    |> sync_pending_session_aliases(updated_session, decrypted_session)
+    |> clear_pending_prekey_for_session(decrypted_session)
+  end
+
+  defp sync_pending_session_aliases(store, updated_session, decrypted_session) do
+    updated_base_key = Map.get(updated_session, :initiator_base_key)
+    decrypted_base_key = Map.get(decrypted_session, :initiator_base_key)
+
+    if is_binary(decrypted_base_key) and updated_base_key == decrypted_base_key do
+      store
+      |> pending_prekey_jids_for_base(decrypted_base_key)
+      |> Enum.reduce(store, &put_session(&2, &1, updated_session))
+    else
+      store
+    end
+  end
+
+  defp clear_pending_prekey_for_session(store, session) do
+    case Map.get(session, :initiator_base_key) do
+      base_key when is_binary(base_key) ->
+        matching_jids = pending_prekey_jids_for_base(store, base_key)
+
+        if matching_jids != [] do
+          Logger.debug(
+            "[SESSION_STORE] Peer message acknowledged pending pre-key session for #{length(matching_jids)} device alias(es)"
+          )
+        end
+
+        Enum.reduce(matching_jids, store, &delete_pending_prekey(&2, &1))
+
+      _ ->
+        store
+    end
+  end
+
+  defp pending_prekey_jids_for_base(%Ref{table: table}, base_key) do
+    :ets.foldl(
+      fn
+        {{:pending_prekey, jid}, %{base_key: ^base_key}}, acc -> [jid | acc]
+        _entry, acc -> acc
+      end,
+      [],
+      table
+    )
+  end
+
+  defp pending_prekey_jids_for_base(store, base_key) do
+    store
+    |> Map.get(:pending_prekeys, %{})
+    |> Enum.flat_map(fn
+      {jid, %{base_key: ^base_key}} -> [jid]
+      _entry -> []
+    end)
+  end
+
+  defp pending_prekey_from_bundle(base_key, remote_bundle) do
+    %{
+      base_key: base_key,
+      prekey_id: bundle_value(remote_bundle, [:prekey, :id]),
+      signed_prekey_id: bundle_value(remote_bundle, [:signed_prekey, :id]) || 0
+    }
+  end
+
+  defp bundle_base_key(remote_bundle) when is_map(remote_bundle),
+    do: Map.get(remote_bundle, :base_key)
+
+  defp bundle_base_key(_remote_bundle), do: nil
+
+  defp bundle_value(remote_bundle, path) when is_map(remote_bundle),
+    do: get_in(remote_bundle, path)
+
+  defp bundle_value(_remote_bundle, _path), do: nil
 
   # Normalize JID to consistent format
   defp normalize_jid(jid) when is_binary(jid) do
@@ -636,17 +848,30 @@ defmodule ExWapp.Signal.SessionStore do
       {:ok, session, base_key} ->
         Logger.debug("[SESSION_STORE] Created session using #{Signal.get_impl()} implementation")
 
+        session = Map.put(session, :initiator_base_key, base_key)
+
         session =
           case get_session(store, jid) do
             {:ok, previous_session} -> retain_previous_session(session, previous_session)
             :not_found -> session
           end
 
-        updated_store = put_session(store, jid, session)
+        updated_store =
+          store
+          |> put_session(jid, session)
+          |> put_pending_prekey(jid, pending_prekey_from_bundle(base_key, remote_bundle))
+
         {:ok, session, base_key, updated_store}
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp copy_pending_prekey(store, source_jid, alias_jid) do
+    case get_pending_prekey(store, source_jid) do
+      {:ok, pending_prekey} -> put_pending_prekey(store, alias_jid, pending_prekey)
+      :not_found -> delete_pending_prekey(store, alias_jid)
     end
   end
 
@@ -666,7 +891,8 @@ defmodule ExWapp.Signal.SessionStore do
             )
 
           {:halt,
-           {:ok, plaintext, Map.put(session, :previous_sessions, updated_previous_sessions)}}
+           {:ok, plaintext, Map.put(session, :previous_sessions, updated_previous_sessions),
+            updated_previous_session}}
 
         {:error, reason} ->
           {:cont, {:error, [reason | reasons]}}

@@ -94,7 +94,7 @@ defmodule ExWapp.SignalSessionStoreTest do
     refute forced_base_key == first_base_key
   end
 
-  test "prekey message decrypts and follow-up whisper decrypts" do
+  test "outbound prekey remains pending even after the recipient decrypts it" do
     alice_identity = Keys.generate_key_pair()
     bob_identity = Keys.generate_key_pair()
 
@@ -146,7 +146,7 @@ defmodule ExWapp.SignalSessionStoreTest do
         bob_local_prekeys
       )
 
-    {:ok, second_ciphertext, :whisper, _alice_store2} =
+    {:ok, second_ciphertext, :prekey, _alice_store2} =
       SessionStore.encrypt_message(alice_store1, bob_jid, "second", alice_identity, 1001, %{})
 
     {:ok, "second", _bob_store2} =
@@ -154,7 +154,7 @@ defmodule ExWapp.SignalSessionStoreTest do
         bob_store1,
         alice_jid,
         second_ciphertext,
-        false,
+        true,
         bob_identity,
         bob_local_prekeys
       )
@@ -224,7 +224,7 @@ defmodule ExWapp.SignalSessionStoreTest do
         1002
       )
 
-    bundle_with_base = Map.put(bob_bundle, :base_key, base_key)
+    assert is_binary(base_key)
 
     {:ok, first_ciphertext, :prekey, alice_store1} =
       SessionStore.encrypt_message(
@@ -233,7 +233,7 @@ defmodule ExWapp.SignalSessionStoreTest do
         "first-prekey",
         alice_identity,
         1002,
-        bundle_with_base
+        %{}
       )
 
     {:ok, second_ciphertext, :prekey, alice_store2} =
@@ -243,7 +243,7 @@ defmodule ExWapp.SignalSessionStoreTest do
         "second-prekey",
         alice_identity,
         1002,
-        bundle_with_base
+        %{}
       )
 
     {:ok, third_ciphertext, :prekey, alice_store3} =
@@ -253,7 +253,7 @@ defmodule ExWapp.SignalSessionStoreTest do
         "third-prekey",
         alice_identity,
         1002,
-        bundle_with_base
+        %{}
       )
 
     {:ok, "first-prekey", bob_store1} =
@@ -286,7 +286,7 @@ defmodule ExWapp.SignalSessionStoreTest do
         bob_local_prekeys
       )
 
-    {:ok, reply_ciphertext, :whisper, _bob_store4} =
+    {:ok, reply_ciphertext, :whisper, bob_store4} =
       SessionStore.encrypt_message(
         bob_store3,
         alice_jid,
@@ -296,7 +296,7 @@ defmodule ExWapp.SignalSessionStoreTest do
         %{}
       )
 
-    {:ok, "reply-whisper", _alice_store4} =
+    {:ok, "reply-whisper", alice_store4} =
       SessionStore.decrypt_message(
         alice_store3,
         bob_jid,
@@ -305,5 +305,170 @@ defmodule ExWapp.SignalSessionStoreTest do
         alice_identity,
         %{signed_prekeys: %{}, prekeys: %{}}
       )
+
+    assert SessionStore.get_pending_prekey(alice_store4, bob_jid) == :not_found
+
+    {:ok, followup_ciphertext, :whisper, _alice_store5} =
+      SessionStore.encrypt_message(
+        alice_store4,
+        bob_jid,
+        "after-reply",
+        alice_identity,
+        1002,
+        %{}
+      )
+
+    {:ok, "after-reply", _bob_store5} =
+      SessionStore.decrypt_message(
+        bob_store4,
+        alice_jid,
+        followup_ciphertext,
+        false,
+        bob_identity,
+        bob_local_prekeys
+      )
+  end
+
+  test "pending prekey state is independent for every recipient device" do
+    alice_identity = Keys.generate_key_pair()
+    alice_jid = "444555668:5@s.whatsapp.net"
+    device_one_jid = "999888779@s.whatsapp.net"
+    device_one_lid_alias = "777666555@lid"
+    device_two_jid = "999888779:23@s.whatsapp.net"
+
+    device_one = remote_device(4_401, 101, 131)
+    device_two = remote_device(4_402, 102, 132)
+
+    {:ok, device_one_ciphertext, :prekey, alice_store1} =
+      SessionStore.encrypt_message(
+        SessionStore.new(),
+        device_one_jid,
+        "to-device-one",
+        alice_identity,
+        1003,
+        device_one.bundle
+      )
+
+    {:ok, _device_two_ciphertext, :prekey, alice_store2} =
+      SessionStore.encrypt_message(
+        alice_store1,
+        device_two_jid,
+        "to-device-two",
+        alice_identity,
+        1003,
+        device_two.bundle
+      )
+
+    alice_store2 =
+      SessionStore.copy_session(alice_store2, device_one_jid, device_one_lid_alias)
+
+    {:ok, "to-device-one", device_one_store1} =
+      SessionStore.decrypt_message(
+        SessionStore.new(),
+        alice_jid,
+        device_one_ciphertext,
+        true,
+        device_one.identity,
+        device_one.local_prekeys
+      )
+
+    {:ok, reply_ciphertext, :whisper, device_one_store2} =
+      SessionStore.encrypt_message(
+        device_one_store1,
+        alice_jid,
+        "device-one-reply",
+        device_one.identity,
+        2004,
+        %{}
+      )
+
+    {:ok, "device-one-reply", alice_store3} =
+      SessionStore.decrypt_message(
+        alice_store2,
+        device_one_lid_alias,
+        reply_ciphertext,
+        false,
+        alice_identity,
+        %{signed_prekeys: %{}, prekeys: %{}}
+      )
+
+    assert SessionStore.get_pending_prekey(alice_store3, device_one_jid) == :not_found
+    assert SessionStore.get_pending_prekey(alice_store3, device_one_lid_alias) == :not_found
+    assert {:ok, _pending} = SessionStore.get_pending_prekey(alice_store3, device_two_jid)
+
+    assert SessionStore.get_session(alice_store3, device_one_jid) ==
+             SessionStore.get_session(alice_store3, device_one_lid_alias)
+
+    assert {:ok, _ciphertext, :whisper, _alice_store4} =
+             SessionStore.encrypt_message(
+               alice_store3,
+               device_one_jid,
+               "confirmed-device",
+               alice_identity,
+               1003,
+               %{}
+             )
+
+    assert {:ok, _ciphertext, :prekey, _alice_store4} =
+             SessionStore.encrypt_message(
+               alice_store3,
+               device_two_jid,
+               "still-pending-device",
+               alice_identity,
+               1003,
+               %{}
+             )
+
+    assert SessionStore.has_session?(device_one_store2, alice_jid)
+  end
+
+  test "pending prekeys persist through ETS snapshots and PN/LID aliases" do
+    source_jid = "15550001111:7@lid"
+    alias_jid = "15550002222:7@s.whatsapp.net"
+    pending = %{base_key: :binary.copy(<<7>>, 32), prekey_id: 77, signed_prekey_id: 9}
+
+    map_store =
+      SessionStore.new()
+      |> SessionStore.put_session(source_jid, %{initiator_base_key: pending.base_key})
+      |> SessionStore.put_pending_prekey(source_jid, pending)
+      |> SessionStore.copy_session(source_jid, alias_jid)
+
+    assert {:ok, ^pending} = SessionStore.get_pending_prekey(map_store, source_jid)
+    assert {:ok, ^pending} = SessionStore.get_pending_prekey(map_store, alias_jid)
+
+    ets_store = SessionStore.new_ets(map_store)
+    assert SessionStore.snapshot(ets_store) == SessionStore.snapshot(map_store)
+
+    assert ets_store
+           |> SessionStore.delete_session(alias_jid)
+           |> SessionStore.get_pending_prekey(alias_jid) == :not_found
+
+    assert map_store
+           |> SessionStore.delete_session(alias_jid)
+           |> SessionStore.get_pending_prekey(alias_jid) == :not_found
+  end
+
+  defp remote_device(registration_id, signed_id, prekey_id) do
+    identity = Keys.generate_key_pair()
+    signed_prekey = Keys.generate_signed_prekey(identity, signed_id)
+    one_time_prekey = Keys.generate_prekey(prekey_id)
+
+    %{
+      identity: identity,
+      bundle: %{
+        registration_id: registration_id,
+        identity_key: identity.public,
+        signed_prekey: %{
+          id: signed_id,
+          public: signed_prekey.public,
+          signature: signed_prekey.signature
+        },
+        prekey: %{id: prekey_id, public: one_time_prekey.public}
+      },
+      local_prekeys: %{
+        signed_prekeys: %{signed_id => signed_prekey},
+        prekeys: %{prekey_id => one_time_prekey}
+      }
+    }
   end
 end

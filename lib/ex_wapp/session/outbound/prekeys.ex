@@ -616,7 +616,7 @@ defmodule ExWapp.Session.Outbound.Prekeys do
 
   @spec maybe_alias_signal_session(SessionStore.t(), term(), term(), map()) ::
           SessionStore.t()
-  defp maybe_alias_signal_session(signal_sessions, requested_jid, device_jid, session) do
+  defp maybe_alias_signal_session(signal_sessions, requested_jid, device_jid, _session) do
     requested_jid = JIDUtils.normalize_with_device(requested_jid)
     device_jid = JIDUtils.normalize_with_device(device_jid)
 
@@ -626,7 +626,7 @@ defmodule ExWapp.Session.Outbound.Prekeys do
         "[PREKEY] Aliasing session #{Log.reference(requested_jid)} -> #{Log.reference(device_jid)}"
       )
 
-      SessionStore.put_session(signal_sessions, requested_jid, session)
+      SessionStore.copy_session(signal_sessions, device_jid, requested_jid)
     else
       signal_sessions
     end
