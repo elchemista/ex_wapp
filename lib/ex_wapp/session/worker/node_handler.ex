@@ -8,9 +8,9 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   require Logger
 
-  alias ExWapp.{Binary, Config, Pairing}
+  alias ExWapp.{Binary, Config, Log, Pairing}
 
-  alias ExWapp.Session.OutboundQueue
+  alias ExWapp.Session.{OutboundQueue, SendCoordinator}
 
   alias ExWapp.Session.Worker.{
     Inbound,
@@ -28,23 +28,23 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   @spec safe_handle_node(Binary.Node.t(), map()) :: {map(), list()}
   def safe_handle_node(node, state) do
     Logger.debug(
-      "[NODE_HANDLER] handling node session_id=#{inspect(Map.get(state, :session_id))} tag=#{node.tag} attrs=#{inspect(loggable_attrs(node.attrs || %{}), limit: 50)}"
+      "[NODE_HANDLER] handling node session=#{Log.reference(Map.get(state, :session_id))} tag=#{node.tag} attrs=#{inspect(loggable_attrs(node.attrs || %{}), limit: 50)}"
     )
 
     {next_state, actions} = handle_connection_node(node, state)
 
     Logger.debug(
-      "[NODE_HANDLER] handled node session_id=#{inspect(Map.get(next_state, :session_id))} tag=#{node.tag} actions=#{length(actions)} status=#{inspect(Map.get(next_state, :status))} post_auth_phase=#{inspect(Map.get(next_state, :post_auth_phase))}"
+      "[NODE_HANDLER] handled node session=#{Log.reference(Map.get(next_state, :session_id))} tag=#{node.tag} actions=#{length(actions)} status=#{inspect(Map.get(next_state, :status))} post_auth_phase=#{inspect(Map.get(next_state, :post_auth_phase))}"
     )
 
     {next_state, actions}
   rescue
     e ->
-      Logger.error("Error handling node: #{inspect(e)}")
+      Logger.error("Error handling node: #{Log.reason(e)}")
       {update_stats(state, :errors), []}
   catch
     :exit, reason ->
-      Logger.error("Exit handling node: #{inspect(reason)}")
+      Logger.error("Exit handling node: #{Log.reason(reason)}")
       {update_stats(state, :errors), []}
   end
 
@@ -54,16 +54,18 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   @spec safe_handle_action(term(), map()) :: :ok
   def safe_handle_action(action, state) do
     Logger.debug(
-      "[NODE_HANDLER] executing action session_id=#{inspect(Map.get(state, :session_id))} action=#{inspect(compact_action(action), limit: 80)}"
+      "[NODE_HANDLER] executing action session=#{Log.reference(Map.get(state, :session_id))} action=#{inspect(compact_action(action), limit: 80)}"
     )
 
     handle_pairing_action(action, state)
   rescue
     e ->
-      Logger.error("Error handling action #{inspect(compact_action(action))}: #{inspect(e)}")
+      Logger.error("Error handling action #{inspect(compact_action(action))}: #{Log.reason(e)}")
   catch
     :exit, reason ->
-      Logger.error("Exit handling action #{inspect(compact_action(action))}: #{inspect(reason)}")
+      Logger.error(
+        "Exit handling action #{inspect(compact_action(action))}: #{Log.reason(reason)}"
+      )
   end
 
   # Dispatch by node type
@@ -74,15 +76,15 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     iq_id = Map.get(attrs, "id")
 
     Logger.debug(
-      "[NODE_HANDLER] iq received session_id=#{inspect(Map.get(state, :session_id))} id=#{inspect(iq_id)} type=#{inspect(iq_type)} xmlns=#{inspect(xmlns)} pending_iqs=#{map_size(Map.get(state, :pending_iqs, %{}))} post_auth_ids=#{inspect(%{prekey_count_query_id: Map.get(state, :prekey_count_query_id), prekey_upload_iq_id: Map.get(state, :prekey_upload_iq_id), passive_iq_id: Map.get(state, :passive_iq_id), digest_iq_id: Map.get(state, :digest_iq_id)})}"
+      "[NODE_HANDLER] iq received session=#{Log.reference(Map.get(state, :session_id))} id=#{Log.reference(iq_id)} type=#{inspect(iq_type)} xmlns=#{inspect(xmlns)} pending_iqs=#{map_size(Map.get(state, :pending_iqs, %{}))} post_auth_pending=#{post_auth_pending_count(state)}"
     )
 
-    state = forward_iq_to_workers(state, iq_type, iq_id, node)
+    {state, worker_handled} = forward_iq_to_worker(state, iq_type, iq_id, node)
     {state, pending_handled} = resolve_pending_iq(state, iq_type, iq_id, node)
 
-    if pending_handled do
+    if worker_handled or pending_handled do
       Logger.debug(
-        "[NODE_HANDLER] iq handled by pending request session_id=#{inspect(Map.get(state, :session_id))} id=#{inspect(iq_id)}"
+        "[NODE_HANDLER] iq handled by pending request session=#{Log.reference(Map.get(state, :session_id))} id=#{Log.reference(iq_id)}"
       )
 
       {state, []}
@@ -123,7 +125,9 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     reason = Map.get(attrs, "reason", "unknown")
     location = Map.get(attrs, "location", "unknown")
 
-    Logger.error("[SESSION] Connection failure: reason=#{reason}, location=#{location}")
+    Logger.error(
+      "[SESSION] Connection failure: reason=#{Log.reason(reason)}, location=#{Log.reason(location)}"
+    )
 
     # 401 = unauthorized/logged out
     # 403 = forbidden
@@ -161,7 +165,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   defp handle_connection_node(%Binary.Node{tag: "stream:features"}, state) do
     Logger.debug(
-      "[NODE_HANDLER] stream features received session_id=#{inspect(Map.get(state, :session_id))}"
+      "[NODE_HANDLER] stream features received session=#{Log.reference(Map.get(state, :session_id))}"
     )
 
     {state, []}
@@ -187,14 +191,10 @@ defmodule ExWapp.Session.Worker.NodeHandler do
       Logger.warning("[SESSION] Recoverable stream error: code=#{code}; reconnecting")
     else
       Logger.error("[SESSION] Stream error: code=#{code}")
-      Logger.error("[SESSION] Stream error attrs: #{inspect(attrs, limit: :infinity)}")
+      Logger.error("[SESSION] Stream error attrs: #{inspect(Log.attrs(attrs))}")
 
       Logger.error(
         "[SESSION] Stream error children summary: #{inspect(children_summary, limit: :infinity)}"
-      )
-
-      Logger.error(
-        "[SESSION] Stream error raw children: #{inspect(children, limit: :infinity, printable_limit: 8_000)}"
       )
     end
 
@@ -239,7 +239,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
         true ->
           Logger.error(
-            "[SESSION] Unknown stream error: code=#{code}, conflict=#{conflict_type}, first_child=#{inspect(first_child_tag)}"
+            "[SESSION] Unknown stream error: code=#{code}, conflict=#{Log.reason(conflict_type)}, first_child=#{inspect(first_child_tag)}"
           )
 
           mark_transport_closed(state, stream_error_reason)
@@ -252,7 +252,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   defp handle_connection_node(%Binary.Node{tag: tag} = node, state)
        when tag in ["message", "notification", "receipt", "ack", "call", "presence", "chatstate"] do
     Logger.debug(
-      "[NODE_HANDLER] routing inbound content node session_id=#{inspect(Map.get(state, :session_id))} tag=#{tag} attrs=#{inspect(loggable_attrs(node.attrs || %{}), limit: 60)}"
+      "[NODE_HANDLER] routing inbound content node session=#{Log.reference(Map.get(state, :session_id))} tag=#{tag} attrs=#{inspect(loggable_attrs(node.attrs || %{}), limit: 60)}"
     )
 
     Inbound.handle_message_node(
@@ -276,7 +276,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   defp handle_connection_node(node, state) do
     Logger.debug(
-      "[NODE_HANDLER] unhandled node session_id=#{inspect(Map.get(state, :session_id))} tag=#{inspect(node.tag)} attrs=#{inspect(loggable_attrs(node.attrs || %{}), limit: 60)}"
+      "[NODE_HANDLER] unhandled node session=#{Log.reference(Map.get(state, :session_id))} tag=#{inspect(node.tag)} attrs=#{inspect(loggable_attrs(node.attrs || %{}), limit: 60)}"
     )
 
     {update_stats(state, :messages_received), []}
@@ -284,28 +284,34 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   # IQ routing and pending-request handling
 
-  defp forward_iq_to_workers(state, iq_type, iq_id, node)
+  defp forward_iq_to_worker(state, iq_type, iq_id, node)
        when iq_type in ["result", "error"] and iq_id != nil do
-    workers = Map.get(state, :send_workers, %{})
+    coordinator = Map.get(state, :send_coordinator, SendCoordinator.new())
 
-    if map_size(workers) > 0 do
-      Logger.debug("[SESSION] Forwarding IQ #{iq_id} to #{map_size(workers)} workers")
-      msg_tag = if iq_type == "result", do: :prekey_response, else: :prekey_error
-      broadcast_iq_to_workers(workers, msg_tag, iq_id, node)
-    else
-      Logger.debug("[NODE_HANDLER] no send workers waiting for IQ id=#{inspect(iq_id)}")
+    case SendCoordinator.take_iq(coordinator, iq_id) do
+      {:ok, worker_pid, coordinator} ->
+        msg_tag = if iq_type == "result", do: :prekey_response, else: :prekey_error
+        send_iq_to_worker(worker_pid, msg_tag, iq_id, node)
+
+        Logger.debug(
+          "[SESSION] Forwarded IQ #{Log.reference(iq_id)} to worker=#{inspect(worker_pid)}"
+        )
+
+        {Map.put(state, :send_coordinator, coordinator), true}
+
+      {:error, :not_found, _coordinator} ->
+        Logger.debug("[NODE_HANDLER] no send worker waiting for IQ id=#{Log.reference(iq_id)}")
+        {state, false}
     end
-
-    state
   end
 
-  defp forward_iq_to_workers(state, _iq_type, _iq_id, _node), do: state
+  defp forward_iq_to_worker(state, _iq_type, _iq_id, _node), do: {state, false}
 
   defp resolve_pending_iq(state, iq_type, iq_id, node)
        when iq_type in ["result", "error"] and iq_id != nil do
     case Map.pop(state.pending_iqs, iq_id) do
       {nil, _} ->
-        Logger.debug("[NODE_HANDLER] no pending IQ match for id=#{inspect(iq_id)}")
+        Logger.debug("[NODE_HANDLER] no pending IQ match for id=#{Log.reference(iq_id)}")
         {state, false}
 
       {%{from: from, timer: timer}, pending_iqs} ->
@@ -314,7 +320,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
         GenServer.reply(from, reply)
 
         Logger.debug(
-          "[NODE_HANDLER] resolved pending IQ id=#{inspect(iq_id)} reply_type=#{iq_type}"
+          "[NODE_HANDLER] resolved pending IQ id=#{Log.reference(iq_id)} reply_type=#{iq_type}"
         )
 
         {%{state | pending_iqs: pending_iqs}, true}
@@ -327,15 +333,15 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   defp log_ib_children(_children), do: :ok
 
   defp log_ib_child(%Binary.Node{tag: "offline_preview", attrs: attrs}) do
-    Logger.debug("[SESSION] Offline preview: #{inspect(attrs)}")
+    Logger.debug("[SESSION] Offline preview: #{inspect(Log.attrs(attrs))}")
   end
 
   defp log_ib_child(%Binary.Node{tag: "offline", attrs: attrs}) do
-    Logger.debug("[SESSION] Offline sync completed: #{inspect(attrs)}")
+    Logger.debug("[SESSION] Offline sync completed: #{inspect(Log.attrs(attrs))}")
   end
 
   defp log_ib_child(%Binary.Node{tag: "dirty", attrs: attrs}) do
-    Logger.debug("[SESSION] Dirty state: #{inspect(attrs)}")
+    Logger.debug("[SESSION] Dirty state: #{inspect(Log.attrs(attrs))}")
   end
 
   defp log_ib_child(%Binary.Node{tag: tag}) do
@@ -361,13 +367,13 @@ defmodule ExWapp.Session.Worker.NodeHandler do
       %Binary.Node{tag: tag, attrs: attrs, content: content} ->
         %{
           tag: tag,
-          attrs: attrs,
+          attrs: Log.attrs(attrs),
           child_count: child_count(content),
           binary_bytes: binary_bytes(content)
         }
 
       other ->
-        %{unexpected: inspect(other, limit: 20, printable_limit: 500)}
+        %{unexpected: Log.term_summary(other)}
     end)
   end
 
@@ -379,17 +385,9 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   defp binary_bytes(content) when is_binary(content), do: byte_size(content)
   defp binary_bytes(_content), do: 0
 
-  defp broadcast_iq_to_workers(workers, msg_tag, iq_id, node) when is_map(workers) do
-    Enum.each(workers, fn {worker_pid, _jid} ->
-      send_iq_to_worker(worker_pid, msg_tag, iq_id, node)
-    end)
-  end
-
   defp send_iq_to_worker(worker_pid, msg_tag, iq_id, node) when is_pid(worker_pid) do
     if Process.alive?(worker_pid), do: send(worker_pid, {msg_tag, iq_id, node})
   end
-
-  defp send_iq_to_worker(_worker_pid, _msg_tag, _iq_id, _node), do: :ok
 
   defp dispatch_iq(state, _node, attrs, "urn:xmpp:ping", "get", _iq_id) do
     Logger.debug("[SESSION] Received ping, sending pong")
@@ -418,7 +416,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     actions =
       if actions == [] and iq_type in ["get", "set"] do
         Logger.debug(
-          "[SESSION] Auto-responding to unhandled IQ: xmlns=#{xmlns} type=#{iq_type} id=#{iq_id}"
+          "[SESSION] Auto-responding to unhandled IQ: xmlns=#{xmlns} type=#{iq_type} id=#{Log.reference(iq_id)}"
         )
 
         [{:send_node, build_iq_result(attrs)}]
@@ -432,7 +430,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   defp maybe_handle_post_auth_iq(state, node, "result", iq_id)
        when is_binary(iq_id) and state.prekey_count_query_id != nil and
               iq_id == state.prekey_count_query_id do
-    Logger.debug("[NODE_HANDLER] matched post-auth prekey count IQ id=#{iq_id}")
+    Logger.debug("[NODE_HANDLER] matched post-auth prekey count IQ id=#{Log.reference(iq_id)}")
 
     {next_state, actions} =
       PostAuth.handle_prekey_count_response(node, state, &build_set_passive_iq/0)
@@ -443,7 +441,9 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   defp maybe_handle_post_auth_iq(state, node, iq_type, iq_id)
        when iq_type in ["result", "error"] and is_binary(iq_id) and
               state.prekey_upload_iq_id != nil and iq_id == state.prekey_upload_iq_id do
-    Logger.debug("[NODE_HANDLER] matched post-auth prekey upload IQ id=#{iq_id} type=#{iq_type}")
+    Logger.debug(
+      "[NODE_HANDLER] matched post-auth prekey upload IQ id=#{Log.reference(iq_id)} type=#{iq_type}"
+    )
 
     {next_state, actions} =
       PostAuth.handle_prekey_upload_response(node, iq_type, state, &build_set_passive_iq/0)
@@ -454,7 +454,9 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   defp maybe_handle_post_auth_iq(state, node, iq_type, iq_id)
        when iq_type in ["result", "error"] and is_binary(iq_id) and
               state.passive_iq_id != nil and iq_id == state.passive_iq_id do
-    Logger.debug("[NODE_HANDLER] matched post-auth passive IQ id=#{iq_id} type=#{iq_type}")
+    Logger.debug(
+      "[NODE_HANDLER] matched post-auth passive IQ id=#{Log.reference(iq_id)} type=#{iq_type}"
+    )
 
     {next_state, actions} =
       PostAuth.handle_passive_response(
@@ -471,7 +473,9 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   defp maybe_handle_post_auth_iq(state, node, iq_type, iq_id)
        when iq_type in ["result", "error"] and is_binary(iq_id) and
               state.digest_iq_id != nil and iq_id == state.digest_iq_id do
-    Logger.debug("[NODE_HANDLER] matched post-auth digest IQ id=#{iq_id} type=#{iq_type}")
+    Logger.debug(
+      "[NODE_HANDLER] matched post-auth digest IQ id=#{Log.reference(iq_id)} type=#{iq_type}"
+    )
 
     {next_state, actions} =
       PostAuth.handle_digest_response(node, iq_type, state, fn ->
@@ -732,26 +736,10 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   defp vext_managed_runtime?(_state), do: false
 
   defp loggable_attrs(attrs) when is_map(attrs) do
-    attrs
-    |> Enum.map(fn {key, value} -> {key, loggable_attr_value(key, value)} end)
-    |> Enum.into(%{})
+    Log.attrs(attrs)
   end
 
-  defp loggable_attrs(value), do: value
-
-  defp loggable_attr_value(key, _value)
-       when key in ["auth", "ip_token", "token", "companion_enc_static"],
-       do: "[FILTERED]"
-
-  defp loggable_attr_value(_key, %{__struct__: module} = value) do
-    %{struct: inspect(module), value: inspect(value, limit: 20)}
-  end
-
-  defp loggable_attr_value(_key, value) when is_binary(value) and byte_size(value) > 120 do
-    String.slice(value, 0, 120)
-  end
-
-  defp loggable_attr_value(_key, value), do: value
+  defp loggable_attrs(value), do: Log.term_summary(value)
 
   defp compact_action({:qr, code}) when is_binary(code),
     do: {:qr, %{bytes: byte_size(code)}}
@@ -765,5 +753,18 @@ defmodule ExWapp.Session.Worker.NodeHandler do
      }}
   end
 
-  defp compact_action(other), do: other
+  defp compact_action({:pairing_success, via, jid}),
+    do: {:pairing_success, via, Log.reference(jid)}
+
+  defp compact_action(other), do: Log.term_summary(other)
+
+  defp post_auth_pending_count(state) do
+    [
+      :prekey_count_query_id,
+      :prekey_upload_iq_id,
+      :passive_iq_id,
+      :digest_iq_id
+    ]
+    |> Enum.count(&(not is_nil(Map.get(state, &1))))
+  end
 end

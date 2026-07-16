@@ -27,12 +27,16 @@ defmodule ExWapp.Client.Transport.Session do
   require Logger
 
   alias ExWapp.{Client, Event, Message, Session}
+  alias ExWapp.Session.Options
 
   @impl true
   @spec connect(Client.t()) :: {:ok, Client.t()} | {:error, term()}
   def connect(%Client{} = client) do
     with {:ok, client, session} <- ensure_session(client) do
-      Logger.info("[ExWapp.SessionTransport] connect session_id=#{inspect(client.session_id)}")
+      Logger.info(
+        "[ExWapp.SessionTransport] connect session=#{ExWapp.Log.reference(client.session_id)}"
+      )
+
       :ok = Session.connect(session)
       {:ok, %{client | status: :connecting}}
     end
@@ -68,7 +72,7 @@ defmodule ExWapp.Client.Transport.Session do
     case session_pid(client) do
       pid when is_pid(pid) ->
         Logger.info(
-          "[ExWapp.SessionTransport] disconnect session_id=#{inspect(client.session_id)}"
+          "[ExWapp.SessionTransport] disconnect session=#{ExWapp.Log.reference(client.session_id)}"
         )
 
         Session.disconnect(pid)
@@ -83,26 +87,11 @@ defmodule ExWapp.Client.Transport.Session do
   @impl true
   @spec send_message(Client.t(), Message.t()) ::
           {:ok, Client.t(), String.t()} | {:error, Client.t(), term()} | {:error, term()}
-  def send_message(%Client{} = client, %Message{type: :text, to: to, body: text, id: id}) do
-    case ensure_session(client) do
-      {:ok, client, session} ->
-        case Session.send_text(session, to, text) do
-          :ok -> {:ok, client, id}
-          {:error, reason} -> {:error, client, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
   def send_message(%Client{} = client, %Message{type: type} = message)
-      when type in [:image, :audio, :document, :location, :contact, :event] do
+      when type in [:text, :image, :audio, :document, :location, :contact, :event] do
     with {:ok, client, session} <- ensure_session(client) do
-      opts = Keyword.put(message.opts, :retry_message_id, message.id)
-
       session
-      |> send_session_content(message, opts)
+      |> Session.send_message(message)
       |> normalize_session_send(client)
     end
   end
@@ -201,36 +190,6 @@ defmodule ExWapp.Client.Transport.Session do
     end
   end
 
-  defp send_session_content(session, %Message{type: :image, to: to, body: source}, opts),
-    do: Session.send_image(session, to, source, opts)
-
-  defp send_session_content(session, %Message{type: :audio, to: to, body: source}, opts),
-    do: Session.send_audio(session, to, source, opts)
-
-  defp send_session_content(session, %Message{type: :document, to: to, body: source}, opts),
-    do: Session.send_document(session, to, source, opts)
-
-  defp send_session_content(
-         session,
-         %Message{type: :location, to: to, body: %{latitude: latitude, longitude: longitude}},
-         opts
-       ),
-       do: Session.send_location(session, to, latitude, longitude, opts)
-
-  defp send_session_content(
-         session,
-         %Message{type: :contact, to: to, body: %{display_name: name, vcard: vcard}},
-         opts
-       ),
-       do: Session.send_contact(session, to, name, vcard, opts)
-
-  defp send_session_content(
-         session,
-         %Message{type: :event, to: to, body: %{name: name, start_time: start_time}},
-         opts
-       ),
-       do: Session.send_event(session, to, name, start_time, opts)
-
   @spec normalize_session_send(
           {:ok, String.t()} | {:error, term()},
           Client.t()
@@ -269,40 +228,42 @@ defmodule ExWapp.Client.Transport.Session do
 
   @spec start_session(Client.t()) :: {:ok, Client.t(), pid()} | {:error, term()}
   defp start_session(%Client{} = client) do
-    opts =
-      client.metadata
-      |> Map.get(:session_opts, [])
-      |> Keyword.put_new(:store, client.store)
+    legacy_options = Map.get(client.metadata, :session_opts, [])
 
-    start_result =
-      if is_nil(client.session_id) do
-        Session.start_link(opts)
-      else
-        start_supervised_session(client.session_id, opts)
+    with {:ok, options} <- Options.from_client(client, legacy_options) do
+      start_result =
+        if is_nil(client.session_id) do
+          Session.start_link(options)
+        else
+          start_supervised_session(client.session_id, options)
+        end
+
+      case start_result do
+        {:ok, pid} ->
+          client = put_in(client.metadata[:session_pid], pid)
+          {:ok, client, pid}
+
+        {:error, {:already_started, pid}} when is_pid(pid) ->
+          client = put_in(client.metadata[:session_pid], pid)
+          {:ok, client, pid}
+
+        {:error, reason} ->
+          {:error, reason}
       end
-
-    case start_result do
-      {:ok, pid} ->
-        client = put_in(client.metadata[:session_pid], pid)
-        {:ok, client, pid}
-
-      {:error, {:already_started, pid}} when is_pid(pid) ->
-        client = put_in(client.metadata[:session_pid], pid)
-        {:ok, client, pid}
-
-      {:error, reason} ->
-        {:error, reason}
     end
   end
 
-  @spec start_supervised_session(term(), keyword()) :: {:ok, pid()} | {:error, term()}
-  defp start_supervised_session(session_id, opts) do
+  @spec start_supervised_session(term(), Options.t()) :: {:ok, pid()} | {:error, term()}
+  defp start_supervised_session(session_id, options) do
     if Process.whereis(ExWapp.Session.Supervisor) do
-      Session.Supervisor.start_session(session_id, opts)
+      Session.Supervisor.start_session(session_id, options)
     else
-      opts
-      |> Keyword.put_new(:session_id, session_id)
-      |> Session.start_link()
+      options
+      |> Options.with_session_id(session_id)
+      |> case do
+        {:ok, options} -> Session.start_link(options)
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 

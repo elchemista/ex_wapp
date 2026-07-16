@@ -9,10 +9,10 @@ defmodule ExWapp.Message.Handler.Inbound.Decryptor do
 
   require Logger
 
-  alias ExWapp.JID
+  alias ExWapp.{JID, Log}
   alias ExWapp.Message.Handler.Common
   alias ExWapp.Message.Handler.Inbound.Envelope
-  alias ExWapp.Session.{Account, JIDUtils}
+  alias ExWapp.Session.Account
   alias ExWapp.Signal.{Encryption, SenderKey, SessionStore}
 
   @type success :: %{
@@ -54,7 +54,7 @@ defmodule ExWapp.Message.Handler.Inbound.Decryptor do
   @spec log_decrypt_attempt(term(), Envelope.decrypt_context(), term()) :: :ok
   defp log_decrypt_attempt(enc_type, decrypt_ctx, from) do
     Logger.debug(
-      "[DECRYPT] Attempting decrypt: enc_type=#{inspect(enc_type)} payload_candidates=#{length(decrypt_ctx.payload_candidates)} decryptable_payloads=#{length(decrypt_ctx.decryptable_payloads)} from=#{inspect(from)} sender_candidates=#{inspect(decrypt_ctx.sender_candidates)}"
+      "[DECRYPT] Attempting decrypt: enc_type=#{inspect(enc_type)} payload_candidates=#{length(decrypt_ctx.payload_candidates)} decryptable_payloads=#{length(decrypt_ctx.decryptable_payloads)} from=#{Log.reference(from)} sender_candidates=#{length(decrypt_ctx.sender_candidates)}"
     )
   end
 
@@ -76,7 +76,7 @@ defmodule ExWapp.Message.Handler.Inbound.Decryptor do
 
       decrypt_ctx.decryptable_payloads == [] ->
         Logger.warning(
-          "[DECRYPT] Skipping decrypt: no binary ciphertext candidates. first_candidate=#{inspect(List.first(decrypt_ctx.payload_candidates))}"
+          "[DECRYPT] Skipping decrypt: no binary ciphertext candidates. first_candidate=#{Log.term_summary(List.first(decrypt_ctx.payload_candidates))}"
         )
 
         {:error, :no_ciphertext_candidates}
@@ -175,37 +175,17 @@ defmodule ExWapp.Message.Handler.Inbound.Decryptor do
           term(),
           Envelope.decrypt_context()
         ) :: :ok
-  defp log_decrypt_failure(state, from, enc_type, reason, decrypt_ctx) do
-    signal_sessions = Map.get(state, :signal_sessions)
+  defp log_decrypt_failure(_state, from, enc_type, reason, decrypt_ctx) do
     sender_candidates = Map.get(decrypt_ctx, :sender_candidates, [])
     payloads = Map.get(decrypt_ctx, :decryptable_payloads, [])
-    lid_mapping = Account.load_lid_mapping(Map.get(state, :store))
-
-    candidate_identities =
-      sender_candidates
-      |> Enum.map(&JIDUtils.identity/1)
-      |> MapSet.new()
-
-    stored_session_targets =
-      signal_sessions
-      |> SessionStore.list_sessions()
-      |> Enum.filter(&MapSet.member?(candidate_identities, JIDUtils.identity(&1)))
-      |> Enum.sort()
-      |> Enum.take(12)
-
-    related_bases =
-      sender_candidates
-      |> Enum.flat_map(&JIDUtils.related_bases(&1, lid_mapping))
-      |> Enum.uniq()
-      |> Enum.sort()
 
     Logger.error(
-      "[DECRYPT] Failed to decrypt message: enc_type=#{inspect(enc_type)} from=#{Common.normalize_jid_with_device(from)} reason=#{inspect(reason)} sender_candidates=#{inspect(sender_candidates)} related_bases=#{inspect(related_bases)} payload_count=#{length(payloads)} payload_types=#{inspect(Enum.map(payloads, &Map.get(&1, :enc_type)))} stored_session_targets=#{inspect(stored_session_targets)}"
+      "[DECRYPT] Failed to decrypt message: enc_type=#{inspect(enc_type)} from=#{Log.reference(from)} reason=#{Log.reason(reason)} sender_candidates=#{length(sender_candidates)} payload_count=#{length(payloads)} payload_types=#{inspect(Enum.map(payloads, &Map.get(&1, :enc_type)))}"
     )
   rescue
     error ->
       Logger.error(
-        "[DECRYPT] Failed to decrypt message and diagnostics logging raised: reason=#{inspect(reason)} logging_error=#{inspect(error)}"
+        "[DECRYPT] Failed to decrypt message and diagnostics logging raised: reason=#{Log.reason(reason)} logging_error=#{Log.reason(error)}"
       )
   end
 
@@ -276,7 +256,7 @@ defmodule ExWapp.Message.Handler.Inbound.Decryptor do
     end
   rescue
     error ->
-      Logger.warning("[DECRYPT] Failed clearing stale signal sessions: #{inspect(error)}")
+      Logger.warning("[DECRYPT] Failed clearing stale signal sessions: #{Log.reason(error)}")
       nil
   end
 
@@ -411,7 +391,7 @@ defmodule ExWapp.Message.Handler.Inbound.Decryptor do
 
       {:error, reason} ->
         Logger.warning(
-          "[SENDER_KEY] Failed processing sender key distribution: #{inspect(reason)}"
+          "[SENDER_KEY] Failed processing sender key distribution: #{Log.reason(reason)}"
         )
 
         {0, state}

@@ -2,6 +2,7 @@ defmodule ExWappTest do
   use ExUnit.Case, async: false
 
   alias ExWapp.Session
+  alias ExWapp.Session.InitialSync
   alias ExWapp.Session.Supervisor, as: SessionSupervisor
 
   defmodule FakeTransport do
@@ -76,7 +77,7 @@ defmodule ExWappTest do
     test "disconnect cancels an active initial sync without stopping the session" do
       {session, conn, sync_state} = start_blocked_initial_sync("disconnect-during-sync")
 
-      sync_task = sync_state.initial_sync_task
+      sync_task = sync_state.initial_sync.task
       queue = sync_state.outbound_queue
       router = sync_state.inbound_router
       task_supervisor = sync_state.send_worker_sup
@@ -92,8 +93,8 @@ defmodule ExWappTest do
                state = :sys.get_state(session)
 
                state.status == :idle and state.pending_iqs == %{} and
-                 state.app_state_initial_sync_requested == false and
-                 is_nil(state.initial_sync_task) and is_nil(state.initial_sync_task_ref)
+                 not InitialSync.active?(state.initial_sync) and
+                 is_nil(state.initial_sync.monitor)
              end)
 
       refute Process.alive?(sync_task)
@@ -116,7 +117,7 @@ defmodule ExWappTest do
       {session, conn, state} = start_blocked_initial_sync("stop-during-sync")
 
       owned_processes = [
-        state.initial_sync_task,
+        state.initial_sync.task,
         state.outbound_queue,
         state.inbound_router,
         state.send_worker_sup,
@@ -238,7 +239,7 @@ defmodule ExWappTest do
       conn = spawn(fn -> Process.sleep(:infinity) end)
 
       :sys.replace_state(session, fn state ->
-        %{state | conn: conn, status: :handshaking, app_state_initial_sync_requested: false}
+        %{state | conn: conn, status: :handshaking}
       end)
 
       send(session, {:connection_event, {:auth, :ready}})
@@ -250,7 +251,7 @@ defmodule ExWappTest do
       assert eventually(fn ->
                state = :sys.get_state(session)
 
-               state.app_state_initial_sync_requested and map_size(state.pending_iqs) > 0
+               InitialSync.active?(state.initial_sync) and map_size(state.pending_iqs) > 0
              end)
 
       first_pending_count = map_size(:sys.get_state(session).pending_iqs)
@@ -259,7 +260,7 @@ defmodule ExWappTest do
       Process.sleep(50)
 
       state_after_duplicate = :sys.get_state(session)
-      assert state_after_duplicate.app_state_initial_sync_requested
+      assert InitialSync.active?(state_after_duplicate.initial_sync)
       assert map_size(state_after_duplicate.pending_iqs) == first_pending_count
 
       send(session, {:connection_event, {:transport, {:closed, :test}}})
@@ -267,7 +268,7 @@ defmodule ExWappTest do
       assert eventually(fn ->
                state = :sys.get_state(session)
 
-               state.app_state_initial_sync_requested == false and
+               not InitialSync.active?(state.initial_sync) and
                  map_size(state.pending_iqs) == 0
              end)
 
@@ -280,7 +281,7 @@ defmodule ExWappTest do
       assert eventually(fn ->
                state = :sys.get_state(session)
 
-               state.app_state_initial_sync_requested and
+               InitialSync.active?(state.initial_sync) and
                  map_size(state.pending_iqs) > 0
              end)
 
@@ -308,7 +309,7 @@ defmodule ExWappTest do
       conn = spawn(fn -> Process.sleep(:infinity) end)
 
       :sys.replace_state(session, fn state ->
-        %{state | conn: conn, status: :handshaking, app_state_initial_sync_requested: false}
+        %{state | conn: conn, status: :handshaking}
       end)
 
       send(session, {:connection_event, {:auth, :ready}})
@@ -321,7 +322,7 @@ defmodule ExWappTest do
 
       state = :sys.get_state(session)
       assert state.status == :connected
-      assert state.app_state_initial_sync_requested == false
+      refute InitialSync.active?(state.initial_sync)
 
       GenServer.stop(session)
       Process.exit(conn, :kill)
@@ -349,8 +350,7 @@ defmodule ExWappTest do
         %{
           state
           | conn: test_pid,
-            status: :handshaking,
-            app_state_initial_sync_requested: false
+            status: :handshaking
         }
       end)
 
@@ -388,9 +388,8 @@ defmodule ExWappTest do
       assert eventually(fn ->
                state = :sys.get_state(session)
 
-               state.status == :syncing and state.app_state_initial_sync_requested and
-                 is_pid(state.initial_sync_task) and
-                 is_reference(state.initial_sync_task_ref)
+               state.status == :syncing and InitialSync.active?(state.initial_sync) and
+                 is_reference(state.initial_sync.monitor)
              end)
 
       assert_receive {:transport_send, %{attrs: %{"id" => request_id}}}, 1_000
@@ -405,8 +404,8 @@ defmodule ExWappTest do
       assert eventually(fn ->
                state = :sys.get_state(session)
 
-               state.status == :connected and is_nil(state.initial_sync_task) and
-                 is_nil(state.initial_sync_task_ref)
+               state.status == :connected and not InitialSync.active?(state.initial_sync) and
+                 is_nil(state.initial_sync.monitor)
              end)
 
       GenServer.stop(session)
@@ -441,7 +440,7 @@ defmodule ExWappTest do
       conn = spawn(fn -> Process.sleep(:infinity) end)
 
       :sys.replace_state(session, fn state ->
-        %{state | conn: conn, status: :handshaking, app_state_initial_sync_requested: false}
+        %{state | conn: conn, status: :handshaking}
       end)
 
       send(session, {:connection_event, {:auth, :ready}})
@@ -454,7 +453,7 @@ defmodule ExWappTest do
 
       state = :sys.get_state(session)
       assert state.status == :connected
-      assert state.app_state_initial_sync_requested == false
+      refute InitialSync.active?(state.initial_sync)
       assert map_size(state.pending_iqs) == 0
 
       GenServer.stop(session)
@@ -481,7 +480,7 @@ defmodule ExWappTest do
       conn = spawn(fn -> Process.sleep(:infinity) end)
 
       :sys.replace_state(session, fn state ->
-        %{state | conn: conn, status: :handshaking, app_state_initial_sync_requested: false}
+        %{state | conn: conn, status: :handshaking}
       end)
 
       send(session, {:connection_event, {:auth, :ready}})
@@ -503,7 +502,7 @@ defmodule ExWappTest do
 
       state = :sys.get_state(session)
       assert state.status == :connected
-      assert state.app_state_initial_sync_requested == false
+      refute InitialSync.active?(state.initial_sync)
       refute Map.has_key?(state, :initial_sync_gate_timer)
       assert map_size(state.pending_iqs) == 0
 
@@ -537,7 +536,7 @@ defmodule ExWappTest do
         )
 
       :sys.replace_state(session, fn state ->
-        %{state | conn: nil, status: :handshaking, app_state_initial_sync_requested: false}
+        %{state | conn: nil, status: :handshaking}
       end)
 
       send(session, {:connection_event, {:auth, :ready}})
@@ -1162,7 +1161,7 @@ defmodule ExWappTest do
     {:ok, conn} = ForwardingConn.start_link(self())
 
     :sys.replace_state(session, fn state ->
-      %{state | conn: conn, status: :handshaking, app_state_initial_sync_requested: false}
+      %{state | conn: conn, status: :handshaking}
     end)
 
     send(session, {:connection_event, {:auth, :ready}})
@@ -1172,8 +1171,8 @@ defmodule ExWappTest do
     assert eventually(fn ->
              state = :sys.get_state(session)
 
-             state.status == :syncing and is_pid(state.initial_sync_task) and
-               is_reference(state.initial_sync_task_ref) and map_size(state.pending_iqs) > 0
+             state.status == :syncing and InitialSync.active?(state.initial_sync) and
+               is_reference(state.initial_sync.monitor) and map_size(state.pending_iqs) > 0
            end)
 
     {session, conn, :sys.get_state(session)}

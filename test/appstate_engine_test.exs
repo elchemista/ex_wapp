@@ -1,21 +1,40 @@
 defmodule ExWapp.AppState.EngineTest do
   use ExUnit.Case, async: true
 
-  alias ExWapp.AppState.{Engine, Crypto, LTHash}
+  alias ExWapp.AppState.{Crypto, Engine, LTHash}
 
   alias ExWapp.Proto.SyncAction
 
   alias ExWapp.Proto.SyncAction.{
-    SyncdMutation,
-    SyncdRecord,
-    SyncActionData,
-    SyncActionValue,
+    ArchiveChatAction,
     ContactAction,
+    DeleteChatAction,
     MuteAction,
     PinAction,
-    ArchiveChatAction,
-    DeleteChatAction
+    SyncActionData,
+    SyncActionValue,
+    SyncdMutation,
+    SyncdRecord
   }
+
+  defmodule PaginationSession do
+    use GenServer
+
+    def start_link(parent, responses), do: GenServer.start_link(__MODULE__, {parent, responses})
+
+    @impl true
+    def init({parent, responses}), do: {:ok, %{parent: parent, responses: responses}}
+
+    @impl true
+    def handle_call({:send_iq, node, _message_id}, _from, %{responses: [response | rest]} = state) do
+      send(state.parent, {:app_state_fetch_iq, node})
+      {:reply, {:ok, response}, %{state | responses: rest}}
+    end
+
+    def handle_call({:send_iq, _node, _message_id}, _from, state) do
+      {:reply, {:error, :no_response}, state}
+    end
+  end
 
   # Contact mutation builders
 
@@ -547,4 +566,124 @@ defmodule ExWapp.AppState.EngineTest do
       assert contact.full_name == "Alice Example"
     end
   end
+
+  describe "fetch_collection/3 pagination" do
+    test "continues with the updated version until has_more_patches is false" do
+      store = ExWapp.Store.new(ExWapp.Store.Memory)
+      collection = "critical_unblock_low"
+      key_id = :crypto.strong_rand_bytes(16)
+      key_data = :crypto.strong_rand_bytes(32)
+      key_hex = Base.encode16(key_id, case: :lower)
+
+      :ok =
+        ExWapp.Store.put(store, :app_state_keys, %{
+          key_hex => %{data: key_data, timestamp: 1}
+        })
+
+      initial_state = %{version: 0, hash: LTHash.new()}
+
+      {:ok, first_patch, first_state, first_macs} =
+        Engine.encode_patch(
+          Engine.build_contact("1001@s.whatsapp.net", "First Page"),
+          key_id,
+          key_data,
+          initial_state,
+          %{}
+        )
+
+      {:ok, second_patch, _second_state, _second_macs} =
+        Engine.encode_patch(
+          Engine.build_contact("1002@s.whatsapp.net", "Second Page"),
+          key_id,
+          key_data,
+          first_state,
+          first_macs
+        )
+
+      responses = [
+        collection_response(collection, first_patch, true),
+        collection_response(collection, second_patch, false)
+      ]
+
+      {:ok, session} = PaginationSession.start_link(self(), responses)
+
+      assert :ok = Engine.fetch_collection(session, store, collection)
+
+      assert_receive {:app_state_fetch_iq, first_request}
+
+      assert collection_request_attrs(first_request) == %{
+               "name" => collection,
+               "return_snapshot" => "true"
+             }
+
+      assert_receive {:app_state_fetch_iq, second_request}
+
+      assert collection_request_attrs(second_request) == %{
+               "name" => collection,
+               "return_snapshot" => "false",
+               "version" => "1"
+             }
+
+      assert ExWapp.Contact.get(store, "1001@s.whatsapp.net").full_name == "First Page"
+      assert ExWapp.Contact.get(store, "1002@s.whatsapp.net").full_name == "Second Page"
+      assert {:ok, %{version: 2}, _macs} = Engine.get_collection_state(store, collection)
+    end
+
+    test "fails instead of looping when a paginated response makes no version progress" do
+      store = ExWapp.Store.new(ExWapp.Store.Memory)
+      collection = "regular"
+      response = collection_response(collection, nil, true)
+      {:ok, session} = PaginationSession.start_link(self(), [response])
+
+      assert {:error, {:app_state_pagination_stalled, ^collection, 0, 0}} =
+               Engine.fetch_collection(session, store, collection)
+    end
+  end
+
+  defp collection_response(collection, patch, has_more?) do
+    patch_content =
+      if is_binary(patch) do
+        [
+          %ExWapp.Binary.Node{
+            tag: "patches",
+            attrs: %{},
+            content: [
+              %ExWapp.Binary.Node{
+                tag: "patch",
+                attrs: %{},
+                content: ExWapp.Binary.raw(patch)
+              }
+            ]
+          }
+        ]
+      else
+        []
+      end
+
+    %ExWapp.Binary.Node{
+      tag: "iq",
+      attrs: %{"type" => "result"},
+      content: [
+        %ExWapp.Binary.Node{
+          tag: "sync",
+          attrs: %{},
+          content: [
+            %ExWapp.Binary.Node{
+              tag: "collection",
+              attrs: %{
+                "name" => collection,
+                "has_more_patches" => to_string(has_more?)
+              },
+              content: patch_content
+            }
+          ]
+        }
+      ]
+    }
+  end
+
+  defp collection_request_attrs(%ExWapp.Binary.Node{
+         content: [%ExWapp.Binary.Node{content: [%ExWapp.Binary.Node{attrs: attrs}]}]
+       }),
+       do: attrs
 end

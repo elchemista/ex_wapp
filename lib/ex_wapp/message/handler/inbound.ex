@@ -11,8 +11,9 @@ defmodule ExWapp.Message.Handler.Inbound do
 
   require Logger
 
-  alias ExWapp.JID
   alias ExWapp.Binary.Node
+  alias ExWapp.JID
+  alias ExWapp.Log
   alias ExWapp.Message.Handler.{Common, Wire}
 
   alias ExWapp.Message.Handler.Inbound.{
@@ -29,49 +30,133 @@ defmodule ExWapp.Message.Handler.Inbound do
   @doc "Processes an inbound message node and returns updated state plus protocol actions."
   @spec handle_message(Node.t(), pid(), map()) :: {:ok, map(), [term()]}
   def handle_message(%Node{attrs: attrs, content: content}, session, state) do
-    from =
-      case Map.get(attrs, "from", "") do
-        %JID{} = jid -> jid
-        jid when is_binary(jid) -> jid
-        _ -> ""
-      end
+    envelope = build_envelope(attrs)
 
-    id = Map.get(attrs, "id", "")
-    type = Map.get(attrs, "type", "text")
-    timestamp = Common.parse_timestamp(Map.get(attrs, "t"))
-    participant = Map.get(attrs, "participant")
-
-    Logger.debug("Received message from=#{from} id=#{id} type=#{type}")
-    state = Envelope.persist_lid_mappings(state, attrs, from, participant)
-    Envelope.persist_observed_devices(state, attrs, from, participant)
-
-    message_data = Wire.extract_message_content(content, type)
-    {message_data, state} = maybe_decrypt_message(message_data, state, from, participant, attrs)
-    message_data = Content.normalize(message_data)
-
-    own_sender? = Envelope.own_sender?(attrs, from, participant, state)
-    state = Sync.ingest(message_data, session, state, from, id, own_sender?)
-    from_me = Envelope.from_me?(attrs, from, state, message_data)
-
-    Publisher.publish(
-      message_data,
-      %{
-        id: id,
-        from: from,
-        from_me: from_me,
-        timestamp: timestamp,
-        participant: participant,
-        type: type,
-        attrs: attrs
-      },
-      session,
-      state
+    Logger.debug(
+      "Received message from=#{Log.reference(envelope.from)} id=#{Log.reference(envelope.id)} type=#{envelope.type}"
     )
 
-    {actions, state} = Receipts.build_actions(from, id, participant, attrs, message_data, state)
-    updated_state = Common.update_stats(state, :messages_received)
-    {:ok, updated_state, actions}
+    state = persist_envelope_metadata(state, attrs, envelope)
+
+    message_data = Wire.extract_message_content(content, envelope.type)
+
+    {message_data, state} =
+      maybe_decrypt_message(
+        message_data,
+        state,
+        envelope.from,
+        envelope.participant,
+        attrs
+      )
+
+    message_data = Content.normalize(message_data)
+
+    state = ingest_protocol_sync(message_data, session, state, envelope)
+
+    envelope =
+      Map.put(
+        envelope,
+        :from_me,
+        Envelope.from_me?(attrs, envelope.from, state, message_data)
+      )
+
+    {actions, state} =
+      Receipts.build_actions(
+        envelope.from,
+        envelope.id,
+        envelope.participant,
+        attrs,
+        message_data,
+        state
+      )
+
+    state = publish_application_message(message_data, envelope, session, state)
+    {:ok, Common.update_stats(state, :messages_received), actions}
   end
+
+  @spec build_envelope(map()) :: map()
+  defp build_envelope(attrs) do
+    %{
+      id: Map.get(attrs, "id", ""),
+      from: normalize_sender(Map.get(attrs, "from", "")),
+      from_me: false,
+      timestamp: Common.parse_timestamp(Map.get(attrs, "t")),
+      participant: Map.get(attrs, "participant"),
+      type: Map.get(attrs, "type", "text"),
+      attrs: attrs
+    }
+  end
+
+  @spec normalize_sender(term()) :: JID.t() | String.t()
+  defp normalize_sender(%JID{} = jid), do: jid
+  defp normalize_sender(jid) when is_binary(jid), do: jid
+  defp normalize_sender(_jid), do: ""
+
+  @spec persist_envelope_metadata(map(), map(), map()) :: map()
+  defp persist_envelope_metadata(state, attrs, envelope) do
+    state =
+      Envelope.persist_lid_mappings(
+        state,
+        attrs,
+        envelope.from,
+        envelope.participant
+      )
+
+    Envelope.persist_observed_devices(state, attrs, envelope.from, envelope.participant)
+    state
+  end
+
+  @spec ingest_protocol_sync(map(), term(), map(), map()) :: map()
+  defp ingest_protocol_sync(message_data, session, state, envelope) do
+    own_sender? =
+      Envelope.own_sender?(
+        envelope.attrs,
+        envelope.from,
+        envelope.participant,
+        state
+      )
+
+    Sync.ingest(
+      message_data,
+      session,
+      state,
+      envelope.from,
+      envelope.id,
+      own_sender?
+    )
+  rescue
+    exception ->
+      record_phase_failure(state, :protocol_sync, envelope, {:exception, exception})
+  catch
+    kind, reason ->
+      record_phase_failure(state, :protocol_sync, envelope, {:caught, kind, reason})
+  end
+
+  @spec publish_application_message(map(), map(), term(), map()) :: map()
+  defp publish_application_message(message_data, envelope, session, state) do
+    case Publisher.publish(message_data, envelope, session, state) do
+      {:published, _message} -> state
+      {:suppressed, _message} -> state
+      {:error, reason} -> record_phase_failure(state, :application_publish, envelope, reason)
+    end
+  end
+
+  @spec record_phase_failure(map(), atom(), map(), term()) :: map()
+  defp record_phase_failure(state, phase, envelope, reason) do
+    Logger.error(
+      "[INBOUND] phase=#{phase} failed from=#{Log.reference(envelope.from)} id=#{Log.reference(envelope.id)} reason=#{format_failure(reason)}"
+    )
+
+    Common.update_stats(state, :errors)
+  end
+
+  @spec format_failure(term()) :: String.t()
+  defp format_failure({:exception, exception}), do: Log.reason(exception)
+
+  defp format_failure({:caught, kind, reason}),
+    do: "#{kind}: #{Log.reason(reason)}"
+
+  defp format_failure(reason), do: Log.reason(reason)
 
   @doc "Records device JIDs advertised by a notification in the session cache."
   @spec persist_notification_devices(map(), term()) :: :ok

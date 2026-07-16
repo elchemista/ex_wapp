@@ -21,7 +21,9 @@ defmodule ExWapp.MediaCryptoTest do
     assert {:ok, upload, body} = Media.Crypto.encrypt_upload("audio-bytes", :audio)
     ref = Media.ref_from_upload(upload, mimetype: "audio/ogg; codecs=opus")
 
-    tampered = binary_part(body, 0, byte_size(body) - 1) <> <<0>>
+    prefix_size = byte_size(body) - 1
+    <<prefix::binary-size(^prefix_size), last_byte>> = body
+    tampered = prefix <> <<Bitwise.bxor(last_byte, 0x01)>>
 
     assert {:error, reason} = Media.Crypto.decrypt_download(tampered, ref)
     assert reason in [:invalid_media_hmac, :invalid_media_enc_sha256]

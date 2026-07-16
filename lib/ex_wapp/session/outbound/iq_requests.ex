@@ -8,7 +8,7 @@ defmodule ExWapp.Session.Outbound.IQRequests do
 
   require Logger
 
-  alias ExWapp.{Binary, Config, Store}
+  alias ExWapp.{Binary, Config, Log, Store}
   alias ExWapp.Session.{Account, DeviceCache, IQ}
   alias ExWapp.Session.Outbound.{Group, Prekeys}
   alias ExWapp.Signal.SessionStore
@@ -67,7 +67,7 @@ defmodule ExWapp.Session.Outbound.IQRequests do
     message_id = request_id()
     request_node = IQ.build_prekey_request(jid, message_id)
 
-    Logger.debug("[PREKEY] Sending prekey request for #{jid}")
+    Logger.debug("[PREKEY] Sending prekey request for #{Log.reference(jid)}")
 
     case send_node_fun.(request_node) do
       :ok ->
@@ -95,7 +95,7 @@ defmodule ExWapp.Session.Outbound.IQRequests do
     message_id = request_id()
     query_node = IQ.build_usync_device_query(jids, message_id)
 
-    Logger.debug("[USYNC] Querying device list for #{inspect(jids)}")
+    Logger.debug("[USYNC] Querying device list #{Log.references(jids)}")
 
     case send_node_fun.(query_node) do
       :ok ->
@@ -104,7 +104,7 @@ defmodule ExWapp.Session.Outbound.IQRequests do
             handle_device_response(state.store, response_node)
 
           {:prekey_error, ^message_id, error} ->
-            Logger.warning("[USYNC] Device list query error: #{inspect(error)}")
+            Logger.warning("[USYNC] Device list query error: #{Log.reason(error)}")
             {:error, {:usync_query_error, error}}
         after
           usync_timeout_ms(state) ->
@@ -127,7 +127,7 @@ defmodule ExWapp.Session.Outbound.IQRequests do
     message_id = request_id()
     query_node = Group.build_info_query(group_jid, message_id)
 
-    Logger.debug("[GROUP] Querying group info for #{group_jid}")
+    Logger.debug("[GROUP] Querying group info for #{Log.reference(group_jid)}")
 
     case send_node_fun.(query_node) do
       :ok ->

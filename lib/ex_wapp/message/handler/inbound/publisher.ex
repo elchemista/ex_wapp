@@ -8,7 +8,7 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
 
   require Logger
 
-  alias ExWapp.{Chat, JID}
+  alias ExWapp.{Chat, JID, Log}
   alias ExWapp.Message.Handler.Common
   alias ExWapp.Message.Handler.Inbound.Projection
 
@@ -26,20 +26,31 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
   Persists and publishes one normalized inbound message unless it is internal.
   """
   @spec publish(map(), envelope(), term(), map()) ::
-          {:published, map()} | {:suppressed, map()}
+          {:published, map()} | {:suppressed, map()} | {:error, term()}
   def publish(message_data, envelope, session, state) do
     message = build_public_message(message_data, envelope)
     is_protocol = Map.get(message_data, :message_content_type) == :protocol
     suppress_message? = transient_encrypted_placeholder?(message_data)
 
     if not is_protocol and not suppress_message? do
-      persist_message(message, envelope, session, state)
-      publish_event(message, envelope, session)
-      {:published, message}
+      case persist_message(message, envelope, session, state) do
+        :ok ->
+          publish_event(message, envelope, session)
+          {:published, message}
+
+        {:error, reason} ->
+          {:error, {:persistence_failed, reason}}
+      end
     else
       log_suppressed_message(is_protocol, suppress_message?, envelope, message_data)
       {:suppressed, message}
     end
+  rescue
+    exception ->
+      {:error, {:exception, exception}}
+  catch
+    kind, reason ->
+      {:error, {:caught, kind, reason}}
   end
 
   @spec build_public_message(map(), envelope()) :: Chat.message()
@@ -76,7 +87,7 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
     }
   end
 
-  @spec persist_message(map(), envelope(), term(), map()) :: :ok
+  @spec persist_message(map(), envelope(), term(), map()) :: :ok | {:error, term()}
   defp persist_message(message, envelope, session, state) do
     case Common.chat_target(session, state) do
       nil ->
@@ -85,13 +96,14 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
       target ->
         chat_jid = Common.normalize_jid(Map.fetch!(envelope, :from))
 
-        Projection.update_chat_name(
-          target,
-          chat_jid,
-          Map.fetch!(envelope, :attrs)
-        )
-
-        Chat.add_message(target, chat_jid, message)
+        with :ok <-
+               Projection.update_chat_name(
+                 target,
+                 chat_jid,
+                 Map.fetch!(envelope, :attrs)
+               ) do
+          Chat.add_message(target, chat_jid, message)
+        end
     end
   end
 
@@ -114,7 +126,7 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
 
   defp log_suppressed_message(_is_protocol, true, envelope, message_data) do
     Logger.debug(
-      "[DECRYPT] Suppressing undecryptable encrypted placeholder from=#{Common.normalize_jid_with_device(Map.fetch!(envelope, :from))} id=#{Map.fetch!(envelope, :id)} reason=#{inspect(Map.get(message_data, :decrypt_status))}"
+      "[DECRYPT] Suppressing undecryptable encrypted placeholder from=#{Log.reference(Map.fetch!(envelope, :from))} id=#{Log.reference(Map.fetch!(envelope, :id))} reason=#{Log.reason(Map.get(message_data, :decrypt_status))}"
     )
   end
 

@@ -23,4 +23,25 @@ defmodule ExWapp.WebSocketTransportTest do
     assert next_state.header_seen?
     assert next_state.buffer == <<5::unsigned-big-size(24), "ab">>
   end
+
+  test "production websocket options verify the CA chain and hostname" do
+    options = ExWapp.Transport.TLS.websockex_options("wss://web.whatsapp.com/ws/chat")
+    ssl_options = Keyword.fetch!(options, :ssl_options)
+
+    assert Keyword.fetch!(options, :insecure) == false
+    assert [_first_ca | _rest] = Keyword.fetch!(options, :cacerts)
+    assert Keyword.fetch!(ssl_options, :verify) == :verify_peer
+    assert Keyword.fetch!(ssl_options, :server_name_indication) == ~c"web.whatsapp.com"
+    assert [_first_ca | _rest] = Keyword.fetch!(ssl_options, :cacerts)
+
+    assert is_function(
+             ssl_options
+             |> Keyword.fetch!(:customize_hostname_check)
+             |> Keyword.fetch!(:match_fun)
+           )
+  end
+
+  test "plaintext websocket URLs do not receive SSL options" do
+    assert ExWapp.Transport.TLS.websockex_options("ws://localhost/socket") == []
+  end
 end

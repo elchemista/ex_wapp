@@ -5,6 +5,8 @@ defmodule ExWapp.LogRedactionTest do
 
   alias ExWapp.{Binary, Noise, Store}
   alias ExWapp.Session.Worker.NodeHandler
+  alias ExWapp.Session.Worker.Subscribers
+  alias ExWapp.Signal.SessionStore
   alias ExWapp.Store.Memory
 
   setup do
@@ -65,5 +67,101 @@ defmodule ExWapp.LogRedactionTest do
     assert is_binary(private_key)
     refute log =~ inspect(private_key)
     refute log =~ Base.encode16(private_key, case: :lower)
+  end
+
+  test "Signal session diagnostics fingerprint JIDs without logging them" do
+    jid = "15551234567@s.whatsapp.net"
+
+    log =
+      capture_log([level: :debug], fn ->
+        SessionStore.put_session(SessionStore.new(), jid, %{ratchet: :test})
+      end)
+
+    assert log =~ "[redacted:"
+    refute log =~ jid
+    refute log =~ "15551234567"
+  end
+
+  test "attribute redaction filters identifiers, tokens, and arbitrary text" do
+    secret = "private-message-text"
+    jid = "15551234567@s.whatsapp.net"
+
+    redacted =
+      ExWapp.Log.attrs(%{
+        "type" => "message",
+        "from" => jid,
+        "text" => secret,
+        "auth" => "token"
+      })
+      |> inspect()
+
+    assert redacted =~ "message"
+    assert redacted =~ "[FILTERED]"
+    refute redacted =~ jid
+    refute redacted =~ secret
+    refute redacted =~ "token"
+  end
+
+  test "message publication logs omit JIDs, IDs, session names, and message text" do
+    jid = "15551234567@s.whatsapp.net"
+    message_id = "3EB0-private-message-id"
+    session_id = "private-account-session"
+    text = "this message must never appear in logs"
+
+    log =
+      capture_log([level: :debug], fn ->
+        :ok =
+          Subscribers.notify_message_subscribers(
+            %{message_subscribers: %{}, session_id: session_id},
+            jid,
+            %{id: message_id, text: text}
+          )
+      end)
+
+    assert log =~ "[redacted:"
+    refute log =~ jid
+    refute log =~ "15551234567"
+    refute log =~ message_id
+    refute log =~ session_id
+    refute log =~ text
+  end
+
+  test "nested error terms keep their shape without exposing binary values" do
+    jid = "15551234567@s.whatsapp.net"
+    payload = :crypto.strong_rand_bytes(32)
+    reason = {:decrypt_failed, jid, %Protox.DecodingError{message: "secret", binary: payload}}
+
+    formatted = ExWapp.Log.reason(reason)
+
+    assert formatted =~ ":decrypt_failed"
+    assert formatted =~ "Protox.DecodingError"
+    refute formatted =~ jid
+    refute formatted =~ inspect(payload)
+  end
+
+  test "stream-error diagnostics never print raw attributes or children" do
+    secret = "stream-error-secret-#{System.unique_integer([:positive])}@s.whatsapp.net"
+
+    node = %Binary.Node{
+      tag: "stream:error",
+      attrs: %{"code" => "500", "from" => secret},
+      content: [
+        %Binary.Node{
+          tag: "conflict",
+          attrs: %{"type" => secret},
+          content: Binary.raw(secret)
+        }
+      ]
+    }
+
+    log =
+      capture_log([level: :debug], fn ->
+        {_state, _actions} =
+          NodeHandler.safe_handle_node(node, %{session_id: "redaction-test", stats: %{}})
+      end)
+
+    assert log =~ "Stream error children summary"
+    assert log =~ "[FILTERED]"
+    refute log =~ secret
   end
 end

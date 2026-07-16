@@ -220,23 +220,21 @@ defmodule ExWapp.Noise do
          %__MODULE__{store: store, pending_store_data: pending},
          %Secrets{} = secrets
        ) do
-    data =
-      store
-      |> Store.load!()
-      |> Map.merge(pending || %{})
-
-    noise = Map.get(data, :noise, %{})
-
-    updated_noise =
-      noise
-      |> Map.put(:handshake_hash, secrets.handshake_hash)
-      |> Map.put(:handshake_salt, secrets.handshake_salt)
-      |> Map.put(:server_static, secrets.server_static)
-      |> Map.put(:server_certificate, secrets.server_certificate)
-
     Logger.debug("[NOISE] persist_handshake_data completed")
 
-    case Store.persist(store, Map.put(data, :noise, updated_noise)) do
+    case Store.transaction(store, fn current ->
+           data = Map.merge(current, pending || %{})
+
+           updated_noise =
+             data
+             |> Map.get(:noise, %{})
+             |> Map.put(:handshake_hash, secrets.handshake_hash)
+             |> Map.put(:handshake_salt, secrets.handshake_salt)
+             |> Map.put(:server_static, secrets.server_static)
+             |> Map.put(:server_certificate, secrets.server_certificate)
+
+           Map.put(data, :noise, updated_noise)
+         end) do
       :ok -> :ok
       {:error, _} = error -> error
     end
@@ -296,9 +294,7 @@ defmodule ExWapp.Noise do
   end
 
   defp load_static_key(store) do
-    data = Store.load!(store)
-
-    case data[:noise] do
+    case Store.get(store, :noise, %{}) do
       %{static_private: priv, static_public: pub} when is_binary(priv) and is_binary(pub) ->
         %{priv: priv, pub: pub}
 
@@ -308,30 +304,15 @@ defmodule ExWapp.Noise do
   end
 
   defp persist_static_key(store, %{priv: priv, pub: pub}) do
-    Logger.debug("[NOISE] persist_static_key called with store=#{inspect(store)}")
+    Logger.debug("[NOISE] persisting static key material")
 
-    Logger.debug(
-      "[NOISE] static key pub=#{Base.encode16(pub, case: :lower) |> String.slice(0, 16)}..."
-    )
-
-    data = Store.load!(store)
-    noise = Map.get(data, :noise, %{})
-
-    current_priv = Map.get(noise, :static_private)
-    current_pub = Map.get(noise, :static_public)
-
-    if current_priv == priv and current_pub == pub do
-      :ok
-    else
-      updated_noise =
-        noise
-        |> Map.put(:static_private, priv)
-        |> Map.put(:static_public, pub)
-
-      case Store.persist(store, Map.put(data, :noise, updated_noise)) do
-        :ok -> :ok
-        {:error, _reason} = error -> error
-      end
+    case Store.update(store, :noise, %{}, fn noise ->
+           noise
+           |> Map.put(:static_private, priv)
+           |> Map.put(:static_public, pub)
+         end) do
+      :ok -> :ok
+      {:error, _reason} = error -> error
     end
   end
 

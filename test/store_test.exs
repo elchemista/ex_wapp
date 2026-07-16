@@ -190,6 +190,139 @@ defmodule ExWapp.StoreTest do
       store2 = Store.Ets.new(path: path)
       assert {:ok, %{key: "value"}} = Store.load(store2)
     end
+
+    test "a stale general snapshot cannot roll back a newer Signal ratchet" do
+      path = Path.join(@tmp_dir, "signal_stale_snapshot.etf")
+      store = Store.Ets.new(path: path)
+      sessions = Store.load_signal_sessions(store)
+      jid = "15550001111@s.whatsapp.net"
+
+      ExWapp.Signal.SessionStore.put_session(sessions, jid, %{ratchet_counter: 1})
+      assert :ok = Store.persist_signal_sessions(store, sessions)
+      stale_snapshot = Store.load!(store)
+
+      ExWapp.Signal.SessionStore.put_session(sessions, jid, %{ratchet_counter: 2})
+      assert :ok = Store.persist_signal_sessions(store, sessions)
+
+      assert :ok =
+               Store.persist(
+                 store,
+                 Map.put(stale_snapshot, :contacts, %{"stale@s.whatsapp.net" => %{}})
+               )
+
+      assert {:ok, %{ratchet_counter: 2}} =
+               store
+               |> Store.load_signal_sessions()
+               |> ExWapp.Signal.SessionStore.get_session(jid)
+
+      reloaded = Store.Ets.new(path: path)
+
+      assert {:ok, %{ratchet_counter: 2}} =
+               reloaded
+               |> Store.load_signal_sessions()
+               |> ExWapp.Signal.SessionStore.get_session(jid)
+    end
+
+    test "concurrent contact-domain updates do not lose entries" do
+      path = Path.join(@tmp_dir, "concurrent_contacts.etf")
+      store = Store.Ets.new(path: path)
+
+      1..32
+      |> Enum.map(fn index ->
+        Task.async(fn ->
+          jid = "#{index}@s.whatsapp.net"
+
+          ExWapp.Contact.merge_from_sync(store, jid, %{
+            full_name: "Contact #{index}",
+            first_name: "Contact"
+          })
+        end)
+      end)
+      |> Task.await_many(10_000)
+
+      assert store |> Store.get(:contacts, %{}) |> map_size() == 32
+      assert Store.Ets.new(path: path) |> Store.get(:contacts, %{}) |> map_size() == 32
+    end
+
+    test "a caller-owned batch defers disk persistence until its final mutation" do
+      path = Path.join(@tmp_dir, "batched_contacts.etf")
+      store = Store.Ets.new(path: path)
+
+      assert :ok = Store.begin_batch(store, :contact_sync)
+
+      for index <- 1..16 do
+        assert :ok =
+                 ExWapp.Contact.merge_from_sync(store, "#{index}@s.whatsapp.net", %{
+                   full_name: "Contact #{index}"
+                 })
+      end
+
+      refute File.exists?(path)
+      assert :ok = Store.finish_batch(store, :contact_sync)
+      assert File.exists?(path)
+
+      assert Store.Ets.new(path: path) |> Store.get(:contacts, %{}) |> map_size() == 16
+    end
+
+    test "an explicit flush persists a still-open batch" do
+      path = Path.join(@tmp_dir, "explicit_flush.etf")
+      store = Store.Ets.new(path: path)
+
+      assert :ok = Store.begin_batch(store, :long_sync)
+      assert :ok = Store.put(store, :sync_progress, 42)
+      refute File.exists?(path)
+
+      assert :ok = Store.flush(store)
+      assert {:ok, %{sync_progress: 42}} = Store.Ets.load_path(path)
+      assert Process.alive?(store.writer)
+
+      assert :ok = Store.finish_batch(store, :long_sync)
+    end
+
+    test "close durably flushes a pending batch before stopping its writer" do
+      path = Path.join(@tmp_dir, "close_flush.etf")
+      store = Store.Ets.new(path: path)
+
+      assert :ok = Store.begin_batch(store, :long_sync)
+      assert :ok = Store.put(store, :last_update, :pending)
+      refute File.exists?(path)
+
+      assert :ok = Store.close(store)
+      refute Process.alive?(store.writer)
+      assert {:ok, %{last_update: :pending}} = Store.Ets.load_path(path)
+    end
+
+    test "an abandoned caller batch is flushed when its owner exits" do
+      path = Path.join(@tmp_dir, "abandoned_batch.etf")
+      store = Store.Ets.new(path: path)
+      parent = self()
+
+      {owner, monitor} =
+        spawn_monitor(fn ->
+          assert :ok = Store.begin_batch(store, :owner_exit)
+          assert :ok = Store.put(store, :owner_state, :finished)
+          send(parent, :batch_mutated)
+        end)
+
+      assert_receive :batch_mutated
+      assert_receive {:DOWN, ^monitor, :process, ^owner, :normal}
+
+      assert_eventually(fn ->
+        match?({:ok, %{owner_state: :finished}}, Store.Ets.load_path(path))
+      end)
+    end
+
+    test "a failing read callback cannot crash the ETS owner" do
+      path = Path.join(@tmp_dir, "reader_isolation.etf")
+      store = Store.Ets.new(path: path)
+
+      assert {:error, {:store_read_failed, %RuntimeError{message: "reader failed"}}} =
+               Store.read(store, fn _data -> raise "reader failed" end)
+
+      assert Process.alive?(store.writer)
+      assert :ok = Store.put(store, :still_available, true)
+      assert Store.get(store, :still_available) == true
+    end
   end
 
   describe "MessageTable" do
@@ -249,6 +382,26 @@ defmodule ExWapp.StoreTest do
       assert {:ok, %{a: 100, b: 2}} = Store.load(store)
     end
 
+    test "failing callbacks cannot crash the memory adapter" do
+      store = Store.Memory.new(initial_data: %{counter: 1})
+
+      assert {:error, {:store_read_failed, %RuntimeError{message: "read failed"}}} =
+               Store.read(store, fn _data -> raise "read failed" end)
+
+      assert {:error, {:store_mutation_failed, %RuntimeError{message: "update failed"}}} =
+               Store.update(store, :counter, 0, fn _current -> raise "update failed" end)
+
+      assert {:error, {:invalid_store_get_and_update_result, :invalid}} =
+               Store.get_and_update(store, :counter, 0, fn _current -> :invalid end)
+
+      assert {:error, {:invalid_store_transaction_result, :invalid}} =
+               Store.transaction(store, fn _data -> :invalid end)
+
+      assert Process.alive?(store.agent)
+      assert :ok = Store.put(store, :counter, 2)
+      assert Store.get(store, :counter) == 2
+    end
+
     test "stop/1 terminates the agent" do
       store = Store.Memory.new()
       assert :ok = Store.Memory.stop(store)
@@ -271,4 +424,17 @@ defmodule ExWapp.StoreTest do
       end
     end
   end
+
+  defp assert_eventually(assertion, attempts \\ 50)
+
+  defp assert_eventually(assertion, attempts) when attempts > 0 do
+    if assertion.() do
+      :ok
+    else
+      Process.sleep(10)
+      assert_eventually(assertion, attempts - 1)
+    end
+  end
+
+  defp assert_eventually(_assertion, 0), do: flunk("condition did not become true")
 end

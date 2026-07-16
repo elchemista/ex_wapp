@@ -9,6 +9,8 @@ defmodule ExWapp.Session.OutboundQueue do
   use GenServer
   require Logger
 
+  alias ExWapp.Log
+
   @type item :: {:send_node, term()} | :restart_stream
 
   defstruct session: nil,
@@ -111,7 +113,7 @@ defmodule ExWapp.Session.OutboundQueue do
             {final_state, sent_rest + 1}
 
           {:error, reason} ->
-            Logger.warning("[OUTBOUND] dispatch failed: #{inspect(reason)}")
+            Logger.warning("[OUTBOUND] dispatch failed: #{Log.reason(reason)}")
             send(state.session, {:outbound_error, item, reason})
             {%{state | queue: :queue.in_r(item, rest)}, 0}
         end

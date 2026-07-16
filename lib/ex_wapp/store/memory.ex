@@ -38,6 +38,7 @@ defmodule ExWapp.Store.Memory do
 
   @behaviour ExWapp.Store
 
+  alias ExWapp.Signal.SessionStore
   alias ExWapp.Store.MessageTable
 
   defstruct [:agent, :message_table]
@@ -64,6 +65,12 @@ defmodule ExWapp.Store.Memory do
   @spec get(t(), atom(), term()) :: term()
   def get(%__MODULE__{agent: agent}, key, default \\ nil) when is_atom(key) do
     Agent.get(agent, &Map.get(&1, key, default))
+  end
+
+  @impl true
+  @spec read(t(), (map() -> term())) :: term()
+  def read(%__MODULE__{agent: agent}, reader) when is_function(reader, 1) do
+    Agent.get(agent, &run_reader(reader, &1))
   end
 
   @impl true
@@ -137,7 +144,7 @@ defmodule ExWapp.Store.Memory do
   def persist_signal_sessions(%__MODULE__{agent: agent}, sessions) do
     Agent.update(
       agent,
-      &Map.put(&1, :signal_sessions, ExWapp.Signal.SessionStore.snapshot(sessions))
+      &Map.put(&1, :signal_sessions, SessionStore.snapshot(sessions))
     )
 
     :ok
@@ -175,6 +182,87 @@ defmodule ExWapp.Store.Memory do
     Agent.update(agent, fn data -> Map.put(data, key, value) end)
     :ok
   end
+
+  @impl true
+  @spec update(t(), atom(), term(), (term() -> term())) :: :ok | {:error, term()}
+  def update(%__MODULE__{agent: agent}, key, default, updater)
+      when is_atom(key) and is_function(updater, 1) do
+    Agent.get_and_update(agent, fn data ->
+      case run_updater(updater, Map.get(data, key, default)) do
+        {:ok, updated} -> {:ok, Map.put(data, key, updated)}
+        {:error, _reason} = error -> {error, data}
+      end
+    end)
+  end
+
+  @impl true
+  @spec get_and_update(t(), atom(), term(), (term() -> {term(), term()})) :: term()
+  def get_and_update(%__MODULE__{agent: agent}, key, default, updater)
+      when is_atom(key) and is_function(updater, 1) do
+    Agent.get_and_update(agent, fn data ->
+      case run_get_and_update(updater, Map.get(data, key, default)) do
+        {:ok, reply, updated} -> {reply, Map.put(data, key, updated)}
+        {:error, _reason} = error -> {error, data}
+      end
+    end)
+  end
+
+  @impl true
+  @spec transaction(t(), (map() -> map())) :: :ok | {:error, term()}
+  def transaction(%__MODULE__{agent: agent}, updater) when is_function(updater, 1) do
+    Agent.get_and_update(agent, fn data ->
+      case run_transaction(updater, data) do
+        {:ok, updated} -> {:ok, updated}
+        {:error, _reason} = error -> {error, data}
+      end
+    end)
+  end
+
+  defp run_reader(reader, data) do
+    reader.(data)
+  rescue
+    exception -> {:error, {:store_read_failed, exception}}
+  catch
+    kind, reason -> {:error, {:store_read_failed, {kind, reason}}}
+  end
+
+  defp run_updater(updater, current) do
+    {:ok, updater.(current)}
+  rescue
+    exception -> {:error, {:store_mutation_failed, exception}}
+  catch
+    kind, reason -> {:error, {:store_mutation_failed, {kind, reason}}}
+  end
+
+  defp run_get_and_update(updater, current) do
+    case updater.(current) do
+      {reply, updated} -> {:ok, reply, updated}
+      other -> {:error, {:invalid_store_get_and_update_result, other}}
+    end
+  rescue
+    exception -> {:error, {:store_mutation_failed, exception}}
+  catch
+    kind, reason -> {:error, {:store_mutation_failed, {kind, reason}}}
+  end
+
+  defp run_transaction(updater, data) do
+    case updater.(data) do
+      updated when is_map(updated) -> {:ok, updated}
+      other -> {:error, {:invalid_store_transaction_result, other}}
+    end
+  rescue
+    exception -> {:error, {:store_mutation_failed, exception}}
+  catch
+    kind, reason -> {:error, {:store_mutation_failed, {kind, reason}}}
+  end
+
+  @impl true
+  @spec begin_batch(t(), term()) :: :ok
+  def begin_batch(%__MODULE__{}, _reason), do: :ok
+
+  @impl true
+  @spec finish_batch(t(), term()) :: :ok
+  def finish_batch(%__MODULE__{}, _reason), do: :ok
 
   defp put_initial_messages(message_table, messages) do
     Enum.each(messages, fn {jid, chat_messages} ->

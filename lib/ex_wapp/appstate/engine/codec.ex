@@ -87,12 +87,17 @@ defmodule ExWapp.AppState.Engine.Codec do
   @spec decode_mutations([syncd_mutation()], map(), boolean()) ::
           {:ok, [decoded_mutation()]} | {:error, term()}
   def decode_mutations(mutations, key_store, validate_macs \\ true) do
-    Enum.reduce_while(mutations, {:ok, []}, fn mutation, {:ok, acc} ->
+    mutations
+    |> Enum.reduce_while({:ok, []}, fn mutation, {:ok, acc} ->
       case decode_single_mutation(mutation, key_store, validate_macs) do
-        {:ok, decoded} -> {:cont, {:ok, acc ++ [decoded]}}
+        {:ok, decoded} -> {:cont, {:ok, [decoded | acc]}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
+    |> case do
+      {:ok, reversed} -> {:ok, Enum.reverse(reversed)}
+      {:error, _reason} = error -> error
+    end
   end
 
   @doc """

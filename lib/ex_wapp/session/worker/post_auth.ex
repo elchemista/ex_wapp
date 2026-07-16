@@ -8,7 +8,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
 
   require Logger
 
-  alias ExWapp.{Binary, Config, MapPath, Store}
+  alias ExWapp.{Binary, Config, Log, MapPath, Store}
 
   @min_prekey_threshold 5
 
@@ -19,45 +19,35 @@ defmodule ExWapp.Session.Worker.PostAuth do
   def persist_lid_and_mapping(state, nil), do: state
 
   def persist_lid_and_mapping(state, lid) when is_binary(lid) do
-    Logger.debug("[SESSION] LID from success: #{inspect(lid)}")
+    Logger.debug("[SESSION] Persisting LID from success")
 
-    data = Store.load!(state.store)
+    Store.transaction(state.store, fn data ->
+      client_info = data |> Map.get(:client_info, %{}) |> Map.put(:lid, lid)
 
-    # Persist LID in client_info
-    client_info = Map.get(data, :client_info, %{})
-    client_info = Map.put(client_info, :lid, lid)
+      own_pn =
+        MapPath.first(data, [
+          ["pairing", "device", "jid"],
+          ["client_info", "jid"]
+        ])
 
-    # Create own PN<->LID mapping (Baileys: storeLIDPNMappings)
-    own_pn =
-      MapPath.first(data, [
-        ["pairing", "device", "jid"],
-        ["client_info", "jid"]
-      ])
+      lid_mapping =
+        if own_pn do
+          pn_normalized = normalize_jid_string(to_string(own_pn))
+          lid_normalized = normalize_jid_string(to_string(lid))
 
-    lid_mapping = Map.get(data, :lid_mapping, %{})
+          data
+          |> Map.get(:lid_mapping, %{})
+          |> Map.put({:pn_to_lid, pn_normalized}, lid_normalized)
+          |> Map.put({:lid_to_pn, lid_normalized}, pn_normalized)
+        else
+          Map.get(data, :lid_mapping, %{})
+        end
 
-    lid_mapping =
-      if own_pn do
-        pn_normalized = normalize_jid_string(to_string(own_pn))
-        lid_normalized = normalize_jid_string(to_string(lid))
-
-        Logger.debug(
-          "[SESSION] Storing own PN<->LID mapping: #{pn_normalized} <-> #{lid_normalized}"
-        )
-
-        lid_mapping
-        |> Map.put({:pn_to_lid, pn_normalized}, lid_normalized)
-        |> Map.put({:lid_to_pn, lid_normalized}, pn_normalized)
-      else
-        lid_mapping
-      end
-
-    data =
       data
       |> Map.put(:client_info, client_info)
       |> Map.put(:lid_mapping, lid_mapping)
+    end)
 
-    Store.persist(state.store, data)
     state
   end
 
@@ -98,11 +88,11 @@ defmodule ExWapp.Session.Worker.PostAuth do
       |> Map.put(:passive_iq_id, passive_iq_id)
 
     Logger.info(
-      "[POST_AUTH] starting session_id=#{inspect(Map.get(state, :session_id))} query_id=#{query_id} passive_iq_id=#{passive_iq_id} status=#{inspect(Map.get(state, :status))} app_state_keys=#{app_state_key_count(state.store)}"
+      "[POST_AUTH] starting session=#{Log.reference(Map.get(state, :session_id))} query_id=#{Log.reference(query_id)} passive_iq_id=#{Log.reference(passive_iq_id)} status=#{inspect(Map.get(state, :status))} app_state_keys=#{app_state_key_count(state.store)}"
     )
 
     Logger.info(
-      "[SESSION] Sending prekey count query (id=#{query_id}) + SetPassive(false) (id=#{passive_iq_id}) + presence available"
+      "[SESSION] Sending prekey count query (id=#{Log.reference(query_id)}) + SetPassive(false) (id=#{Log.reference(passive_iq_id)}) + presence available"
     )
 
     {next_state,
@@ -132,7 +122,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
     local_count = signal |> Map.get(:prekeys, %{}) |> map_size()
 
     Logger.info(
-      "[POST_AUTH] prekey count decision session_id=#{inspect(Map.get(state, :session_id))} server_count=#{server_count} local_count=#{local_count} min_threshold=#{min_prekey_threshold(state)}"
+      "[POST_AUTH] prekey count decision session=#{Log.reference(Map.get(state, :session_id))} server_count=#{server_count} local_count=#{local_count} min_threshold=#{min_prekey_threshold(state)}"
     )
 
     # Baileys logic: if server count == 0 -> INITIAL (812), low -> refill (50)
@@ -177,7 +167,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
       |> sync_post_auth_phase_after_prekey_step()
 
     Logger.info(
-      "[POST_AUTH] prekey upload acknowledged session_id=#{inspect(Map.get(state, :session_id))} uploaded_count=#{length(pending_prekeys)}"
+      "[POST_AUTH] prekey upload acknowledged session=#{Log.reference(Map.get(state, :session_id))} uploaded_count=#{length(pending_prekeys)}"
     )
 
     Logger.debug("[SESSION] Prekey upload acknowledged, continuing post-auth")
@@ -186,7 +176,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
 
   def handle_prekey_upload_response(node, "error", state, build_passive_iq_fun)
       when is_function(build_passive_iq_fun, 0) do
-    Logger.warning("[SESSION] Prekey upload failed: #{inspect(node.attrs || %{})}")
+    Logger.warning("[SESSION] Prekey upload failed: #{inspect(Log.attrs(node.attrs || %{}))}")
 
     state =
       state
@@ -195,7 +185,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
       |> sync_post_auth_phase_after_prekey_step()
 
     Logger.warning(
-      "[POST_AUTH] prekey upload returned error session_id=#{inspect(Map.get(state, :session_id))} attrs=#{inspect(node.attrs || %{}, limit: 50)}"
+      "[POST_AUTH] prekey upload returned error session=#{Log.reference(Map.get(state, :session_id))} attrs=#{inspect(Log.attrs(node.attrs || %{}), limit: 50)}"
     )
 
     maybe_send_passive_iq(state, build_passive_iq_fun)
@@ -227,7 +217,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
     end
 
     Logger.info(
-      "[POST_AUTH] passive response session_id=#{inspect(Map.get(state, :session_id))} iq_type=#{iq_type} digest_enabled=#{digest_enabled?(state)}"
+      "[POST_AUTH] passive response session=#{Log.reference(Map.get(state, :session_id))} iq_type=#{iq_type} digest_enabled=#{digest_enabled?(state)}"
     )
 
     state =
@@ -244,7 +234,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
         |> Map.put(:digest_iq_id, digest_iq_id)
         |> Map.put(:post_auth_phase, :awaiting_digest)
 
-      Logger.debug("[SESSION] Sending digest query (id=#{digest_iq_id})")
+      Logger.debug("[SESSION] Sending digest query (id=#{Log.reference(digest_iq_id)})")
       {next_state, [{:send_node, digest_query}]}
     else
       Logger.debug("[SESSION] Skipping digest query, proceeding directly to unified_session")
@@ -294,7 +284,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
         {next_state, [{:send_node, prekey_node}]}
 
       {:error, reason} ->
-        Logger.warning("[PREKEYS] Notification refill failed: #{inspect(reason)}")
+        Logger.warning("[PREKEYS] Notification refill failed: #{Log.reason(reason)}")
         {state, []}
     end
   end
@@ -326,7 +316,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
     end
 
     Logger.info(
-      "[POST_AUTH] digest response session_id=#{inspect(Map.get(state, :session_id))} iq_type=#{iq_type}"
+      "[POST_AUTH] digest response session=#{Log.reference(Map.get(state, :session_id))} iq_type=#{iq_type}"
     )
 
     next_state =
@@ -349,11 +339,11 @@ defmodule ExWapp.Session.Worker.PostAuth do
         request_id = Map.get(prekey_node.attrs, "id")
 
         Logger.debug(
-          "[SESSION] Uploading prekeys (initial=#{initial}, count=#{length(prekeys)}, id=#{request_id})"
+          "[SESSION] Uploading prekeys (initial=#{initial}, count=#{length(prekeys)}, id=#{Log.reference(request_id)})"
         )
 
         Logger.debug(
-          "[POST_AUTH] upload prekeys session_id=#{inspect(Map.get(state, :session_id))} initial=#{initial} request_id=#{request_id} count=#{length(prekeys)}"
+          "[POST_AUTH] upload prekeys session=#{Log.reference(Map.get(state, :session_id))} initial=#{initial} request_id=#{Log.reference(request_id)} count=#{length(prekeys)}"
         )
 
         next_state =
@@ -365,7 +355,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
         {next_state, [{:send_node, prekey_node}]}
 
       {:error, reason} ->
-        Logger.warning("[SESSION] Cannot upload prekeys: #{inspect(reason)}")
+        Logger.warning("[SESSION] Cannot upload prekeys: #{Log.reason(reason)}")
         maybe_send_passive_iq(state, build_passive_iq_fun)
     end
   end
@@ -373,7 +363,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
   defp maybe_send_passive_iq(%{passive_iq_id: passive_iq_id} = state, _build_passive_iq_fun)
        when is_binary(passive_iq_id) do
     Logger.debug(
-      "[POST_AUTH] passive iq already in flight session_id=#{inspect(Map.get(state, :session_id))} request_id=#{passive_iq_id}"
+      "[POST_AUTH] passive iq already in flight session=#{Log.reference(Map.get(state, :session_id))} request_id=#{Log.reference(passive_iq_id)}"
     )
 
     {Map.put(state, :post_auth_phase, :awaiting_passive_ack), []}
@@ -381,7 +371,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
 
   defp maybe_send_passive_iq(%{post_auth_phase: :complete} = state, _build_passive_iq_fun) do
     Logger.debug(
-      "[POST_AUTH] passive iq already completed session_id=#{inspect(Map.get(state, :session_id))}"
+      "[POST_AUTH] passive iq already completed session=#{Log.reference(Map.get(state, :session_id))}"
     )
 
     {state, []}
@@ -400,10 +390,10 @@ defmodule ExWapp.Session.Worker.PostAuth do
       |> Map.put(:passive_iq_id, request_id)
 
     Logger.info(
-      "[POST_AUTH] sending passive iq session_id=#{inspect(Map.get(state, :session_id))} request_id=#{request_id}"
+      "[POST_AUTH] sending passive iq session=#{Log.reference(Map.get(state, :session_id))} request_id=#{Log.reference(request_id)}"
     )
 
-    Logger.debug("[SESSION] Sending SetPassive(false) (id=#{request_id})")
+    Logger.debug("[SESSION] Sending SetPassive(false) (id=#{Log.reference(request_id)})")
     {next_state, [{:send_node, passive_iq}]}
   end
 
@@ -434,38 +424,34 @@ defmodule ExWapp.Session.Worker.PostAuth do
   end
 
   defp persist_uploaded_prekeys(store, prekeys) when is_list(prekeys) do
-    data = Store.load!(store)
-    signal = Map.get(data, :signal, %{})
-    existing_prekeys = Map.get(signal, :prekeys, %{})
+    Store.update(store, :signal, %{}, fn signal ->
+      merged_prekeys =
+        Enum.reduce(prekeys, Map.get(signal, :prekeys, %{}), fn
+          %{key_id: id, public: pub, private: priv}, acc ->
+            Map.put(acc, id, %{id: id, public: pub, private: priv})
 
-    merged_prekeys =
-      Enum.reduce(prekeys, existing_prekeys, fn
-        %{key_id: id, public: pub, private: priv}, acc ->
-          Map.put(acc, id, %{id: id, public: pub, private: priv})
+          _, acc ->
+            acc
+        end)
 
-        _, acc ->
-          acc
-      end)
+      next_prekey_id =
+        prekeys
+        |> Enum.map(&Map.get(&1, :key_id))
+        |> Enum.filter(&is_integer/1)
+        |> case do
+          [] -> Map.get(signal, :next_prekey_id, 1)
+          ids -> Enum.max(ids) + 1
+        end
 
-    next_prekey_id =
-      prekeys
-      |> Enum.map(&Map.get(&1, :key_id))
-      |> Enum.filter(&is_integer/1)
-      |> case do
-        [] -> Map.get(signal, :next_prekey_id, 1)
-        ids -> Enum.max(ids) + 1
-      end
-
-    updated_signal =
       signal
       |> Map.put(:prekeys, merged_prekeys)
       |> Map.put(:next_prekey_id, next_prekey_id)
+    end)
 
-    Store.persist(store, Map.put(data, :signal, updated_signal))
     :ok
   rescue
     error ->
-      Logger.warning("[SESSION] Failed to persist uploaded prekeys: #{inspect(error)}")
+      Logger.warning("[SESSION] Failed to persist uploaded prekeys: #{Log.reason(error)}")
       :ok
   end
 

@@ -6,7 +6,7 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
 
   require Logger
 
-  alias ExWapp.Chat
+  alias ExWapp.{Chat, Log}
   alias ExWapp.Session.{Account, JIDUtils}
 
   @default_max_silent_drop_fallback_attempts 1
@@ -99,7 +99,7 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
 
     case outbound_message_status(state.store, jid, message_id) do
       status when status in [:delivered, :read, :received] ->
-        Logger.debug("[SEND] Outbound confirmed id=#{message_id} status=#{status}")
+        Logger.debug("[SEND] Outbound confirmed id=#{Log.reference(message_id)} status=#{status}")
         state
 
       :failed ->
@@ -108,7 +108,7 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
       _other ->
         if attempt < max_fallback_attempts do
           Logger.warning(
-            "[SEND] Message id=#{message_id} to=#{jid} remained unconfirmed; retrying with fallback self-chat strategy"
+            "[SEND] Message id=#{Log.reference(message_id)} to=#{Log.reference(jid)} remained unconfirmed; retrying with fallback self-chat strategy"
           )
 
           mark_message_failed(state.store, message_id)
@@ -125,7 +125,7 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
           )
         else
           Logger.error(
-            "[SEND] Message id=#{message_id} to=#{jid} still unconfirmed after fallback; marking as failed"
+            "[SEND] Message id=#{Log.reference(message_id)} to=#{Log.reference(jid)} still unconfirmed after fallback; marking as failed"
           )
 
           mark_message_failed(state.store, message_id)
@@ -164,7 +164,10 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
         register_fn.(state, worker, mon, jid)
 
       {:error, reason} ->
-        Logger.warning("[SEND] Failed to start fallback worker for #{jid}: #{inspect(reason)}")
+        Logger.warning(
+          "[SEND] Failed to start fallback worker for #{Log.reference(jid)}: #{Log.reason(reason)}"
+        )
+
         state
     end
   end
@@ -186,13 +189,13 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
 
   defp log_silent_drop_fallback_result({:ok, new_id}, jid, previous_message_id) do
     Logger.warning(
-      "[SEND] Fallback resend for #{jid} previous_id=#{previous_message_id} new_id=#{new_id}"
+      "[SEND] Fallback resend for #{Log.reference(jid)} previous_id=#{Log.reference(previous_message_id)} new_id=#{Log.reference(new_id)}"
     )
   end
 
   defp log_silent_drop_fallback_result({:error, reason}, jid, previous_message_id) do
     Logger.warning(
-      "[SEND] Fallback resend failed for #{jid} previous_id=#{previous_message_id}: #{inspect(reason)}"
+      "[SEND] Fallback resend failed for #{Log.reference(jid)} previous_id=#{Log.reference(previous_message_id)}: #{Log.reason(reason)}"
     )
   end
 

@@ -5,91 +5,82 @@ defmodule ExWapp.Session.Worker.Retry do
 
   require Logger
 
-  alias ExWapp.Chat
+  alias ExWapp.{Chat, Log}
 
   @type start_worker_fun :: (map(), binary(), (-> any()) ->
                                {:ok, pid(), reference()} | {:error, term()})
+  @type register_worker_fun :: (map(), pid(), reference(), binary() -> map())
   @type send_fun :: (binary(), binary() -> {:ok, binary()} | {:error, term()})
   @type normalize_fun :: (binary() -> binary())
+  @typep retry_context :: %{
+           max_attempts: non_neg_integer(),
+           start_worker: start_worker_fun(),
+           register_worker: register_worker_fun(),
+           send: send_fun(),
+           outgoing_payloads: map(),
+           retry_meta: map()
+         }
 
   @spec maybe_retry_outgoing_message(map(), String.t(), String.t(), keyword()) :: map()
   def maybe_retry_outgoing_message(state, jid, message_id, opts) when is_map(state) do
     normalize_jid = Keyword.fetch!(opts, :normalize_jid)
-    start_worker = Keyword.fetch!(opts, :start_worker)
-    send_fun = Keyword.fetch!(opts, :send_fun)
-    max_attempts = Keyword.fetch!(opts, :max_attempts)
-    outgoing_payloads = Keyword.get(opts, :outgoing_payloads, %{})
-    retry_meta = Keyword.get(opts, :retry_meta, %{})
-
     normalized_jid = normalize_jid.(jid)
 
-    do_retry(
-      state,
-      normalized_jid,
-      message_id,
-      max_attempts,
-      start_worker,
-      send_fun,
-      outgoing_payloads,
-      retry_meta
-    )
+    context = %{
+      max_attempts: Keyword.fetch!(opts, :max_attempts),
+      start_worker: Keyword.fetch!(opts, :start_worker),
+      register_worker: Keyword.fetch!(opts, :register_worker),
+      send: Keyword.fetch!(opts, :send_fun),
+      outgoing_payloads: Keyword.get(opts, :outgoing_payloads, %{}),
+      retry_meta: Keyword.get(opts, :retry_meta, %{})
+    }
+
+    do_retry(state, normalized_jid, message_id, context)
   end
 
-  defp do_retry(
-         state,
-         jid,
-         message_id,
-         max_attempts,
-         start_worker,
-         send_fun,
-         outgoing_payloads,
-         retry_meta
-       ) do
-    case find_outgoing_message(state.store, jid, message_id, outgoing_payloads) do
+  @spec do_retry(map(), String.t(), String.t(), retry_context()) :: map()
+  defp do_retry(state, jid, message_id, context) do
+    case find_outgoing_message(state.store, jid, message_id, context.outgoing_payloads) do
       {:ok, retry_jid, text} ->
         counter_key = outbound_retry_counter_key(retry_jid, message_id)
         attempts = Map.get(state.retry_counters, counter_key, 0)
 
-        if attempts >= max_attempts do
+        if attempts >= context.max_attempts do
           Logger.warning(
-            "[SEND] Skipping retry for message id=#{message_id} to=#{retry_jid}: max attempts reached (requested_by=#{jid})"
+            "[SEND] Skipping retry for message id=#{Log.reference(message_id)} to=#{Log.reference(retry_jid)}: max attempts reached (requested_by=#{Log.reference(jid)})"
           )
 
           state
         else
           Logger.warning(
-            "[SEND] Retrying outbound message id=#{message_id} to=#{retry_jid} (requested_by=#{jid}, recipient=#{inspect(Map.get(retry_meta, :recipient))}, attempt #{attempts + 1}/#{max_attempts})"
+            "[SEND] Retrying outbound message id=#{Log.reference(message_id)} to=#{Log.reference(retry_jid)} (requested_by=#{Log.reference(jid)}, recipient=#{Log.reference(Map.get(context.retry_meta, :recipient))}, attempt #{attempts + 1}/#{context.max_attempts})"
           )
 
-          spawn_retry_worker(state, retry_jid, message_id, attempts, text, start_worker, send_fun)
+          spawn_retry_worker(state, retry_jid, message_id, attempts, text, context)
         end
 
       {:error, reason} ->
         Logger.warning(
-          "[SEND] Cannot retry message id=#{message_id} for #{jid}: #{inspect(reason)}"
+          "[SEND] Cannot retry message id=#{Log.reference(message_id)} for #{Log.reference(jid)}: #{Log.reason(reason)}"
         )
 
         state
     end
   end
 
-  defp spawn_retry_worker(state, jid, message_id, attempts, text, start_worker, send_fun) do
-    case start_worker.(state, jid, fn ->
-           log_retry_result(send_fun.(jid, text), message_id)
+  defp spawn_retry_worker(state, jid, message_id, attempts, text, context) do
+    case context.start_worker.(state, jid, fn ->
+           log_retry_result(context.send.(jid, text), message_id)
          end) do
       {:ok, worker, mon} ->
         counter_key = outbound_retry_counter_key(jid, message_id)
+        state = context.register_worker.(state, worker, mon, jid)
 
-        %{
-          state
-          | retry_counters: Map.put(state.retry_counters, counter_key, attempts + 1),
-            send_workers: Map.put(state.send_workers, worker, jid),
-            send_worker_mons: Map.put(state.send_worker_mons, mon, worker)
-        }
+        Map.update!(state, :retry_counters, &Map.put(&1, counter_key, attempts + 1))
 
       {:error, reason} ->
         Logger.warning(
-          "[SEND] Cannot retry message id=#{message_id} for #{jid}: #{inspect(reason)}"
+          "[SEND] Cannot retry message id=#{Log.reference(message_id)} for #{Log.reference(jid)}: #{Log.reason(reason)}"
         )
 
         state
@@ -97,11 +88,15 @@ defmodule ExWapp.Session.Worker.Retry do
   end
 
   defp log_retry_result({:ok, new_id}, message_id) do
-    Logger.debug("[SEND] Retry for message id=#{message_id} succeeded with new id=#{new_id}")
+    Logger.debug(
+      "[SEND] Retry for message id=#{Log.reference(message_id)} succeeded with new id=#{Log.reference(new_id)}"
+    )
   end
 
   defp log_retry_result({:error, reason}, message_id) do
-    Logger.warning("[SEND] Retry for message id=#{message_id} failed: #{inspect(reason)}")
+    Logger.warning(
+      "[SEND] Retry for message id=#{Log.reference(message_id)} failed: #{Log.reason(reason)}"
+    )
   end
 
   defp outbound_retry_counter_key(jid, message_id) do

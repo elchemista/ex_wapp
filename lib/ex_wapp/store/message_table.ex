@@ -29,8 +29,20 @@ defmodule ExWapp.Store.MessageTable do
   @spec new(map()) :: t()
   def new(initial_messages \\ %{}) do
     message_store = %__MODULE__{
-      table: :ets.new(:ex_wapp_messages, [:ordered_set, :public, :compressed]),
-      index_table: :ets.new(:ex_wapp_message_index, [:set, :public, :compressed])
+      table:
+        :ets.new(:ex_wapp_messages, [
+          :ordered_set,
+          :public,
+          :compressed,
+          read_concurrency: true
+        ]),
+      index_table:
+        :ets.new(:ex_wapp_message_index, [
+          :set,
+          :public,
+          :compressed,
+          read_concurrency: true
+        ])
     }
 
     Enum.each(normalize_initial_messages(initial_messages), fn {jid, messages} ->

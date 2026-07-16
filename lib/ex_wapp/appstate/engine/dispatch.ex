@@ -8,6 +8,7 @@ defmodule ExWapp.AppState.Engine.Dispatch do
   """
 
   require Logger
+  alias ExWapp.Log
   alias ExWapp.Proto.SyncAction.SyncActionValue
 
   @type action_value :: %SyncActionValue{} | nil
@@ -24,7 +25,7 @@ defmodule ExWapp.AppState.Engine.Dispatch do
   rescue
     error ->
       Logger.warning(
-        "[APP_STATE] Dispatch mutation error: #{inspect(error)} index=#{inspect(index)}"
+        "[APP_STATE] Dispatch mutation error: #{Log.reason(error)} index=#{Log.reason(index)}"
       )
 
       :ignored

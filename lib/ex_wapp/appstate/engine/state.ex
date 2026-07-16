@@ -31,14 +31,15 @@ defmodule ExWapp.AppState.Engine.State do
   """
   @spec get_collection_state(struct(), String.t()) :: {:ok, hash_state(), map()}
   def get_collection_state(store, collection_name) do
-    data = Store.load!(store)
-    versions = Map.get(data, :app_state_versions, %{})
-    all_macs = Map.get(data, :app_state_mutation_macs, %{})
+    Store.read(store, fn data ->
+      versions = Map.get(data, :app_state_versions, %{})
+      all_macs = Map.get(data, :app_state_mutation_macs, %{})
 
-    collection_state = Map.get(versions, collection_name, %{version: 0, hash: LTHash.new()})
-    collection_macs = Map.get(all_macs, collection_name, %{})
+      collection_state = Map.get(versions, collection_name, %{version: 0, hash: LTHash.new()})
+      collection_macs = Map.get(all_macs, collection_name, %{})
 
-    {:ok, collection_state, collection_macs}
+      {:ok, collection_state, collection_macs}
+    end)
   end
 
   @doc """
@@ -46,18 +47,13 @@ defmodule ExWapp.AppState.Engine.State do
   """
   @spec persist_collection_state(struct(), String.t(), hash_state(), map()) :: :ok
   def persist_collection_state(store, collection_name, hash_state, mutation_macs) do
-    data = Store.load!(store)
-    versions = Map.get(data, :app_state_versions, %{})
-    all_macs = Map.get(data, :app_state_mutation_macs, %{})
+    Store.transaction(store, fn data ->
+      versions = Map.get(data, :app_state_versions, %{})
+      all_macs = Map.get(data, :app_state_mutation_macs, %{})
 
-    updated_versions = Map.put(versions, collection_name, hash_state)
-    updated_macs = Map.put(all_macs, collection_name, mutation_macs)
-
-    data =
       data
-      |> Map.put(:app_state_versions, updated_versions)
-      |> Map.put(:app_state_mutation_macs, updated_macs)
-
-    Store.persist(store, data)
+      |> Map.put(:app_state_versions, Map.put(versions, collection_name, hash_state))
+      |> Map.put(:app_state_mutation_macs, Map.put(all_macs, collection_name, mutation_macs))
+    end)
   end
 end

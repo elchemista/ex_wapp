@@ -10,7 +10,7 @@ defmodule ExWapp.Session.Outbound.Direct do
 
   require Logger
 
-  alias ExWapp.{Binary, Config, Messages}
+  alias ExWapp.{Binary, Config, Log, Messages}
   alias ExWapp.Proto.Message
   alias ExWapp.Signal.{Encryption, SessionStore}
 
@@ -368,7 +368,7 @@ defmodule ExWapp.Session.Outbound.Direct do
 
       {:error, reason} ->
         Logger.warning(
-          "[SEND] Own-device payload failed for #{own_device_destination}: #{inspect(reason)}"
+          "[SEND] Own-device payload failed for #{Log.reference(own_device_destination)}: #{Log.reason(reason)}"
         )
 
         recipient_payload
@@ -395,20 +395,23 @@ defmodule ExWapp.Session.Outbound.Direct do
       log_self_chat_resolution(resolution, self_chat_mode)
     end
 
-    Logger.debug("[SEND] Recipient targets for #{jid}: #{inspect(resolution.recipient_targets)}")
-    Logger.debug("[SEND] Own-device targets: #{inspect(resolution.own_targets)}")
-    Logger.debug("[SEND] Final fanout targets: #{inspect(resolution.target_specs)}")
+    Logger.debug(
+      "[SEND] Recipient targets for #{Log.reference(jid)}: count=#{length(resolution.recipient_targets)}"
+    )
+
+    Logger.debug("[SEND] Own-device targets: count=#{length(resolution.own_targets)}")
+    Logger.debug("[SEND] Final fanout targets: count=#{length(resolution.target_specs)}")
   end
 
   @spec log_self_chat_resolution(map(), term()) :: :ok
   defp log_self_chat_resolution(resolution, :recipient_primary) do
     Logger.warning("[SEND] Self-chat fallback mode: recipient payload primary")
-    Logger.debug("[SEND] Self-chat target specs: #{inspect(resolution.target_specs)}")
+    Logger.debug("[SEND] Self-chat target specs: count=#{length(resolution.target_specs)}")
   end
 
   defp log_self_chat_resolution(resolution, _mode) do
     Logger.debug("[SEND] Self-chat detected: DSM payload for all non-current targets")
-    Logger.debug("[SEND] Self-chat target specs: #{inspect(resolution.target_specs)}")
+    Logger.debug("[SEND] Self-chat target specs: count=#{length(resolution.target_specs)}")
   end
 
   @spec identity_content(term(), boolean()) :: [Binary.Node.t()]

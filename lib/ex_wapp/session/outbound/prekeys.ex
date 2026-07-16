@@ -10,6 +10,7 @@ defmodule ExWapp.Session.Outbound.Prekeys do
 
   require Logger
 
+  alias ExWapp.Log
   alias ExWapp.Session.JIDUtils
   alias ExWapp.Signal.SessionStore
 
@@ -80,9 +81,7 @@ defmodule ExWapp.Session.Outbound.Prekeys do
       )
       when is_list(devices_needing_prekeys) and is_function(fetch_many_fun, 2) and
              is_function(fetch_one_fun, 2) do
-    Logger.debug(
-      "[SEND] Fetching group prekeys for #{length(devices_needing_prekeys)} devices: #{inspect(devices_needing_prekeys)}"
-    )
+    Logger.debug("[SEND] Fetching group prekeys for #{length(devices_needing_prekeys)} devices")
 
     {updated_sessions, prekey_bundles} =
       case fetch_many_fun.(devices_needing_prekeys, signal_sessions) do
@@ -91,7 +90,7 @@ defmodule ExWapp.Session.Outbound.Prekeys do
 
         {:error, reason} ->
           Logger.warning(
-            "[SEND] Group batch prekey fetch failed: #{inspect(reason)}, retrying individually"
+            "[SEND] Group batch prekey fetch failed: #{Log.reason(reason)}, retrying individually"
           )
 
           case fetch_individually(devices_needing_prekeys, signal_sessions, fetch_one_fun) do
@@ -127,16 +126,16 @@ defmodule ExWapp.Session.Outbound.Prekeys do
          fetch_many_fun,
          fetch_one_fun
        ) do
-    Logger.debug(
-      "[SEND] Fetching prekeys for #{length(devices_needing_prekeys)} devices: #{inspect(devices_needing_prekeys)}"
-    )
+    Logger.debug("[SEND] Fetching prekeys for #{length(devices_needing_prekeys)} devices")
 
     case fetch_many_fun.(devices_needing_prekeys, signal_sessions) do
       {:ok, sessions, bundles} ->
         {sessions, bundles}
 
       {:error, reason} ->
-        Logger.warning("[SEND] Batch prekey fetch failed: #{inspect(reason)}, trying individual")
+        Logger.warning(
+          "[SEND] Batch prekey fetch failed: #{Log.reason(reason)}, trying individual"
+        )
 
         case fetch_one_fun.(recipient_base_jid, signal_sessions) do
           {:ok, sessions, bundles} -> {sessions, bundles}
@@ -226,7 +225,7 @@ defmodule ExWapp.Session.Outbound.Prekeys do
          fetch_one_fun
        ) do
     Logger.warning(
-      "[SEND] Missing #{context} prekey bundles for #{length(missing)} device(s), retrying individually: #{inspect(missing)}"
+      "[SEND] Missing #{context} prekey bundles for #{length(missing)} device(s), retrying individually"
     )
 
     case fetch_individually(missing, sessions, fetch_one_fun) do
@@ -234,7 +233,7 @@ defmodule ExWapp.Session.Outbound.Prekeys do
         {retried_sessions, Map.merge(prekey_bundles, retried_bundles)}
 
       {:error, reason} ->
-        Logger.warning("[SEND] Individual #{context} prekey retry failed: #{inspect(reason)}")
+        Logger.warning("[SEND] Individual #{context} prekey retry failed: #{Log.reason(reason)}")
         {sessions, prekey_bundles}
     end
   end
@@ -467,7 +466,7 @@ defmodule ExWapp.Session.Outbound.Prekeys do
       {:halt, {:error, :invalid_device_jid}}
     else
       Logger.debug(
-        "[PREKEY] Creating session for wire_jid=#{device_jid} signal_jid=#{signal_jid} (request_jid=#{requested_jid})"
+        "[PREKEY] Creating session for wire_jid=#{Log.reference(device_jid)} signal_jid=#{Log.reference(signal_jid)} (request_jid=#{Log.reference(requested_jid)})"
       )
 
       create_bundle_session(
@@ -577,7 +576,7 @@ defmodule ExWapp.Session.Outbound.Prekeys do
       |> maybe_alias_signal_session(device_jid, signal_jid, created_session)
 
     Logger.debug(
-      "[PREKEY] Session ready for wire_jid=#{device_jid} signal_jid=#{signal_jid}, base_key=#{if base_key, do: byte_size(base_key), else: "nil"} bytes"
+      "[PREKEY] Session ready for wire_jid=#{Log.reference(device_jid)} signal_jid=#{Log.reference(signal_jid)}, base_key=#{if base_key, do: byte_size(base_key), else: "nil"} bytes"
     )
 
     bundle_with_info =
@@ -623,7 +622,10 @@ defmodule ExWapp.Session.Outbound.Prekeys do
 
     if requested_jid != "" and device_jid != "" and requested_jid != device_jid and
          not SessionStore.has_session?(signal_sessions, requested_jid) do
-      Logger.debug("[PREKEY] Aliasing session #{requested_jid} -> #{device_jid}")
+      Logger.debug(
+        "[PREKEY] Aliasing session #{Log.reference(requested_jid)} -> #{Log.reference(device_jid)}"
+      )
+
       SessionStore.put_session(signal_sessions, requested_jid, session)
     else
       signal_sessions

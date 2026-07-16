@@ -10,8 +10,8 @@ defmodule ExWapp.Session.Worker.RetryTest do
     state = %{
       store: nil,
       retry_counters: %{},
-      send_workers: %{},
-      send_worker_mons: %{}
+      registered_workers: %{},
+      registered_monitors: %{}
     }
 
     start_worker = fn _state, jid, fun ->
@@ -34,6 +34,7 @@ defmodule ExWapp.Session.Worker.RetryTest do
         max_attempts: 2,
         normalize_jid: &JIDUtils.normalize_for_signal/1,
         start_worker: start_worker,
+        register_worker: &register_worker/4,
         send_fun: send_fun,
         outgoing_payloads: %{
           "MID_1" => %{jid: "270578829287645@lid", text: "retry me"}
@@ -44,8 +45,8 @@ defmodule ExWapp.Session.Worker.RetryTest do
     assert_receive {:retry_send, "270578829287645@lid", "retry me"}
 
     assert next_state.retry_counters == %{"outbound_retry|270578829287645@lid|MID_1" => 1}
-    assert map_size(next_state.send_workers) == 1
-    assert map_size(next_state.send_worker_mons) == 1
+    assert map_size(next_state.registered_workers) == 1
+    assert map_size(next_state.registered_monitors) == 1
   end
 
   test "normalizes linked-device retry receipts to the cached base lid jid" do
@@ -54,8 +55,8 @@ defmodule ExWapp.Session.Worker.RetryTest do
     state = %{
       store: nil,
       retry_counters: %{},
-      send_workers: %{},
-      send_worker_mons: %{}
+      registered_workers: %{},
+      registered_monitors: %{}
     }
 
     start_worker = fn _state, jid, fun ->
@@ -78,6 +79,7 @@ defmodule ExWapp.Session.Worker.RetryTest do
         max_attempts: 2,
         normalize_jid: &JIDUtils.normalize_for_signal/1,
         start_worker: start_worker,
+        register_worker: &register_worker/4,
         send_fun: send_fun,
         outgoing_payloads: %{
           "MID_2" => %{jid: "270578829287645@lid", text: "retry linked device"}
@@ -96,8 +98,8 @@ defmodule ExWapp.Session.Worker.RetryTest do
     state = %{
       store: nil,
       retry_counters: %{},
-      send_workers: %{},
-      send_worker_mons: %{}
+      registered_workers: %{},
+      registered_monitors: %{}
     }
 
     start_worker = fn _state, jid, fun ->
@@ -120,6 +122,7 @@ defmodule ExWapp.Session.Worker.RetryTest do
         max_attempts: 2,
         normalize_jid: &JIDUtils.normalize_for_signal/1,
         start_worker: start_worker,
+        register_worker: &register_worker/4,
         send_fun: send_fun,
         outgoing_payloads: %{
           "MID_3" => %{jid: "19995550404@s.whatsapp.net", text: "retry original contact"}
@@ -132,5 +135,13 @@ defmodule ExWapp.Session.Worker.RetryTest do
     assert next_state.retry_counters == %{
              "outbound_retry|19995550404@s.whatsapp.net|MID_3" => 1
            }
+  end
+
+  defp register_worker(state, worker, monitor, jid) do
+    %{
+      state
+      | registered_workers: Map.put(state.registered_workers, worker, jid),
+        registered_monitors: Map.put(state.registered_monitors, monitor, worker)
+    }
   end
 end

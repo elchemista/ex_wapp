@@ -34,9 +34,9 @@ defmodule ExWapp.Contact do
   @doc "List all contacts from the store."
   @spec list(struct()) :: [t()]
   def list(store) do
-    data = Store.load!(store)
-    contacts = Map.get(data, :contacts, %{})
-    Map.values(contacts)
+    store
+    |> Store.get(:contacts, %{})
+    |> Map.values()
   end
 
   @doc """
@@ -64,8 +64,7 @@ defmodule ExWapp.Contact do
   @doc "Get a contact by JID."
   @spec get(struct(), String.t()) :: t() | nil
   def get(store, jid) do
-    data = Store.load!(store)
-    contacts = Map.get(data, :contacts, %{})
+    contacts = Store.get(store, :contacts, %{})
     normalized = normalize_jid(jid)
     Map.get(contacts, normalized) || find_legacy_contact(contacts, normalized)
   end
@@ -73,37 +72,37 @@ defmodule ExWapp.Contact do
   @doc "Put (create or update) a contact."
   @spec put(struct(), String.t(), t()) :: :ok
   def put(store, jid, %__MODULE__{} = contact) do
-    data = Store.load!(store)
     normalized = normalize_jid(jid)
-    contacts = data |> Map.get(:contacts, %{}) |> remove_contact_aliases(normalized)
     contact = %{contact | jid: normalized, phone_number: extract_phone(normalized)}
-    Store.persist(store, Map.put(data, :contacts, Map.put(contacts, normalized, contact)))
+
+    Store.update(store, :contacts, %{}, fn contacts ->
+      contacts
+      |> remove_contact_aliases(normalized)
+      |> Map.put(normalized, contact)
+    end)
   end
 
   @doc "Delete a contact by JID."
   @spec delete(struct(), String.t()) :: :ok
   def delete(store, jid) do
-    data = Store.load!(store)
     normalized = normalize_jid(jid)
-    contacts = data |> Map.get(:contacts, %{}) |> remove_contact_aliases(normalized)
-    Store.persist(store, Map.put(data, :contacts, contacts))
+
+    Store.update(store, :contacts, %{}, fn contacts ->
+      remove_contact_aliases(contacts, normalized)
+    end)
   end
 
   @doc "Update push name for a contact (from incoming message notify attr)."
   @spec update_push_name(struct(), String.t(), String.t()) :: :ok
   def update_push_name(store, jid, name) when is_binary(name) and name != "" do
     normalized = normalize_jid(jid)
-    data = Store.load!(store)
-    contacts = Map.get(data, :contacts, %{})
 
-    existing =
-      Map.get(contacts, normalized) || find_legacy_contact(contacts, normalized) ||
-        %__MODULE__{jid: normalized}
-
-    contacts = remove_contact_aliases(contacts, normalized)
-    updated = %{existing | push_name: name, phone_number: extract_phone(normalized)}
-
-    Store.persist(store, Map.put(data, :contacts, Map.put(contacts, normalized, updated)))
+    Store.update(store, :contacts, %{}, fn contacts ->
+      existing = existing_contact(contacts, normalized)
+      contacts = remove_contact_aliases(contacts, normalized)
+      updated = %{existing | push_name: name, phone_number: extract_phone(normalized)}
+      Map.put(contacts, normalized, updated)
+    end)
   end
 
   def update_push_name(_store, _jid, _name), do: :ok
@@ -112,27 +111,29 @@ defmodule ExWapp.Contact do
   @spec merge_from_sync(struct(), String.t(), map()) :: :ok
   def merge_from_sync(store, jid, contact_action) when is_map(contact_action) do
     normalized = normalize_jid(jid)
-    data = Store.load!(store)
-    contacts = Map.get(data, :contacts, %{})
 
-    existing =
-      Map.get(contacts, normalized) || find_legacy_contact(contacts, normalized) ||
-        %__MODULE__{jid: normalized}
+    Store.update(store, :contacts, %{}, fn contacts ->
+      updated =
+        contacts
+        |> existing_contact(normalized)
+        |> maybe_set(:full_name, Map.get(contact_action, :full_name))
+        |> maybe_set(:first_name, Map.get(contact_action, :first_name))
+        |> maybe_set(:lid, Map.get(contact_action, :lid_jid))
+        |> maybe_set(:username, Map.get(contact_action, :username))
+        |> Map.put(:phone_number, extract_phone(normalized))
 
-    contacts = remove_contact_aliases(contacts, normalized)
-
-    updated =
-      existing
-      |> maybe_set(:full_name, Map.get(contact_action, :full_name))
-      |> maybe_set(:first_name, Map.get(contact_action, :first_name))
-      |> maybe_set(:lid, Map.get(contact_action, :lid_jid))
-      |> maybe_set(:username, Map.get(contact_action, :username))
-      |> Map.put(:phone_number, extract_phone(normalized))
-
-    Store.persist(store, Map.put(data, :contacts, Map.put(contacts, normalized, updated)))
+      contacts
+      |> remove_contact_aliases(normalized)
+      |> Map.put(normalized, updated)
+    end)
   end
 
   def merge_from_sync(_store, _jid, _contact_action), do: :ok
+
+  defp existing_contact(contacts, normalized) do
+    Map.get(contacts, normalized) || find_legacy_contact(contacts, normalized) ||
+      %__MODULE__{jid: normalized}
+  end
 
   defp maybe_set(contact, _key, nil), do: contact
   defp maybe_set(contact, key, value), do: Map.put(contact, key, value)

@@ -9,7 +9,7 @@ defmodule ExWapp.Message.Handler.Inbound.Content do
 
   require Logger
 
-  alias ExWapp.Media.Ref
+  alias ExWapp.{Log, Media.Ref}
   alias ExWapp.Message.Content, as: MessageContent
   alias ExWapp.Message.Handler.Inbound.Decryptor
   alias ExWapp.Message.Handler.Wire.{ContentDecoder, Fields}
@@ -157,11 +157,9 @@ defmodule ExWapp.Message.Handler.Inbound.Content do
 
   defp log_decrypted_message(%MessageContent{kind: :unsupported}, decrypt_result) do
     plaintext = decrypt_result.plaintext
-    preview_size = min(byte_size(plaintext), 24)
-    preview = Base.encode16(binary_part(plaintext, 0, preview_size), case: :lower)
 
     Logger.warning(
-      "[DECRYPT] Decrypted payload but could not classify content. sender_jid=#{decrypt_result.sender_jid} enc_type=#{Map.get(decrypt_result.payload, :enc_type)} plaintext_size=#{byte_size(plaintext)} preview=#{preview}"
+      "[DECRYPT] Decrypted payload but could not classify content. sender=#{Log.reference(decrypt_result.sender_jid)} enc_type=#{Map.get(decrypt_result.payload, :enc_type)} plaintext_size=#{byte_size(plaintext)}"
     )
 
     log_decrypt_success(decrypt_result, "(unsupported)")
@@ -172,9 +170,9 @@ defmodule ExWapp.Message.Handler.Inbound.Content do
   end
 
   @spec log_decrypt_success(Decryptor.success(), binary() | nil) :: :ok
-  defp log_decrypt_success(decrypt_result, text) do
+  defp log_decrypt_success(decrypt_result, _text) do
     Logger.debug(
-      "[DECRYPT] Success! sender_jid=#{decrypt_result.sender_jid} enc_type=#{Map.get(decrypt_result.payload, :enc_type)} plaintext_size=#{byte_size(decrypt_result.plaintext)} text=#{inspect(String.slice(text || "", 0, 50))}"
+      "[DECRYPT] Success! sender=#{Log.reference(decrypt_result.sender_jid)} enc_type=#{Map.get(decrypt_result.payload, :enc_type)} plaintext_size=#{byte_size(decrypt_result.plaintext)}"
     )
   end
 

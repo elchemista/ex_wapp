@@ -352,7 +352,7 @@ defmodule ExWapp.Session.Outbound.Group do
 
     if mismatched_targets != [] do
       Logger.warning(
-        "[SEND] Dropping non-LID targets in lid addressing mode: #{inspect(mismatched_targets)}"
+        "[SEND] Dropping non-LID targets in lid addressing mode: count=#{length(mismatched_targets)}"
       )
     end
 

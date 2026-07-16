@@ -9,7 +9,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   require Logger
 
-  alias ExWapp.{Binary, Chat, Config, JID, Messages, Store, Telemetry}
+  alias ExWapp.{Binary, Chat, Config, JID, Log, Messages, Store, Telemetry}
   alias ExWapp.Proto.Message
   alias ExWapp.Signal.SessionStore
 
@@ -164,7 +164,7 @@ defmodule ExWapp.Session.Worker.Outbound do
          missing_targets
        ) do
     Logger.warning(
-      "[SEND] Fanout incomplete for #{jid}, clearing cached sessions and retrying once: #{inspect(missing_targets)}"
+      "[SEND] Fanout incomplete for #{Log.reference(jid)}, clearing cached sessions and retrying once: missing_count=#{length(missing_targets)}"
     )
 
     retry_state = %{
@@ -204,7 +204,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     group_jid = strip_device_from_jid(normalize_jid_with_device(group_jid))
     group_fanout_retry? = Keyword.get(opts, :group_fanout_retry, false)
     own_jid = Account.local_account_base_jid(store)
-    message_id = Messages.generate_id(own_jid)
+    message_id = Direct.message_id(opts, own_jid)
     timestamp = System.system_time(:second)
 
     with {:ok, group_info} <- IQRequests.query_group_info(state, group_jid, send_node_fun(state)),
@@ -255,7 +255,10 @@ defmodule ExWapp.Session.Worker.Outbound do
       )
     else
       {:error, reason} ->
-        Logger.error("[SEND] Group send failed for #{group_jid}: #{inspect(reason)}")
+        Logger.error(
+          "[SEND] Group send failed for #{Log.reference(group_jid)}: #{Log.reason(reason)}"
+        )
+
         {:error, {:group_send_failed, reason}}
     end
   end
@@ -271,7 +274,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   defp handle_group_distribution_result(missing_targets, %{group_jid: group_jid}) do
     Logger.error(
-      "[SEND] Aborting group send to #{group_jid}: missing encrypted targets #{inspect(missing_targets)}"
+      "[SEND] Aborting group send to #{Log.reference(group_jid)}: missing_count=#{length(missing_targets)}"
     )
 
     {:error, {:group_distribution_incomplete, missing_targets}}
@@ -308,7 +311,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     case send_transport_node(context.state, context.conn, node) do
       :ok ->
         Logger.debug(
-          "[SEND] Sent group encrypted message to #{context.group_jid} (distribution_targets=#{length(context.participant_nodes)})"
+          "[SEND] Sent group encrypted message to #{Log.reference(context.group_jid)} (distribution_targets=#{length(context.participant_nodes)})"
         )
 
         emit_telemetry(
@@ -322,7 +325,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
       error ->
         Logger.error(
-          "[SEND] Group transport send failed for #{context.group_jid} id=#{context.message_id}: #{inspect(error)}"
+          "[SEND] Group transport send failed for #{Log.reference(context.group_jid)} id=#{Log.reference(context.message_id)}: #{Log.reason(error)}"
         )
 
         Chat.update_message_status(context.store, context.group_jid, context.message_id, :failed)
@@ -333,7 +336,7 @@ defmodule ExWapp.Session.Worker.Outbound do
   @spec retry_group_distribution(map(), [term()]) :: {:ok, String.t()} | {:error, term()}
   defp retry_group_distribution(context, missing_targets) do
     Logger.warning(
-      "[SEND] Group distribution incomplete for #{context.group_jid}, clearing cached sessions and retrying once: #{inspect(missing_targets)}"
+      "[SEND] Group distribution incomplete for #{Log.reference(context.group_jid)}, clearing cached sessions and retrying once: missing_count=#{length(missing_targets)}"
     )
 
     retry_state = %{
@@ -386,7 +389,7 @@ defmodule ExWapp.Session.Worker.Outbound do
       )
 
     Logger.debug(
-      "[SEND] Group sender-key distribution targets for #{group_jid}: live=#{inspect(live_distribution_targets)} cached=#{inspect(cached_distribution_targets)}"
+      "[SEND] Group sender-key distribution targets for #{Log.reference(group_jid)}: live_count=#{length(live_distribution_targets)} cached_count=#{length(cached_distribution_targets)}"
     )
 
     lid_mapping = Account.load_lid_mapping(state.store)
@@ -422,11 +425,17 @@ defmodule ExWapp.Session.Worker.Outbound do
   defp fetch_group_device_map(state, group_jid, query_jids) do
     case IQRequests.query_devices(state, query_jids, send_node_fun(state)) do
       {:ok, map} ->
-        Logger.debug("[SEND] Group usync device map for #{group_jid}: #{inspect(map)}")
+        Logger.debug(
+          "[SEND] Group usync device map for #{Log.reference(group_jid)}: recipients=#{map_size(map)}"
+        )
+
         map
 
       {:error, reason} ->
-        Logger.warning("[SEND] Group usync query failed for #{group_jid}: #{inspect(reason)}")
+        Logger.warning(
+          "[SEND] Group usync query failed for #{Log.reference(group_jid)}: #{Log.reason(reason)}"
+        )
+
         %{}
     end
   end
@@ -505,12 +514,12 @@ defmodule ExWapp.Session.Worker.Outbound do
     device_map =
       case IQRequests.query_devices(state, query_jids, send_node_fun(state)) do
         {:ok, map} ->
-          Logger.debug("[SEND] USync device map: #{inspect(map)}")
+          Logger.debug("[SEND] USync device map: recipients=#{map_size(map)}")
           map
 
         {:error, reason} ->
           Logger.warning(
-            "[SEND] USync query failed (#{inspect(reason)}), falling back to prekey-only"
+            "[SEND] USync query failed (#{Log.reason(reason)}), falling back to prekey-only"
           )
 
           %{}
@@ -538,16 +547,20 @@ defmodule ExWapp.Session.Worker.Outbound do
         lid_mapping: lid_mapping
       })
 
-    Logger.debug("[SEND] Discovered recipient devices: #{inspect(discovery.recipient_devices)}")
-
     Logger.debug(
-      "[SEND] Cached recipient devices: #{inspect(discovery.recipient_cached_devices)}"
+      "[SEND] Discovered recipient devices: count=#{length(discovery.recipient_devices)}"
     )
 
-    Logger.debug("[SEND] Discovered own devices (excl. self): #{inspect(discovery.own_devices)}")
+    Logger.debug(
+      "[SEND] Cached recipient devices: count=#{length(discovery.recipient_cached_devices)}"
+    )
 
     Logger.debug(
-      "[SEND] Cached own devices (excl. self): #{inspect(discovery.own_cached_devices)}"
+      "[SEND] Discovered own devices (excl. self): count=#{length(discovery.own_devices)}"
+    )
+
+    Logger.debug(
+      "[SEND] Cached own devices (excl. self): count=#{length(discovery.own_cached_devices)}"
     )
 
     {
@@ -622,14 +635,17 @@ defmodule ExWapp.Session.Worker.Outbound do
 
         missing ->
           Logger.warning(
-            "[SEND] Aborting DM send to #{jid}: missing encrypted targets #{inspect(missing)}"
+            "[SEND] Aborting DM send to #{Log.reference(jid)}: missing_count=#{length(missing)}"
           )
 
           {:error, {:fanout_incomplete, missing}}
       end
     else
       {:error, reason} ->
-        Logger.error("[SEND] Encrypted send failed for #{jid}: #{inspect(reason)}")
+        Logger.error(
+          "[SEND] Encrypted send failed for #{Log.reference(jid)}: #{Log.reason(reason)}"
+        )
+
         {:error, {:send_failed, reason}}
     end
   end
@@ -678,7 +694,9 @@ defmodule ExWapp.Session.Worker.Outbound do
   defp send_encrypted_node(state, conn, store, jid, message_id, node, payloads) do
     case send_transport_node(state, conn, node) do
       :ok ->
-        Logger.debug("[SEND] Sent encrypted message to #{jid} id=#{message_id}")
+        Logger.debug(
+          "[SEND] Sent encrypted message to #{Log.reference(jid)} id=#{Log.reference(message_id)}"
+        )
 
         emit_telemetry(
           :message_sent,
@@ -691,7 +709,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
       error ->
         Logger.error(
-          "[SEND] Transport send failed for #{jid} id=#{message_id}: #{inspect(error)}"
+          "[SEND] Transport send failed for #{Log.reference(jid)} id=#{Log.reference(message_id)}: #{Log.reason(error)}"
         )
 
         Chat.update_message_status(store, jid, message_id, :failed)
@@ -734,7 +752,19 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   @spec send_node_fun(worker_state()) :: IQRequests.send_node_fun()
   defp send_node_fun(state) do
-    fn node -> send_transport_node(state, state.conn, node) end
+    case Map.get(state, :outbound_iq_router) do
+      session_pid when is_pid(session_pid) ->
+        fn node -> route_worker_iq(session_pid, state, node) end
+
+      _other ->
+        fn node -> send_transport_node(state, state.conn, node) end
+    end
+  end
+
+  defp route_worker_iq(session_pid, state, node) do
+    GenServer.call(session_pid, {:send_worker_iq, self(), node}, iq_timeout_ms(state))
+  catch
+    :exit, reason -> {:error, {:iq_router_exit, reason}}
   end
 
   @spec send_transport_node(worker_state(), pid() | nil, Binary.Node.t()) ::
@@ -753,7 +783,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     :ok
   rescue
     e ->
-      Logger.warning("[SEND] persist_signal_sessions failed: #{inspect(e)}")
+      Logger.warning("[SEND] persist_signal_sessions failed: #{Log.reason(e)}")
       :ok
   end
 

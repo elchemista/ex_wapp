@@ -8,17 +8,17 @@ defmodule ExWapp.Noise.ClientPayload do
 
   require Logger
 
-  alias ExWapp.{Config, MapPath, Noise}
+  alias ExWapp.{Config, Log, MapPath, Noise}
   alias ExWapp.Proto.CompanionReg.AppVersion, as: CompanionAppVersion
   alias ExWapp.Proto.CompanionReg.DeviceProps, as: CompanionDeviceProps
   alias ExWapp.Proto.CompanionReg.HistorySyncConfig
   alias ExWapp.Signal
   alias ExWapp.Store
   alias WAWebProtobufsWa6.ClientPayload
+  alias WAWebProtobufsWa6.ClientPayload.DevicePairingRegistrationData
   alias WAWebProtobufsWa6.ClientPayload.UserAgent
   alias WAWebProtobufsWa6.ClientPayload.UserAgent.AppVersion
   alias WAWebProtobufsWa6.ClientPayload.WebInfo
-  alias WAWebProtobufsWa6.ClientPayload.DevicePairingRegistrationData
 
   @spec build(Noise.t()) :: {:ok, binary()} | {:ok, binary(), map()} | {:error, term()}
   def build(%Noise{} = noise), do: build(noise, default_runtime_cfg())
@@ -36,7 +36,7 @@ defmodule ExWapp.Noise.ClientPayload do
       %ExWapp.JID{} = jid ->
         # Already paired - use login payload
         Logger.debug(
-          "[ClientPayload] Building LOGIN payload for #{inspect(jid)} " <>
+          "[ClientPayload] Building LOGIN payload for #{Log.reference(jid)} " <>
             "client_version=#{version_string(runtime_cfg)}"
         )
 
@@ -45,7 +45,7 @@ defmodule ExWapp.Noise.ClientPayload do
       other ->
         # Not paired - use registration payload
         Logger.debug(
-          "[ClientPayload] Building REGISTRATION payload — no JID found (got #{inspect(other)})"
+          "[ClientPayload] Building REGISTRATION payload — no JID found (got #{Log.term_summary(other)})"
         )
 
         build_registration_payload(data, runtime_cfg)

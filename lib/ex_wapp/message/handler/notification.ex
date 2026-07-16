@@ -9,8 +9,8 @@ defmodule ExWapp.Message.Handler.Notification do
 
   require Logger
 
-  alias ExWapp.{Chat, Config, Pairing, Store}
   alias ExWapp.Binary.Node
+  alias ExWapp.{Chat, Config, Log, Pairing, Store}
   alias ExWapp.Media.Retry, as: MediaRetry
   alias ExWapp.Message.Handler.{Ack, Common}
   alias ExWapp.Pairing.LinkCode
@@ -24,7 +24,7 @@ defmodule ExWapp.Message.Handler.Notification do
     id = Map.get(attrs, "id", "")
     participant = Map.get(attrs, "participant")
 
-    Logger.debug("Notification type=#{type} from=#{from} id=#{id}")
+    Logger.debug("Notification type=#{type} from=#{Log.reference(from)} id=#{Log.reference(id)}")
 
     ack_actions = notification_ack_actions(id, from, participant, type)
 
@@ -75,7 +75,10 @@ defmodule ExWapp.Message.Handler.Notification do
   end
 
   defp handle_notification_type(type, attrs, _content, _session, state) do
-    Logger.debug("[NOTIFICATION] Unhandled type=#{type} from=#{Map.get(attrs, "from", "")}")
+    Logger.debug(
+      "[NOTIFICATION] Unhandled type=#{type} from=#{Log.reference(Map.get(attrs, "from", ""))}"
+    )
+
     {:ok, state}
   end
 
@@ -106,15 +109,21 @@ defmodule ExWapp.Message.Handler.Notification do
 
       {:error, reason}
       when reason in [:missing_link_code_registration, :link_code_not_pending] ->
-        Logger.debug("[PAIRING] Ignoring incomplete link-code notification: #{inspect(reason)}")
+        Logger.debug(
+          "[PAIRING] Ignoring incomplete link-code notification: #{Log.reason(reason)}"
+        )
+
         {:ok, state}
 
       {:error, {:missing_link_code_field, _field} = reason} ->
-        Logger.debug("[PAIRING] Ignoring incomplete link-code notification: #{inspect(reason)}")
+        Logger.debug(
+          "[PAIRING] Ignoring incomplete link-code notification: #{Log.reason(reason)}"
+        )
+
         {:ok, state}
 
       {:error, reason} ->
-        Logger.warning("[PAIRING] Link-code finish failed: #{inspect(reason)}")
+        Logger.warning("[PAIRING] Link-code finish failed: #{Log.reason(reason)}")
         {:ok, state, [{:error, {:link_code_pairing, reason}}]}
     end
   end
@@ -132,7 +141,10 @@ defmodule ExWapp.Message.Handler.Notification do
         handle_prekey_inventory_notification(content, state)
 
       Map.get(attrs, "offline") not in [nil, ""] ->
-        Logger.debug("[IDENTITY] Ignoring offline identity notification from #{from}")
+        Logger.debug(
+          "[IDENTITY] Ignoring offline identity notification from #{Log.reference(from)}"
+        )
+
         {:ok, state}
 
       true ->
@@ -172,7 +184,7 @@ defmodule ExWapp.Message.Handler.Notification do
 
       if after_count < before_count do
         Logger.debug(
-          "[IDENTITY] Removed #{before_count - after_count} stale session(s) for #{from}"
+          "[IDENTITY] Removed #{before_count - after_count} stale session(s) for #{Log.reference(from)}"
         )
 
         updated_state = Map.put(state, :signal_sessions, updated_sessions)
@@ -214,7 +226,7 @@ defmodule ExWapp.Message.Handler.Notification do
 
       if is_binary(token_data) and from != "" do
         Logger.debug(
-          "[PRIVACY_TOKEN] Storing trusted_contact token for #{from} (#{byte_size(token_data)} bytes)"
+          "[PRIVACY_TOKEN] Storing trusted_contact token for #{Log.reference(from)} (#{byte_size(token_data)} bytes)"
         )
 
         store_tctoken(state, from, token_data, timestamp)
@@ -227,22 +239,21 @@ defmodule ExWapp.Message.Handler.Notification do
     if is_nil(store), do: :ok, else: do_store_tctoken(store, jid, token, timestamp)
   rescue
     error ->
-      Logger.warning("[PRIVACY_TOKEN] Failed to store tctoken: #{inspect(error)}")
+      Logger.warning("[PRIVACY_TOKEN] Failed to store tctoken: #{Log.reason(error)}")
       :ok
   end
 
   defp do_store_tctoken(store, jid, token, timestamp) do
-    data = Store.load!(store)
-    tctokens = Map.get(data, :tctokens, %{})
-    tctokens = Map.put(tctokens, jid, %{token: token, timestamp: timestamp})
-    Store.persist(store, Map.put(data, :tctokens, tctokens))
+    Store.update(store, :tctokens, %{}, fn tctokens ->
+      Map.put(tctokens, jid, %{token: token, timestamp: timestamp})
+    end)
   end
 
   defp handle_devices_notification(attrs, content, _session, state) do
     if is_list(content) do
       Enum.each(content, fn
         %Node{tag: tag, attrs: node_attrs} ->
-          Logger.debug("[DEVICES] #{tag}: #{inspect(node_attrs)}")
+          Logger.debug("[DEVICES] #{tag}: #{inspect(Log.attrs(node_attrs))}")
 
         _ ->
           :ok
@@ -368,7 +379,7 @@ defmodule ExWapp.Message.Handler.Notification do
 
     case Map.pop(pending_retries, msg_id) do
       {nil, _pending} ->
-        Logger.debug("[MEDIA_RETRY] No pending request for #{msg_id}")
+        Logger.debug("[MEDIA_RETRY] No pending request for #{Log.reference(msg_id)}")
         {:ok, state}
 
       {pending, remaining} ->

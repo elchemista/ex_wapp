@@ -3,7 +3,7 @@ defmodule ExWapp.Pairing do
   Implements the QR-code based pairing handshake used by WhatsApp Web.
   """
 
-  alias ExWapp.{Binary, Signal, Store}
+  alias ExWapp.{Binary, Log, Signal, Store}
   alias ExWapp.Pairing.ADV
   require Logger
 
@@ -101,7 +101,10 @@ defmodule ExWapp.Pairing do
           if valid_from?(from) and is_binary(id) do
             build_pair_success_ack(from, id, pairing_data)
           else
-            Logger.warning("[PAIRING] Cannot build ack: from=#{inspect(from)}, id=#{inspect(id)}")
+            Logger.warning(
+              "[PAIRING] Cannot build ack: from=#{Log.reference(from)}, id=#{Log.reference(id)}"
+            )
+
             nil
           end
 
@@ -110,7 +113,7 @@ defmodule ExWapp.Pairing do
         {%{state | status: :paired, ref: nil, req_id: nil}, events}
 
       {:error, reason} ->
-        Logger.error("failed to persist pair-success data: #{inspect(reason)}")
+        Logger.error("failed to persist pair-success data: #{Log.reason(reason)}")
 
         error_ack =
           if valid_from?(from) and is_binary(id) do
@@ -353,7 +356,7 @@ defmodule ExWapp.Pairing do
        })
        when is_binary(pub) and byte_size(pub) == 32 and
               is_binary(priv) and byte_size(priv) == 32 do
-    Logger.debug("[PAIRING] Keeping existing Signal identity: #{Base.encode64(pub)}")
+    Logger.debug("[PAIRING] Keeping existing Signal identity (bytes=#{byte_size(pub)})")
     Map.put(signal, :identity_key, identity)
   end
 
@@ -364,7 +367,7 @@ defmodule ExWapp.Pairing do
        when is_binary(pub) and byte_size(pub) == 32 and
               is_binary(priv) and byte_size(priv) == 32 do
     Logger.warning(
-      "[PAIRING] Signal identity missing, falling back to pairing identity: #{Base.encode64(pub)}"
+      "[PAIRING] Signal identity missing, falling back to pairing identity (bytes=#{byte_size(pub)})"
     )
 
     Map.put(signal || %{}, :identity_key, identity)
@@ -376,14 +379,14 @@ defmodule ExWapp.Pairing do
        when is_binary(pub) and byte_size(pub) == 32 and
               is_binary(priv) and byte_size(priv) == 32 do
     Logger.warning(
-      "[PAIRING] Signal identity missing, creating state from pairing identity: #{Base.encode64(pub)}"
+      "[PAIRING] Signal identity missing, creating state from pairing identity (bytes=#{byte_size(pub)})"
     )
 
     %{identity_key: identity}
   end
 
   defp merge_pairing_identity(%{identity: identity}) do
-    Logger.warning("[PAIRING] Invalid pairing identity: #{inspect(identity)}")
+    Logger.warning("[PAIRING] Invalid pairing identity: #{Log.term_summary(identity)}")
     %{}
   end
 
@@ -407,7 +410,7 @@ defmodule ExWapp.Pairing do
         Logger.error("[PAIRING] pairing_data keys: #{inspect(Map.keys(pairing_data || %{}))}")
 
         Logger.error(
-          "[PAIRING] adv_self_signed: #{inspect(pairing_data && Map.get(pairing_data, :adv_self_signed))}"
+          "[PAIRING] adv_self_signed_present=#{is_map(pairing_data) and Map.has_key?(pairing_data, :adv_self_signed)}"
         )
 
         %Binary.Node{tag: "iq", attrs: base_attrs, content: nil}

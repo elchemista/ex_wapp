@@ -25,6 +25,10 @@ defmodule ExWapp.TelemetryTest do
     assert [:ex_wapp, :session, :message_received] in events
     assert [:ex_wapp, :session, :message_sent] in events
     assert [:ex_wapp, :session, :qr] in events
+    assert [:ex_wapp, :app_state, :external_blob] in events
+    assert [:ex_wapp, :app_state, :decode] in events
+    assert [:ex_wapp, :app_state, :dispatch] in events
+    assert [:ex_wapp, :store, :flush] in events
   end
 
   test "emits message_received telemetry from session" do

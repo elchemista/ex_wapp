@@ -32,8 +32,8 @@ defmodule ExWapp.AppState.Engine do
     ExternalBlobReference
   }
 
-  alias ExWapp.Binary
-  alias ExWapp.Store
+  alias ExWapp.{Binary, Log, Store}
+  alias ExWapp.Transport.TLS
 
   @media_key_hkdf_info "WhatsApp App State Keys"
   @appstate_media_mms_type "md-app-state"
@@ -41,6 +41,7 @@ defmodule ExWapp.AppState.Engine do
   @media_hmac_length 10
   @media_conn_cache_ttl_ms :timer.minutes(5)
   @media_conn_cache_table :ex_wapp_media_conn_cache
+  @max_collection_pages 1_000
 
   # WhatsApp app-state collection names
 
@@ -413,15 +414,17 @@ defmodule ExWapp.AppState.Engine do
   @spec decode_mutations([%SyncdMutation{}], map(), boolean()) ::
           {:ok, [decoded_mutation()]} | {:error, term()}
   def decode_mutations(mutations, key_store, validate_macs \\ true) do
-    result =
-      Enum.reduce_while(mutations, {:ok, []}, fn mutation, {:ok, acc} ->
-        case decode_single_mutation(mutation, key_store, validate_macs) do
-          {:ok, decoded} -> {:cont, {:ok, acc ++ [decoded]}}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
-      end)
-
-    result
+    mutations
+    |> Enum.reduce_while({:ok, []}, fn mutation, {:ok, acc} ->
+      case decode_single_mutation(mutation, key_store, validate_macs) do
+        {:ok, decoded} -> {:cont, {:ok, [decoded | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, reversed} -> {:ok, Enum.reverse(reversed)}
+      {:error, _reason} = error -> error
+    end
   end
 
   defp decode_single_mutation(%SyncdMutation{} = mutation, key_store, validate_macs) do
@@ -670,7 +673,7 @@ defmodule ExWapp.AppState.Engine do
 
         {:error, reason} ->
           Logger.debug(
-            "[APP_STATE] Post-mutation refresh failed for #{collection_name}: #{inspect(reason)}"
+            "[APP_STATE] Post-mutation refresh failed for #{collection_name}: #{Log.reason(reason)}"
           )
       end
     end)
@@ -718,28 +721,86 @@ defmodule ExWapp.AppState.Engine do
   """
   @spec fetch_collection(GenServer.server(), struct(), String.t()) :: :ok | {:error, term()}
   def fetch_collection(session, store, collection_name) do
-    case do_fetch_collection(session, store, collection_name, _want_snapshot = true) do
-      :ok ->
-        :ok
+    Store.batch(store, {:app_state_collection, collection_name}, fn ->
+      case do_fetch_collection(session, store, collection_name, _want_snapshot = true) do
+        :ok ->
+          :ok
 
-      {:error, :snapshot_not_supported} ->
-        do_fetch_collection(session, store, collection_name, false)
+        {:error, :snapshot_not_supported} ->
+          do_fetch_collection(session, store, collection_name, false)
 
-      {:error, {:apply_snapshot_failed, _reason}} ->
-        do_fetch_collection(session, store, collection_name, false)
+        {:error, {:apply_snapshot_failed, _reason}} ->
+          do_fetch_collection(session, store, collection_name, false)
 
-      {:error, _reason} = error ->
-        error
-    end
+        {:error, _reason} = error ->
+          error
+      end
+    end)
   end
 
   defp do_fetch_collection(session, store, collection_name, want_snapshot) do
+    do_fetch_collection_page(session, store, collection_name, want_snapshot, 0)
+  end
+
+  defp do_fetch_collection_page(
+         _session,
+         _store,
+         collection_name,
+         _want_snapshot,
+         page
+       )
+       when page >= @max_collection_pages do
+    {:error, {:app_state_pagination_limit, collection_name, @max_collection_pages}}
+  end
+
+  defp do_fetch_collection_page(session, store, collection_name, want_snapshot, page) do
     with {:ok, hash_state, _macs} <- get_collection_state(store, collection_name),
          snapshot? <- want_snapshot and hash_state.version == 0,
          {:ok, response} <-
            send_collection_fetch_iq(session, collection_name, hash_state.version, snapshot?),
-         {:ok, _count} <- apply_collection_response(store, collection_name, response, session),
-         do: :ok
+         {:ok, collection_data} <- extract_collection_data(response, collection_name),
+         {:ok, _count} <- apply_collection_response(store, collection_name, response, session) do
+      continue_collection_pagination(
+        session,
+        store,
+        collection_name,
+        collection_data.has_more_patches,
+        hash_state.version,
+        page
+      )
+    end
+  end
+
+  defp continue_collection_pagination(
+         _session,
+         _store,
+         _collection_name,
+         false,
+         _previous_version,
+         _page
+       ),
+       do: :ok
+
+  defp continue_collection_pagination(
+         session,
+         store,
+         collection_name,
+         true,
+         previous_version,
+         page
+       ) do
+    with {:ok, %{version: version}, _macs} <- get_collection_state(store, collection_name),
+         :ok <- ensure_pagination_progress(collection_name, previous_version, version) do
+      do_fetch_collection_page(session, store, collection_name, false, page + 1)
+    end
+  end
+
+  defp ensure_pagination_progress(_collection_name, previous_version, version)
+       when is_integer(version) and version > previous_version,
+       do: :ok
+
+  defp ensure_pagination_progress(collection_name, previous_version, version) do
+    {:error, {:app_state_pagination_stalled, collection_name, previous_version, version}}
   end
 
   @doc """
@@ -804,32 +865,28 @@ defmodule ExWapp.AppState.Engine do
   @doc "Get the current hash state and mutation MACs for a collection."
   @spec get_collection_state(struct(), String.t()) :: {:ok, hash_state(), map()}
   def get_collection_state(store, collection_name) do
-    data = Store.load!(store)
-    versions = Map.get(data, :app_state_versions, %{})
-    all_macs = Map.get(data, :app_state_mutation_macs, %{})
+    Store.read(store, fn data ->
+      versions = Map.get(data, :app_state_versions, %{})
+      all_macs = Map.get(data, :app_state_mutation_macs, %{})
 
-    collection_state = Map.get(versions, collection_name, %{version: 0, hash: LTHash.new()})
-    collection_macs = Map.get(all_macs, collection_name, %{})
+      collection_state = Map.get(versions, collection_name, %{version: 0, hash: LTHash.new()})
+      collection_macs = Map.get(all_macs, collection_name, %{})
 
-    {:ok, collection_state, collection_macs}
+      {:ok, collection_state, collection_macs}
+    end)
   end
 
   @doc "Persist collection hash state and mutation MACs."
   @spec persist_collection_state(struct(), String.t(), hash_state(), map()) :: :ok
   def persist_collection_state(store, collection_name, hash_state, mutation_macs) do
-    data = Store.load!(store)
-    versions = Map.get(data, :app_state_versions, %{})
-    all_macs = Map.get(data, :app_state_mutation_macs, %{})
+    Store.transaction(store, fn data ->
+      versions = Map.get(data, :app_state_versions, %{})
+      all_macs = Map.get(data, :app_state_mutation_macs, %{})
 
-    updated_versions = Map.put(versions, collection_name, hash_state)
-    updated_macs = Map.put(all_macs, collection_name, mutation_macs)
-
-    data =
       data
-      |> Map.put(:app_state_versions, updated_versions)
-      |> Map.put(:app_state_mutation_macs, updated_macs)
-
-    Store.persist(store, data)
+      |> Map.put(:app_state_versions, Map.put(versions, collection_name, hash_state))
+      |> Map.put(:app_state_mutation_macs, Map.put(all_macs, collection_name, mutation_macs))
+    end)
   end
 
   # Applying decoded mutations locally
@@ -872,7 +929,7 @@ defmodule ExWapp.AppState.Engine do
   rescue
     error ->
       Logger.warning(
-        "[APP_STATE] Dispatch mutation error: #{inspect(error)} index=#{inspect(index)}"
+        "[APP_STATE] Dispatch mutation error: #{Log.reason(error)} index=#{Log.reason(index)}"
       )
 
       :ignored
@@ -1139,14 +1196,27 @@ defmodule ExWapp.AppState.Engine do
   end
 
   defp maybe_apply_snapshot(store, session, collection_name, snapshot_binary, key_store, _hs, _mm) do
-    with {:ok, snapshot} <- decode_snapshot_payload(session, snapshot_binary),
-         {:ok, version} <- normalize_patch_version(snapshot.version),
-         {:ok, decoded} <- decode_snapshot_mutations(snapshot, key_store),
-         {:ok, hash, macs} <-
-           verify_snapshot(snapshot, decoded, version, collection_name, key_store) do
-      dispatch_decoded_mutations(store, decoded)
-      {:ok, %{version: version, hash: hash}, macs, length(decoded)}
-    else
+    result =
+      timed_app_state(
+        :decode,
+        %{collection: collection_name, payload: :snapshot},
+        %{payload_bytes: byte_size(snapshot_binary)},
+        fn ->
+          with {:ok, snapshot} <- decode_snapshot_payload(session, snapshot_binary),
+               {:ok, version} <- normalize_patch_version(snapshot.version),
+               {:ok, decoded} <- decode_snapshot_mutations(snapshot, key_store),
+               {:ok, hash, macs} <-
+                 verify_snapshot(snapshot, decoded, version, collection_name, key_store) do
+            {:ok, decoded, version, hash, macs}
+          end
+        end
+      )
+
+    case result do
+      {:ok, decoded, version, hash, macs} ->
+        dispatch_decoded_mutations(store, decoded, collection_name)
+        {:ok, %{version: version, hash: hash}, macs, length(decoded)}
+
       {:error, reason}
       when reason in [
              :invalid_length_delimited_field,
@@ -1174,7 +1244,7 @@ defmodule ExWapp.AppState.Engine do
        when is_binary(snapshot_binary) and snapshot_count > 0 and
               reason in [:mismatching_snapshot_mac, :mismatching_patch_mac] do
     Logger.warning(
-      "[APP_STATE] Ignoring trailing patch chain for #{collection_name} after valid snapshot: #{inspect(reason)}"
+      "[APP_STATE] Ignoring trailing patch chain for #{collection_name} after valid snapshot: #{Log.reason(reason)}"
     )
 
     persist_collection_state(store, collection_name, hash_state, mutation_macs)
@@ -1217,9 +1287,29 @@ defmodule ExWapp.AppState.Engine do
     end
   end
 
-  defp dispatch_decoded_mutations(store, decoded_mutations) do
-    Enum.each(decoded_mutations, fn m ->
-      dispatch_mutation(store, m.operation, m.index, m.action)
+  defp dispatch_decoded_mutations(store, decoded_mutations, collection_name) do
+    dispatch_decoded_mutation_batches(
+      store,
+      [decoded_mutations],
+      length(decoded_mutations),
+      collection_name
+    )
+  end
+
+  defp dispatch_decoded_mutation_batches(store, decoded_batches, mutation_count, collection_name) do
+    timed_app_state(
+      :dispatch,
+      %{collection: collection_name},
+      %{mutation_count: mutation_count},
+      fn ->
+        Enum.each(decoded_batches, &dispatch_decoded_mutation_batch(store, &1))
+      end
+    )
+  end
+
+  defp dispatch_decoded_mutation_batch(store, decoded_mutations) do
+    Enum.each(decoded_mutations, fn mutation ->
+      dispatch_mutation(store, mutation.operation, mutation.index, mutation.action)
     end)
   end
 
@@ -1236,8 +1326,8 @@ defmodule ExWapp.AppState.Engine do
     result =
       Enum.reduce_while(
         patches,
-        {:ok, hash_state, mutation_macs, []},
-        fn patch_binary, {:ok, state, macs, decoded_acc} ->
+        {:ok, hash_state, mutation_macs, [], 0},
+        fn patch_binary, {:ok, state, macs, decoded_batches, decoded_count} ->
           case apply_single_patch(
                  session,
                  collection_name,
@@ -1247,7 +1337,9 @@ defmodule ExWapp.AppState.Engine do
                  macs
                ) do
             {:ok, decoded, new_state, new_macs} ->
-              {:cont, {:ok, new_state, new_macs, decoded_acc ++ decoded}}
+              {:cont,
+               {:ok, new_state, new_macs, [decoded | decoded_batches],
+                decoded_count + length(decoded)}}
 
             {:error, reason} ->
               {:halt, {:error, {:apply_patch_failed, reason}}}
@@ -1256,11 +1348,17 @@ defmodule ExWapp.AppState.Engine do
       )
 
     case result do
-      {:ok, new_state, new_macs, decoded} ->
+      {:ok, new_state, new_macs, decoded_batches, decoded_count} ->
         # Do not partially mutate local state when a later patch in the same
         # authenticated chain is corrupt.
-        dispatch_decoded_mutations(store, decoded)
-        {:ok, new_state, new_macs, length(decoded)}
+        dispatch_decoded_mutation_batches(
+          store,
+          Enum.reverse(decoded_batches),
+          decoded_count,
+          collection_name
+        )
+
+        {:ok, new_state, new_macs, decoded_count}
 
       {:error, _reason} = error ->
         error
@@ -1268,12 +1366,19 @@ defmodule ExWapp.AppState.Engine do
   end
 
   defp apply_single_patch(session, collection_name, patch_binary, key_store, state, macs) do
-    with {:ok, patch} <- SyncAction.decode_syncd_patch(patch_binary),
-         {:ok, patch} <- maybe_resolve_external_patch_mutations(session, patch),
-         {:ok, decoded, new_state, new_macs} <-
-           decode_patch(patch, collection_name, state, macs, key_store, true) do
-      {:ok, decoded, new_state, new_macs}
-    end
+    timed_app_state(
+      :decode,
+      %{collection: collection_name, payload: :patch},
+      %{payload_bytes: byte_size(patch_binary)},
+      fn ->
+        with {:ok, patch} <- SyncAction.decode_syncd_patch(patch_binary),
+             {:ok, patch} <- maybe_resolve_external_patch_mutations(session, patch),
+             {:ok, decoded, new_state, new_macs} <-
+               decode_patch(patch, collection_name, state, macs, key_store, true) do
+          {:ok, decoded, new_state, new_macs}
+        end
+      end
+    )
   end
 
   defp decode_snapshot_payload(_session, snapshot_binary) when not is_binary(snapshot_binary) do
@@ -1317,11 +1422,13 @@ defmodule ExWapp.AppState.Engine do
   end
 
   defp download_external_blob(session, %ExternalBlobReference{} = ref) do
-    with {:ok, direct_path} <- validate_external_direct_path(ref.direct_path),
-         {:ok, encrypted_payload} <-
-           download_external_blob_payload(session, direct_path, ref.file_enc_sha256) do
-      decrypt_external_blob_payload(ref.media_key, encrypted_payload)
-    end
+    timed_app_state(:external_blob, %{payload: :app_state}, %{}, fn ->
+      with {:ok, direct_path} <- validate_external_direct_path(ref.direct_path),
+           {:ok, encrypted_payload} <-
+             download_external_blob_payload(session, direct_path, ref.file_enc_sha256) do
+        decrypt_external_blob_payload(ref.media_key, encrypted_payload)
+      end
+    end)
   end
 
   defp validate_external_direct_path(path) when is_binary(path) do
@@ -1341,7 +1448,7 @@ defmodule ExWapp.AppState.Engine do
 
         {:error, reason} ->
           Logger.debug(
-            "[APP_STATE] External blob download failed from #{host}: #{inspect(reason)}"
+            "[APP_STATE] External blob download failed from #{host}: #{Log.reason(reason)}"
           )
 
           {:cont, {:error, reason}}
@@ -1527,14 +1634,14 @@ defmodule ExWapp.AppState.Engine do
     ]
 
     request = {String.to_charlist(url), headers}
-    http_opts = [timeout: 15_000, connect_timeout: 10_000]
+    http_opts = TLS.httpc_options(url, timeout: 15_000, connect_timeout: 10_000)
 
     case :httpc.request(:get, request, http_opts, body_format: :binary) do
       {:ok, {{_http_version, 200, _reason}, _resp_headers, body}} when is_binary(body) ->
         {:ok, body}
 
       {:ok, {{_http_version, status, _reason}, _resp_headers, body}} ->
-        {:error, {:http_status, status, body}}
+        {:error, {:http_status, status, byte_size(body)}}
 
       {:error, reason} ->
         {:error, reason}
@@ -1818,6 +1925,46 @@ defmodule ExWapp.AppState.Engine do
   end
 
   defp normalize_contact_jid(jid), do: jid |> to_string() |> normalize_contact_jid()
+
+  defp timed_app_state(stage, metadata, measurements, fun)
+       when is_atom(stage) and is_map(metadata) and is_map(measurements) and is_function(fun, 0) do
+    started_at = System.monotonic_time()
+    result = fun.()
+    duration = System.monotonic_time() - started_at
+
+    measurements =
+      measurements
+      |> Map.put(:duration, duration)
+      |> Map.put(:duration_ms, System.convert_time_unit(duration, :native, :millisecond))
+      |> Map.merge(stage_result_measurements(result))
+
+    metadata = Map.put(metadata, :result, stage_result(result))
+    ExWapp.Telemetry.execute([:ex_wapp, :app_state, stage], measurements, metadata)
+
+    Logger.debug(
+      "[APP_STATE] stage=#{stage} collection=#{Map.get(metadata, :collection, "n/a")} result=#{metadata.result} duration_ms=#{measurements.duration_ms}"
+    )
+
+    result
+  end
+
+  defp stage_result_measurements({:ok, binary}) when is_binary(binary),
+    do: %{result_bytes: byte_size(binary)}
+
+  defp stage_result_measurements({:ok, decoded, _state, _macs}) when is_list(decoded),
+    do: %{mutation_count: length(decoded)}
+
+  defp stage_result_measurements({:ok, decoded, _version, _hash, _macs}) when is_list(decoded),
+    do: %{mutation_count: length(decoded)}
+
+  defp stage_result_measurements(_result), do: %{}
+
+  defp stage_result({:ok, _value}), do: :ok
+  defp stage_result({:ok, _value, _third, _fourth}), do: :ok
+  defp stage_result({:ok, _value, _third, _fourth, _fifth}), do: :ok
+  defp stage_result({:error, _reason}), do: :error
+  defp stage_result(:ok), do: :ok
+  defp stage_result(_result), do: :other
 
   defp generate_request_id do
     :crypto.strong_rand_bytes(16) |> Base.encode64() |> String.slice(0, 16)

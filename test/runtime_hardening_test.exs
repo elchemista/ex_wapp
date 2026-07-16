@@ -1,6 +1,8 @@
 defmodule ExWapp.RuntimeHardeningTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias ExWapp.{Config, Quota, RateLimiter}
   alias ExWapp.Session.Worker.{Resilience, Safety}
 
@@ -64,6 +66,11 @@ defmodule ExWapp.RuntimeHardeningTest do
 
     assert get_in(overridden_cfg, [:protocol, :post_auth_digest_enabled]) == true
     assert get_in(overridden_cfg, [:app_state, :initial_sync_enabled]) == false
+  end
+
+  test "config resolve preserves empty list values" do
+    assert {:ok, cfg} = Config.resolve(runtime: [canary: [recipients: []]])
+    assert get_in(cfg, [:canary, :recipients]) == []
   end
 
   test "config validates the native Android client mode" do
@@ -229,33 +236,39 @@ defmodule ExWapp.RuntimeHardeningTest do
   end
 
   test "guard can hard-stop worker after max consecutive send errors" do
-    {:ok, session} =
-      GenServer.start(ExWapp.Session.Worker,
-        store: ExWapp.Store.Memory,
-        runtime: [
-          send_error_guard: [
-            enabled: true,
-            max_consecutive_errors: 3,
-            max_errors_per_minute: 100,
-            max_drops_per_minute: 100,
-            action: :stop_session,
-            notify_only: false
-          ]
-        ]
-      )
+    jid = "15559990000@s.whatsapp.net"
+    text = "private crash-report text"
 
-    mon = Process.monitor(session)
+    log =
+      capture_log(fn ->
+        {:ok, session} =
+          GenServer.start(ExWapp.Session.Worker,
+            store: ExWapp.Store.Memory,
+            runtime: [
+              send_error_guard: [
+                enabled: true,
+                max_consecutive_errors: 3,
+                max_errors_per_minute: 100,
+                max_drops_per_minute: 100,
+                action: :stop_session,
+                notify_only: false
+              ]
+            ]
+          )
 
-    for _ <- 1..3 do
-      send(
-        session,
-        {:send_result, "15550001111@s.whatsapp.net", "x", {:error, :boom}, :primary, 0}
-      )
-    end
+        mon = Process.monitor(session)
 
-    assert_receive {:DOWN, ^mon, :process, ^session,
-                    {:send_error_guard_trip, {:max_consecutive_errors, 3}}},
-                   1_000
+        for _ <- 1..3 do
+          send(session, {:send_result, jid, text, {:error, :boom}, :primary, 0})
+        end
+
+        assert_receive {:DOWN, ^mon, :process, ^session,
+                        {:send_error_guard_trip, {:max_consecutive_errors, 3}}},
+                       1_000
+      end)
+
+    refute log =~ jid
+    refute log =~ text
   end
 
   test "pubsub control can pause/resume sends and emits health events" do

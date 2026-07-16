@@ -47,6 +47,8 @@ defmodule ExWapp.Session.Supervisor do
 
   use DynamicSupervisor
 
+  alias ExWapp.Session.Options
+
   @registry ExWapp.Session.Registry
   @supervisor __MODULE__
 
@@ -106,29 +108,27 @@ defmodule ExWapp.Session.Supervisor do
         auto_connect: true
       )
   """
-  @spec start_session(term(), keyword()) :: {:ok, pid()} | {:error, term()}
+  @spec start_session(term(), keyword() | Options.t()) :: {:ok, pid()} | {:error, term()}
   def start_session(session_id, opts \\ []) do
     case get_session(session_id) do
       {:ok, pid} ->
         {:error, {:already_started, pid}}
 
       :error ->
-        opts = Keyword.put(opts, :session_id, session_id)
-
-        child_spec = %{
-          id: session_id,
-          start: {ExWapp.Session, :start_link, [opts]},
-          restart: :transient
-        }
-
-        case DynamicSupervisor.start_child(@supervisor, child_spec) do
-          {:ok, pid} ->
-            {:ok, pid}
-
-          {:error, reason} ->
-            {:error, reason}
+        with {:ok, options} <- Options.with_session_id(opts, session_id) do
+          start_session_child(session_id, options)
         end
     end
+  end
+
+  defp start_session_child(session_id, options) do
+    child_spec = %{
+      id: session_id,
+      start: {ExWapp.Session, :start_link, [options]},
+      restart: :transient
+    }
+
+    DynamicSupervisor.start_child(@supervisor, child_spec)
   end
 
   @doc """

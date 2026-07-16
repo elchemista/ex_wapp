@@ -387,6 +387,8 @@ defmodule ExWapp.Config do
 
   defp normalize_client_version(_), do: :error
 
+  defp normalize_container([]), do: []
+
   defp normalize_container(container) when is_list(container) do
     if Keyword.keyword?(container) do
       container

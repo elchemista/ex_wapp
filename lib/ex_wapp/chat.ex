@@ -198,8 +198,6 @@ defmodule ExWapp.Chat do
   def merge_messages(target, jid, messages) when is_list(messages) do
     jid_str = normalize_jid(jid)
     store = resolve_store(target)
-    chat = stored_or_new_chat(store, jid_str)
-
     normalized_messages = normalize_merged_messages(messages)
 
     case store do
@@ -211,7 +209,7 @@ defmodule ExWapp.Chat do
           store,
           jid_str,
           normalized_messages,
-          update_last_message_timestamp(chat, normalized_messages)
+          &update_last_message_timestamp(&1, normalized_messages)
         )
     end
   end
@@ -226,20 +224,20 @@ defmodule ExWapp.Chat do
   def add_message(target, jid, message) do
     jid_str = normalize_jid(jid)
     store = resolve_store(target)
-    chat = stored_or_new_chat(store, jid_str)
 
     case store do
       nil ->
         :ok
 
       store ->
-        updated_chat = %{
-          chat
-          | last_message_timestamp: message.timestamp,
-            unread_count: if(message.from_me, do: chat.unread_count, else: chat.unread_count + 1)
-        }
-
-        save_chat_with_messages(store, jid_str, [message], updated_chat)
+        save_chat_with_messages(store, jid_str, [message], fn chat ->
+          %{
+            chat
+            | last_message_timestamp: message.timestamp,
+              unread_count:
+                if(message.from_me, do: chat.unread_count, else: chat.unread_count + 1)
+          }
+        end)
     end
   end
 
@@ -248,14 +246,7 @@ defmodule ExWapp.Chat do
   """
   @spec mark_read(target(), String.t() | JID.t()) :: :ok
   def mark_read(target, jid) do
-    case get(target, jid) do
-      {:ok, chat} ->
-        updated_chat = %{chat | unread_count: 0}
-        save_chat(target, updated_chat)
-
-      {:error, _} ->
-        :ok
-    end
+    update_chat(target, jid, &%{&1 | unread_count: 0})
   end
 
   @doc """
@@ -322,18 +313,7 @@ defmodule ExWapp.Chat do
     store = resolve_store(target)
     jid_str = normalize_jid(jid)
 
-    if store do
-      data = Store.load!(store)
-      chats = Map.get(data, :chats, %{})
-      updated_data = Map.put(data, :chats, Map.delete(chats, jid_str))
-
-      case Store.delete_chat_messages(store, jid_str) do
-        :ok -> Store.persist(store, updated_data)
-        {:error, _reason} = error -> error
-      end
-    else
-      :ok
-    end
+    if store, do: delete_from_store(store, jid_str), else: :ok
   end
 
   @doc """
@@ -371,21 +351,18 @@ defmodule ExWapp.Chat do
   @doc "Update archived state from app state sync dispatch."
   @spec update_archived(target(), String.t(), boolean()) :: :ok
   def update_archived(target, jid, archived) when is_boolean(archived) do
-    chat = get_or_create(target, jid)
-    save_chat(target, %{chat | archived: archived})
+    upsert_chat(target, jid, &%{&1 | archived: archived})
   end
 
   @doc "Update pinned state from app state sync dispatch."
   @spec update_pinned(target(), String.t(), boolean()) :: :ok
   def update_pinned(target, jid, pinned) when is_boolean(pinned) do
-    chat = get_or_create(target, jid)
-    save_chat(target, %{chat | pinned: pinned})
+    upsert_chat(target, jid, &%{&1 | pinned: pinned})
   end
 
   @doc "Update muted state from app state sync dispatch."
   @spec update_muted(target(), String.t(), map()) :: :ok
   def update_muted(target, jid, mute_action) when is_map(mute_action) do
-    chat = get_or_create(target, jid)
     muted = Map.get(mute_action, :muted, false)
     mute_end = Map.get(mute_action, :mute_end_timestamp)
 
@@ -396,7 +373,7 @@ defmodule ExWapp.Chat do
         true -> -1
       end
 
-    save_chat(target, %{chat | muted_until: muted_until})
+    upsert_chat(target, jid, &%{&1 | muted_until: muted_until})
   end
 
   @doc "Mark chat as read/unread from app state sync dispatch."
@@ -440,22 +417,7 @@ defmodule ExWapp.Chat do
   def merge_metadata(target, jid, metadata) when is_map(metadata) do
     jid_str = normalize_jid(jid)
 
-    chat =
-      case get(target, jid_str) do
-        {:ok, existing_chat} ->
-          existing_chat
-
-        {:error, :not_found} ->
-          name =
-            case fetch_metadata(metadata, :name) do
-              {:ok, value} when is_binary(value) and value != "" -> value
-              _ -> nil
-            end
-
-          new_chat(jid_str, name: name)
-      end
-
-    updated_chat =
+    upsert_chat(target, jid_str, fn chat ->
       chat
       |> maybe_update_name(metadata)
       |> maybe_update_non_neg_integer(:unread_count, metadata)
@@ -464,8 +426,7 @@ defmodule ExWapp.Chat do
       |> maybe_update_muted_until(metadata)
       |> maybe_update_boolean_field(:archived, metadata)
       |> maybe_update_boolean_field(:is_group, metadata)
-
-    save_chat(target, updated_chat)
+    end)
   end
 
   # Message parsing
@@ -531,15 +492,6 @@ defmodule ExWapp.Chat do
     GenServer.call(session, :get_store)
   catch
     :exit, _ -> nil
-  end
-
-  defp stored_or_new_chat(nil, jid_str), do: new_chat(jid_str)
-
-  defp stored_or_new_chat(store, jid_str) do
-    case Store.get(store, :chats, %{}) |> Map.get(jid_str) do
-      nil -> new_chat(jid_str)
-      chat -> normalize_stored_chat(store, chat)
-    end
   end
 
   # Normalize JID to string format
@@ -716,42 +668,27 @@ defmodule ExWapp.Chat do
     end
   end
 
-  defp save_chat_with_messages(%Store.Ets{} = store, jid, messages, chat),
-    do: persist_chat_with_messages(store, jid, messages, chat)
+  defp delete_from_store(store, jid) do
+    Store.batch(store, {:delete_chat, jid}, fn ->
+      with :ok <- Store.delete_chat_messages(store, jid) do
+        Store.update(store, :chats, %{}, &Map.delete(&1, jid))
+      end
+    end)
+  end
 
-  defp save_chat_with_messages(%Store.Memory{} = store, jid, messages, chat),
-    do: persist_chat_with_messages(store, jid, messages, chat)
-
-  defp save_chat_with_messages(store, _jid, [], chat), do: save_chat_to_store(store, chat)
-
-  defp save_chat_with_messages(store, jid, messages, chat) do
-    case Store.upsert_messages(store, jid, messages) do
-      :ok -> save_chat_to_store(store, chat)
-      {:error, _reason} = error -> error
-    end
+  defp save_chat_with_messages(store, jid, messages, updater)
+       when is_function(updater, 1) do
+    Store.batch(store, {:chat_with_messages, jid}, fn ->
+      with :ok <- Store.upsert_messages(store, jid, messages) do
+        update_stored_chat(store, jid, updater, true)
+      end
+    end)
   end
 
   defp save_chat_to_store(store, chat) do
-    data = Store.load!(store)
-    chats = Map.get(data, :chats, %{})
-    updated_data = Map.put(data, :chats, Map.put(chats, chat.jid, chat))
-    Store.persist(store, updated_data)
-  end
-
-  defp persist_chat_with_messages(store, jid, messages, chat) do
-    data = Store.load!(store)
-    chats = Map.get(data, :chats, %{})
-
-    data
-    |> Map.put(:chats, Map.put(chats, chat.jid, strip_legacy_messages(chat)))
-    |> maybe_put_messages_for_persist(jid, messages)
-    |> then(&Store.persist(store, &1))
-  end
-
-  defp maybe_put_messages_for_persist(data, _jid, []), do: data
-
-  defp maybe_put_messages_for_persist(data, jid, messages) do
-    Map.put(data, :chat_messages, %{jid => messages})
+    Store.update(store, :chats, %{}, fn chats ->
+      Map.put(chats, chat.jid, strip_legacy_messages(chat))
+    end)
   end
 
   defp normalize_stored_chat(store, chat) when is_map(chat) do
@@ -780,12 +717,41 @@ defmodule ExWapp.Chat do
   defp strip_legacy_messages(chat) when is_map(chat), do: Map.delete(chat, :messages)
 
   defp update_chat(target, jid, update_fn) do
-    case get(target, jid) do
-      {:ok, chat} ->
-        save_chat(target, update_fn.(chat))
-
-      {:error, _} ->
-        :ok
+    case resolve_store(target) do
+      nil -> :ok
+      store -> update_stored_chat(store, normalize_jid(jid), update_fn, false)
     end
   end
+
+  defp upsert_chat(target, jid, update_fn) do
+    case resolve_store(target) do
+      nil -> :ok
+      store -> update_stored_chat(store, normalize_jid(jid), update_fn, true)
+    end
+  end
+
+  defp update_stored_chat(store, jid, update_fn, create?) do
+    Store.update(store, :chats, %{}, fn chats ->
+      case Map.get(chats, jid) do
+        nil when create? ->
+          Map.put(chats, jid, update_fn.(new_chat(jid)))
+
+        nil ->
+          chats
+
+        chat ->
+          chat = coerce_chat(chat, jid)
+          Map.put(chats, jid, update_fn.(chat))
+      end
+    end)
+  end
+
+  defp coerce_chat(%__MODULE__{} = chat, _jid), do: strip_legacy_messages(chat)
+
+  defp coerce_chat(chat, jid) when is_map(chat) do
+    fields = Map.take(chat, Map.keys(Map.from_struct(%__MODULE__{})))
+    struct(__MODULE__, Map.put_new(fields, :jid, jid))
+  end
+
+  defp coerce_chat(_chat, jid), do: new_chat(jid)
 end

@@ -16,7 +16,11 @@
 
 .codex/
 
-.txt
+# Local runtime and test logs may contain account identifiers, message content,
+# and protocol diagnostics.
+*.log
+*.log.*
+log_*.txt
 
 .claude
 

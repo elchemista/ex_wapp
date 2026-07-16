@@ -11,7 +11,7 @@ defmodule ExWapp.Signal.SenderKey do
 
   require Logger
 
-  alias ExWapp.{JID, Store}
+  alias ExWapp.{JID, Log, Store}
   alias ExWapp.Signal.{Keys, WireFormat}
 
   @current_version 3
@@ -77,7 +77,7 @@ defmodule ExWapp.Signal.SenderKey do
 
       {:error, reason} ->
         Logger.warning(
-          "[SENDER_KEY] Failed to parse axolotl sender key distribution for sender=#{sender}: #{inspect(reason)}"
+          "[SENDER_KEY] Failed to parse axolotl sender key distribution for sender=#{Log.reference(sender)}: #{Log.reason(reason)}"
         )
 
         0
@@ -97,14 +97,14 @@ defmodule ExWapp.Signal.SenderKey do
           })
 
         Logger.debug(
-          "[SENDER_KEY] Stored distribution: group=#{group_jid} sender=#{sender} id=#{parsed.id} iteration=#{parsed.iteration} source_field=#{source_field}"
+          "[SENDER_KEY] Stored distribution: group=#{Log.reference(group_jid)} sender=#{Log.reference(sender)} id=#{parsed.id} iteration=#{parsed.iteration} source_field=#{source_field}"
         )
 
         1
 
       {:error, reason} ->
         Logger.warning(
-          "[SENDER_KEY] Invalid signing key in distribution (group=#{group_jid} sender=#{sender}): #{inspect(reason)}"
+          "[SENDER_KEY] Invalid signing key in distribution (group=#{Log.reference(group_jid)} sender=#{Log.reference(sender)}): #{Log.reason(reason)}"
         )
 
         0
@@ -235,29 +235,31 @@ defmodule ExWapp.Signal.SenderKey do
          sender_state,
          existing_record \\ nil
        ) do
-    {data, signal, sender_keys} = load_sender_key_maps(store)
     key = {group_jid, sender_jid}
-    record = normalize_sender_key_record(existing_record || Map.get(sender_keys, key))
 
-    state_ids =
-      [key_id | Enum.reject(Map.get(record, :state_ids, []), &(&1 == key_id))]
-      |> Enum.take(@max_state_ids)
+    :ok =
+      Store.update(store, :signal, %{}, fn signal ->
+        sender_keys = Map.get(signal, :sender_keys, %{})
+        record = normalize_sender_key_record(existing_record || Map.get(sender_keys, key))
 
-    states =
-      record
-      |> Map.get(:states, %{})
-      |> Map.put(key_id, sender_state)
-      |> Map.take(state_ids)
+        state_ids =
+          [key_id | Enum.reject(Map.get(record, :state_ids, []), &(&1 == key_id))]
+          |> Enum.take(@max_state_ids)
 
-    updated_record = %{
-      current_id: key_id,
-      state_ids: state_ids,
-      states: states
-    }
+        states =
+          record
+          |> Map.get(:states, %{})
+          |> Map.put(key_id, sender_state)
+          |> Map.take(state_ids)
 
-    updated_sender_keys = Map.put(sender_keys, key, updated_record)
-    updated_signal = Map.put(signal, :sender_keys, updated_sender_keys)
-    :ok = Store.persist(store, Map.put(data, :signal, updated_signal))
+        updated_record = %{
+          current_id: key_id,
+          state_ids: state_ids,
+          states: states
+        }
+
+        Map.put(signal, :sender_keys, Map.put(sender_keys, key, updated_record))
+      end)
   end
 
   defp get_sender_key_record(store, group_jid, sender_jid) do

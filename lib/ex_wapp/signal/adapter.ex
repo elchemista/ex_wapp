@@ -131,7 +131,7 @@ defmodule ExWapp.Signal.Adapter do
   """
   @spec debug_message(binary()) :: String.t()
   def debug_message(message) do
-    "Signal message bytes=#{byte_size(message)} hex=#{Base.encode16(message, case: :lower)}"
+    "Signal message bytes=#{byte_size(message)}"
   end
 
   @doc """
