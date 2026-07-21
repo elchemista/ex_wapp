@@ -134,6 +134,28 @@ defmodule ExWapp.Session.Account do
       ""
   end
 
+  @doc "Returns the local identity WhatsApp expects in a chat-state stanza."
+  @spec local_account_chatstate_jid(term(), String.t()) :: String.t()
+  def local_account_chatstate_jid(nil, _destination_jid), do: ""
+
+  def local_account_chatstate_jid(store, destination_jid) do
+    data = Store.load!(store)
+
+    data
+    |> then(fn data ->
+      if JIDUtils.lid_jid?(destination_jid) do
+        local_account_lid_value(data)
+      else
+        local_account_jid_value(data)
+      end
+    end)
+    |> JIDUtils.normalize_with_device()
+  rescue
+    e ->
+      Logger.warning("[ACCOUNT] local_account_chatstate_jid failed: #{Log.reason(e)}")
+      ""
+  end
+
   @spec local_account_sender_key_jid(term()) :: String.t()
   def local_account_sender_key_jid(nil), do: ""
 

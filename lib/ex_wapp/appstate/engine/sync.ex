@@ -9,7 +9,7 @@ defmodule ExWapp.AppState.Engine.Sync do
 
   require Logger
 
-  alias ExWapp.AppState.Crypto
+  alias ExWapp.AppState.{CollectionLock, Crypto}
   alias ExWapp.AppState.Engine.{Codec, Dispatch, State}
   alias ExWapp.{Binary, Log}
   alias ExWapp.Proto.SyncAction
@@ -35,13 +35,18 @@ defmodule ExWapp.AppState.Engine.Sync do
   @type patch_info :: Codec.patch_info()
 
   @doc """
-  Encodes and sends a mutation patch, then applies the acknowledged change
-  locally and schedules a background refresh for the affected collection.
+  Synchronizes the affected collection, encodes and sends a mutation patch,
+  then applies the acknowledged change locally and schedules a background
+  refresh. Operations for the same store collection are serialized.
   """
   @spec send_mutation(GenServer.server(), patch_info(), struct()) ::
           {:ok, hash_state(), map()} | {:error, term()}
   def send_mutation(session, patch_info, store) do
-    do_send_mutation(session, patch_info, store, true)
+    CollectionLock.with_lock(store, patch_info.type, fn ->
+      with :ok <- fetch_collection_unlocked(session, store, patch_info.type) do
+        do_send_mutation(session, patch_info, store, true)
+      end
+    end)
   end
 
   @doc """
@@ -49,6 +54,12 @@ defmodule ExWapp.AppState.Engine.Sync do
   """
   @spec fetch_collection(GenServer.server(), struct(), String.t()) :: :ok | {:error, term()}
   def fetch_collection(session, store, collection_name) do
+    CollectionLock.with_lock(store, collection_name, fn ->
+      fetch_collection_unlocked(session, store, collection_name)
+    end)
+  end
+
+  defp fetch_collection_unlocked(session, store, collection_name) do
     Store.batch(store, {:app_state_collection, collection_name}, fn ->
       case do_fetch_collection(session, store, collection_name, true) do
         :ok ->

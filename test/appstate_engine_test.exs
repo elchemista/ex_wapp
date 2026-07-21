@@ -1,7 +1,7 @@
 defmodule ExWapp.AppState.EngineTest do
   use ExUnit.Case, async: true
 
-  alias ExWapp.AppState.{Crypto, Engine, LTHash}
+  alias ExWapp.AppState.{CollectionLock, Crypto, Engine, LTHash}
 
   alias ExWapp.Proto.SyncAction
 
@@ -36,6 +36,54 @@ defmodule ExWapp.AppState.EngineTest do
     end
   end
 
+  defmodule MutationSession do
+    use GenServer
+
+    def start_link(parent, opts \\ []), do: GenServer.start_link(__MODULE__, {parent, opts})
+
+    @impl true
+    def init({parent, opts}), do: {:ok, %{parent: parent, fail_fetch?: opts[:fail_fetch]}}
+
+    @impl true
+    def handle_call({:send_iq, node, _message_id}, _from, state) do
+      collection = collection_node(node)
+      kind = if collection.content in [nil, []], do: :fetch, else: :mutation
+      send(state.parent, {:app_state_iq, kind, node})
+
+      if kind == :fetch and state.fail_fetch? do
+        {:reply, {:error, :sync_unavailable}, state}
+      else
+        response = %ExWapp.Binary.Node{
+          tag: "iq",
+          attrs: %{"type" => "result"},
+          content: [
+            %ExWapp.Binary.Node{
+              tag: "sync",
+              attrs: %{},
+              content: [
+                %ExWapp.Binary.Node{
+                  tag: "collection",
+                  attrs: %{
+                    "name" => collection.attrs["name"],
+                    "has_more_patches" => "false"
+                  },
+                  content: []
+                }
+              ]
+            }
+          ]
+        }
+
+        {:reply, {:ok, response}, state}
+      end
+    end
+
+    defp collection_node(%ExWapp.Binary.Node{
+           content: [%ExWapp.Binary.Node{content: [%ExWapp.Binary.Node{} = collection]}]
+         }),
+         do: collection
+  end
+
   # Contact mutation builders
 
   describe "build_contact/3" do
@@ -50,6 +98,7 @@ defmodule ExWapp.AppState.EngineTest do
       assert mutation.version == 2
       assert mutation.value.contact_action.full_name == "John Doe"
       assert mutation.value.contact_action.first_name == "John"
+      assert mutation.value.contact_action.save_on_primary == true
     end
 
     test "defaults first_name to full_name when nil" do
@@ -62,6 +111,103 @@ defmodule ExWapp.AppState.EngineTest do
       patch = Engine.build_contact("+1234@whatsapp.net", "John Doe")
       [mutation] = patch.mutations
       assert mutation.index == ["contact", "1234@s.whatsapp.net"]
+    end
+  end
+
+  describe "send_mutation/3 synchronization" do
+    test "refreshes the contact collection before encoding and sending the patch" do
+      store = app_state_store()
+      {:ok, session} = MutationSession.start_link(self())
+      patch = Engine.build_contact("1234@s.whatsapp.net", "John Doe")
+
+      assert {:ok, %{version: 1}, mutation_macs} =
+               Engine.send_mutation(session, patch, store)
+
+      assert map_size(mutation_macs) == 1
+      assert_receive {:app_state_iq, :fetch, fetch_node}
+      assert_receive {:app_state_iq, :mutation, _mutation_node}
+
+      assert collection_request_attrs(fetch_node) == %{
+               "name" => "critical_unblock_low",
+               "return_snapshot" => "true"
+             }
+
+      assert ExWapp.Contact.get(store, "1234@s.whatsapp.net").full_name == "John Doe"
+
+      # A successful mutation also retains the existing asynchronous
+      # post-write refresh, which must wait until the write lock is released.
+      assert_receive {:app_state_iq, :fetch, _refresh_node}
+    end
+
+    test "does not send a contact patch when the pre-write sync fails" do
+      store = app_state_store()
+      {:ok, session} = MutationSession.start_link(self(), fail_fetch: true)
+      patch = Engine.build_contact("1234@s.whatsapp.net", "John Doe")
+
+      assert {:error, {:iq_failed, :sync_unavailable}} =
+               Engine.send_mutation(session, patch, store)
+
+      assert_receive {:app_state_iq, :fetch, _fetch_node}
+      refute_receive {:app_state_iq, :mutation, _mutation_node}
+      assert ExWapp.Contact.get(store, "1234@s.whatsapp.net") == nil
+    end
+
+    test "serializes concurrent operations for one contact collection" do
+      store = app_state_store()
+      collection = "critical_unblock_low"
+      parent = self()
+
+      operation = fn ->
+        CollectionLock.with_lock(store, collection, fn ->
+          send(parent, {:contact_collection_entered, self()})
+          receive do: (:release_contact_collection -> :ok)
+        end)
+      end
+
+      first = Task.async(operation)
+      first_pid = first.pid
+      assert_receive {:contact_collection_entered, ^first_pid}
+
+      second = Task.async(operation)
+      second_pid = second.pid
+      refute_receive {:contact_collection_entered, ^second_pid}, 100
+
+      send(first_pid, :release_contact_collection)
+      assert :ok = Task.await(first)
+      assert_receive {:contact_collection_entered, ^second_pid}
+
+      send(second_pid, :release_contact_collection)
+      assert :ok = Task.await(second)
+    end
+
+    test "concurrent contact writes advance one shared hash chain" do
+      store = app_state_store()
+      {:ok, session} = MutationSession.start_link(self())
+
+      tasks =
+        for {jid, name} <- [
+              {"1001@s.whatsapp.net", "First Contact"},
+              {"1002@s.whatsapp.net", "Second Contact"}
+            ] do
+          Task.async(fn ->
+            Engine.send_mutation(session, Engine.build_contact(jid, name), store)
+          end)
+        end
+
+      versions =
+        tasks
+        |> Enum.map(&Task.await/1)
+        |> Enum.map(fn {:ok, %{version: version}, _mutation_macs} -> version end)
+        |> Enum.sort()
+
+      assert versions == [1, 2]
+      assert ExWapp.Contact.get(store, "1001@s.whatsapp.net").full_name == "First Contact"
+      assert ExWapp.Contact.get(store, "1002@s.whatsapp.net").full_name == "Second Contact"
+
+      assert {:ok, %{version: 2}, mutation_macs} =
+               Engine.get_collection_state(store, "critical_unblock_low")
+
+      assert map_size(mutation_macs) == 2
     end
   end
 
@@ -686,4 +832,17 @@ defmodule ExWapp.AppState.EngineTest do
          content: [%ExWapp.Binary.Node{content: [%ExWapp.Binary.Node{attrs: attrs}]}]
        }),
        do: attrs
+
+  defp app_state_store do
+    key_id = :crypto.strong_rand_bytes(16)
+    key_data = :crypto.strong_rand_bytes(32)
+    key_hex = Base.encode16(key_id, case: :lower)
+
+    ExWapp.Store.new(
+      {ExWapp.Store.Memory,
+       initial_data: %{
+         app_state_keys: %{key_hex => %{data: key_data, timestamp: 1}}
+       }}
+    )
+  end
 end

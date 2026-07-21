@@ -47,7 +47,8 @@ defmodule ExWapp.AppState.Engine.Builders do
           value: %SyncActionValue{
             contact_action: %ContactAction{
               full_name: full_name,
-              first_name: first_name || full_name
+              first_name: first_name || full_name,
+              save_on_primary: true
             }
           }
         }

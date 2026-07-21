@@ -92,7 +92,14 @@ defmodule ExWapp.SessionHelpersTest do
 
     {:ok, pid} =
       ExWapp.Session.Supervisor.start_session(session_id,
-        store: ExWapp.Store.Memory,
+        store:
+          {ExWapp.Store.Memory,
+           initial_data: %{
+             client_info: %{
+               jid: "15550009999:4@s.whatsapp.net",
+               lid: "999900001111:4@lid"
+             }
+           }},
         transport: TypingTransport,
         reconnect: false
       )
@@ -100,19 +107,55 @@ defmodule ExWapp.SessionHelpersTest do
     on_exit(fn -> ExWapp.Session.Supervisor.stop_all_sessions(session_id) end)
 
     assert {:error, {:not_connected, :idle}} =
-             ExWapp.Session.send_typing(pid, "15550001111@s.whatsapp.net")
+             ExWapp.send_typing(pid, "15550001111@s.whatsapp.net")
 
     test_pid = self()
     :sys.replace_state(pid, fn state -> %{state | status: :connected, conn: test_pid} end)
 
-    assert :ok = ExWapp.Session.send_typing(pid, "15550001111@s.whatsapp.net")
+    assert :ok = ExWapp.send_typing(pid, "15550001111@s.whatsapp.net")
 
     assert_receive {:sent_node,
                     %ExWapp.Binary.Node{
                       tag: "chatstate",
-                      attrs: %{"to" => "15550001111@s.whatsapp.net"},
+                      attrs: %{
+                        "from" => "15550009999:4@s.whatsapp.net",
+                        "to" => "15550001111@s.whatsapp.net"
+                      },
                       content: [%ExWapp.Binary.Node{tag: "composing"}]
                     }}
+
+    assert :ok = ExWapp.send_typing(pid, "777700001111@lid")
+
+    assert_receive {:sent_node,
+                    %ExWapp.Binary.Node{
+                      tag: "chatstate",
+                      attrs: %{
+                        "from" => "999900001111:4@lid",
+                        "to" => "777700001111@lid"
+                      },
+                      content: [%ExWapp.Binary.Node{tag: "composing"}]
+                    }}
+  end
+
+  test "send_typing refuses to emit a chatstate without the local identity" do
+    session_id = "typing_missing_identity_#{System.unique_integer([:positive])}"
+
+    {:ok, pid} =
+      ExWapp.Session.Supervisor.start_session(session_id,
+        store: ExWapp.Store.Memory,
+        transport: TypingTransport,
+        reconnect: false
+      )
+
+    on_exit(fn -> ExWapp.Session.Supervisor.stop_all_sessions(session_id) end)
+
+    test_pid = self()
+    :sys.replace_state(pid, fn state -> %{state | status: :connected, conn: test_pid} end)
+
+    assert {:error, :local_identity_unavailable} =
+             ExWapp.send_typing(pid, "15550001111@s.whatsapp.net")
+
+    refute_receive {:sent_node, _node}
   end
 
   test "supervisor live-session helpers handle zero and one runtime" do

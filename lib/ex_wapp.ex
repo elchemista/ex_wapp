@@ -700,11 +700,8 @@ defmodule ExWapp do
   """
   @spec send_typing(GenServer.server(), String.t(), boolean()) :: :ok | {:error, term()}
   def send_typing(session, jid, composing \\ true) do
-    node = Messages.build_typing(jid, composing)
-
     try do
-      conn = GenServer.call(session, :get_conn)
-      if conn, do: ExWapp.Conn.send_node(conn, node), else: {:error, :not_connected}
+      Session.send_typing(session, jid, composing)
     catch
       :exit, _ -> {:error, :session_unavailable}
     end

@@ -302,7 +302,7 @@ defmodule ExWapp.Session.Worker do
   @doc "Send an app state mutation (server-synced)."
   @spec send_app_state(GenServer.server(), map()) :: {:ok, map(), map()} | {:error, term()}
   def send_app_state(server, patch_info) do
-    GenServer.call(server, {:app_state_mutation, patch_info}, 30_000)
+    GenServer.call(server, {:app_state_mutation, patch_info}, @explicit_app_state_sync_timeout)
   end
 
   @doc "Archive a chat (server-synced)."
@@ -681,8 +681,14 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_call({:send_typing, jid, composing}, _from, %{conn: conn} = state) do
-    node = Messages.build_typing(jid, composing)
-    {:reply, state.transport_mod.send_node(conn, node), state}
+    case Account.local_account_chatstate_jid(state.store, jid) do
+      "" ->
+        {:reply, {:error, :local_identity_unavailable}, state}
+
+      from_jid ->
+        node = Messages.build_typing(jid, from_jid, composing)
+        {:reply, state.transport_mod.send_node(conn, node), state}
+    end
   end
 
   def handle_call({:send_iq, node, message_id}, from, %{status: status, conn: conn} = state)

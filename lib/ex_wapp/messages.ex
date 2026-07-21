@@ -451,11 +451,32 @@ defmodule ExWapp.Messages do
   """
   @spec build_typing(String.t(), boolean()) :: Binary.Node.t()
   def build_typing(jid, composing \\ true) do
+    build_typing_node(jid, nil, composing)
+  end
+
+  @doc """
+  Builds a typing indicator node with the local sender identity required by
+  WhatsApp's chat-state protocol.
+  """
+  @spec build_typing(String.t(), String.t(), boolean()) :: Binary.Node.t()
+  def build_typing(jid, from_jid, composing)
+      when is_binary(from_jid) and from_jid != "" and is_boolean(composing) do
+    build_typing_node(jid, from_jid, composing)
+  end
+
+  defp build_typing_node(jid, from_jid, composing) do
     state = if composing, do: "composing", else: "paused"
+
+    attrs =
+      if is_binary(from_jid) and from_jid != "" do
+        %{"from" => from_jid, "to" => jid}
+      else
+        %{"to" => jid}
+      end
 
     %Binary.Node{
       tag: "chatstate",
-      attrs: %{"to" => jid},
+      attrs: attrs,
       content: [
         %Binary.Node{
           tag: state,

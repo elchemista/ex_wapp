@@ -11,7 +11,7 @@ defmodule ExWapp.AppState.Engine do
 
   require Logger
 
-  alias ExWapp.AppState.{Crypto, LTHash}
+  alias ExWapp.AppState.{CollectionLock, Crypto, LTHash}
   alias ExWapp.Proto.SyncAction
 
   alias ExWapp.Proto.SyncAction.{
@@ -106,7 +106,8 @@ defmodule ExWapp.AppState.Engine do
           value: %SyncActionValue{
             contact_action: %ContactAction{
               full_name: full_name,
-              first_name: first_name || full_name
+              first_name: first_name || full_name,
+              save_on_primary: true
             }
           }
         }
@@ -584,14 +585,19 @@ defmodule ExWapp.AppState.Engine do
   @doc """
   Send an app state mutation to the WhatsApp server.
 
-  This encodes the patch, builds the IQ node, and sends it via the session.
+  The affected collection is synchronized and locked before the patch is
+  encoded so concurrent writers cannot build from the same stale hash state.
 
   Returns `{:ok, new_hash_state, new_mutation_macs}` or `{:error, reason}`.
   """
   @spec send_mutation(GenServer.server(), patch_info(), struct()) ::
           {:ok, hash_state(), map()} | {:error, term()}
   def send_mutation(session, patch_info, store) do
-    do_send_mutation(session, patch_info, store, true)
+    CollectionLock.with_lock(store, patch_info.type, fn ->
+      with :ok <- fetch_collection_unlocked(session, store, patch_info.type) do
+        do_send_mutation(session, patch_info, store, true)
+      end
+    end)
   end
 
   defp do_send_mutation(session, patch_info, store, allow_retry) do
@@ -721,6 +727,12 @@ defmodule ExWapp.AppState.Engine do
   """
   @spec fetch_collection(GenServer.server(), struct(), String.t()) :: :ok | {:error, term()}
   def fetch_collection(session, store, collection_name) do
+    CollectionLock.with_lock(store, collection_name, fn ->
+      fetch_collection_unlocked(session, store, collection_name)
+    end)
+  end
+
+  defp fetch_collection_unlocked(session, store, collection_name) do
     Store.batch(store, {:app_state_collection, collection_name}, fn ->
       case do_fetch_collection(session, store, collection_name, _want_snapshot = true) do
         :ok ->
