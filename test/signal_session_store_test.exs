@@ -494,6 +494,99 @@ defmodule ExWapp.SignalSessionStoreTest do
       )
   end
 
+  test "repeated prekey decrypts through the retained session after an outbound refresh" do
+    alice_identity = Keys.generate_key_pair()
+    bob = remote_device(4_503, 93, 123)
+    alice_jid = "444555669:32@lid"
+    bob_jid = "999888780:7@lid"
+
+    alice_signed_prekey = Keys.generate_signed_prekey(alice_identity, 94)
+    alice_one_time_prekey = Keys.generate_prekey(124)
+
+    alice_bundle = %{
+      registration_id: 4_504,
+      identity_key: alice_identity.public,
+      signed_prekey: %{
+        id: 94,
+        public: alice_signed_prekey.public,
+        signature: alice_signed_prekey.signature
+      },
+      prekey: %{id: 124, public: alice_one_time_prekey.public}
+    }
+
+    assert {:ok, first_ciphertext, :prekey, alice_store1} =
+             SessionStore.encrypt_message(
+               SessionStore.new(),
+               bob_jid,
+               "first",
+               alice_identity,
+               4_505,
+               bob.bundle
+             )
+
+    assert {:ok, second_ciphertext, :prekey, _alice_store2} =
+             SessionStore.encrypt_message(
+               alice_store1,
+               bob_jid,
+               "second",
+               alice_identity,
+               4_505,
+               %{}
+             )
+
+    assert {:ok, "first", bob_store1} =
+             SessionStore.decrypt_message(
+               SessionStore.new(),
+               alice_jid,
+               first_ciphertext,
+               true,
+               bob.identity,
+               bob.local_prekeys
+             )
+
+    assert {:ok, first_envelope} = WireFormat.parse_prekey_signal_message(first_ciphertext)
+    assert {:ok, first_receiving_session} = SessionStore.get_session(bob_store1, alice_jid)
+    assert first_receiving_session.initiator_base_key == first_envelope.base_key
+
+    assert {:ok, refreshed_session, _base_key, bob_store2} =
+             SessionStore.get_or_create_session(
+               bob_store1,
+               alice_jid,
+               bob.identity,
+               alice_bundle,
+               4_503,
+               force: true
+             )
+
+    assert length(refreshed_session.previous_sessions) == 1
+
+    consumed_prekeys = %{bob.local_prekeys | prekeys: %{}}
+
+    assert {:ok, "second", bob_store3} =
+             SessionStore.decrypt_message(
+               bob_store2,
+               alice_jid,
+               second_ciphertext,
+               true,
+               bob.identity,
+               consumed_prekeys
+             )
+
+    assert {:ok, current_session} = SessionStore.get_session(bob_store3, alice_jid)
+    assert current_session.initiator_base_key == refreshed_session.initiator_base_key
+    assert length(current_session.previous_sessions) == 1
+
+    assert {:error, :message_key_not_found} =
+             SessionStore.decrypt_message(
+               bob_store3,
+               alice_jid,
+               second_ciphertext,
+               true,
+               bob.identity,
+               consumed_prekeys
+             )
+  end
+
   test "pending prekey state is independent for every recipient device" do
     alice_identity = Keys.generate_key_pair()
     alice_jid = "444555668:5@s.whatsapp.net"

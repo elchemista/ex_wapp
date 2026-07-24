@@ -167,11 +167,18 @@ defmodule ExWapp.Session.Account do
   @spec local_account_sender_identity_for_destination(term(), String.t()) :: String.t()
   def local_account_sender_identity_for_destination(nil, _destination_jid), do: ""
 
-  def local_account_sender_identity_for_destination(store, _destination_jid) do
+  def local_account_sender_identity_for_destination(store, destination_jid) do
     own_base = local_account_base_jid(store)
     own_lid = local_account_lid_jid(store)
+    lid_destination? = JIDUtils.lid_jid?(JIDUtils.strip_device(destination_jid))
 
     cond do
+      lid_destination? and own_lid != "" ->
+        own_lid
+
+      not lid_destination? and own_base != "" ->
+        own_base
+
       own_lid != "" ->
         own_lid
 
@@ -190,8 +197,9 @@ defmodule ExWapp.Session.Account do
     else
       data = Store.load!(store)
       tctokens = Map.get(data, :tctokens, %{})
+      lid_mapping = Map.get(data, :lid_mapping, %{})
 
-      case Map.get(tctokens, jid) do
+      case find_tctoken(tctokens, jid, lid_mapping) do
         %{token: token} when is_binary(token) ->
           Logger.debug("[SEND] Appending tctoken for #{Log.reference(jid)}")
 
@@ -211,6 +219,13 @@ defmodule ExWapp.Session.Account do
     e ->
       Logger.warning("[ACCOUNT] maybe_append_tctoken failed: #{Log.reason(e)}")
       content
+  end
+
+  defp find_tctoken(tctokens, jid, lid_mapping) do
+    jid
+    |> JIDUtils.related_bases(lid_mapping)
+    |> Enum.sort_by(fn candidate -> if JIDUtils.lid_jid?(candidate), do: 0, else: 1 end)
+    |> Enum.find_value(&Map.get(tctokens, &1))
   end
 
   @spec get_device_identity_node(term()) ::

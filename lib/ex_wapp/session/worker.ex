@@ -1793,6 +1793,12 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp handle_connection_event({:connection_message, %Binary.Node{} = node}, state) do
+    # ACK at the connection boundary, before routing/decryption/persistence.
+    # This keeps protocol liveness independent from application work.
+    node
+    |> NodeHandler.immediate_actions()
+    |> Enum.each(&NodeHandler.safe_handle_action(&1, state))
+
     InboundRouter.route(state.inbound_router, node)
     state
   end
@@ -1865,15 +1871,24 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp maybe_start_placeholder_resend_request(
-         %{status: status, conn: conn} = state,
+         state,
          chat_jid,
          sender_jid,
          message_id,
          metadata
-       )
-       when status in [:connected, :syncing] and is_pid(conn) and is_binary(chat_jid) and
-              chat_jid != "" and is_binary(sender_jid) and sender_jid != "" and
-              is_binary(message_id) and message_id != "" do
+       ) do
+    if placeholder_resend_ready?(state, chat_jid, sender_jid, message_id) do
+      start_placeholder_resend_request(state, chat_jid, sender_jid, message_id, metadata)
+    else
+      Logger.warning(
+        "[PLACEHOLDER] Cannot request unavailable message id=#{Log.reference(message_id)} while status=#{inspect(Map.get(state, :status))}"
+      )
+
+      state
+    end
+  end
+
+  defp start_placeholder_resend_request(state, chat_jid, sender_jid, message_id, metadata) do
     session_pid = self()
 
     proto =
@@ -1903,19 +1918,14 @@ defmodule ExWapp.Session.Worker do
     end
   end
 
-  defp maybe_start_placeholder_resend_request(
-         state,
-         _chat_jid,
-         _sender_jid,
-         message_id,
-         _metadata
-       ) do
-    Logger.warning(
-      "[PLACEHOLDER] Cannot request unavailable message id=#{Log.reference(message_id)} while status=#{inspect(Map.get(state, :status))}"
-    )
-
-    state
+  defp placeholder_resend_ready?(%{status: status, conn: conn}, chat_jid, sender_jid, message_id) do
+    status in [:connected, :syncing] and is_pid(conn) and valid_resend_ref?(chat_jid) and
+      valid_resend_ref?(sender_jid) and valid_resend_ref?(message_id)
   end
+
+  defp placeholder_resend_ready?(_state, _chat_jid, _sender_jid, _message_id), do: false
+
+  defp valid_resend_ref?(value), do: is_binary(value) and value != ""
 
   # Outbound message dispatch
 

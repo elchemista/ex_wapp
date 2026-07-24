@@ -271,20 +271,18 @@ defmodule ExWapp.Signal.SessionStore do
   end
 
   defp do_copy_session(store, source_jid, alias_jid) do
-    cond do
-      source_jid == alias_jid ->
-        store
+    if source_jid == alias_jid do
+      store
+    else
+      case get_session(store, source_jid) do
+        {:ok, session} ->
+          store
+          |> put_session(alias_jid, session)
+          |> copy_pending_prekey(source_jid, alias_jid)
 
-      true ->
-        case get_session(store, source_jid) do
-          {:ok, session} ->
-            store
-            |> put_session(alias_jid, session)
-            |> copy_pending_prekey(source_jid, alias_jid)
-
-          :not_found ->
-            store
-        end
+        :not_found ->
+          store
+      end
     end
   end
 
@@ -661,8 +659,8 @@ defmodule ExWapp.Signal.SessionStore do
     )
 
     case try_existing_session_for_prekey(store, jid, ciphertext) do
-      {:ok, plaintext, session} ->
-        {:ok, plaintext, store_decrypted_session(store, jid, session, session)}
+      {:ok, plaintext, updated_session, decrypted_session} ->
+        {:ok, plaintext, store_decrypted_session(store, jid, updated_session, decrypted_session)}
 
       {:error, reason} ->
         {:error, reason}
@@ -699,37 +697,150 @@ defmodule ExWapp.Signal.SessionStore do
   defp try_existing_session_for_prekey(store, jid, ciphertext) do
     case get_session(store, jid) do
       {:ok, session} ->
-        Logger.debug(
-          "[SESSION_STORE] Trying existing session ratchet for prekey msg from #{Log.reference(jid)} session=#{inspect(session_debug(session))}"
-        )
+        case WireFormat.parse_prekey_signal_message(ciphertext) do
+          {:ok, parsed} ->
+            decrypt_prekey_with_stored_sessions(session, ciphertext, jid, parsed.base_key)
 
-        case Signal.decrypt_prekey_message_with_session(session, ciphertext) do
-          {:ok, plaintext, updated_session} ->
-            Logger.debug(
-              "[SESSION_STORE] PreKey decrypt succeeded on existing session for #{Log.reference(jid)}"
-            )
-
-            {:ok, plaintext, updated_session}
-
-          {:error, reason} when reason in [:message_key_not_found, :prekey_not_found] ->
-            Logger.debug(
-              "[SESSION_STORE] Prekey message for #{Log.reference(jid)} references already-consumed key material: #{inspect(reason)}"
+          {:error, reason} ->
+            Logger.warning(
+              "[SESSION_STORE] Cannot route malformed prekey message for #{Log.reference(jid)}: #{Log.reason(reason)}"
             )
 
             {:error, reason}
-
-          {:error, reason} ->
-            Logger.debug(
-              "[SESSION_STORE] Existing session prekey decrypt failed for #{Log.reference(jid)}, trying fresh X3DH: #{Log.reason(reason)} " <>
-                "session=#{inspect(session_debug(session))}"
-            )
-
-            :try_fresh
         end
 
       :not_found ->
         :try_fresh
     end
+  end
+
+  defp decrypt_prekey_with_stored_sessions(session, ciphertext, jid, base_key) do
+    candidates = prekey_session_candidates(session)
+    matching = Enum.filter(candidates, &session_matches_base_key?(&1, base_key))
+
+    Logger.debug(
+      "[SESSION_STORE] Routing prekey message for #{Log.reference(jid)} " <>
+        "stored_sessions=#{length(candidates)} base_key_matches=#{length(matching)} " <>
+        "legacy_sessions=#{Enum.count(candidates, &legacy_session_candidate?/1)} " <>
+        "current=#{inspect(session_debug(session))}"
+    )
+
+    case matching do
+      [candidate | _rest] ->
+        decrypt_matching_prekey_session(session, candidate, ciphertext, jid)
+
+      [] ->
+        decrypt_legacy_prekey_sessions(session, candidates, ciphertext, jid, base_key)
+    end
+  end
+
+  defp decrypt_matching_prekey_session(session, candidate, ciphertext, jid) do
+    {_location, stored_session} = candidate
+
+    case Signal.decrypt_prekey_message_with_session(stored_session, ciphertext) do
+      {:ok, plaintext, updated_session} ->
+        Logger.debug(
+          "[SESSION_STORE] PreKey decrypt succeeded on base-key-matched #{candidate_label(candidate)} " <>
+            "for #{Log.reference(jid)}"
+        )
+
+        {:ok, plaintext, replace_prekey_candidate(session, candidate, updated_session),
+         updated_session}
+
+      {:error, :message_key_not_found} = duplicate ->
+        Logger.debug(
+          "[SESSION_STORE] Base-key-matched ratchet proved prekey replay for #{Log.reference(jid)}"
+        )
+
+        duplicate
+
+      {:error, reason} ->
+        Logger.warning(
+          "[SESSION_STORE] Base-key-matched prekey session failed for #{Log.reference(jid)} " <>
+            "location=#{candidate_label(candidate)} reason=#{Log.reason(reason)}"
+        )
+
+        {:error, reason}
+    end
+  end
+
+  defp decrypt_legacy_prekey_sessions(session, candidates, ciphertext, jid, base_key) do
+    legacy_candidates = Enum.filter(candidates, &legacy_session_candidate?/1)
+
+    case try_legacy_prekey_candidates(session, legacy_candidates, ciphertext, base_key) do
+      {:ok, plaintext, updated_session, decrypted_session, candidate} ->
+        Logger.debug(
+          "[SESSION_STORE] PreKey decrypt succeeded on legacy #{candidate_label(candidate)} " <>
+            "for #{Log.reference(jid)}; attached envelope base key for future routing"
+        )
+
+        {:ok, plaintext, updated_session, decrypted_session}
+
+      {:error, reasons} ->
+        Logger.debug(
+          "[SESSION_STORE] No stored session matched prekey base key for #{Log.reference(jid)}; " <>
+            "legacy_attempts=#{length(legacy_candidates)} legacy_errors=#{summarize_decrypt_reasons(reasons)} " <>
+            "trying fresh X3DH"
+        )
+
+        :try_fresh
+    end
+  end
+
+  defp try_legacy_prekey_candidates(session, candidates, ciphertext, base_key) do
+    Enum.reduce_while(candidates, {:error, []}, fn candidate, {:error, reasons} ->
+      {_location, legacy_session} = candidate
+
+      case Signal.decrypt_prekey_message_with_session(legacy_session, ciphertext) do
+        {:ok, plaintext, updated_legacy_session} ->
+          updated_legacy_session =
+            Map.put(updated_legacy_session, :initiator_base_key, base_key)
+
+          {:halt,
+           {:ok, plaintext, replace_prekey_candidate(session, candidate, updated_legacy_session),
+            updated_legacy_session, candidate}}
+
+        {:error, reason} ->
+          {:cont, {:error, [reason | reasons]}}
+      end
+    end)
+  end
+
+  defp prekey_session_candidates(session) do
+    [{:current, session}] ++
+      (session
+       |> Map.get(:previous_sessions, [])
+       |> Enum.with_index()
+       |> Enum.map(fn {previous, index} -> {{:previous, index}, previous} end))
+  end
+
+  defp session_matches_base_key?({_location, session}, base_key),
+    do: is_binary(base_key) and Map.get(session, :initiator_base_key) == base_key
+
+  defp legacy_session_candidate?({_location, session}),
+    do: not is_binary(Map.get(session, :initiator_base_key))
+
+  defp replace_prekey_candidate(_session, {:current, _stored}, updated_session),
+    do: updated_session
+
+  defp replace_prekey_candidate(session, {{:previous, index}, _stored}, updated_session) do
+    previous_sessions =
+      session
+      |> Map.get(:previous_sessions, [])
+      |> List.replace_at(index, strip_previous_sessions(updated_session))
+
+    Map.put(session, :previous_sessions, previous_sessions)
+  end
+
+  defp candidate_label({:current, _session}), do: "current-session"
+  defp candidate_label({{:previous, index}, _session}), do: "previous-session[#{index}]"
+
+  defp summarize_decrypt_reasons([]), do: "none"
+
+  defp summarize_decrypt_reasons(reasons) do
+    reasons
+    |> Enum.frequencies()
+    |> Enum.map_join(",", fn {reason, count} -> "#{inspect(reason)}:#{count}" end)
   end
 
   defp decrypt_whisper(store, jid, ciphertext) do
@@ -912,13 +1023,7 @@ defmodule ExWapp.Signal.SessionStore do
     lock_keys = session_mutation_lock_keys(store, jids, identity_hints)
 
     case MutationLock.with_locks(lock_keys, fn ->
-           refreshed_keys = session_mutation_lock_keys(store, jids, identity_hints)
-
-           if Enum.all?(refreshed_keys, &(&1 in lock_keys)) do
-             {:mutation_result, fun.()}
-           else
-             :retry_mutation_lock
-           end
+           run_locked_session_mutation(store, jids, identity_hints, lock_keys, fun)
          end) do
       {:mutation_result, result} -> result
       :retry_mutation_lock -> with_session_mutation(store, jids, identity_hints, fun)
@@ -926,6 +1031,16 @@ defmodule ExWapp.Signal.SessionStore do
   end
 
   defp with_session_mutation(_store, _jids, _identity_hints, fun), do: fun.()
+
+  defp run_locked_session_mutation(store, jids, identity_hints, lock_keys, fun) do
+    refreshed_keys = session_mutation_lock_keys(store, jids, identity_hints)
+
+    if Enum.all?(refreshed_keys, &(&1 in lock_keys)) do
+      {:mutation_result, fun.()}
+    else
+      :retry_mutation_lock
+    end
+  end
 
   defp session_mutation_lock_keys(%Ref{table: table} = store, jids, identity_hints) do
     normalized_jids = jids |> Enum.map(&normalize_jid/1) |> Enum.uniq()
@@ -1031,8 +1146,7 @@ defmodule ExWapp.Signal.SessionStore do
     Enum.find([current_reason | previous_reasons], &duplicate_key_error?/1) || current_reason
   end
 
-  defp duplicate_key_error?(reason),
-    do: reason in [:message_key_not_found, :prekey_not_found, :key_unavailable]
+  defp duplicate_key_error?(reason), do: reason == :message_key_not_found
 
   defp retain_previous_session(new_session, previous_session) do
     if same_remote_identity?(new_session, previous_session) do
@@ -1101,6 +1215,7 @@ defmodule ExWapp.Signal.SessionStore do
   defp session_debug(session) when is_map(session) do
     %{
       remote_identity_present?: is_binary(Map.get(session, :remote_identity_key)),
+      initiator_base_key_present?: is_binary(Map.get(session, :initiator_base_key)),
       local_identity_present?:
         session
         |> Map.get(:local_identity_key, %{})

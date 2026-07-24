@@ -103,6 +103,76 @@ defmodule ExWapp.Session.Outbound.FanoutTest do
     assert resolution.cached_eviction_batches == [[unreachable_cached]]
   end
 
+  test "canonicalizes every participant into a LID destination family" do
+    recipient_pn = "15550001111@s.whatsapp.net"
+    recipient_lid = "70000001111@lid"
+    own_pn = "15550002222@s.whatsapp.net"
+    own_lid = "70000002222@lid"
+
+    resolution =
+      Fanout.resolve(
+        context(%{
+          jid: recipient_lid,
+          own_base_jid: own_pn,
+          own_lid_jid: own_lid,
+          lid_mapping: %{
+            {:pn_to_lid, recipient_pn} => recipient_lid,
+            {:lid_to_pn, recipient_lid} => recipient_pn,
+            {:pn_to_lid, own_pn} => own_lid,
+            {:lid_to_pn, own_lid} => own_pn
+          },
+          target_hints: %{
+            recipient_devices: [
+              recipient_pn,
+              "#{recipient_pn |> String.split("@") |> hd()}:5@s.whatsapp.net"
+            ],
+            recipient_cached_devices: [],
+            own_devices: ["15550002222:9@s.whatsapp.net"],
+            own_cached_devices: [],
+            own_identity_jid: own_lid,
+            all_usync_devices: [
+              "15550001111:5@s.whatsapp.net",
+              "15550002222:9@s.whatsapp.net"
+            ]
+          }
+        })
+      )
+
+    assert resolution.target_specs == [
+             %{jid: recipient_lid, payload_kind: :recipient},
+             %{jid: "70000001111:5@lid", payload_kind: :recipient},
+             %{jid: "70000002222:9@lid", payload_kind: :own}
+           ]
+
+    assert Enum.all?(resolution.all_usync_devices, &String.ends_with?(&1, "@lid"))
+    assert resolution.family_rejections == []
+  end
+
+  test "rejects an unresolved mixed-family target instead of poisoning the whole message" do
+    resolution =
+      Fanout.resolve(
+        context(%{
+          jid: "70000001111@lid",
+          own_base_jid: "",
+          own_lid_jid: "",
+          target_hints: %{
+            recipient_devices: ["70000001111@lid"],
+            recipient_cached_devices: [],
+            own_devices: ["15550002222:9@s.whatsapp.net"],
+            own_cached_devices: [],
+            own_identity_jid: "",
+            all_usync_devices: []
+          }
+        })
+      )
+
+    assert resolution.target_specs == [
+             %{jid: "70000001111@lid", payload_kind: :recipient}
+           ]
+
+    assert resolution.family_rejections == ["15550002222:9@s.whatsapp.net"]
+  end
+
   @spec context(map()) :: map()
   defp context(overrides) do
     Map.merge(

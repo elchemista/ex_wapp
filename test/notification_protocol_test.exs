@@ -1,6 +1,7 @@
 defmodule ExWapp.NotificationProtocolTest do
   use ExUnit.Case, async: true
 
+  alias ExWapp.Binary
   alias ExWapp.Binary.Node
   alias ExWapp.MessageHandler
   alias ExWapp.Session.DeviceCache
@@ -132,6 +133,45 @@ defmodule ExWapp.NotificationProtocolTest do
              MessageHandler.handle_node(own_devices, self(), %{store: store})
 
     assert Store.load_device_cache(store) == %{}
+  end
+
+  test "privacy tokens are stored under both PN and LID aliases" do
+    pn = "15550003333@s.whatsapp.net"
+    lid = "77777733333@lid"
+    token = <<1, 2, 3, 4>>
+
+    store =
+      Store.Memory.new(
+        initial_data: %{
+          lid_mapping: %{
+            {:pn_to_lid, pn} => lid,
+            {:lid_to_pn, lid} => pn
+          }
+        }
+      )
+
+    privacy_token =
+      notification("privacy_token", "TOKEN-1", pn, [
+        %Node{
+          tag: "tokens",
+          attrs: %{},
+          content: [
+            %Node{
+              tag: "token",
+              attrs: %{"type" => "trusted_contact", "t" => "123"},
+              content: Binary.raw(token)
+            }
+          ]
+        }
+      ])
+      |> put_in([Access.key!(:attrs), "sender_lid"], lid)
+
+    assert {:ok, _state, [{:send_node, %Node{tag: "ack"}}]} =
+             MessageHandler.handle_node(privacy_token, self(), %{store: store})
+
+    tctokens = store |> Store.load!() |> Map.fetch!(:tctokens)
+    assert tctokens[pn] == %{token: token, timestamp: "123"}
+    assert tctokens[lid] == %{token: token, timestamp: "123"}
   end
 
   defp notification(type, id, from, content) do

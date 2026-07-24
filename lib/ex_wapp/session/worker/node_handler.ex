@@ -9,8 +9,9 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   require Logger
 
   alias ExWapp.{Binary, Config, Log, Pairing}
-
+  alias ExWapp.Message.Handler.Ack
   alias ExWapp.Session.{OutboundQueue, SendCoordinator}
+  alias ExWapp.Signal.SessionStore
 
   alias ExWapp.Session.Worker.{
     Inbound,
@@ -21,6 +22,31 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   }
 
   # Safe node entry point
+
+  @doc """
+  Returns transport acknowledgements that must be enqueued before normal node
+  handling. This is intentionally separate from `safe_handle_node/2`: message
+  decryption and persistence may block or fail, while the server-level stanza
+  ACK is independent of those application phases.
+  """
+  @spec immediate_actions(Binary.Node.t()) :: [term()]
+  def immediate_actions(%Binary.Node{} = node) do
+    case Ack.build_immediate_ack(node) do
+      {:ok, ack} ->
+        Logger.debug(
+          "[ACK] queueing immediate inbound stanza ack class=#{Map.get(ack.attrs, "class", "")} " <>
+            "type=#{Map.get(ack.attrs, "type", "")} id=#{Log.reference(Map.get(ack.attrs, "id"))} " <>
+            "to=#{Log.reference(Map.get(ack.attrs, "to"))} participant?=#{Map.has_key?(ack.attrs, "participant")} " <>
+            "recipient?=#{Map.has_key?(ack.attrs, "recipient")}"
+        )
+
+        [{:send_node, ack}]
+
+      :ignore ->
+        maybe_log_missing_immediate_ack_identity(node)
+        []
+    end
+  end
 
   @doc """
   Safely handles a node, catching any exceptions.
@@ -46,6 +72,21 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     :exit, reason ->
       Logger.error("Exit handling node: #{Log.reason(reason)}")
       {update_stats(state, :errors), []}
+  end
+
+  defp maybe_log_missing_immediate_ack_identity(%Binary.Node{tag: tag, attrs: attrs})
+       when tag in ["message", "call"] do
+    Logger.warning(
+      "[ACK] cannot acknowledge inbound stanza class=#{tag}: " <>
+        "id_present?=#{non_empty_attr?(attrs, "id")} from_present?=#{non_empty_attr?(attrs, "from")}"
+    )
+  end
+
+  defp maybe_log_missing_immediate_ack_identity(_node), do: :ok
+
+  defp non_empty_attr?(attrs, key) when is_map(attrs) do
+    value = Map.get(attrs, key)
+    is_binary(value) and value != ""
   end
 
   @doc """
@@ -183,69 +224,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
          %Binary.Node{tag: "stream:error", attrs: attrs, content: children},
          state
        ) do
-    code = Map.get(attrs, "code", "unknown")
-    first_child_tag = first_stream_error_child_tag(children)
-    children_summary = summarize_stream_error_children(children)
-
-    if transient_stream_error?(code) do
-      Logger.warning("[SESSION] Recoverable stream error: code=#{code}; reconnecting")
-    else
-      Logger.error("[SESSION] Stream error: code=#{code}")
-      Logger.error("[SESSION] Stream error attrs: #{inspect(Log.attrs(attrs))}")
-
-      Logger.error(
-        "[SESSION] Stream error children summary: #{inspect(children_summary, limit: :infinity)}"
-      )
-    end
-
-    # Check for conflict type in children
-    conflict_type = extract_conflict_type(children)
-    stream_error_reason = {:stream_error, code, conflict_type}
-
-    # Recoverable server-side conditions (503/515) are announced as a soft
-    # "reconnecting" notice rather than a hard error, so owners don't raise
-    # user-facing alerts for transient blips that the runtime recovers from.
-    if transient_stream_error?(code) do
-      broadcast_reconnecting_event(state, stream_error_reason)
-    else
-      broadcast_error_event(state, stream_error_reason)
-    end
-
-    new_state =
-      cond do
-        code == "401" ->
-          Logger.error("[SESSION] Device was removed (401)! Need to re-pair from scratch.")
-          Logger.error("[SESSION] Delete session file and scan QR code again.")
-          maybe_notify_qr_error(state, :device_removed)
-          state = Safety.record_signal(state, :device_removed)
-          # Mark session invalid, then trigger the normal disconnect path in Worker.
-          state
-          |> Map.put(:session_invalid, true)
-          |> mark_transport_closed(stream_error_reason)
-
-        conflict_type == "replaced" ->
-          Logger.error("[SESSION] Stream replaced by another connection, restarting transport")
-          maybe_notify_qr_error(state, :stream_replaced)
-          state = Safety.record_signal(state, :stream_replaced)
-          restart_connection_now(state, :stream_replaced)
-
-        code == "515" ->
-          Logger.warning("[SESSION] Got 515, will reconnect...")
-          mark_transport_closed(state, stream_error_reason)
-
-        code == "503" ->
-          Logger.warning("[SESSION] Got 503 (service unavailable), will reconnect...")
-          mark_transport_closed(state, stream_error_reason)
-
-        true ->
-          Logger.error(
-            "[SESSION] Unknown stream error: code=#{code}, conflict=#{Log.reason(conflict_type)}, first_child=#{inspect(first_child_tag)}"
-          )
-
-          mark_transport_closed(state, stream_error_reason)
-      end
-
-    {new_state, []}
+    handle_stream_error(attrs, children, state)
   end
 
   # Handle incoming messages and notifications via MessageHandler
@@ -280,6 +259,143 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     )
 
     {update_stats(state, :messages_received), []}
+  end
+
+  defp handle_stream_error(attrs, children, state) do
+    code = Map.get(attrs, "code", "unknown")
+    first_child_tag = first_stream_error_child_tag(children)
+    children_summary = summarize_stream_error_children(children)
+
+    log_stream_error(code, attrs, children_summary)
+
+    # Check for structured details in children. WhatsApp uses an <ack/> child
+    # to tell the client exactly which inbound stanza was left unacknowledged.
+    conflict_type = extract_conflict_type(children)
+    missing_ack = extract_missing_ack(children)
+    stream_error_detail = missing_ack || conflict_type
+    stream_error_reason = {:stream_error, code, stream_error_detail}
+
+    log_missing_ack(missing_ack)
+
+    # Recoverable server-side conditions (503/515) are announced as a soft
+    # "reconnecting" notice rather than a hard error, so owners don't raise
+    # user-facing alerts for transient blips that the runtime recovers from.
+    broadcast_stream_error(state, code, stream_error_reason)
+
+    new_state =
+      transition_stream_error(
+        state,
+        code,
+        conflict_type,
+        stream_error_reason,
+        stream_error_detail,
+        first_child_tag
+      )
+
+    {new_state, []}
+  end
+
+  defp log_stream_error(code, attrs, children_summary) do
+    if transient_stream_error?(code) do
+      Logger.warning("[SESSION] Recoverable stream error: code=#{code}; reconnecting")
+    else
+      Logger.error("[SESSION] Stream error: code=#{code}")
+      Logger.error("[SESSION] Stream error attrs: #{inspect(Log.attrs(attrs))}")
+
+      Logger.error(
+        "[SESSION] Stream error children summary: #{inspect(children_summary, limit: :infinity)}"
+      )
+    end
+  end
+
+  defp log_missing_ack(nil), do: :ok
+
+  defp log_missing_ack({:missing_stanza_ack, stanza_class, stanza_type}) do
+    Logger.error(
+      "[SESSION] Server closed stream for missing stanza ACK class=#{stanza_class} " <>
+        "type=#{stanza_type}; the immediate ACK path must prevent this from recurring"
+    )
+  end
+
+  defp broadcast_stream_error(state, code, stream_error_reason) do
+    if transient_stream_error?(code) do
+      broadcast_reconnecting_event(state, stream_error_reason)
+    else
+      broadcast_error_event(state, stream_error_reason)
+    end
+  end
+
+  defp transition_stream_error(
+         state,
+         "401",
+         _conflict_type,
+         stream_error_reason,
+         _detail,
+         _first_child_tag
+       ) do
+    Logger.error("[SESSION] Device was removed (401)! Need to re-pair from scratch.")
+    Logger.error("[SESSION] Delete session file and scan QR code again.")
+    maybe_notify_qr_error(state, :device_removed)
+
+    state
+    |> Safety.record_signal(:device_removed)
+    |> Map.put(:session_invalid, true)
+    |> mark_transport_closed(stream_error_reason)
+  end
+
+  defp transition_stream_error(
+         state,
+         _code,
+         "replaced",
+         _stream_error_reason,
+         _detail,
+         _first_child_tag
+       ) do
+    Logger.error("[SESSION] Stream replaced by another connection, restarting transport")
+    maybe_notify_qr_error(state, :stream_replaced)
+
+    state
+    |> Safety.record_signal(:stream_replaced)
+    |> restart_connection_now(:stream_replaced)
+  end
+
+  defp transition_stream_error(
+         state,
+         "515",
+         _conflict_type,
+         stream_error_reason,
+         _detail,
+         _first_child_tag
+       ) do
+    Logger.warning("[SESSION] Got 515, will reconnect...")
+    mark_transport_closed(state, stream_error_reason)
+  end
+
+  defp transition_stream_error(
+         state,
+         "503",
+         _conflict_type,
+         stream_error_reason,
+         _detail,
+         _first_child_tag
+       ) do
+    Logger.warning("[SESSION] Got 503 (service unavailable), will reconnect...")
+    mark_transport_closed(state, stream_error_reason)
+  end
+
+  defp transition_stream_error(
+         state,
+         code,
+         _conflict_type,
+         stream_error_reason,
+         detail,
+         first_child_tag
+       ) do
+    Logger.error(
+      "[SESSION] Unknown stream error: code=#{code}, detail=#{Log.reason(detail)}, first_child=#{inspect(first_child_tag)}"
+    )
+
+    mark_transport_closed(state, stream_error_reason)
   end
 
   # IQ routing and pending-request handling
@@ -358,6 +474,23 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   end
 
   defp extract_conflict_type(_children), do: nil
+
+  defp extract_missing_ack(children) when is_list(children) do
+    Enum.find_value(children, fn
+      %Binary.Node{tag: "ack", attrs: attrs} when is_map(attrs) ->
+        stanza_class = Map.get(attrs, "class", "")
+        stanza_type = Map.get(attrs, "type", "")
+
+        if stanza_class != "" do
+          {:missing_stanza_ack, stanza_class, stanza_type}
+        end
+
+      _other ->
+        nil
+    end)
+  end
+
+  defp extract_missing_ack(_children), do: nil
 
   defp first_stream_error_child_tag([%Binary.Node{tag: tag} | _]) when is_binary(tag), do: tag
   defp first_stream_error_child_tag(_children), do: nil
@@ -568,6 +701,18 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   # Executing pairing and session actions
 
+  defp handle_pairing_action(
+         {:send_node, %Binary.Node{tag: "ack"} = node},
+         %{outbound_queue: outbound_queue}
+       )
+       when is_pid(outbound_queue) do
+    Logger.debug(
+      "[NODE_HANDLER] priority-enqueueing stanza ACK attrs=#{inspect(loggable_attrs(node.attrs || %{}), limit: 60)}"
+    )
+
+    OutboundQueue.enqueue_priority_node(outbound_queue, node)
+  end
+
   defp handle_pairing_action({:send_node, node}, %{outbound_queue: outbound_queue})
        when is_pid(outbound_queue) do
     Logger.debug(
@@ -620,7 +765,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   end
 
   defp handle_pairing_action({:signal_sessions_updated, sessions}, _state) do
-    if ExWapp.Signal.SessionStore.store?(sessions) do
+    if SessionStore.store?(sessions) do
       send(self(), {:signal_sessions_updated, sessions})
     end
   end

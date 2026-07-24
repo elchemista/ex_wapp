@@ -1,7 +1,7 @@
 # WhatsApp Multi-Device Protocol Spec for ExWapp
 
 > Derived from whatsmeow (Go), Baileys (TypeScript), whatsapp-rust, and reconciled
-> with ExWapp implementation/history through Feb 12, 2026.
+> with ExWapp implementation/history and production logs through Jul 24, 2026.
 > When reference behavior and current ExWapp behavior differ, this document calls it out.
 
 ---
@@ -12,9 +12,9 @@
 
 | Type | Server | Example | Usage |
 |------|--------|---------|-------|
-| **PN (Phone Number)** | `s.whatsapp.net` | `15550001111@s.whatsapp.net` | User-facing, server-facing (usync, prekey IQ, `<to>` attr) |
+| **PN (Phone Number)** | `s.whatsapp.net` | `15550001111@s.whatsapp.net` | User-facing, usync/prekey IQ, PN-addressed message fanout |
 | **PN with Device** | `s.whatsapp.net` | `15550001111:2@s.whatsapp.net` | Device-specific targeting |
-| **LID (Linked Identity)** | `lid` | `203139403767907@lid` | Signal session storage, encryption identity |
+| **LID (Linked Identity)** | `lid` | `203139403767907@lid` | Signal session storage, encryption identity, LID-addressed message fanout |
 | **LID with Device** | `lid` | `203139403767907:2@lid` | Device-specific LID |
 | **Group** | `g.us` | `120363043214477337@g.us` | Group chat addressing |
 | **Server** | `s.whatsapp.net` | `s.whatsapp.net` | IQ target for server requests |
@@ -23,11 +23,15 @@
 
 This is the most critical distinction. Getting it wrong causes silent message delivery failure.
 
-- **Wire Identity (PN)**: Used in server-facing XML nodes (`<to jid="...">`, usync queries, prekey fetch IQ `<user jid="...">`).
+- **Wire Identity**: Used in server-facing XML nodes. USync and prekey-fetch IQs
+  use PN identities, while a DM participant `<to jid="...">` must use the same
+  PN/LID family as the outer chat destination.
 - **Encryption Identity (LID)**: Used for Signal session lookup/storage and encryption cipher operations.
 
-**Rule**: The `<to jid="...">` attribute in participant nodes MUST use the **wire identity** (PN).
-The Signal session MUST be keyed by the **encryption identity** (LID if mapping exists).
+**Rule**: A single DM stanza MUST NOT mix PN and LID participant JIDs. For a
+PN destination all participant JIDs, including own linked devices, use PN; for
+a LID destination they all use LID. The Signal session can still be resolved
+through the mapped encryption identity.
 
 > whatsmeow `send.go:1323-1343`: `encryptMessageForDeviceAndWrap` takes both `wireIdentity` and `encryptionIdentity`. The XML `<to jid>` uses wireIdentity; the cipher uses encryptionIdentity.
 
@@ -132,6 +136,20 @@ If session migration hasn't run → encryption MUST use PN JID (where the sessio
 
 **Bug we hit**: Fetching prekeys with PN JID, then encrypting with LID JID → no session found → creates new session from bundle → wrong session state → message silently dropped by server.
 
+### 3.4 Local Prekey Upload Durability
+
+Uploading local one-time prekeys is a two-phase operation:
+
+1. Atomically generate/reserve the private and public halves in the store and
+   advance `next_prekey_id`.
+2. Only then build and enqueue the upload IQ.
+3. On an IQ `result`, mark the reserved IDs as `uploaded: true`.
+4. On timeout, disconnect, or IQ error, keep `uploaded: false` key material and
+   reuse the same IDs on the next upload attempt.
+
+Transient request tracking may be reset on reconnect; private key material
+must never depend on receiving the upload result.
+
 ---
 
 ## 4. Signal Encryption
@@ -210,7 +228,9 @@ MAC is first 8 bytes of HMAC-SHA256 with:
    - Own devices (matching user part) → encrypt `dsmPlaintext`
    - Recipient devices → encrypt `plaintext`
    - Each encryption → pad → Signal encrypt → get ciphertext + type (pkmsg/msg)
-11. **Build participant nodes**: `<to jid="wireJID"><enc v="2" type="pkmsg|msg">ciphertext</enc></to>`
+11. **Canonicalize fanout family** to match the outer destination; reject any
+    target that cannot be mapped, then build participant nodes:
+    `<to jid="wireJID"><enc v="2" type="pkmsg|msg">ciphertext</enc></to>`
 12. **Build DM message node**: participants + optional device-identity + optional tctoken (`phash` not emitted in DM attrs)
 13. **Send** over transport (Binary encode → Noise encrypt → WA frame)
 
@@ -313,6 +333,10 @@ The server compares the phash with its own computation. On mismatch:
   <tctoken>[privacy token bytes]</tctoken>
 </message>
 ```
+
+The example is PN-addressed. If the outer `to` is `recipient@lid`, every
+participant `jid` in that stanza must also be in the LID family. ExWapp validates
+this invariant again immediately before transport send.
 
 ### 7.2 Message ID Format
 
@@ -431,7 +455,7 @@ For groups:
 
 | enc type | Handler | Description |
 |----------|---------|-------------|
-| `pkmsg` | PreKey decrypt | Try existing session ratchet first; fallback to fresh X3DH only if needed |
+| `pkmsg` | PreKey decrypt | Route by the envelope base key across current/retained sessions; fallback to fresh X3DH only when no stored session matches |
 | `msg` | Normal decrypt | Existing session → advance ratchet |
 | `skmsg` | SenderKey decrypt | Group message → SenderKey cipher |
 
@@ -450,11 +474,16 @@ Try payload candidates in order; for each payload, try sender candidates until o
 6. If payload is protocol/internal (history sync/SKDM-only), do not emit chat text
 7. Otherwise → dispatch as chat message
 
+After a successful fresh `pkmsg` decrypt, persist the advanced Signal session
+before deleting the one-time prekey. Retain a small bounded set of prior
+sessions, keyed by the incoming initiator base key, so delayed stanzas can be
+routed to the ratchet that actually consumed them.
+
 ---
 
 ## 10. Receipt and ACK Handling
 
-### 10.1 Message ACK (Outgoing)
+### 10.1 Server ACK for an Outgoing Message
 
 For outbound sends, server returns ACK:
 
@@ -462,7 +491,28 @@ For outbound sends, server returns ACK:
 <ack class="message" id="MSG_ID" to="sender@s.whatsapp.net"/>
 ```
 
-### 10.2 Notification ACK
+An ACK containing a three-digit `error` attribute is a failed send and the
+numeric code must remain visible in sanitized logs.
+
+### 10.2 Immediate ACK for an Inbound Stanza
+
+Inbound `message` and `call` stanzas MUST be ACKed at the connection boundary,
+before routing, decryption, persistence, or subscriber publication:
+
+```xml
+<ack class="message" id="MSG_ID" to="sender:device@s.whatsapp.net"/>
+<ack class="call" id="CALL_ID" to="sender@s.whatsapp.net" type="offer"/>
+```
+
+- Copy `participant` and `recipient` when present.
+- For calls, derive `type` from the first child tag (`offer`, etc.) when it is
+  absent on the outer node.
+- The protocol ACK uses a priority transport queue and is independent of the
+  later delivery receipt.
+- A stream error containing `<ack class="call" .../>` means this ACK was
+  missing or delayed; reconnecting alone cannot correct it.
+
+### 10.3 Notification ACK
 
 Notifications MUST be ACKed with `class="notification"`:
 
@@ -472,7 +522,7 @@ Notifications MUST be ACKed with `class="notification"`:
 
 Missing notification ACKs stall server sync and history delivery.
 
-### 10.3 Delivery Receipt
+### 10.4 Delivery Receipt
 
 After successful decryption of an inbound message, send a receipt:
 
@@ -482,6 +532,9 @@ After successful decryption of an inbound message, send a receipt:
 
 - `type="delivery"` for regular inbound content
 - `type` omitted for peer/protocol category
+
+A delivery `<receipt>` is application delivery state; it does not replace the
+transport-level stanza ACK.
 
 ---
 
@@ -511,6 +564,12 @@ ExWapp retry error codes:
 - `3` unknown signed prekey
 - `7` invalid MAC
 - `0` other/unspecified
+
+`prekey_not_found` and `key_unavailable` are not cryptographic duplicate proof.
+An unseen message with either error gets a retry receipt. A decrypt failure may
+be suppressed as an application redelivery only when the same message ID is
+already persisted under the same canonical chat. `message_key_not_found` from
+the base-key-matched ratchet is the strong replay signal.
 
 ### 11.2 When We Handle Retry Receipt
 
@@ -617,11 +676,15 @@ These MUST ALL hold for messages to be delivered successfully:
 - [ ] Prekey IQ uses wire PN JIDs (never mapped LID JIDs)
 - [ ] Only fetch for devices without existing sessions (check both PN and LID)
 - [ ] Missing bundles from batch response are retried individually
+- [ ] Generated upload keys and `next_prekey_id` are persisted before IQ send
+- [ ] Unacknowledged upload batches survive reconnect and reuse the same IDs
 
 ### Session Management
 - [ ] Session aliasing/migration between wire and signal JIDs is deterministic
 - [ ] Encryption uses whichever JID keyspace actually has session state (no blind remap)
 - [ ] Self-chat clears stale sessions before prekey bootstrap
+- [ ] Fresh inbound session is persisted before its one-time prekey is deleted
+- [ ] Retained sessions carry the initiator base key for deterministic replay routing
 
 ### Encryption
 - [ ] Recipient devices get plain message protobuf
@@ -631,7 +694,8 @@ These MUST ALL hold for messages to be delivered successfully:
 - [ ] Plaintext is padded before encryption
 
 ### Message Node
-- [ ] `<to jid>` uses wire identity (PN)
+- [ ] Every DM participant `<to jid>` uses the outer destination's PN/LID family
+- [ ] Final pre-send validation rejects mixed-family participant nodes
 - [ ] DM messages do NOT include `phash` attr
 - [ ] Group `phash` uses ADString input + first 6 hash bytes + base64(no padding)
 - [ ] `<device-identity>` included when ANY target gets pkmsg
@@ -642,8 +706,10 @@ These MUST ALL hold for messages to be delivered successfully:
 ### Receiving
 - [ ] Sender resolved to encryption identity (LID if mapping exists)
 - [ ] Multiple enc candidates tried until one succeeds
+- [ ] Inbound `message` and `call` stanzas ACKed before normal processing
 - [ ] Notifications ACKed with `class="notification"`
 - [ ] Delivery receipts sent after successful decrypt
+- [ ] Public chat identity is device-stripped; participant identity may retain device
 
 ---
 
@@ -695,7 +761,9 @@ For troubleshooting message delivery, ensure logs show:
 7. **phash**: Computed value and input JID list
 8. **device-identity**: Whether included (any pkmsg?)
 9. **Message node**: Final XML structure sent
-10. **Server response**: ACK, error code, phash mismatch
+10. **Inbound protocol ACK**: class, type, correlation ID reference, queue priority
+11. **Prekey inventory**: server/local/usable/unacknowledged counts and ID range
+12. **Server response**: ACK, visible three-digit error code, phash mismatch
 
 ---
 

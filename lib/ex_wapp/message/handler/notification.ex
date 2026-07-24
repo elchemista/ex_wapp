@@ -203,14 +203,29 @@ defmodule ExWapp.Message.Handler.Notification do
   end
 
   defp handle_privacy_token_notification(attrs, content, state) do
-    from = Common.normalize_jid(Map.get(attrs, "from", ""))
+    storage_jids = privacy_token_storage_jids(attrs, state)
 
     content
     |> Common.find_child_node("tokens")
     |> extract_privacy_token_nodes()
-    |> Enum.each(&maybe_store_privacy_token(state, from, &1))
+    |> Enum.each(&maybe_store_privacy_token(state, storage_jids, &1))
 
     {:ok, state}
+  end
+
+  defp privacy_token_storage_jids(attrs, state) do
+    lid_mapping = Account.load_lid_mapping(Map.get(state, :store))
+
+    [
+      Map.get(attrs, "sender_lid"),
+      Map.get(attrs, "from"),
+      Map.get(attrs, "sender_pn")
+    ]
+    |> Enum.flat_map(&JIDUtils.related_bases(&1, lid_mapping))
+    |> JIDUtils.normalize_target_list()
+    |> Enum.map(&JIDUtils.strip_device/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
   end
 
   defp extract_privacy_token_nodes(%Node{content: children}) when is_list(children) do
@@ -219,33 +234,39 @@ defmodule ExWapp.Message.Handler.Notification do
 
   defp extract_privacy_token_nodes(_tokens_node), do: []
 
-  defp maybe_store_privacy_token(state, from, %Node{attrs: token_attrs, content: token_content}) do
+  defp maybe_store_privacy_token(
+         state,
+         storage_jids,
+         %Node{attrs: token_attrs, content: token_content}
+       ) do
     if Map.get(token_attrs, "type") == "trusted_contact" do
       timestamp = Map.get(token_attrs, "t")
       token_data = Common.normalize_content(token_content)
 
-      if is_binary(token_data) and from != "" do
+      if is_binary(token_data) and storage_jids != [] do
         Logger.debug(
-          "[PRIVACY_TOKEN] Storing trusted_contact token for #{Log.reference(from)} (#{byte_size(token_data)} bytes)"
+          "[PRIVACY_TOKEN] Storing trusted_contact token for #{length(storage_jids)} PN/LID alias(es) (#{byte_size(token_data)} bytes)"
         )
 
-        store_tctoken(state, from, token_data, timestamp)
+        store_tctoken(state, storage_jids, token_data, timestamp)
       end
     end
   end
 
-  defp store_tctoken(state, jid, token, timestamp) do
+  defp store_tctoken(state, jids, token, timestamp) do
     store = Map.get(state, :store)
-    if is_nil(store), do: :ok, else: do_store_tctoken(store, jid, token, timestamp)
+    if is_nil(store), do: :ok, else: do_store_tctoken(store, jids, token, timestamp)
   rescue
     error ->
       Logger.warning("[PRIVACY_TOKEN] Failed to store tctoken: #{Log.reason(error)}")
       :ok
   end
 
-  defp do_store_tctoken(store, jid, token, timestamp) do
+  defp do_store_tctoken(store, jids, token, timestamp) do
     Store.update(store, :tctokens, %{}, fn tctokens ->
-      Map.put(tctokens, jid, %{token: token, timestamp: timestamp})
+      Enum.reduce(jids, tctokens, fn jid, acc ->
+        Map.put(acc, jid, %{token: token, timestamp: timestamp})
+      end)
     end)
   end
 

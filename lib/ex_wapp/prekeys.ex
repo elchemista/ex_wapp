@@ -8,6 +8,7 @@ defmodule ExWapp.Prekeys do
   require Logger
   alias ExWapp.{Binary, Config, Store}
   alias ExWapp.Binary.Node
+  alias ExWapp.Signal.Keys
 
   # Number of prekeys to upload on initial registration
   @initial_prekey_count 812
@@ -53,10 +54,12 @@ defmodule ExWapp.Prekeys do
 
     Logger.debug("[PREKEYS] Building upload, signal keys: #{inspect(Map.keys(signal))}")
 
-    with {:ok, registration_id} <- get_registration_id(signal),
+    with true <- is_integer(prekey_count) and prekey_count > 0,
+         {:ok, registration_id} <- get_registration_id(signal),
          {:ok, identity_pub} <- get_identity_public(signal, data),
          {:ok, signed_prekey} <- get_signed_prekey(signal),
-         {:ok, prekeys} <- generate_prekeys(signal, prekey_count) do
+         {:ok, reservation} <- reserve_prekeys(store, prekey_count) do
+      prekeys = reservation.prekeys
       request_id = generate_request_id()
 
       # Build registration ID as 4-byte big-endian
@@ -83,11 +86,47 @@ defmodule ExWapp.Prekeys do
       }
 
       Logger.debug(
-        "[PREKEYS] Built upload for #{length(prekeys)} prekeys (initial=#{initial_upload})"
+        "[PREKEYS] Built durable upload batch count=#{length(prekeys)} initial=#{initial_upload} " <>
+          "reused=#{reservation.reused_count} generated=#{reservation.generated_count} " <>
+          "id_range=#{format_id_range(prekeys)}"
       )
 
       {:ok, node, prekeys}
+    else
+      false -> {:error, :invalid_prekey_count}
+      {:error, _reason} = error -> error
     end
+  end
+
+  @doc """
+  Marks a durably reserved prekey batch as acknowledged by the server.
+
+  Private key material is already present before the IQ is sent; this mutation
+  only changes upload bookkeeping and can therefore be safely retried.
+  """
+  @spec mark_uploaded(Store.t(), [map()]) :: :ok | {:error, term()}
+  def mark_uploaded(store, prekeys) when is_list(prekeys) do
+    ids =
+      prekeys
+      |> Enum.map(&(Map.get(&1, :key_id) || Map.get(&1, :id)))
+      |> Enum.filter(&(is_integer(&1) and &1 > 0))
+      |> MapSet.new()
+
+    case Store.update(store, :signal, %{}, fn signal ->
+           updated_prekeys =
+             signal
+             |> Map.get(:prekeys, %{})
+             |> Enum.into(%{}, &mark_prekey_uploaded(&1, ids))
+
+           Map.put(signal, :prekeys, updated_prekeys)
+         end) do
+      :ok -> :ok
+      {:error, _reason} = error -> error
+    end
+  rescue
+    error -> {:error, {:prekey_upload_mark_failed, error}}
+  catch
+    kind, reason -> {:error, {:prekey_upload_mark_failed, {kind, reason}}}
   end
 
   @doc """
@@ -184,23 +223,122 @@ defmodule ExWapp.Prekeys do
     {:error, :missing_signed_prekey}
   end
 
-  defp generate_prekeys(signal, count) do
-    # Get current prekey ID or start from 1
-    start_id = Map.get(signal, :next_prekey_id, 1)
+  defp reserve_prekeys(store, count) do
+    case Store.get_and_update(store, :signal, %{}, fn signal ->
+           prekeys = Map.get(signal, :prekeys, %{})
 
-    prekeys =
-      for i <- 0..(count - 1) do
-        key_id = start_id + i
-        {pub, priv} = :crypto.generate_key(:ecdh, :x25519)
+           reusable =
+             prekeys
+             |> Enum.filter(&unuploaded_prekey?/1)
+             |> Enum.sort_by(&elem(&1, 0))
+             |> Enum.take(count)
 
-        %{
-          key_id: key_id,
-          public: pub,
-          private: priv
-        }
+           generated_count = max(count - length(reusable), 0)
+           start_id = next_safe_prekey_id(signal, prekeys)
+           now = System.system_time(:second)
+
+           generated =
+             generate_reserved_prekeys(start_id, generated_count, now)
+
+           updated_prekeys = Enum.reduce(generated, prekeys, &put_reserved_prekey/2)
+
+           selected = Enum.map(reusable, &prekey_with_id/1) ++ generated
+
+           next_prekey_id = next_prekey_id_after(generated, start_id)
+
+           reservation = %{
+             prekeys: Enum.map(selected, &to_upload_prekey/1),
+             reused_count: length(reusable),
+             generated_count: generated_count
+           }
+
+           {{:ok, reservation},
+            signal
+            |> Map.put(:prekeys, updated_prekeys)
+            |> Map.put(:next_prekey_id, next_prekey_id)}
+         end) do
+      {:ok, _reservation} = success -> success
+      {:error, _reason} = error -> {:error, {:prekey_reservation_failed, error}}
+      other -> {:error, {:prekey_reservation_failed, other}}
+    end
+  rescue
+    error -> {:error, {:prekey_reservation_failed, error}}
+  catch
+    kind, reason -> {:error, {:prekey_reservation_failed, {kind, reason}}}
+  end
+
+  defp mark_prekey_uploaded({id, prekey}, ids) do
+    if MapSet.member?(ids, id) and is_map(prekey) do
+      {id, Map.put(prekey, :uploaded, true)}
+    else
+      {id, prekey}
+    end
+  end
+
+  defp next_prekey_id_after([], start_id), do: start_id
+
+  defp next_prekey_id_after(generated, _start_id) do
+    generated
+    |> List.last()
+    |> Map.fetch!(:id)
+    |> Kernel.+(1)
+  end
+
+  defp put_reserved_prekey(prekey, prekeys), do: Map.put(prekeys, prekey.id, prekey)
+  defp prekey_with_id({id, prekey}), do: Map.put(prekey, :id, id)
+
+  defp unuploaded_prekey?({id, prekey}) when is_integer(id) and is_map(prekey) do
+    Map.get(prekey, :uploaded, true) == false and
+      match?(<<_::binary-size(32)>>, Map.get(prekey, :public)) and
+      match?(<<_::binary-size(32)>>, Map.get(prekey, :private))
+  end
+
+  defp unuploaded_prekey?(_entry), do: false
+
+  defp next_safe_prekey_id(signal, prekeys) do
+    configured =
+      case Map.get(signal, :next_prekey_id, 1) do
+        value when is_integer(value) and value > 0 -> value
+        _other -> 1
       end
 
-    {:ok, prekeys}
+    after_existing =
+      prekeys
+      |> Map.keys()
+      |> Enum.filter(&is_integer/1)
+      |> case do
+        [] -> 1
+        ids -> Enum.max(ids) + 1
+      end
+
+    max(configured, after_existing)
+  end
+
+  defp generate_reserved_prekeys(_start_id, 0, _now), do: []
+
+  defp generate_reserved_prekeys(start_id, count, now) do
+    for offset <- 0..(count - 1) do
+      start_id
+      |> Kernel.+(offset)
+      |> Keys.generate_prekey()
+      |> Map.put(:generated_at, now)
+      |> Map.put(:uploaded, false)
+    end
+  end
+
+  defp to_upload_prekey(prekey) do
+    %{
+      key_id: Map.fetch!(prekey, :id),
+      public: Map.fetch!(prekey, :public),
+      private: Map.fetch!(prekey, :private)
+    }
+  end
+
+  defp format_id_range([]), do: "empty"
+
+  defp format_id_range(prekeys) do
+    ids = Enum.map(prekeys, &Map.fetch!(&1, :key_id))
+    "#{Enum.min(ids)}..#{Enum.max(ids)}"
   end
 
   defp prekeys_to_nodes(prekeys) do

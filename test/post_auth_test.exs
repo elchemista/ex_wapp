@@ -1,11 +1,12 @@
 defmodule ExWapp.Session.Worker.PostAuthTest do
   use ExUnit.Case, async: true
 
-  alias ExWapp.{Binary, Signal, Store}
+  alias ExWapp.{Binary, Prekeys, Signal, Store}
   alias ExWapp.Session.Worker.PostAuth
+  alias ExWapp.Store.Memory
 
-  test "prekeys are only persisted after the upload is acknowledged" do
-    store = ExWapp.Store.Memory.new(initial_data: %{})
+  test "prekeys are durably reserved before upload and only marked uploaded after acknowledgement" do
+    store = Memory.new(initial_data: %{})
     {:ok, _signal_info, signal_state} = Signal.bootstrap(%{})
     :ok = Store.persist(store, %{signal: signal_state})
 
@@ -62,10 +63,17 @@ defmodule ExWapp.Session.Worker.PostAuthTest do
     assert after_count.passive_iq_id == "passive-1"
     assert length(after_count.pending_prekey_upload) > 100
 
-    assert store
-           |> Store.load!()
-           |> get_in([:signal, :prekeys])
-           |> map_size() == initial_prekey_count
+    reserved_signal = store |> Store.load!() |> Map.fetch!(:signal)
+    reserved_ids = Enum.map(after_count.pending_prekey_upload, &Map.fetch!(&1, :key_id))
+
+    assert map_size(reserved_signal.prekeys) ==
+             initial_prekey_count + length(after_count.pending_prekey_upload)
+
+    assert Enum.all?(reserved_ids, fn id ->
+             get_in(reserved_signal, [:prekeys, id, :uploaded]) == false
+           end)
+
+    assert reserved_signal.next_prekey_id == Enum.max(reserved_ids) + 1
 
     {after_upload, upload_actions} =
       PostAuth.handle_prekey_upload_response(
@@ -85,9 +93,34 @@ defmodule ExWapp.Session.Worker.PostAuthTest do
     assert after_upload.passive_iq_id == "passive-1"
     assert after_upload.post_auth_phase == :awaiting_passive_ack
 
-    assert store
-           |> Store.load!()
-           |> get_in([:signal, :prekeys])
-           |> map_size() > initial_prekey_count
+    acknowledged_signal = store |> Store.load!() |> Map.fetch!(:signal)
+
+    assert map_size(acknowledged_signal.prekeys) == map_size(reserved_signal.prekeys)
+
+    assert Enum.all?(reserved_ids, fn id ->
+             get_in(acknowledged_signal, [:prekeys, id, :uploaded]) == true
+           end)
+  end
+
+  test "an unacknowledged durable batch is reused instead of regenerating key IDs" do
+    store = Memory.new(initial_data: %{})
+    {:ok, _signal_info, signal_state} = Signal.bootstrap(%{})
+    :ok = Store.persist(store, %{signal: signal_state})
+
+    assert {:ok, _first_node, first_batch} = Prekeys.build_prekey_upload(store, count: 3)
+    signal_after_first = store |> Store.load!() |> Map.fetch!(:signal)
+
+    assert {:ok, _second_node, second_batch} = Prekeys.build_prekey_upload(store, count: 3)
+    signal_after_second = store |> Store.load!() |> Map.fetch!(:signal)
+
+    assert Enum.map(first_batch, & &1.key_id) == Enum.map(second_batch, & &1.key_id)
+    assert map_size(signal_after_second.prekeys) == map_size(signal_after_first.prekeys)
+    assert signal_after_second.next_prekey_id == signal_after_first.next_prekey_id
+
+    assert :ok = Prekeys.mark_uploaded(store, second_batch)
+    assert {:ok, _third_node, third_batch} = Prekeys.build_prekey_upload(store, count: 3)
+
+    refute MapSet.new(Enum.map(first_batch, & &1.key_id)) ==
+             MapSet.new(Enum.map(third_batch, & &1.key_id))
   end
 end

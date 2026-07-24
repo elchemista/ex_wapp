@@ -225,10 +225,18 @@ defmodule ExWapp.Message.Handler.Receipt do
   defp effective_ack_type(type, _error), do: type || ""
 
   defp log_ack(class, type, id, from, to, error) do
-    Logger.debug(
-      "[ACK] class=#{class} type=#{type} id=#{Log.reference(id)} from=#{Log.reference(from)} to=#{Log.reference(to)} error=#{Log.reason(error)}"
-    )
+    message =
+      "[ACK] class=#{class} type=#{type} id=#{Log.reference(id)} from=#{Log.reference(from)} " <>
+        "to=#{Log.reference(to)} error=#{Log.reason(error)}#{ack_error_code_log(error)}"
+
+    if type == "error", do: Logger.warning(message), else: Logger.debug(message)
   end
+
+  defp ack_error_code_log(error) when is_binary(error) do
+    if Regex.match?(~r/^\d{3}$/, error), do: " error_code=#{error}", else: ""
+  end
+
+  defp ack_error_code_log(_error), do: ""
 
   defp ack_status("error"), do: :failed
   defp ack_status(_type), do: :sent

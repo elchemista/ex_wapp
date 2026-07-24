@@ -2,6 +2,8 @@ defmodule ExWapp.Message.Handler.Inbound.ReceiptsTest do
   use ExUnit.Case, async: true
 
   alias ExWapp.Message.Handler.Inbound.Receipts
+  alias ExWapp.Store
+  alias ExWapp.Store.Memory
 
   test "plans a delivery receipt for a normalized user message" do
     from = "15550001111@s.whatsapp.net"
@@ -67,37 +69,136 @@ defmodule ExWapp.Message.Handler.Inbound.ReceiptsTest do
     assert {[], %{}} = Receipts.build_actions("", "", nil, %{}, %{}, %{})
   end
 
-  test "treats consumed Signal key failures as delivered duplicates" do
+  test "treats a ratchet-proven replay of a stored message as delivered" do
     from = "15550001111@s.whatsapp.net"
-    state = %{marker: :unchanged}
+    store = Memory.new()
+    state = %{marker: :unchanged, store: store}
+    message_id = "duplicate-message-key"
 
-    for reason <- [:message_key_not_found, :prekey_not_found, :key_unavailable] do
-      message_id = "duplicate-#{reason}"
+    assert :ok =
+             Store.upsert_messages(store, from, [
+               %{id: message_id, timestamp: 1, status: :received}
+             ])
 
-      decrypt_status =
-        {:error,
-         {:decrypt_failed_for_payload, "pkmsg", {:decrypt_failed_for_candidate, from, reason}}}
+    decrypt_status =
+      {:error,
+       {:decrypt_failed_for_payload, "pkmsg",
+        {:decrypt_failed_for_candidate, from, :message_key_not_found}}}
 
-      message_data = %{
-        encrypted: true,
-        placeholder_unavailable: true,
-        decrypt_status: decrypt_status
-      }
+    message_data = %{
+      encrypted: true,
+      placeholder_unavailable: true,
+      decrypt_status: decrypt_status
+    }
 
-      assert Receipts.duplicate_decrypt_error?(decrypt_status)
+    assert Receipts.duplicate_decrypt_error?(decrypt_status)
 
-      assert {[
-                {:send_receipt, ^from, ^message_id, nil, nil, %{recipient: nil}}
-              ], ^state} =
-               Receipts.build_actions(
-                 from,
-                 message_id,
-                 nil,
-                 %{},
-                 message_data,
-                 state
-               )
-    end
+    assert {[
+              {:send_receipt, ^from, ^message_id, nil, nil, %{recipient: nil}}
+            ], ^state} =
+             Receipts.build_actions(
+               from,
+               message_id,
+               nil,
+               %{},
+               message_data,
+               state
+             )
+  end
+
+  test "does not call missing prekey material a duplicate even when the message id is stored" do
+    from = "15550001111@s.whatsapp.net"
+    message_id = "stored-but-not-ratchet-proven"
+    store = Memory.new()
+
+    assert :ok =
+             Store.upsert_messages(store, from, [
+               %{id: message_id, timestamp: 1, status: :received}
+             ])
+
+    decrypt_status =
+      {:error,
+       {:decrypt_failed_for_payload, "pkmsg",
+        {:decrypt_failed_for_candidate, from, :prekey_not_found}}}
+
+    refute Receipts.duplicate_decrypt_error?(decrypt_status)
+
+    assert {actions, _state} =
+             Receipts.build_actions(
+               from,
+               message_id,
+               nil,
+               %{"t" => "321"},
+               %{encrypted: true, decrypt_status: decrypt_status},
+               %{store: store}
+             )
+
+    assert [
+             {:send_retry_receipt, ^from, ^message_id, nil, "321", 1, 0,
+              %{category: nil, recipient: nil}},
+             {:request_placeholder_resend, ^from, ^from, ^message_id, %{from_me: false}}
+           ] = actions
+  end
+
+  test "requests a retry when consumed key material belongs to an unseen message" do
+    from = "15550001111@s.whatsapp.net"
+
+    decrypt_status =
+      {:error,
+       {:decrypt_failed_for_payload, "pkmsg",
+        {:decrypt_failed_for_candidate, from, :prekey_not_found}}}
+
+    assert {actions, updated_state} =
+             Receipts.build_actions(
+               from,
+               "unseen-prekey-message",
+               nil,
+               %{"t" => "322"},
+               %{encrypted: true, decrypt_status: decrypt_status},
+               %{store: Memory.new()}
+             )
+
+    assert [
+             {:send_retry_receipt, ^from, "unseen-prekey-message", nil, "322", 1, 0,
+              %{category: nil, recipient: nil}},
+             {:request_placeholder_resend, ^from, ^from, "unseen-prekey-message",
+              %{from_me: false}}
+           ] = actions
+
+    assert map_size(updated_state.retry_counters) == 1
+  end
+
+  test "does not suppress a decrypt failure because another chat reused the message id" do
+    from = "15550001111@s.whatsapp.net"
+    other_chat = "15550002222@s.whatsapp.net"
+    message_id = "chat-scoped-message-id"
+    store = Memory.new()
+
+    assert :ok =
+             Store.upsert_messages(store, other_chat, [
+               %{id: message_id, timestamp: 1, status: :received}
+             ])
+
+    decrypt_status =
+      {:error,
+       {:decrypt_failed_for_payload, "pkmsg",
+        {:decrypt_failed_for_candidate, from, :prekey_not_found}}}
+
+    assert {actions, _state} =
+             Receipts.build_actions(
+               from,
+               message_id,
+               nil,
+               %{"t" => "323"},
+               %{encrypted: true, decrypt_status: decrypt_status},
+               %{store: store}
+             )
+
+    assert [
+             {:send_retry_receipt, ^from, ^message_id, nil, "323", 1, 0,
+              %{category: nil, recipient: nil}},
+             {:request_placeholder_resend, ^from, ^from, ^message_id, %{from_me: false}}
+           ] = actions
   end
 
   test "genuine Signal decrypt failures still request a retry" do
@@ -133,7 +234,7 @@ defmodule ExWapp.Message.Handler.Inbound.ReceiptsTest do
     recipient = "15550002222@lid"
 
     store =
-      ExWapp.Store.Memory.new(
+      Memory.new(
         initial_data: %{
           pairing: %{device: %{jid: "15550009999@s.whatsapp.net"}},
           client_info: %{jid: "15550009999@s.whatsapp.net"}

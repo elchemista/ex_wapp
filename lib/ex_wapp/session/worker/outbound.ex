@@ -688,7 +688,8 @@ defmodule ExWapp.Session.Worker.Outbound do
              target_specs,
              payloads,
              prekey_bundles
-           ) do
+           ),
+         :ok <- Direct.validate_participant_family(jid, participant_nodes) do
       case Encryptor.missing_expected_targets(target_specs, participant_nodes) do
         [] ->
           persist_signal_sessions(session_pid, updated_sessions, state)

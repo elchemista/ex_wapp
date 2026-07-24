@@ -119,11 +119,32 @@ defmodule ExWapp.Session.Worker.PostAuth do
 
     data = Store.load!(state.store)
     signal = Map.get(data, :signal, %{})
-    local_count = signal |> Map.get(:prekeys, %{}) |> map_size()
+    inventory = local_prekey_inventory(signal)
+    local_count = inventory.total_count
 
     Logger.info(
-      "[POST_AUTH] prekey count decision session=#{Log.reference(Map.get(state, :session_id))} server_count=#{server_count} local_count=#{local_count} min_threshold=#{min_prekey_threshold(state)}"
+      "[POST_AUTH] prekey count decision session=#{Log.reference(Map.get(state, :session_id))} " <>
+        "server_count=#{server_count} local_count=#{local_count} " <>
+        "usable_local_count=#{inventory.usable_count} durable_unacked_count=#{inventory.unacked_count} " <>
+        "oldest_unacked_age_s=#{inventory.oldest_unacked_age_s || "none"} " <>
+        "min_threshold=#{min_prekey_threshold(state)}"
     )
+
+    if inventory.unacked_count > 0 and server_count > min_prekey_threshold(state) do
+      Logger.warning(
+        "[PREKEYS] Durable unacknowledged key material found while server inventory is healthy; " <>
+          "keys are retained and will be reused on the next upload instead of regenerated " <>
+          "count=#{inventory.unacked_count}"
+      )
+    end
+
+    if server_count > inventory.usable_count do
+      Logger.error(
+        "[PREKEYS] Server advertises more one-time keys than have usable local private halves; " <>
+          "inbound pkmsg decrypts may require retry server_count=#{server_count} " <>
+          "usable_local_count=#{inventory.usable_count} private_key_deficit=#{server_count - inventory.usable_count}"
+      )
+    end
 
     # Baileys logic: if server count == 0 -> INITIAL (812), low -> refill (50)
     # For fresh devices, server_count == 0 always needs full initial upload
@@ -158,7 +179,15 @@ defmodule ExWapp.Session.Worker.PostAuth do
   def handle_prekey_upload_response(_node, "result", state, build_passive_iq_fun)
       when is_function(build_passive_iq_fun, 0) do
     pending_prekeys = Map.get(state, :pending_prekey_upload, [])
-    persist_uploaded_prekeys(state.store, pending_prekeys)
+
+    upload_mark_result = ExWapp.Prekeys.mark_uploaded(state.store, pending_prekeys)
+
+    if upload_mark_result != :ok do
+      Logger.warning(
+        "[PREKEYS] Server acknowledged upload but local uploaded-state marking failed; " <>
+          "private keys remain durable and will be safe to retry reason=#{Log.reason(upload_mark_result)}"
+      )
+    end
 
     state =
       state
@@ -167,7 +196,8 @@ defmodule ExWapp.Session.Worker.PostAuth do
       |> sync_post_auth_phase_after_prekey_step()
 
     Logger.info(
-      "[POST_AUTH] prekey upload acknowledged session=#{Log.reference(Map.get(state, :session_id))} uploaded_count=#{length(pending_prekeys)}"
+      "[POST_AUTH] prekey upload acknowledged session=#{Log.reference(Map.get(state, :session_id))} " <>
+        "uploaded_count=#{length(pending_prekeys)} local_marked?=#{upload_mark_result == :ok}"
     )
 
     Logger.debug("[SESSION] Prekey upload acknowledged, continuing post-auth")
@@ -176,6 +206,8 @@ defmodule ExWapp.Session.Worker.PostAuth do
 
   def handle_prekey_upload_response(node, "error", state, build_passive_iq_fun)
       when is_function(build_passive_iq_fun, 0) do
+    reserved_count = state |> Map.get(:pending_prekey_upload, []) |> length()
+
     Logger.warning("[SESSION] Prekey upload failed: #{inspect(Log.attrs(node.attrs || %{}))}")
 
     state =
@@ -185,7 +217,9 @@ defmodule ExWapp.Session.Worker.PostAuth do
       |> sync_post_auth_phase_after_prekey_step()
 
     Logger.warning(
-      "[POST_AUTH] prekey upload returned error session=#{Log.reference(Map.get(state, :session_id))} attrs=#{inspect(Log.attrs(node.attrs || %{}), limit: 50)}"
+      "[POST_AUTH] prekey upload returned error session=#{Log.reference(Map.get(state, :session_id))} " <>
+        "durable_reserved_count=#{reserved_count} will_reuse=true " <>
+        "attrs=#{inspect(Log.attrs(node.attrs || %{}), limit: 50)}"
     )
 
     maybe_send_passive_iq(state, build_passive_iq_fun)
@@ -423,38 +457,6 @@ defmodule ExWapp.Session.Worker.PostAuth do
     |> String.replace("@whatsapp.net", "@s.whatsapp.net")
   end
 
-  defp persist_uploaded_prekeys(store, prekeys) when is_list(prekeys) do
-    Store.update(store, :signal, %{}, fn signal ->
-      merged_prekeys =
-        Enum.reduce(prekeys, Map.get(signal, :prekeys, %{}), fn
-          %{key_id: id, public: pub, private: priv}, acc ->
-            Map.put(acc, id, %{id: id, public: pub, private: priv})
-
-          _, acc ->
-            acc
-        end)
-
-      next_prekey_id =
-        prekeys
-        |> Enum.map(&Map.get(&1, :key_id))
-        |> Enum.filter(&is_integer/1)
-        |> case do
-          [] -> Map.get(signal, :next_prekey_id, 1)
-          ids -> Enum.max(ids) + 1
-        end
-
-      signal
-      |> Map.put(:prekeys, merged_prekeys)
-      |> Map.put(:next_prekey_id, next_prekey_id)
-    end)
-
-    :ok
-  rescue
-    error ->
-      Logger.warning("[SESSION] Failed to persist uploaded prekeys: #{Log.reason(error)}")
-      :ok
-  end
-
   defp min_prekey_threshold(state) do
     Config.get(state.runtime_cfg || %{}, [:prekeys, :min_threshold], @min_prekey_threshold)
   end
@@ -470,5 +472,42 @@ defmodule ExWapp.Session.Worker.PostAuth do
     |> map_size()
   rescue
     _ -> 0
+  end
+
+  defp local_prekey_inventory(signal) do
+    prekeys = Map.get(signal, :prekeys, %{})
+
+    usable_prekeys =
+      Enum.filter(prekeys, fn
+        {_id, %{public: public, private: private}}
+        when is_binary(public) and byte_size(public) == 32 and is_binary(private) and
+               byte_size(private) == 32 ->
+          true
+
+        _entry ->
+          false
+      end)
+
+    unacknowledged =
+      Enum.filter(usable_prekeys, fn {_id, prekey} ->
+        Map.get(prekey, :uploaded, true) == false
+      end)
+
+    oldest_generated_at =
+      unacknowledged
+      |> Enum.map(fn {_id, prekey} -> Map.get(prekey, :generated_at) end)
+      |> Enum.filter(&is_integer/1)
+      |> Enum.min(fn -> nil end)
+
+    %{
+      total_count: map_size(prekeys),
+      usable_count: length(usable_prekeys),
+      unacked_count: length(unacknowledged),
+      oldest_unacked_age_s:
+        if(is_integer(oldest_generated_at),
+          do: max(System.system_time(:second) - oldest_generated_at, 0),
+          else: nil
+        )
+    }
   end
 end

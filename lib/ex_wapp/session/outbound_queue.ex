@@ -49,6 +49,16 @@ defmodule ExWapp.Session.OutboundQueue do
   @spec enqueue_node(pid(), term()) :: :ok
   def enqueue_node(pid, node), do: GenServer.cast(pid, {:enqueue, {:send_node, node}})
 
+  @doc """
+  Enqueues a protocol-critical node ahead of normal application traffic.
+
+  Stanza ACKs use this path so a reconnect backlog or a burst of outbound
+  messages cannot delay the acknowledgement that keeps the stream healthy.
+  """
+  @spec enqueue_priority_node(pid(), term()) :: :ok
+  def enqueue_priority_node(pid, node),
+    do: GenServer.cast(pid, {:enqueue_priority, {:send_node, node}})
+
   @spec restart_stream(pid()) :: :ok
   def restart_stream(pid), do: GenServer.cast(pid, {:enqueue, :restart_stream})
 
@@ -77,6 +87,11 @@ defmodule ExWapp.Session.OutboundQueue do
 
   def handle_cast({:enqueue, item}, state) do
     state = enqueue_item(state, item)
+    {:noreply, flush(state)}
+  end
+
+  def handle_cast({:enqueue_priority, item}, state) do
+    state = enqueue_priority_item(state, item)
     {:noreply, flush(state)}
   end
 
@@ -147,6 +162,24 @@ defmodule ExWapp.Session.OutboundQueue do
         send(state.session, {:outbound_error, item, :queue_full})
         state
     end
+  end
+
+  defp enqueue_priority_item(state, item) do
+    queue =
+      if :queue.len(state.queue) < state.max_size do
+        state.queue
+      else
+        case :queue.out_r(state.queue) do
+          {:empty, current} ->
+            current
+
+          {{:value, dropped}, trimmed} ->
+            send(state.session, {:outbound_error, dropped, :preempted_by_protocol_ack})
+            trimmed
+        end
+      end
+
+    %{state | queue: :queue.in_r(item, queue)}
   end
 
   defp dispatch({:send_node, node}, %{transport: transport, conn: conn}) do

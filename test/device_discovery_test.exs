@@ -91,4 +91,28 @@ defmodule ExWapp.Session.Outbound.DeviceDiscoveryTest do
 
     assert resolution.own_devices == ["15550002222:9@s.whatsapp.net"]
   end
+
+  test "maps own linked devices into LID for a LID-addressed destination" do
+    own = "15550002222@s.whatsapp.net"
+    own_lid = "70000002222@lid"
+    own_pn_device = "15550002222:9@s.whatsapp.net"
+
+    resolution =
+      DeviceDiscovery.resolve(%{
+        device_map: %{own => [own_pn_device]},
+        recipient_base_jid: "70000001111@lid",
+        recipient_cached_devices: [],
+        own_sender_jid: own_lid,
+        own_base_jid: own,
+        own_lid_jid: own_lid,
+        own_cached_devices: [],
+        own_device_id: 0,
+        lid_mapping: %{
+          {:pn_to_lid, own} => own_lid,
+          {:lid_to_pn, own_lid} => own
+        }
+      })
+
+    assert resolution.own_devices == ["70000002222:9@lid"]
+  end
 end

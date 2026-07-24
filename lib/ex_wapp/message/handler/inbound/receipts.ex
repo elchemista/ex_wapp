@@ -8,13 +8,13 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
 
   require Logger
 
-  alias ExWapp.JID
+  alias ExWapp.{JID, Store}
   alias ExWapp.Message.Handler.Common
   alias ExWapp.Message.Handler.Inbound.Envelope
   alias ExWapp.Signal.SessionStore
 
   @max_retry_receipt_count 2
-  @duplicate_decrypt_reasons [:message_key_not_found, :prekey_not_found, :key_unavailable]
+  @duplicate_decrypt_reasons [:message_key_not_found]
 
   @doc """
   Plans receipt-related actions for one normalized inbound message.
@@ -25,7 +25,8 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
       invalid_receipt_target?(from, id) ->
         {[], state}
 
-      duplicate_decrypt_error?(Map.get(message_data, :decrypt_status)) ->
+      duplicate_decrypt_error?(Map.get(message_data, :decrypt_status)) and
+          stored_message?(state, from, id) ->
         build_duplicate_delivery_receipt_actions(
           from,
           id,
@@ -94,8 +95,13 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
          message_data,
          state
        ) do
+    duplicate_reason = Map.get(message_data, :decrypt_status)
+
     Logger.debug(
-      "[DECRYPT] Treating #{ExWapp.Log.reference(id)} as an already-decrypted Signal duplicate"
+      "[DECRYPT] Suppressing encrypted redelivery for stored chat message " <>
+        "id=#{ExWapp.Log.reference(id)} chat=#{ExWapp.Log.reference(from)} " <>
+        "ratchet_replay_proof?=true " <>
+        "reason=#{ExWapp.Log.reason(duplicate_reason)}"
     )
 
     receipt_type = delivery_receipt_type(from, attrs, state)
@@ -224,6 +230,23 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
     do: duplicate_decrypt_error?(reason)
 
   def duplicate_decrypt_error?(_reason), do: false
+
+  defp stored_message?(state, from, id)
+       when is_map(state) and is_binary(id) and id != "" do
+    chat_jid = Common.normalize_jid(from)
+
+    case {Map.get(state, :store), chat_jid} do
+      {nil, _chat_jid} -> false
+      {_store, ""} -> false
+      {store, chat_jid} -> not is_nil(Store.find_message(store, chat_jid, id))
+    end
+  rescue
+    _error -> false
+  catch
+    _kind, _reason -> false
+  end
+
+  defp stored_message?(_state, _from, _id), do: false
 
   @spec needs_retry_receipt?(map()) :: boolean()
   defp needs_retry_receipt?(%{decrypt_status: {:error, _}}), do: true

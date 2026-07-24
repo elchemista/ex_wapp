@@ -62,12 +62,13 @@ defmodule ExWapp.Session.Outbound.DeviceDiscovery do
   """
   @spec own_preferred_jid(term(), term()) :: String.t()
   def own_preferred_jid(own_base_jid, own_sender_jid) do
+    own_sender_jid = JIDUtils.normalize_with_device(own_sender_jid)
     own_base_jid = JIDUtils.normalize_with_device(own_base_jid)
 
-    if own_base_jid != "" do
-      own_base_jid
-    else
-      JIDUtils.normalize_with_device(own_sender_jid)
+    cond do
+      own_sender_jid != "" -> own_sender_jid
+      own_base_jid != "" -> own_base_jid
+      true -> ""
     end
   end
 
@@ -96,7 +97,10 @@ defmodule ExWapp.Session.Outbound.DeviceDiscovery do
       |> JIDUtils.normalize_target_list()
 
     recipient_cached_devices =
-      Enum.reject(recipient_cached_devices, &(&1 in recipient_devices))
+      recipient_cached_devices
+      |> Enum.map(&JIDUtils.map_to_preferred_family(&1, recipient_base_jid, lid_mapping))
+      |> JIDUtils.normalize_target_list()
+      |> Enum.reject(&(&1 in recipient_devices))
 
     preferred_own_jid = own_preferred_jid(own_base_jid, own_sender_jid)
 
@@ -110,7 +114,10 @@ defmodule ExWapp.Session.Outbound.DeviceDiscovery do
       |> JIDUtils.normalize_target_list()
 
     own_cached_devices =
-      Enum.reject(own_cached_devices, fn device_jid ->
+      own_cached_devices
+      |> Enum.map(&JIDUtils.map_to_preferred_family(&1, preferred_own_jid, lid_mapping))
+      |> JIDUtils.normalize_target_list()
+      |> Enum.reject(fn device_jid ->
         device_jid in own_devices_all or
           JIDUtils.current_device_target?(device_jid, own_device_id)
       end)

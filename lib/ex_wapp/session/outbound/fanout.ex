@@ -8,6 +8,8 @@ defmodule ExWapp.Session.Outbound.Fanout do
   boundary.
   """
 
+  require Logger
+
   alias ExWapp.Session.{JIDUtils, Targets}
   alias ExWapp.Signal.SessionStore
 
@@ -32,6 +34,7 @@ defmodule ExWapp.Session.Outbound.Fanout do
           own_targets: [String.t()],
           all_usync_devices: term(),
           cached_eviction_batches: [[String.t()]],
+          family_rejections: [String.t()],
           self_chat?: boolean()
         }
 
@@ -56,6 +59,10 @@ defmodule ExWapp.Session.Outbound.Fanout do
       })
       when is_map(hints) and is_map(lid_mapping) do
     prekey_bundles = if is_map(prekey_bundles), do: prekey_bundles, else: %{}
+    destination_jid = jid |> JIDUtils.normalize_with_device() |> JIDUtils.strip_device()
+
+    lid_mapping =
+      ensure_own_family_mapping(lid_mapping, own_base_jid, own_lid_jid)
 
     {recipient_targets_hint, recipient_evictions} =
       resolve_soft_targets(
@@ -99,11 +106,39 @@ defmodule ExWapp.Session.Outbound.Fanout do
     recipient_targets =
       maybe_drop_current_self_chat_target(recipient_targets, self_chat?, own_device_id)
 
+    {recipient_targets, rejected_recipient_targets} =
+      canonicalize_target_family(recipient_targets, destination_jid, lid_mapping)
+
+    {own_targets, rejected_own_targets} =
+      canonicalize_target_family(own_targets, destination_jid, lid_mapping)
+
+    {all_usync_devices, rejected_usync_targets} =
+      Map.get(hints, :all_usync_devices, [])
+      |> canonicalize_target_family(destination_jid, lid_mapping)
+
+    family_rejections =
+      JIDUtils.normalize_target_list(
+        rejected_recipient_targets ++ rejected_own_targets ++ rejected_usync_targets
+      )
+
+    if family_rejections != [] do
+      Logger.warning(
+        "[SEND] Excluded #{length(family_rejections)} fanout target(s) with unresolved " <>
+          "addressing family destination_family=#{jid_family(destination_jid)}"
+      )
+    end
+
+    Logger.debug(
+      "[SEND] Canonical fanout destination_family=#{jid_family(destination_jid)} " <>
+        "recipient_targets=#{length(recipient_targets)} own_targets=#{length(own_targets)} " <>
+        "family_rejections=#{length(family_rejections)}"
+    )
+
     target_specs =
       build_target_specs(
         recipient_targets,
         own_targets,
-        jid,
+        destination_jid,
         self_chat?,
         self_chat_mode
       )
@@ -112,11 +147,50 @@ defmodule ExWapp.Session.Outbound.Fanout do
       target_specs: target_specs,
       recipient_targets: recipient_targets,
       own_targets: own_targets,
-      all_usync_devices: Map.get(hints, :all_usync_devices, []),
+      all_usync_devices: all_usync_devices,
       cached_eviction_batches: Enum.reject([recipient_evictions, own_evictions], &(&1 == [])),
+      family_rejections: family_rejections,
       self_chat?: self_chat?
     }
   end
+
+  defp ensure_own_family_mapping(lid_mapping, own_base_jid, own_lid_jid) do
+    own_base_jid = own_base_jid |> JIDUtils.normalize_with_device() |> JIDUtils.strip_device()
+    own_lid_jid = own_lid_jid |> JIDUtils.normalize_with_device() |> JIDUtils.strip_device()
+
+    if own_base_jid != "" and own_lid_jid != "" do
+      lid_mapping
+      |> Map.put_new({:pn_to_lid, own_base_jid}, own_lid_jid)
+      |> Map.put_new({:lid_to_pn, own_lid_jid}, own_base_jid)
+    else
+      lid_mapping
+    end
+  end
+
+  defp canonicalize_target_family(targets, destination_jid, lid_mapping) do
+    targets
+    |> JIDUtils.normalize_target_list()
+    |> Enum.reduce({[], []}, fn target, {accepted, rejected} ->
+      mapped = JIDUtils.map_to_preferred_family(target, destination_jid, lid_mapping)
+
+      if same_jid_family?(mapped, destination_jid) do
+        {[mapped | accepted], rejected}
+      else
+        {accepted, [target | rejected]}
+      end
+    end)
+    |> then(fn {accepted, rejected} ->
+      {
+        accepted |> Enum.reverse() |> JIDUtils.normalize_target_list(),
+        rejected |> Enum.reverse() |> JIDUtils.normalize_target_list()
+      }
+    end)
+  end
+
+  defp same_jid_family?(left, right),
+    do: JIDUtils.lid_jid?(left) == JIDUtils.lid_jid?(right)
+
+  defp jid_family(jid), do: if(JIDUtils.lid_jid?(jid), do: "lid", else: "pn")
 
   @doc """
   Returns whether the destination belongs to the local account identity.

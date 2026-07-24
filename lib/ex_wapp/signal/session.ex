@@ -30,6 +30,7 @@ defmodule ExWapp.Signal.Session do
   @max_archived_receiving_chains 5
 
   @type session_state :: %{
+          optional(:initiator_base_key) => binary(),
           remote_identity_key: binary(),
           local_identity_key: %{public: binary(), private: binary()},
           root_key: binary(),
@@ -490,7 +491,7 @@ defmodule ExWapp.Signal.Session do
          local_identity,
          signed_prekey,
          remote_identity,
-         _base_key,
+         base_key,
          root_key,
          chain_key
        ) do
@@ -511,6 +512,9 @@ defmodule ExWapp.Signal.Session do
       receiving_chain: nil,
       receiving_chains: %{},
       previous_counter: 0,
+      # Keep the prekey envelope identity so delayed/replayed pkmsg stanzas can
+      # be routed to the exact ratchet session after an outbound refresh.
+      initiator_base_key: base_key,
       # Bob side starts from signed prekey as current ratchet private key.
       ratchet_key: %{public: signed_prekey.public, private: signed_prekey.private},
       # Force the first inner SignalMessage to perform a DH ratchet from root_key.

@@ -227,11 +227,25 @@ defmodule ExWapp.Session.Outbound.Direct do
   def build_encrypted_message_node(jid, message_id, participant_nodes, store, include_identity)
       when is_binary(jid) and is_binary(message_id) and is_list(participant_nodes) and
              is_boolean(include_identity) do
-    attrs = %{
-      "id" => message_id,
-      "to" => strip_device(jid),
-      "type" => "text"
-    }
+    destination_jid = strip_device(jid)
+
+    {participant_nodes, rejected_count} =
+      filter_participants_for_destination(participant_nodes, destination_jid)
+
+    if rejected_count > 0 do
+      Logger.error(
+        "[SEND] Removed #{rejected_count} mixed-family participant(s) at final message boundary " <>
+          "destination_family=#{jid_family(destination_jid)}"
+      )
+    end
+
+    attrs =
+      %{
+        "id" => message_id,
+        "to" => destination_jid,
+        "type" => "text"
+      }
+      |> maybe_put_peer_recipient_pn(destination_jid, store)
 
     participants_node = %Binary.Node{
       tag: "participants",
@@ -240,9 +254,37 @@ defmodule ExWapp.Session.Outbound.Direct do
     }
 
     content = [participants_node] ++ identity_content(store, include_identity)
-    content = Account.maybe_append_tctoken(content, strip_device(jid), store)
+    content = Account.maybe_append_tctoken(content, destination_jid, store)
 
     %Binary.Node{tag: "message", attrs: attrs, content: content}
+  end
+
+  @doc """
+  Verifies that every encrypted participant uses the destination JID family.
+
+  This is the final pre-send invariant. Fanout resolution performs the mapping;
+  this check prevents a later regression from putting a PN participant into a
+  LID message (or the reverse).
+  """
+  @spec validate_participant_family(String.t(), [Binary.Node.t()]) ::
+          :ok | {:error, {:mixed_addressing_family, non_neg_integer()}}
+  def validate_participant_family(jid, participant_nodes)
+      when is_binary(jid) and is_list(participant_nodes) do
+    destination_jid = strip_device(jid)
+
+    {_accepted, rejected_count} =
+      filter_participants_for_destination(participant_nodes, destination_jid)
+
+    if rejected_count == 0 do
+      :ok
+    else
+      Logger.error(
+        "[SEND] Refusing direct message with #{rejected_count} mixed-family participant(s) " <>
+          "destination_family=#{jid_family(destination_jid)}"
+      )
+
+      {:error, {:mixed_addressing_family, rejected_count}}
+    end
   end
 
   @spec finalize_prepared_sessions(
@@ -435,4 +477,43 @@ defmodule ExWapp.Session.Outbound.Direct do
   defp strip_device(jid) when is_binary(jid), do: JIDUtils.strip_device(jid)
   defp strip_device(%ExWapp.JID{} = jid), do: JIDUtils.strip_device(jid)
   defp strip_device(_), do: ""
+
+  @spec filter_participants_for_destination([Binary.Node.t()], String.t()) ::
+          {[Binary.Node.t()], non_neg_integer()}
+  defp filter_participants_for_destination(participant_nodes, destination_jid) do
+    {accepted, rejected} =
+      Enum.split_with(participant_nodes, fn
+        %Binary.Node{tag: "to", attrs: %{"jid" => participant_jid}} ->
+          normalized_jid = JIDUtils.normalize_with_device(participant_jid)
+
+          normalized_jid != "" and
+            JIDUtils.lid_jid?(normalized_jid) == JIDUtils.lid_jid?(destination_jid)
+
+        _ ->
+          false
+      end)
+
+    {accepted, length(rejected)}
+  end
+
+  @spec jid_family(String.t()) :: String.t()
+  defp jid_family(jid), do: if(JIDUtils.lid_jid?(jid), do: "lid", else: "pn")
+
+  defp maybe_put_peer_recipient_pn(attrs, destination_jid, store) do
+    if JIDUtils.lid_jid?(destination_jid) do
+      peer_recipient_pn =
+        store
+        |> Account.load_lid_mapping()
+        |> Map.get({:lid_to_pn, destination_jid}, "")
+        |> JIDUtils.normalize_for_signal()
+
+      if peer_recipient_pn == "" do
+        attrs
+      else
+        Map.put(attrs, "peer_recipient_pn", peer_recipient_pn)
+      end
+    else
+      attrs
+    end
+  end
 end

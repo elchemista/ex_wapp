@@ -29,13 +29,14 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
           {:published, map()} | {:suppressed, map()} | {:error, term()}
   def publish(message_data, envelope, session, state) do
     message = build_public_message(message_data, envelope)
+    chat_jid = canonical_chat_jid(envelope)
     is_protocol = Map.get(message_data, :message_content_type) == :protocol
     suppress_message? = transient_encrypted_placeholder?(message_data)
 
     if not is_protocol and not suppress_message? do
-      case persist_message(message, envelope, session, state) do
+      case persist_message(message, envelope, chat_jid, session, state) do
         :ok ->
-          publish_event(message, envelope, session)
+          publish_event(message, chat_jid, session)
           {:published, message}
 
         {:error, reason} ->
@@ -87,15 +88,13 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
     }
   end
 
-  @spec persist_message(map(), envelope(), term(), map()) :: :ok | {:error, term()}
-  defp persist_message(message, envelope, session, state) do
+  @spec persist_message(map(), envelope(), String.t(), term(), map()) :: :ok | {:error, term()}
+  defp persist_message(message, envelope, chat_jid, session, state) do
     case Common.chat_target(session, state) do
       nil ->
         :ok
 
       target ->
-        chat_jid = Common.normalize_jid(Map.fetch!(envelope, :from))
-
         with :ok <-
                Projection.update_chat_name(
                  target,
@@ -107,14 +106,33 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
     end
   end
 
-  @spec publish_event(map(), envelope(), term()) :: :ok
-  defp publish_event(message, envelope, session) do
+  @spec publish_event(map(), String.t(), term()) :: :ok
+  defp publish_event(message, chat_jid, session) do
     if is_pid(session) do
-      send(session, {:new_message, Map.fetch!(envelope, :from), message})
+      send(session, {:new_message, chat_jid, message})
     end
 
     :ok
   end
+
+  @spec canonical_chat_jid(envelope()) :: String.t()
+  defp canonical_chat_jid(envelope) do
+    raw_from = Map.fetch!(envelope, :from)
+    wire_jid = Common.normalize_jid_with_device(raw_from)
+    chat_jid = Common.normalize_jid(raw_from)
+
+    if wire_jid != "" and chat_jid != "" and wire_jid != chat_jid do
+      Logger.debug(
+        "[INBOUND] Canonicalized public chat identity family=#{jid_family(chat_jid)} " <>
+          "device_suffix_removed=true"
+      )
+    end
+
+    chat_jid
+  end
+
+  @spec jid_family(String.t()) :: String.t()
+  defp jid_family(jid), do: if(Common.lid_jid?(jid), do: "lid", else: "pn")
 
   @spec transient_encrypted_placeholder?(map()) :: boolean()
   defp transient_encrypted_placeholder?(%{encrypted: true, decrypt_status: {:error, _}}), do: true
