@@ -137,6 +137,36 @@ defmodule ExWapp.Session.Worker.Subscribers do
   end
 
   @doc """
+  Broadcasts the server's verdict on an outbound message.
+
+  WhatsApp answers a message it accepts with an `<ack>` and stays silent for one
+  it drops, so this is the only positive confirmation a sender ever gets. It is
+  published because the session already observes it while the caller cannot:
+  without it the only way to learn a send succeeded is to poll stored message
+  status, which is both slower and unable to distinguish "refused" from "no
+  answer yet".
+
+  Events are sent on:
+  - per-session: `"ex_wapp:delivery:<session_id>"`
+  - global: `"ex_wapp:delivery"` with `{session_id, payload}`
+
+  Message format:
+  - `{:ex_wapp_delivery, message_id, :sent, %{jid: jid}}`
+  - `{:ex_wapp_delivery, message_id, :failed, %{jid: jid, error: %ExWapp.Error.Ack{}}}`
+  """
+  @spec broadcast_delivery(term(), String.t(), atom(), map()) :: :ok
+  def broadcast_delivery(session_id, message_id, status, meta) do
+    topic_key = session_id || self()
+    event = {:ex_wapp_delivery, message_id, status, meta}
+
+    Phoenix.PubSub.broadcast(ExWapp.PubSub, "ex_wapp:delivery:#{topic_key}", event)
+    Phoenix.PubSub.broadcast(ExWapp.PubSub, "ex_wapp:delivery", {topic_key, event})
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  @doc """
   Broadcasts session health events (errors, drops, retries, guard trips).
 
   Events are sent on:

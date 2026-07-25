@@ -9,12 +9,13 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
   require Logger
 
   alias ExWapp.AppState.Engine
-  alias ExWapp.{Chat, Log, Store}
+  alias ExWapp.{Chat, Log, PrivacyToken, Store}
   alias ExWapp.Message.Content, as: MessageContent
   alias ExWapp.Message.Handler.Common
   alias ExWapp.Message.Handler.Inbound.{Content, Projection}
   alias ExWapp.Message.Handler.Wire.Fields
   alias ExWapp.Proto.{HistorySync, SyncAction}
+  alias ExWapp.Session.JIDUtils
 
   @doc """
   Applies every supported inbound protocol-sync payload to session state.
@@ -68,9 +69,10 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
         end
 
         persist_history_sync_lid_mappings(state, lid_mappings)
+        privacy_token_count = persist_history_sync_privacy_tokens(state, conversations)
 
         Logger.debug(
-          "[HISTORY_SYNC] Applied protocol history sync from=#{Log.reference(from)} id=#{Log.reference(id)} sync_type=#{inspect(sync_type)} conversations=#{length(conversations)} messages=#{history_message_count} lid_mappings=#{length(lid_mappings)}"
+          "[HISTORY_SYNC] Applied protocol history sync from=#{Log.reference(from)} id=#{Log.reference(id)} sync_type=#{inspect(sync_type)} conversations=#{length(conversations)} messages=#{history_message_count} lid_mappings=#{length(lid_mappings)} privacy_tokens=#{privacy_token_count}"
         )
 
         state
@@ -597,6 +599,76 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
   end
 
   defp persist_history_sync_lid_mappings(_state, _lid_mappings), do: :ok
+
+  @spec persist_history_sync_privacy_tokens(map(), list()) :: non_neg_integer()
+  defp persist_history_sync_privacy_tokens(state, conversations)
+       when is_map(state) and is_list(conversations) do
+    case Map.get(state, :store) do
+      nil ->
+        0
+
+      store ->
+        lid_mapping = store |> Store.load!() |> Map.get(:lid_mapping, %{})
+        token_entries = history_sync_privacy_token_entries(conversations, lid_mapping)
+
+        if token_entries != [] do
+          Store.update(store, :tctokens, %{}, fn existing_tokens ->
+            merge_history_sync_privacy_tokens(existing_tokens, token_entries)
+          end)
+        end
+
+        length(token_entries)
+    end
+  rescue
+    error ->
+      Logger.warning("[HISTORY_SYNC] Failed storing privacy tokens: #{Log.reason(error)}")
+      0
+  end
+
+  defp persist_history_sync_privacy_tokens(_state, _conversations), do: 0
+
+  defp history_sync_privacy_token_entries(conversations, lid_mapping) do
+    Enum.reduce(conversations, [], fn conversation, entries ->
+      record = %{
+        token: Map.get(conversation, :tc_token),
+        timestamp: Map.get(conversation, :tc_token_timestamp),
+        sender_timestamp: Map.get(conversation, :tc_token_sender_timestamp)
+      }
+
+      storage_jids = history_sync_privacy_token_jids(conversation, lid_mapping)
+
+      if PrivacyToken.valid?(record) and storage_jids != [] do
+        [{storage_jids, record} | entries]
+      else
+        entries
+      end
+    end)
+  end
+
+  defp history_sync_privacy_token_jids(conversation, lid_mapping) do
+    conversation
+    |> Map.take([:jid, :pn_jid, :lid_jid])
+    |> Map.values()
+    |> Enum.flat_map(&JIDUtils.related_bases(&1, lid_mapping))
+    |> Enum.filter(&direct_user_jid?/1)
+    |> Enum.uniq()
+  end
+
+  defp direct_user_jid?(jid) when is_binary(jid) do
+    String.ends_with?(jid, "@s.whatsapp.net") or JIDUtils.lid_jid?(jid)
+  end
+
+  defp direct_user_jid?(_jid), do: false
+
+  defp merge_history_sync_privacy_tokens(existing_tokens, token_entries) do
+    Enum.reduce(token_entries, existing_tokens, fn {storage_jids, record}, tokens ->
+      Enum.reduce(storage_jids, tokens, fn jid, aliases ->
+        Map.update(aliases, jid, record, fn existing ->
+          if PrivacyToken.newer_or_equal?(record, existing), do: record, else: existing
+        end)
+      end)
+    end)
+  end
 
   defp merge_lid_mappings(existing_mappings, normalized_mappings) do
     Enum.reduce(normalized_mappings, existing_mappings, fn {lid, pn}, acc ->

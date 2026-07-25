@@ -2,6 +2,7 @@ defmodule ExWapp.Message.Handler.Ack do
   @moduledoc false
 
   alias ExWapp.Binary.Node
+  alias ExWapp.JID
 
   @immediate_ack_classes ["message", "call"]
 
@@ -15,7 +16,7 @@ defmodule ExWapp.Message.Handler.Ack do
   @spec build_immediate_ack(Node.t()) :: {:ok, Node.t()} | :ignore
   def build_immediate_ack(%Node{tag: stanza_class, attrs: attrs, content: content})
       when stanza_class in @immediate_ack_classes and is_map(attrs) do
-    from = Map.get(attrs, "from", "")
+    from = normalize_jid(Map.get(attrs, "from", ""))
     child = first_child(content)
     id = immediate_ack_id(stanza_class, attrs, child)
 
@@ -65,18 +66,21 @@ defmodule ExWapp.Message.Handler.Ack do
 
   defp first_non_empty(values), do: Enum.find(values, "", &non_empty_binary?/1)
 
-  @spec build_notification_ack(binary(), binary(), term(), binary()) :: Node.t()
+  @spec build_notification_ack(term(), binary(), term(), binary()) :: Node.t()
   def build_notification_ack(from, id, participant, type) do
     build_stanza_ack("notification", from, id, participant, nil, type)
   end
 
-  @spec build_receipt_node_ack(binary(), binary(), term(), term(), binary()) :: Node.t()
+  @spec build_receipt_node_ack(term(), binary(), term(), term(), binary()) :: Node.t()
   def build_receipt_node_ack(from, id, participant, recipient, type) do
     build_stanza_ack("receipt", from, id, participant, recipient, type)
   end
 
-  @spec build_stanza_ack(binary(), binary(), binary(), term(), term(), term()) :: Node.t()
+  @spec build_stanza_ack(binary(), term(), binary(), term(), term(), term()) :: Node.t()
   def build_stanza_ack(stanza_class, from, id, participant, recipient, type) do
+    from = normalize_jid(from)
+    participant = normalize_jid(participant)
+    recipient = normalize_jid(recipient)
     attrs = %{"id" => id, "to" => from, "class" => stanza_class}
     attrs = if non_empty_binary?(type), do: Map.put(attrs, "type", type), else: attrs
 
@@ -94,6 +98,10 @@ defmodule ExWapp.Message.Handler.Ack do
 
     %Node{tag: "ack", attrs: attrs, content: nil}
   end
+
+  defp normalize_jid(%JID{} = jid), do: JID.to_string(jid)
+  defp normalize_jid(value) when is_binary(value), do: value
+  defp normalize_jid(_value), do: ""
 
   defp non_empty_binary?(value), do: is_binary(value) and value != ""
 end

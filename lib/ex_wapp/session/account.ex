@@ -5,7 +5,7 @@ defmodule ExWapp.Session.Account do
 
   require Logger
 
-  alias ExWapp.{Binary, Log, MapPath, Store}
+  alias ExWapp.{Binary, Log, MapPath, PrivacyToken, Store}
   alias ExWapp.Pairing.ADV
   alias ExWapp.Session.JIDUtils
 
@@ -200,7 +200,7 @@ defmodule ExWapp.Session.Account do
       lid_mapping = Map.get(data, :lid_mapping, %{})
 
       case find_tctoken(tctokens, jid, lid_mapping) do
-        %{token: token} when is_binary(token) ->
+        %{token: token} ->
           Logger.debug("[SEND] Appending tctoken for #{Log.reference(jid)}")
 
           tctoken_node = %Binary.Node{
@@ -225,7 +225,15 @@ defmodule ExWapp.Session.Account do
     jid
     |> JIDUtils.related_bases(lid_mapping)
     |> Enum.sort_by(fn candidate -> if JIDUtils.lid_jid?(candidate), do: 0, else: 1 end)
-    |> Enum.find_value(&Map.get(tctokens, &1))
+    |> Enum.find_value(fn candidate ->
+      case Map.get(tctokens, candidate) do
+        nil ->
+          nil
+
+        token_record ->
+          if PrivacyToken.valid?(token_record), do: token_record
+      end
+    end)
   end
 
   @spec get_device_identity_node(term()) ::

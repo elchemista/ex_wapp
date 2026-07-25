@@ -9,8 +9,10 @@ defmodule ExWapp.Message.Handler.Receipt do
   require Logger
 
   alias ExWapp.Binary.Node
+  alias ExWapp.Chat
   alias ExWapp.Log
   alias ExWapp.Message.Handler.{Ack, Common}
+  alias ExWapp.Session.Worker.Subscribers
 
   @spec handle_receipt(Node.t(), pid(), map()) :: {:ok, map()} | {:ok, map(), [term()]}
   def handle_receipt(%Node{attrs: attrs, content: content} = node, session, state) do
@@ -72,12 +74,34 @@ defmodule ExWapp.Message.Handler.Receipt do
     from = Common.normalize_jid(Map.get(attrs, "from", ""))
     to = Common.normalize_jid(Map.get(attrs, "to", ""))
 
+    jid = ack_target_jid(to, from)
     target = Common.chat_target(session, state)
+    status = ack_status(type)
 
     log_ack(class, type, id, from, to, error)
-    maybe_update_ack_status(target, ack_target_jid(to, from), id, ack_status(type))
+    maybe_update_ack_status(target, jid, id, status)
+    maybe_broadcast_delivery(state, class, id, jid, status, error)
 
     {:ok, state}
+  end
+
+  # Only message acks carry a delivery verdict; receipt/notification acks are
+  # transport bookkeeping and would be noise on this topic.
+  defp maybe_broadcast_delivery(_state, class, _id, _jid, _status, _error)
+       when class != "message",
+       do: :ok
+
+  defp maybe_broadcast_delivery(_state, _class, "", _jid, _status, _error), do: :ok
+
+  defp maybe_broadcast_delivery(state, _class, id, jid, status, error) do
+    meta = %{jid: jid}
+
+    meta =
+      if status == :failed,
+        do: Map.put(meta, :error, ExWapp.Error.Ack.classify(error)),
+        else: meta
+
+    Subscribers.broadcast_delivery(Map.get(state, :session_id), id, status, meta)
   end
 
   defp receipt_ack_actions(id, from, participant, recipient, type) do
@@ -244,9 +268,22 @@ defmodule ExWapp.Message.Handler.Receipt do
   defp ack_target_jid(_to, from) when from != "", do: from
   defp ack_target_jid(_to, _from), do: ""
   defp maybe_update_ack_status(nil, _jid, _id, _status), do: :ok
+  defp maybe_update_ack_status(_target, _jid, "", _status), do: :ok
 
-  defp maybe_update_ack_status(target, jid, id, status),
-    do: ExWapp.Chat.update_message_status(target, jid, id, status)
+  # The server does not always acknowledge a message under the same addressing
+  # family the chat is keyed by: a LID-addressed send can come back acked
+  # against the peer's phone JID, and vice versa. A JID-scoped update silently
+  # matches nothing in that case, so the message stays `:pending` forever and
+  # every caller that waits on the ack concludes the send was dropped even
+  # though the server accepted it. Fall back to an ID-wide update, which is
+  # safe because WhatsApp message IDs are unique per account.
+  defp maybe_update_ack_status(target, jid, id, status) do
+    if jid != "" and Chat.find_message(target, jid, id) do
+      Chat.update_message_status(target, jid, id, status)
+    else
+      Chat.update_message_status_by_id(target, id, status)
+    end
+  end
 
   defp receipt_status("read"), do: :read
   defp receipt_status("read-self"), do: :read

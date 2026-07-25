@@ -33,6 +33,9 @@ defmodule ExWapp.Proto.HistorySync do
           is_group: boolean(),
           pn_jid: String.t() | nil,
           lid_jid: String.t() | nil,
+          tc_token: binary() | nil,
+          tc_token_timestamp: non_neg_integer() | nil,
+          tc_token_sender_timestamp: non_neg_integer() | nil,
           messages: [conversation_message()]
         }
 
@@ -123,6 +126,9 @@ defmodule ExWapp.Proto.HistorySync do
         is_group: JID.group?(jid),
         pn_jid: normalize_optional_jid(first_length_delimited_field(fields, 39)),
         lid_jid: normalize_optional_jid(first_length_delimited_field(fields, 42)),
+        tc_token: first_length_delimited_field(fields, 21),
+        tc_token_timestamp: first_varint_field(fields, 22),
+        tc_token_sender_timestamp: first_varint_field(fields, 28),
         messages: parse_conversation_messages(fields)
       }
     else

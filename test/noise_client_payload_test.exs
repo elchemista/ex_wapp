@@ -11,49 +11,6 @@ defmodule ExWapp.Noise.ClientPayloadTest do
   alias WAWebProtobufsWa6.ClientPayload.DevicePairingRegistrationData
 
   @version_hash :crypto.hash(:md5, "2.3000.1041871181")
-  # DeviceProps with historySyncConfig matching Firefox/Linux identity
-  @device_props <<
-    0x0A,
-    0x09,
-    "whatsmeow"::binary,
-    0x12,
-    0x06,
-    0x08,
-    0x00,
-    0x10,
-    0x01,
-    0x18,
-    0x00,
-    0x18,
-    0x00,
-    0x20,
-    0x00,
-    0x2A,
-    0x17,
-    0x18,
-    0x80,
-    0x50,
-    0x20,
-    0x01,
-    0x30,
-    0x00,
-    0x38,
-    0x01,
-    0x40,
-    0x01,
-    0x48,
-    0x01,
-    0x50,
-    0x01,
-    0x58,
-    0x01,
-    0x60,
-    0x01,
-    0x70,
-    0x01,
-    0x78,
-    0x00
-  >>
   @firefox_device_props <<
     0x0A,
     0x05,
@@ -113,11 +70,22 @@ defmodule ExWapp.Noise.ClientPayloadTest do
       assert byte_size(pairing.eSkeyVal) == 32
       assert byte_size(pairing.eSkeySig) == 64
       assert pairing.buildHash == @version_hash
-      assert pairing.deviceProps == @device_props
+
+      # Asserted against the configured defaults rather than a captured byte
+      # string: the property worth protecting is that the identity we configure
+      # is the identity we encode. Pinning the bytes only detects change, and
+      # change here is sometimes the fix.
+      configured = Config.defaults().protocol.pairing_device_props
+
       assert %DeviceProps{} = device_props = DeviceProps.decode!(pairing.deviceProps)
-      assert device_props.os == "whatsmeow"
-      assert device_props.platform_type == 0
-      assert device_props.require_full_sync == false
+      assert device_props.os == configured.os
+      assert device_props.platform_type == configured.platform_type
+      assert device_props.require_full_sync == configured.require_full_sync
+
+      # `platform_type: 0` is the UNKNOWN enum, which makes WhatsApp render `os`
+      # verbatim as the device label in the user's linked-devices list. Shipping
+      # that by default put a library name on every paired device.
+      refute device_props.platform_type == 0
       assert device_props.version.primary == 0
       assert device_props.version.secondary == 1
       assert device_props.version.tertiary == 0

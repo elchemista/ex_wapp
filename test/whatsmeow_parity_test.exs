@@ -451,6 +451,11 @@ defmodule ExWapp.WhatsmeowParityTest do
     signed_id = 700
     prekey_id = 701
     sender_jid = "15550001111@s.whatsapp.net"
+    alice_pn = "111111111@s.whatsapp.net"
+    alice_lid = "888111111@lid"
+    privacy_token = <<1, 3, 3, 7>>
+    privacy_token_timestamp = System.system_time(:second)
+    privacy_token_sender_timestamp = privacy_token_timestamp - 5
 
     bob_signed_prekey = Keys.generate_signed_prekey(bob_identity, signed_id)
     bob_one_time_prekey = Keys.generate_prekey(prekey_id)
@@ -483,13 +488,18 @@ defmodule ExWapp.WhatsmeowParityTest do
     history_sync_payload =
       build_history_sync_protocol_message([
         %{
-          jid: "111111111@s.whatsapp.net",
+          jid: alice_pn,
+          pn_jid: alice_pn,
+          lid_jid: alice_lid,
           name: "Alice",
           unread_count: 3,
           last_message_timestamp: 1_730_000_001,
           pinned: true,
           archived: false,
-          muted_until: 0
+          muted_until: 0,
+          tc_token: privacy_token,
+          tc_token_timestamp: privacy_token_timestamp,
+          tc_token_sender_timestamp: privacy_token_sender_timestamp
         },
         %{
           jid: "123456789@g.us",
@@ -540,7 +550,7 @@ defmodule ExWapp.WhatsmeowParityTest do
     chats = ExWapp.Chat.list(bob_store)
     assert length(chats) == 2
 
-    alice = Enum.find(chats, &(&1.jid == "111111111@s.whatsapp.net"))
+    alice = Enum.find(chats, &(&1.jid == alice_pn))
     assert alice
     assert alice.name == "Alice"
     assert alice.unread_count == 3
@@ -563,10 +573,23 @@ defmodule ExWapp.WhatsmeowParityTest do
     groups = ExWapp.Chat.list_groups(bob_store)
     assert Enum.map(groups, & &1.jid) == ["123456789@g.us"]
 
-    contact = ExWapp.Contact.get(bob_store, "111111111@s.whatsapp.net")
+    contact = ExWapp.Contact.get(bob_store, alice_pn)
     assert contact
     assert contact.push_name == "Alice"
     assert ExWapp.Contact.get(bob_store, "123456789@g.us") == nil
+
+    stored_data = ExWapp.Store.load!(bob_store)
+
+    expected_privacy_token = %{
+      token: privacy_token,
+      timestamp: privacy_token_timestamp,
+      sender_timestamp: privacy_token_sender_timestamp
+    }
+
+    assert stored_data.tctokens[alice_pn] == expected_privacy_token
+    assert stored_data.tctokens[alice_lid] == expected_privacy_token
+    assert stored_data.lid_mapping[{:pn_to_lid, alice_pn}] == alice_lid
+    assert stored_data.lid_mapping[{:lid_to_pn, alice_lid}] == alice_pn
   end
 
   test "protocol history sync inline payload ingests conversation messages" do
@@ -817,6 +840,11 @@ defmodule ExWapp.WhatsmeowParityTest do
     |> maybe_append_varint_field(24, boolean_to_int(Map.get(conversation, :pinned)))
     |> maybe_append_varint_field(16, boolean_to_int(Map.get(conversation, :archived)))
     |> maybe_append_varint_field(25, Map.get(conversation, :muted_until))
+    |> maybe_append_length_delimited_field(21, Map.get(conversation, :tc_token))
+    |> maybe_append_varint_field(22, Map.get(conversation, :tc_token_timestamp))
+    |> maybe_append_varint_field(28, Map.get(conversation, :tc_token_sender_timestamp))
+    |> maybe_append_length_delimited_field(39, Map.get(conversation, :pn_jid))
+    |> maybe_append_length_delimited_field(42, Map.get(conversation, :lid_jid))
     |> IO.iodata_to_binary()
   end
 

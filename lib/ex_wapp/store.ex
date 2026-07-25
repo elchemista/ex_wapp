@@ -420,6 +420,52 @@ defmodule ExWapp.Store do
     if function_exported?(module, :flush, 1), do: module.flush(store), else: :ok
   end
 
+  @doc """
+  Reports which optional callbacks an adapter does not implement.
+
+  Every message-level callback is optional and dispatched through
+  `function_exported?/3`, so an adapter that misspells one, or never wrote it,
+  silently falls through to a generic path with different semantics — no
+  compile warning, no runtime error, just behaviour that quietly diverges.
+  Naming the gap once at session start turns that into something a reader can
+  see. Returns the missing `{function, arity}` pairs, newest adapters usually
+  returning `[]`.
+  """
+  @spec missing_optional_callbacks(t()) :: [{atom(), arity()}]
+  def missing_optional_callbacks(%module{}) do
+    Code.ensure_loaded(module)
+
+    __optional_callbacks__()
+    |> Enum.reject(fn {fun, arity} -> function_exported?(module, fun, arity) end)
+  end
+
+  def missing_optional_callbacks(_store), do: []
+
+  @doc false
+  @spec __optional_callbacks__() :: [{atom(), arity()}]
+  def __optional_callbacks__ do
+    [
+      close: 1,
+      clear: 1,
+      read: 2,
+      update: 4,
+      get_and_update: 4,
+      transaction: 2,
+      begin_batch: 2,
+      finish_batch: 2,
+      flush: 1,
+      stream_messages: 3,
+      upsert_messages: 3,
+      find_message: 3,
+      find_message_by_id: 2,
+      update_message_status: 4,
+      update_message_status_by_id: 3,
+      delete_messages: 3,
+      delete_chat_messages: 2,
+      snapshot_messages: 1
+    ]
+  end
+
   @doc "Runs a function inside a caller-owned persistence batch."
   @spec batch(t(), term(), (-> term())) :: term()
   def batch(store, reason, fun) when is_function(fun, 0) do

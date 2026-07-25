@@ -5,6 +5,14 @@ defmodule ExWapp.Config do
 
   @default_client_version %{primary: 2, secondary: 3000, tertiary: 1_041_871_181}
 
+  # WhatsApp expects a client version close to what its own web client reports,
+  # and this default only ages. It cannot expire on its own, so record when it
+  # was known good and let `client_version_age/1` say so out loud — a stale
+  # version fails as an unexplained refusal at connect time, which is expensive
+  # to diagnose from the far end.
+  @client_version_verified_on ~D[2026-01-15]
+  @client_version_stale_after_days 120
+
   @type runtime_cfg :: map()
   @type client_version :: %{
           required(:primary) => pos_integer(),
@@ -14,6 +22,23 @@ defmodule ExWapp.Config do
 
   @spec default_client_version() :: client_version()
   def default_client_version, do: @default_client_version
+
+  @doc """
+  Reports whether the built-in client version is old enough to be suspect.
+
+  Returns `:overridden` when the caller supplied its own version, in which case
+  this library has no opinion about its age.
+  """
+  @spec client_version_status(client_version() | nil, Date.t()) ::
+          :overridden | {:ok, non_neg_integer()} | {:stale, non_neg_integer()}
+  def client_version_status(version, today \\ Date.utc_today())
+
+  def client_version_status(@default_client_version, today) do
+    age = Date.diff(today, @client_version_verified_on)
+    if age > @client_version_stale_after_days, do: {:stale, age}, else: {:ok, age}
+  end
+
+  def client_version_status(_version, _today), do: :overridden
 
   @spec defaults() :: runtime_cfg()
   def defaults do
@@ -106,9 +131,16 @@ defmodule ExWapp.Config do
         client_mode: :web,
         client_version: @default_client_version,
         post_auth_digest_enabled: false,
+        # `platform_type: 0` is the UNKNOWN enum, which makes WhatsApp render
+        # `os` verbatim in the user's linked-devices list — so the previous
+        # default labelled every device "whatsmeow", naming a Go library this
+        # one was ported from and advertising the connection as unofficial
+        # tooling. `platform_type: 1` (CHROME) renders as "Chrome (<os>)", which
+        # is both accurate for `client_mode: :web` and unremarkable. Callers who
+        # want a different label should override the whole map.
         pairing_device_props: %{
-          os: "whatsmeow",
-          platform_type: 0,
+          os: "Mac OS",
+          platform_type: 1,
           require_full_sync: false,
           version: %{
             primary: 0,
