@@ -239,13 +239,11 @@ defmodule ExWapp.Session.Outbound.Direct do
       )
     end
 
-    attrs =
-      %{
-        "id" => message_id,
-        "to" => destination_jid,
-        "type" => "text"
-      }
-      |> maybe_put_peer_recipient_pn(destination_jid, store)
+    attrs = %{
+      "id" => message_id,
+      "to" => destination_jid,
+      "type" => "text"
+    }
 
     participants_node = %Binary.Node{
       tag: "participants",
@@ -498,22 +496,4 @@ defmodule ExWapp.Session.Outbound.Direct do
 
   @spec jid_family(String.t()) :: String.t()
   defp jid_family(jid), do: if(JIDUtils.lid_jid?(jid), do: "lid", else: "pn")
-
-  defp maybe_put_peer_recipient_pn(attrs, destination_jid, store) do
-    if JIDUtils.lid_jid?(destination_jid) do
-      peer_recipient_pn =
-        store
-        |> Account.load_lid_mapping()
-        |> Map.get({:lid_to_pn, destination_jid}, "")
-        |> JIDUtils.normalize_for_signal()
-
-      if peer_recipient_pn == "" do
-        attrs
-      else
-        Map.put(attrs, "peer_recipient_pn", peer_recipient_pn)
-      end
-    else
-      attrs
-    end
-  end
 end

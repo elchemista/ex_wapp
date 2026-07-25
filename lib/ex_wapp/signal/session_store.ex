@@ -823,13 +823,26 @@ defmodule ExWapp.Signal.SessionStore do
   defp replace_prekey_candidate(_session, {:current, _stored}, updated_session),
     do: updated_session
 
+  # A previous session that just decrypted a peer message is the session the
+  # peer is actually using, so it is promoted to current and the outgoing
+  # session is demoted into the slot it vacated. Writing the ratcheted state
+  # back into the previous list and leaving `current` alone would keep every
+  # outbound message encrypted against a session the peer has moved off: the
+  # server answers those with `<ack class="message" error="463">`, and because
+  # the peer never receives a decryptable reply it keeps re-initiating, so the
+  # mismatch never heals.
   defp replace_prekey_candidate(session, {{:previous, index}, _stored}, updated_session) do
+    demoted = strip_previous_sessions(session)
+
     previous_sessions =
       session
       |> Map.get(:previous_sessions, [])
-      |> List.replace_at(index, strip_previous_sessions(updated_session))
+      |> List.replace_at(index, demoted)
+      |> Enum.take(@max_previous_sessions)
 
-    Map.put(session, :previous_sessions, previous_sessions)
+    updated_session
+    |> strip_previous_sessions()
+    |> Map.put(:previous_sessions, previous_sessions)
   end
 
   defp candidate_label({:current, _session}), do: "current-session"

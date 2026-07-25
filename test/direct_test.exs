@@ -1,7 +1,7 @@
 defmodule ExWapp.Session.Outbound.DirectTest do
   use ExUnit.Case, async: true
 
-  alias ExWapp.{Binary, Messages}
+  alias ExWapp.{Binary, Messages, PrivacyToken}
   alias ExWapp.Session.Account
   alias ExWapp.Session.Outbound.Direct
   alias ExWapp.Store.Memory
@@ -68,6 +68,7 @@ defmodule ExWapp.Session.Outbound.DirectTest do
     pn = "15550002222@s.whatsapp.net"
     lid = "88888822222@lid"
     token = <<5, 6, 7, 8>>
+    timestamp = System.system_time(:second)
 
     store =
       Memory.new(
@@ -76,7 +77,7 @@ defmodule ExWapp.Session.Outbound.DirectTest do
             {:pn_to_lid, pn} => lid,
             {:lid_to_pn, lid} => pn
           },
-          tctokens: %{pn => %{token: token, timestamp: "123"}}
+          tctokens: %{pn => %{token: token, timestamp: timestamp}}
         }
       )
 
@@ -89,10 +90,44 @@ defmodule ExWapp.Session.Outbound.DirectTest do
         false
       )
 
-    assert node.attrs["peer_recipient_pn"] == pn
+    refute Map.has_key?(node.attrs, "peer_recipient_pn")
 
     assert %Binary.Node{tag: "tctoken", content: %Binary.Raw{data: ^token}} =
              List.last(node.content)
+  end
+
+  test "does not append an expired privacy token" do
+    pn = "15550003333@s.whatsapp.net"
+    lid = "88888833333@lid"
+    now = System.system_time(:second)
+
+    store =
+      Memory.new(
+        initial_data: %{
+          lid_mapping: %{
+            {:pn_to_lid, pn} => lid,
+            {:lid_to_pn, lid} => pn
+          },
+          tctokens: %{
+            pn => %{
+              token: <<9, 10, 11, 12>>,
+              timestamp: PrivacyToken.cutoff_timestamp(now) - 1
+            }
+          }
+        }
+      )
+
+    node =
+      Direct.build_encrypted_message_node(
+        lid,
+        "message-with-expired-token",
+        [],
+        store,
+        false
+      )
+
+    refute Map.has_key?(node.attrs, "peer_recipient_pn")
+    refute Enum.any?(node.content, &match?(%Binary.Node{tag: "tctoken"}, &1))
   end
 
   test "selects the local sender identity in the destination addressing family" do

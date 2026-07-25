@@ -494,7 +494,7 @@ defmodule ExWapp.SignalSessionStoreTest do
       )
   end
 
-  test "repeated prekey decrypts through the retained session after an outbound refresh" do
+  test "a retained session that decrypts a peer message is promoted back to current" do
     alice_identity = Keys.generate_key_pair()
     bob = remote_device(4_503, 93, 123)
     alice_jid = "444555669:32@lid"
@@ -572,9 +572,17 @@ defmodule ExWapp.SignalSessionStoreTest do
                consumed_prekeys
              )
 
+    # The peer is demonstrably still on the session that decrypted this message,
+    # so it becomes the session Bob encrypts with; the forced outbound refresh is
+    # demoted in its place. Leaving the refresh as current would send every reply
+    # on a session the peer has moved off, which the server rejects with 463.
     assert {:ok, current_session} = SessionStore.get_session(bob_store3, alice_jid)
-    assert current_session.initiator_base_key == refreshed_session.initiator_base_key
+    assert current_session.initiator_base_key == first_envelope.base_key
+    refute current_session.initiator_base_key == refreshed_session.initiator_base_key
     assert length(current_session.previous_sessions) == 1
+
+    assert [demoted] = current_session.previous_sessions
+    assert demoted.initiator_base_key == refreshed_session.initiator_base_key
 
     assert {:error, :message_key_not_found} =
              SessionStore.decrypt_message(

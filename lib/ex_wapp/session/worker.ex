@@ -455,6 +455,8 @@ defmodule ExWapp.Session.Worker do
     runtime_cfg = options.runtime
     store_input = options.store
     store = Store.new(store_input)
+    log_store_capabilities(store)
+    log_client_version_age(runtime_cfg)
     session_id = options.session_id
     transport_mod = options.transport
 
@@ -1409,6 +1411,38 @@ defmodule ExWapp.Session.Worker do
   end
 
   # Establishing and closing connections
+
+  defp log_store_capabilities(store) do
+    case Store.missing_optional_callbacks(store) do
+      [] ->
+        :ok
+
+      missing ->
+        # Not an error: a minimal adapter is legitimate. But the fallbacks it
+        # silently gets have different semantics from a real implementation, so
+        # the substitution should be visible at start rather than inferred from
+        # odd behaviour later.
+        Logger.info(
+          "[SESSION] store_adapter=#{inspect(store.__struct__)} using generic fallbacks for " <>
+            inspect(missing)
+        )
+    end
+  end
+
+  defp log_client_version_age(runtime_cfg) do
+    configured = get_in(runtime_cfg, [:protocol, :client_version])
+
+    case Config.client_version_status(configured) do
+      {:stale, age} ->
+        Logger.warning(
+          "[SESSION] built-in client_version is #{age} days old; WhatsApp may refuse the " <>
+            "handshake. Override :client_version under the :protocol runtime config."
+        )
+
+      _ ->
+        :ok
+    end
+  end
 
   defp do_connect(%__MODULE__{status: status} = state)
        when status not in [:idle, :disconnected] do

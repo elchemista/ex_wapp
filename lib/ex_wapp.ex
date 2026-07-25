@@ -485,6 +485,85 @@ defmodule ExWapp do
   end
 
   @doc """
+  Sends a text message and waits for the server's verdict on it.
+
+  `send_message/3` returns once the encrypted stanza reaches the socket, which
+  is not the same as WhatsApp accepting it: the server answers a message it
+  accepts with an `<ack>` and stays silent for one it drops. A caller that
+  treats the write as success records dropped messages as delivered, so the
+  three outcomes are separated here:
+
+    * `{:ok, message_id}` — the server acknowledged the message
+    * `{:error, {:rejected, %ExWapp.Error.Ack{}}}` — the server refused it, with
+      a classified reason saying whether a resend can succeed
+    * `{:error, :ack_timeout}` — no answer within `timeout`; genuinely unknown,
+      and specifically *not* proof of non-delivery
+
+  Blocks the calling process. Delivery events are consumed from this process's
+  mailbox and any that arrive for other messages are discarded on the way out,
+  so the caller's mailbox is left as it was. A caller that would rather not
+  block should subscribe to `"ex_wapp:delivery:<session_id>"` directly and
+  correlate on the message ID.
+  """
+  @spec send_message_await(pid(), String.t(), String.t(), timeout()) ::
+          {:ok, String.t()}
+          | {:error, {:rejected, ExWapp.Error.Ack.t()}}
+          | {:error, :ack_timeout}
+          | {:error, term()}
+  def send_message_await(session, jid, text, timeout \\ 15_000) when is_pid(session) do
+    topic = delivery_topic(session)
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, topic)
+
+    try do
+      with {:ok, message_id} <- send_message(session, jid, text) do
+        await_delivery(message_id, timeout)
+      end
+    after
+      Phoenix.PubSub.unsubscribe(ExWapp.PubSub, topic)
+      drain_delivery_events()
+    end
+  end
+
+  # The per-session topic when the session is registered, so an awaiting caller
+  # is not woken by unrelated traffic; the global topic otherwise, where the
+  # message ID still disambiguates.
+  defp delivery_topic(session) do
+    case Registry.keys(ExWapp.Session.Registry, session) do
+      [session_id | _] -> "ex_wapp:delivery:#{session_id}"
+      [] -> "ex_wapp:delivery"
+    end
+  end
+
+  defp await_delivery(message_id, timeout) do
+    receive do
+      {:ex_wapp_delivery, ^message_id, :sent, _meta} ->
+        {:ok, message_id}
+
+      {:ex_wapp_delivery, ^message_id, :failed, %{error: error}} ->
+        {:error, {:rejected, error}}
+
+      {_session_id, {:ex_wapp_delivery, ^message_id, :sent, _meta}} ->
+        {:ok, message_id}
+
+      {_session_id, {:ex_wapp_delivery, ^message_id, :failed, %{error: error}}} ->
+        {:error, {:rejected, error}}
+    after
+      timeout -> {:error, :ack_timeout}
+    end
+  end
+
+  # Anything still queued arrived only because of the subscription above, so
+  # removing it restores the caller's mailbox rather than discarding its mail.
+  defp drain_delivery_events do
+    receive do
+      {:ex_wapp_delivery, _id, _status, _meta} -> drain_delivery_events()
+      {_session_id, {:ex_wapp_delivery, _id, _status, _meta}} -> drain_delivery_events()
+    after
+      0 -> :ok
+    end
+  end
+
+  @doc """
   Sends an image through a high-level client.
   """
   @spec send_image(Client.t() | GenServer.server(), String.t(), ExWapp.Media.source(), keyword()) ::

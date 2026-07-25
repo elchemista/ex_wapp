@@ -3,19 +3,57 @@ defmodule ExWapp.Log do
 
   @safe_attr_keys MapSet.new(["class", "code", "count", "offline", "type", "xmlns"])
 
+  # Attributes that identify *which* conversation or stanza a line is about.
+  # These are fingerprinted rather than blanked, because `[FILTERED]` is a
+  # constant and therefore joins to nothing: with it, `[SEND] Sent encrypted
+  # message to <ref>` and the `<message to="...">` node it produced cannot be
+  # tied together, and diagnosing a dropped stanza means enabling plaintext
+  # logging globally — which prints every contact's real phone number.
+  # A fingerprint is stable for a given value, so the same identity can be
+  # followed across the send path, the wire node, and the ack that returns,
+  # while remaining useless to anyone who does not already know the value.
+  @correlatable_attr_keys MapSet.new([
+                            "from",
+                            "id",
+                            "jid",
+                            "participant",
+                            "recipient",
+                            "sender_pn",
+                            "to"
+                          ])
+
+  # Local vendor change: with `config :ex_wapp, :unsafe_plaintext_logs?, true`
+  # JIDs and stanza attributes are logged verbatim instead of fingerprinted.
+  # Redaction hides the addressing detail that decides whether the server
+  # accepts or silently drops a stanza, which cannot be diagnosed from a
+  # SHA-256 prefix. Off by default; only switch it on to capture a failing
+  # exchange, since it prints real phone numbers and JIDs.
+  @spec unsafe_plaintext_logs?() :: boolean()
+  def unsafe_plaintext_logs?, do: Application.get_env(:ex_wapp, :unsafe_plaintext_logs?, false)
+
   @spec reference(term()) :: String.t()
   def reference(nil), do: "[none]"
   def reference(""), do: "[none]"
 
-  def reference(value) do
-    fingerprint =
-      value
-      |> :erlang.term_to_binary()
-      |> then(&:crypto.hash(:sha256, &1))
-      |> Base.encode16(case: :lower)
-      |> binary_part(0, 12)
+  # A JID reaching here as a struct must fingerprint identically to the same
+  # JID reaching here as a string, or the two halves of a send stop correlating
+  # for the exact identities worth correlating. Matched structurally to avoid a
+  # compile-time dependency on the JID module.
+  def reference(%{__struct__: ExWapp.JID} = jid), do: reference(ExWapp.JID.to_string(jid))
 
-    "[redacted:#{fingerprint}]"
+  def reference(value) do
+    if unsafe_plaintext_logs?() do
+      "[plain:#{inspect(value)}]"
+    else
+      fingerprint =
+        value
+        |> :erlang.term_to_binary()
+        |> then(&:crypto.hash(:sha256, &1))
+        |> Base.encode16(case: :lower)
+        |> binary_part(0, 12)
+
+      "[redacted:#{fingerprint}]"
+    end
   end
 
   @spec references(list()) :: String.t()
@@ -26,15 +64,18 @@ defmodule ExWapp.Log do
   @spec attrs(map() | term()) :: map() | String.t()
   def attrs(attrs) when is_map(attrs) do
     Map.new(attrs, fn {key, value} ->
-      if MapSet.member?(@safe_attr_keys, to_string(key)) do
-        {key, safe_scalar(value)}
-      else
-        {key, "[FILTERED]"}
+      cond do
+        unsafe_plaintext_logs?() -> {key, value}
+        MapSet.member?(@safe_attr_keys, to_string(key)) -> {key, safe_scalar(value)}
+        MapSet.member?(@correlatable_attr_keys, to_string(key)) -> {key, reference(value)}
+        true -> {key, "[FILTERED]"}
       end
     end)
   end
 
-  def attrs(_attrs), do: "[FILTERED]"
+  def attrs(attrs) do
+    if unsafe_plaintext_logs?(), do: attrs, else: "[FILTERED]"
+  end
 
   @spec term_summary(term()) :: String.t()
   def term_summary(value) when is_binary(value), do: "binary(bytes=#{byte_size(value)})"

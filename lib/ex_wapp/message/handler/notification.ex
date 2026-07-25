@@ -10,7 +10,7 @@ defmodule ExWapp.Message.Handler.Notification do
   require Logger
 
   alias ExWapp.Binary.Node
-  alias ExWapp.{Chat, Config, Log, Pairing, Store}
+  alias ExWapp.{Chat, Config, Log, Pairing, PrivacyToken, Store}
   alias ExWapp.Media.Retry, as: MediaRetry
   alias ExWapp.Message.Handler.{Ack, Common}
   alias ExWapp.Pairing.LinkCode
@@ -263,9 +263,13 @@ defmodule ExWapp.Message.Handler.Notification do
   end
 
   defp do_store_tctoken(store, jids, token, timestamp) do
+    record = %{token: token, timestamp: timestamp}
+
     Store.update(store, :tctokens, %{}, fn tctokens ->
       Enum.reduce(jids, tctokens, fn jid, acc ->
-        Map.put(acc, jid, %{token: token, timestamp: timestamp})
+        Map.update(acc, jid, record, fn existing ->
+          if PrivacyToken.newer_or_equal?(record, existing), do: record, else: existing
+        end)
       end)
     end)
   end

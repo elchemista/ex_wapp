@@ -50,18 +50,57 @@ defmodule ExWapp.Session.Worker.Outbound do
   def send_text_worker(session_pid, state, jid, text, opts) do
     normalized_jid = normalize_jid_with_device(jid)
 
-    if JID.group?(normalized_jid) do
-      do_send_group_worker(session_pid, state, normalized_jid, text, opts)
-    else
-      send_direct_text_worker(
-        session_pid,
-        state,
-        normalize_jid_for_signal(normalized_jid),
-        text,
-        opts
-      )
+    # One send touches the store on the order of twenty times — device cache,
+    # LID mapping, prekeys, per-target Signal sessions, the ADV identity, the
+    # pending chat record. Unbatched, each of those is a full adapter load, so
+    # an in-memory adapter pays nothing and a durable one pays a round trip and
+    # a whole-blob decode per access. Holding one batch open for the send lets
+    # the adapter answer them from a single load.
+    with_send_batch(state, {:outbound_send, normalized_jid}, fn ->
+      if JID.group?(normalized_jid) do
+        do_send_group_worker(session_pid, state, normalized_jid, text, opts)
+      else
+        send_direct_text_worker(
+          session_pid,
+          state,
+          normalize_jid_for_signal(normalized_jid),
+          text,
+          opts
+        )
+      end
+    end)
+  end
+
+  # Deliberately not `Store.batch/3`: that helper replaces the wrapped result
+  # with `{:error, _}` when the closing flush fails, which would report a
+  # message already on the wire as unsent and invite a duplicate resend. Here
+  # the send's own result always wins and a persistence problem is logged
+  # instead of substituted. A batch that cannot be opened degrades to the
+  # unbatched path rather than failing the send.
+  defp with_send_batch(%{store: store}, reason, fun) when not is_nil(store) do
+    case Store.begin_batch(store, reason) do
+      :ok ->
+        try do
+          fun.()
+        after
+          case Store.finish_batch(store, reason) do
+            :ok ->
+              :ok
+
+            {:error, flush_reason} ->
+              Logger.warning(
+                "[SEND] Batch flush failed after send reason=#{Log.reason(flush_reason)}"
+              )
+          end
+        end
+
+      {:error, batch_reason} ->
+        Logger.debug("[SEND] Proceeding unbatched reason=#{Log.reason(batch_reason)}")
+        fun.()
     end
   end
+
+  defp with_send_batch(_state, _reason, fun), do: fun.()
 
   @doc "Sends a constructed WhatsApp protobuf message through the normal outbound pipeline."
   @spec send_proto_worker(pid(), map(), String.t(), ExWapp.Proto.Message.t(), keyword()) ::

@@ -94,6 +94,32 @@ defmodule ExWapp.ReceiptProtocolTest do
             }} = Ack.build_immediate_ack(call)
   end
 
+  test "acknowledges decoded JID structs without losing their addressing family" do
+    message = %Node{
+      tag: "message",
+      attrs: %{
+        "from" => %ExWapp.JID{user: "70000001111", server: "lid"},
+        "id" => "MSG_ACK_LID",
+        "participant" => %ExWapp.JID{
+          user: "70000002222",
+          device: 3,
+          server: "lid"
+        }
+      }
+    }
+
+    assert {:ok,
+            %Node{
+              tag: "ack",
+              attrs: %{
+                "class" => "message",
+                "id" => "MSG_ACK_LID",
+                "to" => "70000001111@lid",
+                "participant" => "70000002222:3@lid"
+              }
+            }} = Ack.build_immediate_ack(message)
+  end
+
   test "does not emit uncorrelatable or duplicate immediate acknowledgements" do
     assert NodeHandler.immediate_actions(%Node{
              tag: "message",
