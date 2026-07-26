@@ -510,8 +510,19 @@ defmodule ExWapp.OutboundSessionRefreshTest do
     local_lid_base_jid = "19995550202@lid"
     chat_jid = "19995550404@s.whatsapp.net"
 
-    %{store: store} = build_local_store(local_pn_device_jid, local_lid_device_jid)
+    %{store: store, local_signal: local_signal, local_bundle: local_bundle} =
+      build_local_store(local_pn_device_jid, local_lid_device_jid)
+
     primary_device = build_remote_device(local_pn_base_jid)
+
+    {signal_sessions, primary_sessions} =
+      establish_inbound_session(
+        local_pn_device_jid,
+        local_pn_base_jid,
+        local_signal,
+        local_bundle,
+        primary_device.signal
+      )
 
     conn =
       start_fake_conn(self(), %{
@@ -523,7 +534,7 @@ defmodule ExWapp.OutboundSessionRefreshTest do
         route_via_session: true
       })
 
-    session = start_connected_session(store, conn, SessionStore.new())
+    session = start_connected_session(store, conn, signal_sessions)
 
     send(
       session,
@@ -548,9 +559,15 @@ defmodule ExWapp.OutboundSessionRefreshTest do
 
     encrypted_node = Enum.find(content, &match?(%Binary.Node{tag: "enc"}, &1))
     assert %Binary.Node{} = encrypted_node
+    assert encrypted_node.attrs["type"] == "msg"
 
     plaintext =
-      decrypt_direct_payload(local_pn_device_jid, encrypted_node, primary_device.signal)
+      decrypt_direct_payload(
+        local_pn_device_jid,
+        encrypted_node,
+        primary_device.signal,
+        primary_sessions
+      )
 
     assert {:ok, message_fields} = Fields.decode_safe(plaintext)
     protocol_message = Fields.first_length_delimited(message_fields, 12)
@@ -570,7 +587,8 @@ defmodule ExWapp.OutboundSessionRefreshTest do
     assert Fields.first_length_delimited(key_fields, 3) == "UNAVAILABLE_1"
     assert Fields.first_length_delimited(key_fields, 4) == nil
 
-    assert Enum.any?(node.content, &match?(%Binary.Node{tag: "device-identity"}, &1))
+    refute Enum.any?(node.content, &match?(%Binary.Node{tag: "device-identity"}, &1))
+    refute_receive {:prekey_request, _requested_jids}, 50
   end
 
   test "send_text_worker returns not_connected when the runtime is disconnected" do
@@ -637,7 +655,7 @@ defmodule ExWapp.OutboundSessionRefreshTest do
   end
 
   defp build_local_store(local_jid, local_lid) do
-    {:ok, _signal_info, local_signal} = Signal.bootstrap(%{device_attrs: %{"jid" => local_jid}})
+    {:ok, signal_info, local_signal} = Signal.bootstrap(%{device_attrs: %{"jid" => local_jid}})
 
     client_info =
       %{jid: local_jid}
@@ -656,7 +674,7 @@ defmodule ExWapp.OutboundSessionRefreshTest do
         }
       )
 
-    %{store: store, local_signal: local_signal}
+    %{store: store, local_signal: local_signal, local_bundle: signal_info.bundle}
   end
 
   defp maybe_put_lid(map, nil), do: map
@@ -709,13 +727,14 @@ defmodule ExWapp.OutboundSessionRefreshTest do
   defp decrypt_direct_payload(
          sender_jid,
          %Binary.Node{attrs: attrs, content: %Binary.Raw{data: ciphertext}},
-         remote_signal
+         remote_signal,
+         remote_sessions
        ) do
     enc_type = Map.get(attrs, "type", "msg")
 
     {:ok, padded_plaintext, _sessions} =
       SessionStore.decrypt_message(
-        SessionStore.new(),
+        remote_sessions,
         sender_jid,
         ciphertext,
         enc_type == "pkmsg",
@@ -727,6 +746,39 @@ defmodule ExWapp.OutboundSessionRefreshTest do
       )
 
     Encryption.unpad_message(padded_plaintext)
+  end
+
+  defp establish_inbound_session(
+         local_device_jid,
+         primary_device_jid,
+         local_signal,
+         local_bundle,
+         primary_signal
+       ) do
+    {:ok, ciphertext, :prekey, primary_sessions} =
+      SessionStore.encrypt_message(
+        SessionStore.new(),
+        local_device_jid,
+        Encryption.pad_message("session continuity seed"),
+        primary_signal.identity_key,
+        primary_signal.registration_id,
+        local_bundle
+      )
+
+    {:ok, _plaintext, local_sessions} =
+      SessionStore.decrypt_message(
+        SessionStore.new(),
+        primary_device_jid,
+        ciphertext,
+        true,
+        local_signal.identity_key,
+        %{
+          signed_prekeys: local_signal.signed_prekeys,
+          prekeys: local_signal.prekeys
+        }
+      )
+
+    {local_sessions, primary_sessions}
   end
 
   defp encrypted_participant_targets(%Binary.Node{} = node) do

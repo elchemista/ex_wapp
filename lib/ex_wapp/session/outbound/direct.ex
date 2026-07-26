@@ -55,7 +55,8 @@ defmodule ExWapp.Session.Outbound.Direct do
           non_neg_integer(),
           discover_fun(),
           Prekeys.fetch_many_fun(),
-          Prekeys.fetch_one_fun()
+          Prekeys.fetch_one_fun(),
+          keyword()
         ) ::
           {:ok, SessionStore.t(), map(), target_hints()} | {:error, term()}
   def prepare_sessions(
@@ -64,10 +65,12 @@ defmodule ExWapp.Session.Outbound.Direct do
         now_ms,
         discover_fun,
         fetch_many_fun,
-        fetch_one_fun
+        fetch_one_fun,
+        opts \\ []
       )
       when is_binary(jid) and is_integer(now_ms) and is_function(discover_fun, 3) and
-             is_function(fetch_many_fun, 2) and is_function(fetch_one_fun, 2) do
+             is_function(fetch_many_fun, 2) and is_function(fetch_one_fun, 2) and
+             is_list(opts) do
     signal_sessions = state.signal_sessions || SessionStore.new()
     own_sender_jid = Account.local_account_sender_identity_for_destination(state.store, jid)
     own_device_id = Account.local_account_device_id(state.store)
@@ -79,8 +82,11 @@ defmodule ExWapp.Session.Outbound.Direct do
 
     self_chat? = self_chat_destination?(state.store, jid, own_sender_jid)
 
+    reuse_self_chat_sessions? =
+      self_chat? and Keyword.get(opts, :reuse_self_chat_sessions, false)
+
     signal_sessions =
-      if self_chat? do
+      if self_chat? and not reuse_self_chat_sessions? do
         clear_self_chat_sessions(state.store, signal_sessions, all_device_jids)
       else
         signal_sessions
@@ -109,7 +115,10 @@ defmodule ExWapp.Session.Outbound.Direct do
         state.store,
         signal_sessions,
         all_target_device_jids,
-        own_target_candidates ++ own_cached_devices,
+        if(reuse_self_chat_sessions?,
+          do: [],
+          else: own_target_candidates ++ own_cached_devices
+        ),
         now_ms
       )
 
