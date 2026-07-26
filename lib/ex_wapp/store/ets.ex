@@ -105,7 +105,10 @@ defmodule ExWapp.Store.Ets do
       table: table,
       signal_table: signal_table,
       device_cache_table: device_cache_table,
-      message_table: MessageTable.new(initial_messages),
+      message_table:
+        MessageTable.new(initial_messages,
+          max_per_chat: Keyword.get(opts, :max_messages_per_chat, :default)
+        ),
       writer: nil
     }
 
