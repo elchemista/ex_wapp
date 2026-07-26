@@ -60,14 +60,18 @@ defmodule ExWapp.Config.Validator do
       fn -> ensure_non_neg_integer(cfg, [:send, :max_outgoing_retry_attempts]) end,
       fn -> ensure_positive_integer(cfg, [:send, :confirm_timeout_ms]) end,
       fn -> ensure_non_neg_integer(cfg, [:send, :max_silent_drop_fallback_attempts]) end,
-      fn -> ensure_list_of_positive_integers(cfg, [:send, :retry_backoff_ms]) end
+      fn -> ensure_list_of_positive_integers(cfg, [:send, :retry_backoff_ms]) end,
+      fn -> ensure_non_neg_integer(cfg, [:send, :max_session_repair_attempts]) end,
+      fn -> ensure_list_of_non_neg_integers(cfg, [:send, :session_repair_backoff_ms]) end
     ])
   end
 
   defp validate_signal(cfg) do
     run_validations([
       fn -> ensure_positive_integer(cfg, [:signal, :session_max_age_ms]) end,
-      fn -> ensure_positive_integer(cfg, [:signal, :device_cache_max_age_ms]) end
+      fn -> ensure_positive_integer(cfg, [:signal, :device_cache_max_age_ms]) end,
+      fn -> ensure_non_neg_integer(cfg, [:signal, :evict_one_way_sessions_after_ms]) end,
+      fn -> ensure_boolean(cfg, [:signal, :reset_sessions_on_connect]) end
     ])
   end
 
@@ -417,8 +421,19 @@ defmodule ExWapp.Config.Validator do
       fn -> ensure_positive_integer(cfg, [:prekeys, :initial_prekey_count]) end,
       fn -> ensure_positive_integer(cfg, [:prekeys, :refill_prekey_count]) end,
       fn -> ensure_positive_integer(cfg, [:prekeys, :min_threshold]) end,
-      fn -> ensure_non_neg_integer(cfg, [:prekeys, :upload_cooldown_ms]) end
+      fn -> ensure_non_neg_integer(cfg, [:prekeys, :upload_cooldown_ms]) end,
+      fn -> ensure_nil_or_function(cfg, [:prekeys, :id_allocator], 2) end
     ])
+  end
+
+  # Caught here rather than at the first prekey mint: a misconfigured allocator
+  # surfaces at session start, not hours later when the pool needs refilling.
+  defp ensure_nil_or_function(cfg, path, arity) do
+    case fetch(cfg, path) do
+      nil -> :ok
+      value when is_function(value, arity) -> :ok
+      value -> {:error, {:invalid_runtime_config, path, value, {:expected_function, arity}}}
+    end
   end
 
   defp run_validations(validations) when is_list(validations) do
@@ -496,6 +511,23 @@ defmodule ExWapp.Config.Validator do
       :ok
     else
       {:error, {:invalid_runtime_config, path, value, {:expected_one_of, allowed}}}
+    end
+  end
+
+  # Backoff schedules start at zero when the first attempt is meant to be
+  # immediate, so this list admits it where a timeout never could.
+  defp ensure_list_of_non_neg_integers(cfg, path) do
+    value = fetch(cfg, path)
+
+    cond do
+      not is_list(value) ->
+        {:error, {:invalid_runtime_config, path, value, :expected_list}}
+
+      Enum.all?(value, fn v -> is_integer(v) and v >= 0 end) ->
+        :ok
+
+      true ->
+        {:error, {:invalid_runtime_config, path, value, :expected_list_of_non_neg_integers}}
     end
   end
 

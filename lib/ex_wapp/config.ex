@@ -64,6 +64,8 @@ defmodule ExWapp.Config do
       },
       send: %{
         max_outgoing_retry_attempts: 2,
+        max_session_repair_attempts: 2,
+        session_repair_backoff_ms: [0, 3_000],
         confirm_timeout_ms: 6_000,
         max_silent_drop_fallback_attempts: 1,
         retry_backoff_ms: [1_000, 3_000, 7_000]
@@ -117,11 +119,14 @@ defmodule ExWapp.Config do
         initial_prekey_count: 812,
         refill_prekey_count: 50,
         min_threshold: 5,
-        upload_cooldown_ms: 120_000
+        upload_cooldown_ms: 120_000,
+        id_allocator: nil
       },
       signal: %{
         session_max_age_ms: :timer.hours(12),
-        device_cache_max_age_ms: :timer.hours(24 * 14)
+        device_cache_max_age_ms: :timer.hours(24 * 14),
+        evict_one_way_sessions_after_ms: :timer.hours(1),
+        reset_sessions_on_connect: false
       },
       app_state: %{
         initial_sync_enabled: true

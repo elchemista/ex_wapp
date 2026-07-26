@@ -14,6 +14,7 @@ defmodule ExWapp.Session.Worker.Retry do
   @type normalize_fun :: (binary() -> binary())
   @typep retry_context :: %{
            max_attempts: non_neg_integer(),
+           counter_scope: String.t(),
            start_worker: start_worker_fun(),
            register_worker: register_worker_fun(),
            send: send_fun(),
@@ -28,6 +29,7 @@ defmodule ExWapp.Session.Worker.Retry do
 
     context = %{
       max_attempts: Keyword.fetch!(opts, :max_attempts),
+      counter_scope: Keyword.get(opts, :counter_scope, "outbound_retry"),
       start_worker: Keyword.fetch!(opts, :start_worker),
       register_worker: Keyword.fetch!(opts, :register_worker),
       send: Keyword.fetch!(opts, :send_fun),
@@ -42,7 +44,7 @@ defmodule ExWapp.Session.Worker.Retry do
   defp do_retry(state, jid, message_id, context) do
     case find_outgoing_message(state.store, jid, message_id, context.outgoing_payloads) do
       {:ok, retry_jid, text} ->
-        counter_key = outbound_retry_counter_key(retry_jid, message_id)
+        counter_key = retry_counter_key(context.counter_scope, retry_jid, message_id)
         attempts = Map.get(state.retry_counters, counter_key, 0)
 
         if attempts >= context.max_attempts do
@@ -73,7 +75,7 @@ defmodule ExWapp.Session.Worker.Retry do
            log_retry_result(context.send.(jid, text), message_id)
          end) do
       {:ok, worker, mon} ->
-        counter_key = outbound_retry_counter_key(jid, message_id)
+        counter_key = retry_counter_key(context.counter_scope, jid, message_id)
         state = context.register_worker.(state, worker, mon, jid)
 
         Map.update!(state, :retry_counters, &Map.put(&1, counter_key, attempts + 1))
@@ -99,8 +101,8 @@ defmodule ExWapp.Session.Worker.Retry do
     )
   end
 
-  defp outbound_retry_counter_key(jid, message_id) do
-    "outbound_retry|#{jid}|#{message_id}"
+  defp retry_counter_key(scope, jid, message_id) do
+    "#{scope}|#{jid}|#{message_id}"
   end
 
   defp find_outgoing_message(store, jid, message_id, outgoing_payloads) do

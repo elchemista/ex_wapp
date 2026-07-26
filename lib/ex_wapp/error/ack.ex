@@ -50,7 +50,10 @@ defmodule ExWapp.Error.Ack do
   # specifically because leaving a stale session as `current` makes the server
   # answer every send with this code while the peer keeps re-initiating.
   # Retriable, but only after the session is refreshed — an immediate resend
-  # with the same session reproduces it exactly.
+  # with the same session reproduces it exactly. The session worker does that
+  # refresh itself: a `:session` rejection drops the peer's sessions and resends
+  # under a fresh one, and the caller is told only when that repair cannot run
+  # or is refused in turn.
   defp categorize("463"),
     do: {:session, true, "peer session mismatch; refresh the Signal session before resending"}
 
