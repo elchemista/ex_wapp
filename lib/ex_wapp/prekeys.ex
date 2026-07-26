@@ -18,6 +18,158 @@ defmodule ExWapp.Prekeys do
   @min_prekey_count 5
 
   @doc """
+  Returns the next one-time prekey id that is safe to mint.
+
+  An id is safe only if it was never handed to the server. WhatsApp keeps
+  serving an uploaded prekey to peers long after this client forgot it — after a
+  crash before the durable write, or after the session file is restored from an
+  older snapshot — and a peer that opens a session with a stale id sends a
+  `pkmsg` this client answers with `:prekey_not_found`. Minting that id again
+  with fresh key material makes the damage permanent: the peer holds one public
+  half, the store holds another, and every X3DH between them fails from then on.
+  So the ceiling is the highest id ever advertised, not the highest id still
+  held.
+  """
+  @spec next_safe_id(map(), map()) :: pos_integer()
+  def next_safe_id(signal, prekeys) when is_map(signal) and is_map(prekeys) do
+    configured =
+      case Map.get(signal, :next_prekey_id, 1) do
+        value when is_integer(value) and value > 0 -> value
+        _other -> 1
+      end
+
+    after_existing = highest_id(Map.keys(prekeys)) + 1
+    after_advertised = advertised_watermark(signal) + 1
+
+    Enum.max([configured, after_existing, after_advertised])
+  end
+
+  @doc """
+  Reserves `count` consecutive ids and returns the first one to mint.
+
+  The local watermark is only as trustworthy as the store holding it: restore the
+  session file from a snapshot and the ceiling comes back with it, below ids the
+  server is already handing out. A host that keeps its durable state somewhere
+  that cannot roll back — a row in the database the session file is archived
+  into, say — can close that gap by configuring
+  `prekeys: [id_allocator: fn local_floor, count -> {:ok, first_id} end]`. The
+  allocator is expected to be atomic and monotonic; it receives the local floor
+  so it can never hand back a range this store has already used.
+
+  Without one, the local floor stands on its own, which is correct for any
+  deployment whose store never travels backwards.
+
+  An allocator that fails aborts the caller. Refusing to mint costs a thinner
+  prekey pool on the server until it recovers; minting anyway costs an id space
+  that two devices disagree about, which nothing repairs.
+  """
+  @spec allocate_ids(map(), map(), pos_integer()) :: {:ok, pos_integer()} | {:error, term()}
+  def allocate_ids(runtime_cfg, signal, count)
+      when is_map(signal) and is_integer(count) and count > 0 do
+    local_floor = next_safe_id(signal, Map.get(signal, :prekeys) || %{})
+
+    case prekey_cfg(runtime_cfg || %{}, :id_allocator, nil) do
+      nil ->
+        {:ok, local_floor}
+
+      allocator when is_function(allocator, 2) ->
+        apply_id_allocator(allocator, local_floor, count)
+
+      other ->
+        {:error, {:invalid_prekey_id_allocator, other}}
+    end
+  end
+
+  defp apply_id_allocator(allocator, local_floor, count) do
+    case allocator.(local_floor, count) do
+      {:ok, first_id} when is_integer(first_id) and first_id >= local_floor ->
+        {:ok, first_id}
+
+      {:ok, first_id} when is_integer(first_id) ->
+        # A floor below what this store has already minted would reissue live
+        # ids. The allocator is the ceiling, never a way to move backwards.
+        Logger.error(
+          "[PREKEYS] Id allocator returned #{first_id}, below the local floor #{local_floor}; " <>
+            "keeping the local floor"
+        )
+
+        {:ok, local_floor}
+
+      {:error, reason} ->
+        {:error, {:prekey_id_allocation_failed, reason}}
+
+      other ->
+        {:error, {:prekey_id_allocation_failed, other}}
+    end
+  rescue
+    error -> {:error, {:prekey_id_allocation_failed, error}}
+  catch
+    kind, reason -> {:error, {:prekey_id_allocation_failed, {kind, reason}}}
+  end
+
+  @doc """
+  Raises the advertised-id watermark to cover `ids`.
+
+  Called for every id this client puts in front of the server or a peer: an
+  upload batch, a retry receipt's key bundle, and any id an inbound `pkmsg`
+  proves the server is still serving.
+  """
+  @spec advertise_ids(map(), [term()]) :: map()
+  def advertise_ids(signal, ids) when is_map(signal) and is_list(ids) do
+    watermark = max(advertised_watermark(signal), highest_id(ids))
+
+    if watermark > 0 do
+      Map.put(signal, :max_advertised_prekey_id, watermark)
+    else
+      signal
+    end
+  end
+
+  @doc """
+  Records that the server is still serving `prekey_id` for this account.
+
+  The trigger is an inbound `pkmsg` naming a one-time prekey the local store
+  cannot produce. Nothing can recover that message — the private half is gone —
+  but the id must never be reissued, so the watermark absorbs it here.
+  """
+  @spec note_advertised_prekey_id(Store.t(), term()) :: :ok | {:error, term()}
+  def note_advertised_prekey_id(store, prekey_id)
+      when is_integer(prekey_id) and prekey_id > 0 do
+    # `get_and_update/4` rather than `update/4`: every adapter that reserves
+    # prekeys already implements it, while `update/4` falls back to a whole-store
+    # transaction that a narrower adapter may not support at all — and a silently
+    # dropped watermark is the one outcome this must not have.
+    case Store.get_and_update(store, :signal, %{}, &{:ok, advertise_ids(&1, [prekey_id])}) do
+      :ok -> :ok
+      {:error, _reason} = error -> error
+      other -> {:error, {:prekey_watermark_update_failed, other}}
+    end
+  rescue
+    error -> {:error, {:prekey_watermark_update_failed, error}}
+  catch
+    kind, reason -> {:error, {:prekey_watermark_update_failed, {kind, reason}}}
+  end
+
+  def note_advertised_prekey_id(_store, _prekey_id), do: :ok
+
+  @doc """
+  Returns the highest one-time prekey id this account has ever advertised.
+  """
+  @spec advertised_watermark(map()) :: non_neg_integer()
+  def advertised_watermark(signal) when is_map(signal) do
+    case Map.get(signal, :max_advertised_prekey_id) do
+      value when is_integer(value) and value > 0 -> value
+      _other -> 0
+    end
+  end
+
+  defp highest_id(ids) do
+    ids
+    |> Enum.filter(&(is_integer(&1) and &1 > 0))
+    |> Enum.max(fn -> 0 end)
+  end
+
+  @doc """
   Builds the IQ node to query prekey count on server.
   """
   def build_prekey_count_query do
@@ -58,7 +210,9 @@ defmodule ExWapp.Prekeys do
          {:ok, registration_id} <- get_registration_id(signal),
          {:ok, identity_pub} <- get_identity_public(signal, data),
          {:ok, signed_prekey} <- get_signed_prekey(signal),
-         {:ok, reservation} <- reserve_prekeys(store, prekey_count) do
+         {:ok, start_id} <- allocate_ids(runtime_cfg, signal, keys_to_mint(signal, prekey_count)),
+         {:ok, reservation} <- reserve_prekeys(store, prekey_count, start_id),
+         :ok <- flush_reservation(store) do
       prekeys = reservation.prekeys
       request_id = generate_request_id()
 
@@ -223,7 +377,19 @@ defmodule ExWapp.Prekeys do
     {:error, :missing_signed_prekey}
   end
 
-  defp reserve_prekeys(store, count) do
+  # How many ids the batch will actually mint. Keys reserved by an upload that
+  # never completed are reused rather than replaced, and asking the allocator for
+  # ids that will not be used would burn the id space on every failed attempt.
+  defp keys_to_mint(signal, count) do
+    reusable =
+      signal
+      |> Map.get(:prekeys, %{})
+      |> Enum.count(&unuploaded_prekey?/1)
+
+    max(count - reusable, 1)
+  end
+
+  defp reserve_prekeys(store, count, allocated_start_id) do
     case Store.get_and_update(store, :signal, %{}, fn signal ->
            prekeys = Map.get(signal, :prekeys, %{})
 
@@ -234,7 +400,7 @@ defmodule ExWapp.Prekeys do
              |> Enum.take(count)
 
            generated_count = max(count - length(reusable), 0)
-           start_id = next_safe_prekey_id(signal, prekeys)
+           start_id = max(allocated_start_id, next_safe_id(signal, prekeys))
            now = System.system_time(:second)
 
            generated =
@@ -255,7 +421,8 @@ defmodule ExWapp.Prekeys do
            {{:ok, reservation},
             signal
             |> Map.put(:prekeys, updated_prekeys)
-            |> Map.put(:next_prekey_id, next_prekey_id)}
+            |> Map.put(:next_prekey_id, next_prekey_id)
+            |> advertise_ids(Enum.map(selected, & &1.id))}
          end) do
       {:ok, _reservation} = success -> success
       {:error, _reason} = error -> {:error, {:prekey_reservation_failed, error}}
@@ -265,6 +432,29 @@ defmodule ExWapp.Prekeys do
     error -> {:error, {:prekey_reservation_failed, error}}
   catch
     kind, reason -> {:error, {:prekey_reservation_failed, {kind, reason}}}
+  end
+
+  # The batch is durable before the IQ leaves, never after. An adapter that
+  # persists asynchronously would otherwise let this client advertise public
+  # halves whose private halves are still only in memory: a crash in that window
+  # leaves the server serving keys nothing can decrypt with, and every peer that
+  # draws one is stuck on `:prekey_not_found` until it is nudged onto a new
+  # bundle. Refusing to upload keeps that state unreachable.
+  defp flush_reservation(store) do
+    case Store.flush(store) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "[PREKEYS] Refusing to advertise a batch that could not be persisted: #{inspect(reason)}"
+        )
+
+        {:error, {:prekey_reservation_flush_failed, reason}}
+
+      other ->
+        {:error, {:prekey_reservation_flush_failed, other}}
+    end
   end
 
   defp mark_prekey_uploaded({id, prekey}, ids) do
@@ -294,25 +484,6 @@ defmodule ExWapp.Prekeys do
   end
 
   defp unuploaded_prekey?(_entry), do: false
-
-  defp next_safe_prekey_id(signal, prekeys) do
-    configured =
-      case Map.get(signal, :next_prekey_id, 1) do
-        value when is_integer(value) and value > 0 -> value
-        _other -> 1
-      end
-
-    after_existing =
-      prekeys
-      |> Map.keys()
-      |> Enum.filter(&is_integer/1)
-      |> case do
-        [] -> 1
-        ids -> Enum.max(ids) + 1
-      end
-
-    max(configured, after_existing)
-  end
 
   defp generate_reserved_prekeys(_start_id, 0, _now), do: []
 

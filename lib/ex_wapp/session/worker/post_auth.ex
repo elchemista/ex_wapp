@@ -9,6 +9,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
   require Logger
 
   alias ExWapp.{Binary, Config, Log, MapPath, Store}
+  alias ExWapp.Session.Worker.Subscribers
 
   @min_prekey_threshold 5
 
@@ -200,6 +201,8 @@ defmodule ExWapp.Session.Worker.PostAuth do
         "uploaded_count=#{length(pending_prekeys)} local_marked?=#{upload_mark_result == :ok}"
     )
 
+    announce_key_material(state, pending_prekeys)
+
     Logger.debug("[SESSION] Prekey upload acknowledged, continuing post-auth")
     maybe_send_passive_iq(state, build_passive_iq_fun)
   end
@@ -223,6 +226,36 @@ defmodule ExWapp.Session.Worker.PostAuth do
     )
 
     maybe_send_passive_iq(state, build_passive_iq_fun)
+  end
+
+  # The server now hands these public halves to any peer that asks. Their private
+  # halves live in the store, which a host archives on its own schedule — so
+  # until that archive catches up, a lost process leaves the server advertising
+  # keys nothing can decrypt with. The host is told the moment the gap opens
+  # rather than being left to pick an interval narrow enough to hide it.
+  defp announce_key_material(state, prekeys) do
+    highest_id =
+      prekeys
+      |> Enum.map(&(Map.get(&1, :key_id) || Map.get(&1, :id)))
+      |> Enum.filter(&(is_integer(&1) and &1 > 0))
+      |> Enum.max(fn -> nil end)
+
+    case Map.get(state, :session_id) do
+      session_id when is_binary(session_id) and highest_id != nil ->
+        Subscribers.broadcast_lifecycle(
+          session_id,
+          {:ex_wapp_session, :key_material_advertised,
+           %{
+             session_id: session_id,
+             reason: :prekey_upload,
+             highest_prekey_id: highest_id,
+             count: length(prekeys)
+           }}
+        )
+
+      _no_session_or_keys ->
+        :ok
+    end
   end
 
   @doc """

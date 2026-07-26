@@ -5,8 +5,9 @@ defmodule ExWapp.Session.Worker.ReceiptBuilder do
 
   require Logger
 
-  alias ExWapp.{Binary, Log, Store}
+  alias ExWapp.{Binary, Log, Prekeys, Store}
   alias ExWapp.Session.Account
+  alias ExWapp.Session.Worker.Subscribers
   alias ExWapp.Signal.Keys
 
   @spec build_receipt_ack(
@@ -52,7 +53,8 @@ defmodule ExWapp.Session.Worker.ReceiptBuilder do
         message_t,
         retry_count,
         error_code,
-        retry_meta
+        retry_meta,
+        session_ctx \\ %{}
       ) do
     attrs = %{
       "id" => id,
@@ -86,8 +88,8 @@ defmodule ExWapp.Session.Worker.ReceiptBuilder do
       end
 
     content =
-      if retry_keys_needed?(retry_count) do
-        case local_retry_keys_node(store) do
+      if retry_keys_needed?(retry_count, retry_meta) do
+        case local_retry_keys_node(store, session_ctx) do
           {:ok, keys_node} ->
             content ++ [keys_node]
 
@@ -139,21 +141,33 @@ defmodule ExWapp.Session.Worker.ReceiptBuilder do
   defp retry_timestamp(message_t) when is_integer(message_t), do: Integer.to_string(message_t)
   defp retry_timestamp(_), do: Integer.to_string(System.system_time(:second))
 
-  defp retry_keys_needed?(retry_count) when is_integer(retry_count), do: retry_count >= 2
-  defp retry_keys_needed?(_), do: false
+  # A plain retry asks the peer to send the same ciphertext again, which is worth
+  # doing when the failure was transient. It is worthless when the peer built
+  # that ciphertext against key material this device cannot produce: the resend
+  # is byte-identical and fails identically, and the pair burns its retry budget
+  # discovering that. Those failures are told apart upstream, and they get the
+  # key bundle on the first receipt instead of the second — that bundle is the
+  # only thing that moves the peer onto a session this device can open.
+  defp retry_keys_needed?(retry_count, %{force_keys?: true}) when is_integer(retry_count),
+    do: true
 
-  defp local_retry_keys_node(nil), do: {:error, :missing_store}
+  defp retry_keys_needed?(retry_count, _retry_meta) when is_integer(retry_count),
+    do: retry_count >= 2
 
-  defp local_retry_keys_node(store) do
+  defp retry_keys_needed?(_retry_count, _retry_meta), do: false
+
+  defp local_retry_keys_node(nil, _session_ctx), do: {:error, :missing_store}
+
+  defp local_retry_keys_node(store, session_ctx) do
     data = Store.load!(store)
     signal = Map.get(data, :signal, %{})
 
     with {:ok, identity_pub} <- local_identity_public(signal),
          {:ok, signed_prekey} <- local_signed_prekey(signal),
-         {:ok, prekey_id, prekey_public} <- generate_retry_prekey(store),
          {:ok, device_identity_node} <- Account.get_device_identity_node(store),
          %Binary.Node{content: %Binary.Raw{data: device_identity_payload}} <-
-           device_identity_node do
+           device_identity_node,
+         {:ok, prekey_id, prekey_public} <- generate_retry_prekey(store, session_ctx, signal) do
       type_node = %Binary.Node{tag: "type", attrs: %{}, content: Binary.raw(<<5>>)}
 
       identity_node = %Binary.Node{
@@ -212,31 +226,75 @@ defmodule ExWapp.Session.Worker.ReceiptBuilder do
 
   defp local_signed_prekey(_), do: {:error, :missing_signed_prekey}
 
-  defp generate_retry_prekey(store) do
-    Store.get_and_update(store, :signal, %{}, fn signal ->
-      next_id =
-        cond do
-          is_integer(signal[:next_prekey_id]) and signal[:next_prekey_id] > 0 ->
-            signal[:next_prekey_id]
+  defp generate_retry_prekey(store, session_ctx, signal) do
+    runtime_cfg = Map.get(session_ctx, :runtime_cfg) || %{}
 
-          is_map(signal[:prekeys]) and map_size(signal[:prekeys]) > 0 ->
-            signal[:prekeys] |> Map.keys() |> Enum.max() |> Kernel.+(1)
+    # Reserved before the store transaction opens: an allocator that reaches an
+    # external system has no business running inside the store's write owner.
+    with {:ok, allocated_id} <- Prekeys.allocate_ids(runtime_cfg, signal, 1),
+         {:ok, prekey_id, prekey_public} <- mint_retry_prekey(store, allocated_id) do
+      announce_key_material(session_ctx, prekey_id)
+      {:ok, prekey_id, prekey_public}
+    end
+  end
 
-          true ->
-            1
+  # This key exists nowhere but the peer's copy of this receipt and the store's
+  # last flush. A host that archives the store on a timer has a window in which
+  # the key is live for the peer and absent from anything that survives the
+  # process, and that window is precisely how a session becomes permanently
+  # undecryptable. Saying so lets the host close it on the event instead of
+  # guessing an interval short enough.
+  defp announce_key_material(session_ctx, prekey_id) do
+    case Map.get(session_ctx, :session_id) do
+      session_id when is_binary(session_id) ->
+        Subscribers.broadcast_lifecycle(
+          session_id,
+          {:ex_wapp_session, :key_material_advertised,
+           %{session_id: session_id, reason: :retry_prekey, highest_prekey_id: prekey_id}}
+        )
+
+      _no_session ->
+        :ok
+    end
+  end
+
+  defp mint_retry_prekey(store, allocated_id) do
+    result =
+      Store.get_and_update(store, :signal, %{}, fn signal ->
+        prekeys = if is_map(signal[:prekeys]), do: signal[:prekeys], else: %{}
+        next_id = max(allocated_id, Prekeys.next_safe_id(signal, prekeys))
+        prekey = Keys.generate_prekey(next_id)
+        prekeys = Map.put(prekeys, next_id, prekey)
+
+        updated_signal =
+          signal
+          |> Map.put(:prekeys, prekeys)
+          |> Map.put(:next_prekey_id, next_id + 1)
+          |> Map.put(:updated_at, System.system_time(:second))
+          |> Prekeys.advertise_ids([next_id])
+
+        {{:ok, next_id, prekey.public}, updated_signal}
+      end)
+
+    case result do
+      {:ok, prekey_id, prekey_public} ->
+        case Store.flush(store) do
+          :ok ->
+            {:ok, prekey_id, prekey_public}
+
+          {:error, reason} ->
+            {:error, {:retry_prekey_flush_failed, reason}}
+
+          other ->
+            {:error, {:retry_prekey_flush_failed, other}}
         end
 
-      prekey = Keys.generate_prekey(next_id)
-      prekeys = Map.get(signal, :prekeys, %{}) |> Map.put(next_id, prekey)
+      {:error, _reason} = error ->
+        error
 
-      updated_signal =
-        signal
-        |> Map.put(:prekeys, prekeys)
-        |> Map.put(:next_prekey_id, next_id + 1)
-        |> Map.put(:updated_at, System.system_time(:second))
-
-      {{:ok, next_id, prekey.public}, updated_signal}
-    end)
+      other ->
+        {:error, {:retry_prekey_reservation_failed, other}}
+    end
   end
 
   defp local_registration_node(store), do: Account.local_registration_node(store)
