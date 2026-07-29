@@ -89,6 +89,66 @@ defmodule ExWapp.MessageWindowTest do
       assert ids(table, @jid) == ["msg-5", "msg-4", "msg-3"]
     end
 
+    test "a chat can still receive messages after it is deleted" do
+      # Clearing a chat frees its whole window. Keeping the pre-delete count
+      # would leave the window believing an empty chat is full, and every
+      # message arriving afterwards would be trimmed away as excess the instant
+      # it landed — a chat that silently stops recording anything for good.
+      table = MessageTable.new(%{}, max_per_chat: 3)
+
+      MessageTable.upsert(table, @jid, messages(1..3))
+      MessageTable.delete_chat(table, @jid)
+
+      MessageTable.upsert(table, @jid, messages(4..5))
+
+      assert ids(table, @jid) == ["msg-5", "msg-4"]
+    end
+
+    test "deleting one chat does not disturb another chat's window" do
+      table = MessageTable.new(%{}, max_per_chat: 3)
+
+      MessageTable.upsert(table, @jid, messages(1..3))
+      MessageTable.upsert(table, @other, messages(1..3))
+
+      MessageTable.delete_chat(table, @jid)
+      MessageTable.upsert(table, @other, messages(4..4))
+
+      assert ids(table, @jid) == []
+      assert ids(table, @other) == ["msg-4", "msg-3", "msg-2"]
+    end
+
+    test "the window survives repeated delete and refill cycles" do
+      # The app-state sync deletes a chat whenever the phone does, so this pair
+      # repeats for the life of a session rather than happening once.
+      table = MessageTable.new(%{}, max_per_chat: 2)
+
+      Enum.each(1..5, fn cycle ->
+        MessageTable.upsert(table, @jid, messages(1..3))
+        assert length(ids(table, @jid)) == 2, "lost the window on cycle #{cycle}"
+        MessageTable.delete_chat(table, @jid)
+      end)
+
+      MessageTable.upsert(table, @jid, messages(1..1))
+      assert ids(table, @jid) == ["msg-1"]
+    end
+
+    test "the file store keeps accepting messages after clearing a chat" do
+      path =
+        Path.join(
+          System.tmp_dir!(),
+          "ex_wapp_window_delete_#{System.unique_integer([:positive])}.etf"
+        )
+
+      store = FileStore.new(path: path, max_messages_per_chat: 3)
+      on_exit(fn -> File.rm(path) end)
+
+      :ok = Store.upsert_messages(store, @jid, messages(1..3))
+      :ok = Store.delete_chat_messages(store, @jid)
+      :ok = Store.upsert_messages(store, @jid, messages(4..4))
+
+      assert store |> Store.stream_messages(@jid, []) |> Enum.map(& &1.id) == ["msg-4"]
+    end
+
     test "restored history is trimmed on the way in" do
       # A session file written before the cap was configured still has to come
       # back within it, or the first flush writes the whole old history again.

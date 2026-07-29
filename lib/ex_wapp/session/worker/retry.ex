@@ -78,7 +78,7 @@ defmodule ExWapp.Session.Worker.Retry do
         counter_key = retry_counter_key(context.counter_scope, jid, message_id)
         state = context.register_worker.(state, worker, mon, jid)
 
-        Map.update!(state, :retry_counters, &Map.put(&1, counter_key, attempts + 1))
+        ExWapp.Session.RetryCounters.put(state, counter_key, attempts + 1)
 
       {:error, reason} ->
         Logger.warning(

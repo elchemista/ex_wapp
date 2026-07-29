@@ -548,7 +548,8 @@ defmodule ExWapp.Store.Ets do
       store.signal_table,
       store.device_cache_table,
       store.message_table.table,
-      store.message_table.index_table
+      store.message_table.index_table,
+      store.message_table.count_table
     ]
     |> Enum.each(&:ets.give_away(&1, writer, :ex_wapp_store))
   end

@@ -16,6 +16,11 @@ defmodule ExWapp.Prekeys do
   @wanted_prekey_count 50
   # Minimum prekeys before triggering upload
   @min_prekey_count 5
+  # One-time prekey ids travel as 3 bytes on the wire. An id above this is
+  # advertised under a different (truncated) number than the store holds it
+  # by, so every pkmsg drawing it fails permanently — the ceiling has to be
+  # enforced where ids are minted.
+  @max_prekey_id 0xFFFFFF
 
   @doc """
   Returns the next one-time prekey id that is safe to mint.
@@ -70,7 +75,7 @@ defmodule ExWapp.Prekeys do
 
     case prekey_cfg(runtime_cfg || %{}, :id_allocator, nil) do
       nil ->
-        {:ok, local_floor}
+        bounded_id_range(local_floor, count)
 
       allocator when is_function(allocator, 2) ->
         apply_id_allocator(allocator, local_floor, count)
@@ -80,10 +85,16 @@ defmodule ExWapp.Prekeys do
     end
   end
 
+  defp bounded_id_range(first_id, count) when first_id + count - 1 <= @max_prekey_id,
+    do: {:ok, first_id}
+
+  defp bounded_id_range(_first_id, _count),
+    do: {:error, :prekey_id_space_exhausted}
+
   defp apply_id_allocator(allocator, local_floor, count) do
     case allocator.(local_floor, count) do
       {:ok, first_id} when is_integer(first_id) and first_id >= local_floor ->
-        {:ok, first_id}
+        bounded_id_range(first_id, count)
 
       {:ok, first_id} when is_integer(first_id) ->
         # A floor below what this store has already minted would reissue live
@@ -514,8 +525,10 @@ defmodule ExWapp.Prekeys do
 
   defp prekeys_to_nodes(prekeys) do
     Enum.map(prekeys, fn prekey ->
-      # Key ID is 3 bytes (last 3 bytes of 4-byte BE)
-      <<_::8, key_id_bytes::binary-3>> = <<prekey.key_id::big-32>>
+      # Key IDs are 3 bytes on the wire. Matching the high byte to zero makes
+      # an out-of-range id fail loudly instead of being advertised under a
+      # silently truncated number the store does not hold.
+      <<0::8, key_id_bytes::binary-3>> = <<prekey.key_id::big-32>>
 
       %Node{
         tag: "key",
@@ -529,9 +542,10 @@ defmodule ExWapp.Prekeys do
   end
 
   defp signed_prekey_to_node(spk) do
-    # Key ID is 3 bytes (last 3 bytes of 4-byte BE)
+    # Key IDs are 3 bytes on the wire; an out-of-range id must fail loudly
+    # rather than truncate.
     key_id = Map.get(spk, :key_id, 1)
-    <<_::8, key_id_bytes::binary-3>> = <<key_id::big-32>>
+    <<0::8, key_id_bytes::binary-3>> = <<key_id::big-32>>
 
     pub = Map.get(spk, :public)
     sig = Map.get(spk, :signature)

@@ -56,4 +56,20 @@ defmodule ExWapp.AppState.Engine.State do
       |> Map.put(:app_state_mutation_macs, Map.put(all_macs, collection_name, mutation_macs))
     end)
   end
+
+  @doc """
+  Drops a collection's stored version, hash and mutation MACs so the next
+  fetch starts over from a snapshot.
+  """
+  @spec reset_collection_state(struct(), String.t()) :: :ok
+  def reset_collection_state(store, collection_name) do
+    Store.transaction(store, fn data ->
+      versions = Map.get(data, :app_state_versions, %{})
+      all_macs = Map.get(data, :app_state_mutation_macs, %{})
+
+      data
+      |> Map.put(:app_state_versions, Map.delete(versions, collection_name))
+      |> Map.put(:app_state_mutation_macs, Map.delete(all_macs, collection_name))
+    end)
+  end
 end

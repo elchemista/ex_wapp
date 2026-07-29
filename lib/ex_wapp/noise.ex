@@ -153,13 +153,20 @@ defmodule ExWapp.Noise do
   @doc """
   Decrypts a transport payload once the handshake has completed.
   """
-  @spec decrypt(t(), binary()) :: {:ok, binary(), t()} | {:error, term()}
+  @spec decrypt(t(), binary()) :: {:ok, binary(), t()} | {:error, term(), t()} | {:error, term()}
   def decrypt(%__MODULE__{phase: :transport, cipher_ref: cipher} = state, payload)
       when is_binary(payload) do
     if is_nil(cipher) do
       {:error, :invalid_state}
     else
       case NoiseEngine.decrypt(cipher, payload, state.rx_counter) do
+        {:error, reason, new_cipher} ->
+          # The frame was consumed even though it did not decrypt: the peer has
+          # already moved to the next counter, so we must too or every later
+          # frame fails against a stale nonce.
+          new_state = %{state | cipher_ref: new_cipher, rx_counter: state.rx_counter + 1}
+          {:error, {:decrypt_failed, reason}, new_state}
+
         {:error, reason} ->
           {:error, {:decrypt_failed, reason}}
 

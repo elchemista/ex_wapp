@@ -59,6 +59,13 @@ defmodule ExWapp.AppState.Engine.Sync do
     end)
   end
 
+  @mac_divergence_reasons [
+    :mismatching_snapshot_mac,
+    :mismatching_patch_mac,
+    :mismatching_content_mac,
+    :mismatching_index_mac
+  ]
+
   defp fetch_collection_unlocked(session, store, collection_name) do
     Store.batch(store, {:app_state_collection, collection_name}, fn ->
       case do_fetch_collection(session, store, collection_name, true) do
@@ -70,6 +77,20 @@ defmodule ExWapp.AppState.Engine.Sync do
 
         {:error, {:apply_snapshot_failed, _reason}} ->
           do_fetch_collection(session, store, collection_name, false)
+
+        {:error, {:apply_patch_failed, reason}} when reason in @mac_divergence_reasons ->
+          # The local hash chain no longer matches the server's, and a normal
+          # retry can never repair it: a snapshot is only requested at version
+          # 0, so the same failing patch just comes back in front of us on
+          # every fetch — and with it every mutation to this collection fails,
+          # forever. Dropping the stored version forces a fresh snapshot sync,
+          # which is exactly what whatsmeow does for this error class.
+          Logger.warning(
+            "[APP_STATE] #{collection_name} hash state diverged (#{Log.reason(reason)}); resyncing from snapshot"
+          )
+
+          :ok = State.reset_collection_state(store, collection_name)
+          do_fetch_collection(session, store, collection_name, true)
 
         {:error, _reason} = error ->
           error

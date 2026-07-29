@@ -220,9 +220,17 @@ defmodule ExWapp.Conn do
   def handle_cast(:restart_stream, %State{} = state) do
     state = %{state | stream_started?: false}
 
+    # WebSockex accepts {:ok, state} or {:reply, single_frame, state} — a bare
+    # frame list dies in Frame.encode_frame and {:noreply, _} is a badreply
+    # that terminates the process. Extra frames go through the mailbox, where
+    # each handle_info reply carries exactly one frame.
     case maybe_send_stream_start(state) do
-      {:ok, new_state, []} -> {:noreply, new_state}
-      {:ok, new_state, replies} -> {:reply, replies, new_state}
+      {:ok, new_state, []} ->
+        {:ok, new_state}
+
+      {:ok, new_state, [reply | rest]} ->
+        Enum.each(rest, &send(self(), {:send_raw_frame, &1}))
+        {:reply, reply, new_state}
     end
   end
 
@@ -290,6 +298,11 @@ defmodule ExWapp.Conn do
         Logger.debug("[CONN] Decrypted: #{byte_size(plaintext)} bytes")
         state = %{state | noise: noise_state}
         handle_decrypted_payload(state, plaintext)
+
+      {:error, reason, noise_state} ->
+        Logger.warning("[CONN] Decrypt failed: #{Log.reason(reason)}")
+        notify_session(state.session, {:error, {:decrypt_failed, reason, frame}})
+        {:ok, %{state | noise: noise_state}, []}
 
       {:error, reason} ->
         Logger.warning("[CONN] Decrypt failed: #{Log.reason(reason)}")

@@ -219,11 +219,11 @@ defmodule ExWapp.Transport.WebSocket do
           [] ->
             {:ok, next_state}
 
-          [reply] ->
+          [reply | rest] ->
+            # WebSockex encodes exactly one frame per reply tuple; a list dies
+            # in Frame.encode_frame. Extra frames go through the mailbox.
+            Enum.each(rest, &send(self(), {:send_raw_frame, &1}))
             {:reply, {:binary, reply}, %{next_state | header_sent?: true}}
-
-          replies ->
-            {:reply, Enum.map(replies, &{:binary, &1}), %{next_state | header_sent?: true}}
         end
 
       {:error, reason} ->
@@ -259,6 +259,19 @@ defmodule ExWapp.Transport.WebSocket do
     end
   end
 
+  @doc false
+  @impl true
+  @spec handle_info(term(), State.t()) ::
+          {:reply, {:binary, binary()}, State.t()} | {:ok, State.t()}
+  def handle_info({:send_raw_frame, payload}, %State{} = state) do
+    {:reply, {:binary, payload}, state}
+  end
+
+  def handle_info(message, %State{} = state) do
+    Logger.debug("[ExWapp.Transport.WebSocket] ignoring message=#{Log.term_summary(message)}")
+    {:ok, state}
+  end
+
   @spec process_frame(State.t(), binary()) :: {:ok, State.t(), [event()]} | {:error, term()}
   defp process_frame(%State{noise: %Noise{phase: :handshake} = noise} = state, frame) do
     with {:ok, client_finish, noise} <- Noise.handle_server_hello(noise, frame) do
@@ -269,18 +282,34 @@ defmodule ExWapp.Transport.WebSocket do
     end
   end
 
+  # A frame that fails to decrypt or decode must not halt the batch: an
+  # {:error, ...} return here makes handle_frame fall back to the state from
+  # before the whole websocket message, throwing away nodes already decoded
+  # from earlier frames and the noise counter advances that went with them —
+  # after which every subsequent frame fails AEAD against a stale nonce. The
+  # bad frame becomes an owner event and the batch carries on.
   defp process_frame(%State{noise: %Noise{phase: :transport} = noise} = state, frame) do
-    with {:ok, plaintext, noise} <- Noise.decrypt(noise, frame),
-         {:ok, node} <- Binary.decode(plaintext) do
-      state = %{state | noise: noise}
+    case Noise.decrypt(noise, frame) do
+      {:ok, plaintext, noise} ->
+        state = %{state | noise: noise}
 
-      ExWapp.Telemetry.execute([:ex_wapp, :transport, :websocket, :frame_received], %{
-        bytes: byte_size(frame)
-      })
+        case Binary.decode(plaintext) do
+          {:ok, node} ->
+            ExWapp.Telemetry.execute([:ex_wapp, :transport, :websocket, :frame_received], %{
+              bytes: byte_size(frame)
+            })
 
-      {:ok, state, [{:node, node}]}
-    else
-      {:error, reason} -> {:error, reason}
+            {:ok, state, [{:node, node}]}
+
+          {:error, reason} ->
+            {:ok, state, [{:error, {:decode_failed, reason}}]}
+        end
+
+      {:error, reason, noise} ->
+        {:ok, %{state | noise: noise}, [{:error, reason}]}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

@@ -618,6 +618,12 @@ defmodule ExWapp.Signal.SessionStore do
             local_registration_id,
             updated_store
           )
+
+        {:error, _reason} = error ->
+          # A CaseClauseError here would escape the per-target error handling
+          # in the encryptor and abort the whole multi-device fanout; an error
+          # tuple records just this target as failed.
+          error
       end
     end
   end

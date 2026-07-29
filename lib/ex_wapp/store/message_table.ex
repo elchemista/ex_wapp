@@ -322,6 +322,11 @@ defmodule ExWapp.Store.MessageTable do
       {{{jid, :_}, :_}, [], [true]}
     ])
 
+    # The per-chat counter drives trimming, so leaving it behind would make the
+    # window believe an emptied chat is still full: every message arriving after
+    # a delete would be trimmed away as excess the moment it landed.
+    :ets.delete(message_store.count_table, jid)
+
     deleted
   end
 

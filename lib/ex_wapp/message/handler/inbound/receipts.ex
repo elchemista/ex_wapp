@@ -296,7 +296,7 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
     local_next = Map.get(counters, key, 0) + 1
     incoming_next = incoming_retry_count(message_data) + 1
     next = if local_next == 1 and incoming_next > 1, do: incoming_next, else: local_next
-    {next, Map.put(state, :retry_counters, Map.put(counters, key, next))}
+    {next, ExWapp.Session.RetryCounters.put(state, key, next)}
   end
 
   defp next_retry_count(state, _from, _id, _participant, _message_data), do: {1, state}

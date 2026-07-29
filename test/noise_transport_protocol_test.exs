@@ -75,18 +75,68 @@ defmodule ExWapp.NoiseTransportProtocolTest do
     assert state.noise.rx_counter == 2
   end
 
-  test "short or tampered transport ciphertext does not consume a nonce" do
+  test "a frame that fails authentication still consumes its nonce" do
+    # The peer advances its write counter for every frame it sends, whether or
+    # not we manage to read it. A receiver that keeps the old nonce after a bad
+    # frame decrypts every later frame against the wrong counter — one
+    # corrupted frame silently kills all inbound traffic on a connection that
+    # still looks alive. Both whatsmeow and whatsapp-rust consume the counter
+    # before attempting decryption.
     {sender, receiver} = transport_pair()
-    {:ok, ciphertext, _sender} = Noise.encrypt(sender, "authenticated")
-    tampered = flip_last_byte(ciphertext)
+    {:ok, first_ciphertext, sender} = Noise.encrypt(sender, "first")
+    {:ok, second_ciphertext, _sender} = Noise.encrypt(sender, "second")
+    tampered = flip_last_byte(first_ciphertext)
 
-    assert {:error, {:decrypt_failed, :ciphertext_too_short}} = Noise.decrypt(receiver, <<1, 2>>)
-    assert {:error, {:decrypt_failed, :decrypt_failed}} = Noise.decrypt(receiver, tampered)
-    assert receiver.rx_counter == 0
-    assert read_counter(receiver) == 0
+    assert {:error, {:decrypt_failed, :decrypt_failed}, receiver} =
+             Noise.decrypt(receiver, tampered)
 
-    assert {:ok, "authenticated", receiver} = Noise.decrypt(receiver, ciphertext)
     assert receiver.rx_counter == 1
+    assert read_counter(receiver) == 1
+
+    # "second" was written with counter 1; only a receiver that burned
+    # counter 0 on the bad frame can still read it.
+    assert {:ok, "second", receiver} = Noise.decrypt(receiver, second_ciphertext)
+    assert receiver.rx_counter == 2
+  end
+
+  test "a too-short ciphertext consumes its nonce like any other frame" do
+    {sender, receiver} = transport_pair()
+    {:ok, _skipped, sender} = Noise.encrypt(sender, "lost to truncation")
+    {:ok, next_ciphertext, _sender} = Noise.encrypt(sender, "next")
+
+    assert {:error, {:decrypt_failed, :ciphertext_too_short}, receiver} =
+             Noise.decrypt(receiver, <<1, 2>>)
+
+    assert receiver.rx_counter == 1
+    assert {:ok, "next", _receiver} = Noise.decrypt(receiver, next_ciphertext)
+  end
+
+  test "a bad frame in the middle of a batch does not take the rest of the batch with it" do
+    # One websocket message can carry several noise frames. An error return
+    # from the middle of the batch used to roll the whole transport state back
+    # to before the message: nodes already decoded were dropped and the read
+    # counter reverted, so every subsequent frame failed AEAD forever after.
+    {sender, receiver} = transport_pair()
+    first = %Node{tag: "ack", attrs: %{"id" => "before"}}
+    third = %Node{tag: "ack", attrs: %{"id" => "after"}}
+
+    {:ok, first_ciphertext, sender} = Noise.encrypt(sender, Binary.encode!(first))
+    {:ok, second_ciphertext, sender} = Noise.encrypt(sender, Binary.encode!(%Node{tag: "iq"}))
+    {:ok, third_ciphertext, _sender} = Noise.encrypt(sender, Binary.encode!(third))
+
+    bytes =
+      Frame.header() <>
+        Frame.encode(first_ciphertext) <>
+        Frame.encode(flip_last_byte(second_ciphertext)) <>
+        Frame.encode(third_ciphertext)
+
+    assert {:ok, state, events} = WebSocket.receive_bytes(websocket_state(receiver), bytes)
+
+    assert [{:node, ^first}, {:error, {:decrypt_failed, :decrypt_failed}}, {:node, ^third}] =
+             events
+
+    assert state.noise.rx_counter == 3
+    assert read_counter(state.noise) == 3
   end
 
   test "transport nonce encoding covers byte boundaries and rejects reuse after uint32 max" do

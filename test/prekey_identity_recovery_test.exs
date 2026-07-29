@@ -179,6 +179,34 @@ defmodule ExWapp.PrekeyIdentityRecoveryTest do
       assert Enum.map(prekeys, & &1.key_id) == [400]
     end
 
+    test "an allocator that leaves the 3-byte id space is refused" do
+      # Prekey ids travel as 3 bytes on the wire. An id above 0xFFFFFF would
+      # be advertised under a truncated number the store does not hold, so a
+      # peer drawing it sends a pkmsg naming a key that cannot be found — and
+      # the truncated id then gets reserved, making the damage permanent.
+      store = signal_store(%{prekeys: %{}, next_prekey_id: 1})
+
+      assert {:error, :prekey_id_space_exhausted} =
+               Prekeys.build_prekey_upload(store,
+                 count: 2,
+                 runtime_cfg: %{prekeys: %{id_allocator: allocator_returning(0xFFFFFF)}}
+               )
+
+      assert Store.load!(store).signal.prekeys == %{}
+    end
+
+    test "a batch is allowed right up to the ceiling and refused past it" do
+      store = signal_store(%{prekeys: %{}, next_prekey_id: 0xFFFFFF})
+
+      assert {:error, :prekey_id_space_exhausted} =
+               Prekeys.build_prekey_upload(store, count: 2, runtime_cfg: %{})
+
+      assert {:ok, _node, prekeys} =
+               Prekeys.build_prekey_upload(store, count: 1, runtime_cfg: %{})
+
+      assert Enum.map(prekeys, & &1.key_id) == [0xFFFFFF]
+    end
+
     test "nothing is minted when the allocator cannot reserve" do
       # Fail closed: a thinner prekey pool on the server recovers on the next
       # connect, an id space two devices disagree about never does.

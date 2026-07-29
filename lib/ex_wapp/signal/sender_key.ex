@@ -94,13 +94,21 @@ defmodule ExWapp.Signal.SenderKey do
     case WireFormat.deserialize_public_key(parsed.signing_key) do
       {:ok, signing_key} ->
         :ok =
-          put_sender_key_state(store, group_jid, sender, parsed.id, %{
-            id: parsed.id,
-            iteration: parsed.iteration,
-            chain_key: parsed.chain_key,
-            signing_key: signing_key,
-            message_keys: %{}
-          })
+          put_sender_key_state(
+            store,
+            group_jid,
+            sender,
+            parsed.id,
+            %{
+              id: parsed.id,
+              iteration: parsed.iteration,
+              chain_key: parsed.chain_key,
+              signing_key: signing_key,
+              message_keys: %{}
+            },
+            nil,
+            preserve_current: true
+          )
 
         Logger.debug(
           "[SENDER_KEY] Stored distribution: group=#{Log.reference(group_jid)} sender=#{Log.reference(sender)} id=#{parsed.id} iteration=#{parsed.iteration} source_field=#{source_field}"
@@ -166,7 +174,8 @@ defmodule ExWapp.Signal.SenderKey do
              normalized_sender,
              parsed_message.id,
              updated_state,
-             record
+             record,
+             preserve_current: true
            ) do
       {:ok, plaintext}
     end
@@ -284,18 +293,33 @@ defmodule ExWapp.Signal.SenderKey do
          sender_jid,
          key_id,
          sender_state,
-         existing_record \\ nil
+         existing_record,
+         opts \\ []
        ) do
     key = {group_jid, sender_jid}
+
+    # current_id names the locally-minted outbound key. The account's own
+    # primary device shares this record's key whenever the group is addressed
+    # by the device-stripped local JID (device 0 renders with no suffix), so an
+    # inbound state that stole the pointer would orphan our signing key and
+    # force a full sender-key rotation on the next group send.
+    keep_current? = Keyword.get(opts, :preserve_current, false)
 
     :ok =
       Store.update(store, :signal, %{}, fn signal ->
         sender_keys = Map.get(signal, :sender_keys, %{})
         record = normalize_sender_key_record(existing_record || Map.get(sender_keys, key))
 
+        current_id =
+          if keep_current? and own_outbound_current?(record) do
+            record.current_id
+          else
+            key_id
+          end
+
         state_ids =
           [key_id | Enum.reject(Map.get(record, :state_ids, []), &(&1 == key_id))]
-          |> Enum.take(@max_state_ids)
+          |> trim_state_ids(current_id)
 
         states =
           record
@@ -304,13 +328,38 @@ defmodule ExWapp.Signal.SenderKey do
           |> Map.take(state_ids)
 
         updated_record = %{
-          current_id: key_id,
+          current_id: current_id,
           state_ids: state_ids,
           states: states
         }
 
         Map.put(signal, :sender_keys, Map.put(sender_keys, key, updated_record))
       end)
+  end
+
+  # Only a state we minted ourselves carries the signing private key. For a
+  # purely inbound record the pointer just tracks the latest distribution, and
+  # protecting it would pin a stale peer key at the expense of a newer one.
+  defp own_outbound_current?(%{current_id: current_id} = record) when is_integer(current_id) do
+    case get_in(record, [:states, current_id]) do
+      %{} = state -> is_binary(Map.get(state, :signing_private))
+      _ -> false
+    end
+  end
+
+  defp own_outbound_current?(_record), do: false
+
+  # The record that carries our outbound key also receives the primary
+  # device's rotations, so they compete for the same @max_state_ids budget —
+  # the current id is pinned instead of aging out with the rest.
+  defp trim_state_ids(state_ids, current_id) do
+    trimmed = Enum.take(state_ids, @max_state_ids)
+
+    if is_integer(current_id) and current_id in state_ids and current_id not in trimmed do
+      Enum.take(state_ids, @max_state_ids - 1) ++ [current_id]
+    else
+      trimmed
+    end
   end
 
   defp get_sender_key_record(store, group_jid, sender_jid) do
