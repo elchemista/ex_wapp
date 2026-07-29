@@ -129,6 +129,33 @@ defmodule ExWapp.StoreTest do
                |> Enum.to_list()
     end
 
+    test "message persistence survives the store-creating process exiting" do
+      # The writer process takes ownership of every ETS table precisely so the
+      # store outlives whoever built it. A table left off the give-away list
+      # stays owned by the creator and dies with it — and because the per-chat
+      # counter is touched on every insert, one missing table turns every later
+      # message write into {:error, {:store_mutation_failed, %ArgumentError{}}}
+      # while the rest of the store keeps working.
+      path = Path.join(@tmp_dir, "creator_handoff_test.etf")
+      jid = "15550001111@s.whatsapp.net"
+      parent = self()
+
+      {creator, ref} =
+        spawn_monitor(fn ->
+          send(parent, {:store, Store.Ets.new(path: path)})
+        end)
+
+      assert_receive {:store, store}
+      assert_receive {:DOWN, ^ref, :process, ^creator, :normal}
+
+      assert :ok =
+               Store.upsert_messages(store, jid, [
+                 %{id: "after-handoff", timestamp: 1, status: :received}
+               ])
+
+      assert :ok = Store.delete_chat_messages(store, jid)
+    end
+
     test "status updates by ID apply across chats" do
       path = Path.join(@tmp_dir, "status_by_id_test.etf")
       store = Store.Ets.new(path: path)
@@ -406,6 +433,45 @@ defmodule ExWapp.StoreTest do
       store = Store.Memory.new()
       assert :ok = Store.Memory.stop(store)
       assert catch_exit(Store.load(store))
+    end
+
+    test "stop/1 is idempotent" do
+      store = Store.Memory.new()
+
+      assert :ok = Store.Memory.stop(store)
+      assert :ok = Store.Memory.stop(store)
+    end
+
+    test "stop/1 tolerates an agent that shuts down while being stopped" do
+      # The agent is linked to whoever built the store, so teardown that runs
+      # after that owner has gone races the shutdown it caused: the process is
+      # alive when stop/1 looks, and dead with reason :shutdown by the time the
+      # stop lands. That is what an ExUnit `on_exit` cleanup does after its test
+      # process exits, and a teardown helper that raises there fails a test that
+      # had already passed.
+      #
+      # Standing in for the agent is a process that exits :shutdown when the
+      # stop reaches it, which pins the timing rather than racing for it.
+      agent =
+        spawn(fn ->
+          Process.flag(:trap_exit, true)
+
+          receive do
+            {:system, _from, _message} -> exit(:shutdown)
+          end
+        end)
+
+      store = %Store.Memory{agent: agent, message_table: nil}
+
+      assert :ok = Store.Memory.stop(store)
+    end
+
+    test "stop/1 tolerates an agent killed out from under it" do
+      store = Store.Memory.new()
+      Process.unlink(store.agent)
+      Process.exit(store.agent, :kill)
+
+      assert :ok = Store.Memory.stop(store)
     end
   end
 

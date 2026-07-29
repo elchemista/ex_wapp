@@ -1294,6 +1294,17 @@ defmodule ExWapp.Session.Worker do
     {:noreply, maybe_retry_outgoing_message(state, jid, message_id, retry_meta)}
   end
 
+  def handle_info({:ack_session_rejection, message_id, jid, ack}, state) do
+    {:noreply, repair_session_and_retry(state, message_id, jid, ack)}
+  end
+
+  def handle_info({:session_repair_due, message_id, jid, ack}, state) do
+    attempts = session_repair_attempts(state, message_id)
+    max_attempts = Config.get(state.runtime_cfg, [:send, :max_session_repair_attempts], 2)
+
+    {:noreply, run_session_repair(state, message_id, jid, ack, attempts, max_attempts)}
+  end
+
   def handle_info({:send_result, jid, text, {:ok, message_id}, strategy, attempt}, state) do
     state =
       state
@@ -1692,6 +1703,51 @@ defmodule ExWapp.Session.Worker do
     %{state | health_timer: nil}
   end
 
+  # A reconnect is the one moment this client knows its view of every peer may
+  # have gone stale without being told: messages it never saw were exchanged
+  # while the socket was down, and a session file restored from a snapshot comes
+  # back with ratchets the peers moved past long ago. Dropping the sessions that
+  # look one-way here costs one prekey fetch on the next send to those peers, and
+  # buys back the case where the alternative is an unbounded run of rejected
+  # sends. Deployments that restore the store from an external snapshot can turn
+  # `reset_sessions_on_connect` on and pay that cost for every peer instead.
+  defp refresh_signal_sessions_on_connect(%{signal_sessions: nil} = state), do: state
+
+  defp refresh_signal_sessions_on_connect(state) do
+    runtime_cfg = Map.get(state, :runtime_cfg) || %{}
+
+    reset? = Config.get(runtime_cfg, [:signal, :reset_sessions_on_connect], false)
+
+    {sessions, dropped} =
+      if reset? do
+        drop_all_signal_sessions(state.signal_sessions)
+      else
+        SessionStore.evict_one_way_sessions(
+          state.signal_sessions,
+          Config.get(runtime_cfg, [:signal, :evict_one_way_sessions_after_ms], :timer.hours(1))
+        )
+      end
+
+    if dropped == [] do
+      state
+    else
+      scope = if reset?, do: "every", else: "one-way"
+
+      Logger.warning(
+        "[SESSION] Dropped #{length(dropped)} #{scope} Signal session(s) at connect; " <>
+          "the next send to those peers negotiates a fresh one"
+      )
+
+      persist_signal_sessions_store(state.store, sessions)
+      %{state | signal_sessions: sessions}
+    end
+  end
+
+  defp drop_all_signal_sessions(signal_sessions) do
+    jids = SessionStore.list_sessions(signal_sessions)
+    {Enum.reduce(jids, signal_sessions, &SessionStore.delete_session(&2, &1)), jids}
+  end
+
   defp clear_signal_sessions_for_jid_in_memory(%{signal_sessions: nil} = state, _jid), do: state
 
   defp clear_signal_sessions_for_jid_in_memory(state, jid) do
@@ -1816,6 +1872,7 @@ defmodule ExWapp.Session.Worker do
           connected_at: DateTime.utc_now(),
           post_auth_phase: :complete
       }
+      |> refresh_signal_sessions_on_connect()
 
     Subscribers.broadcast_lifecycle(
       state.session_id,
@@ -1859,13 +1916,34 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp maybe_retry_outgoing_message(state, jid, message_id, retry_meta) do
-    session_pid = self()
     max_attempts = Config.get(state.runtime_cfg, [:send, :max_outgoing_retry_attempts], 2)
+
+    {_started?, new_state} =
+      retry_outgoing_message(state, jid, message_id, retry_meta, max_attempts)
+
+    new_state
+  end
+
+  # Returns whether a retry worker was actually started alongside the new state,
+  # because a caller repairing a rejected send has to know: nothing was resent
+  # means the rejection it withheld is the final verdict and has to be reported.
+  @spec retry_outgoing_message(
+          map(),
+          String.t(),
+          String.t(),
+          map(),
+          non_neg_integer(),
+          keyword()
+        ) ::
+          {boolean(), map()}
+  defp retry_outgoing_message(state, jid, message_id, retry_meta, max_attempts, opts \\ []) do
+    session_pid = self()
     retries_before = total_retry_attempts(state)
 
     new_state =
       Retry.maybe_retry_outgoing_message(state, jid, message_id,
         max_attempts: max_attempts,
+        counter_scope: Keyword.get(opts, :counter_scope, "outbound_retry"),
         normalize_jid: &JIDUtils.normalize_for_signal/1,
         start_worker: &start_send_worker/3,
         register_worker: &register_send_worker/4,
@@ -1898,9 +1976,119 @@ defmodule ExWapp.Session.Worker do
         retries_started: delta
       })
 
-      state_with_retries
+      {true, state_with_retries}
     else
-      new_state
+      {false, new_state}
+    end
+  end
+
+  # The server refused the message because the Signal session it was encrypted
+  # under no longer matches the one the peer is using. Resending the same bytes
+  # reproduces the rejection exactly, so the retained payload is re-encrypted
+  # after the peer's sessions are dropped, which forces a fresh prekey fetch on
+  # the way back out. `Retry` reuses the original message ID, so the peer still
+  # deduplicates it and a caller awaiting delivery keeps correlating on the ID it
+  # was handed.
+  #
+  # `Receipt` withholds the delivery event for exactly this case, so a repair
+  # that never starts has to report the failure here or the caller waits for an
+  # ack that is not coming.
+  @spec repair_session_and_retry(map(), String.t(), String.t(), ExWapp.Error.Ack.t()) :: map()
+  defp repair_session_and_retry(state, message_id, jid, ack) do
+    attempts = session_repair_attempts(state, message_id)
+    max_attempts = Config.get(state.runtime_cfg, [:send, :max_session_repair_attempts], 2)
+    delay_ms = session_repair_delay_ms(state, attempts)
+
+    cond do
+      attempts >= max_attempts ->
+        report_session_rejection(state, message_id, jid, ack, "repair budget spent")
+
+      delay_ms > 0 ->
+        # A repair that renegotiated from a freshly fetched bundle and was
+        # refused again is not evidence that the payload is unsendable: the same
+        # payload, to the same peer, over another fresh session, has gone through
+        # seconds later. Something on the far side is still catching up, and the
+        # only lever this client has is to stop racing it.
+        Logger.warning(
+          "[SEND] Session rejected again id=#{Log.reference(message_id)} " <>
+            "to=#{Log.reference(jid)} code=#{ack.code}; repair #{attempts + 1}/#{max_attempts} " <>
+            "in #{delay_ms}ms"
+        )
+
+        Process.send_after(self(), {:session_repair_due, message_id, jid, ack}, delay_ms)
+        state
+
+      true ->
+        run_session_repair(state, message_id, jid, ack, attempts, max_attempts)
+    end
+  end
+
+  @spec run_session_repair(
+          map(),
+          String.t(),
+          String.t(),
+          ExWapp.Error.Ack.t(),
+          non_neg_integer(),
+          non_neg_integer()
+        ) :: map()
+  defp run_session_repair(state, message_id, jid, ack, attempts, max_attempts) do
+    Logger.warning(
+      "[SEND] Session rejected id=#{Log.reference(message_id)} to=#{Log.reference(jid)} " <>
+        "code=#{ack.code}; dropping peer sessions and resending " <>
+        "(repair #{attempts + 1}/#{max_attempts})"
+    )
+
+    # No `:recipient` hint: an ack can come back addressed in the peer's other
+    # family, and pinning the own-device destination to it would put a PN inside
+    # a LID send. The resend derives that destination from the JID it actually
+    # sends to, which `Retry` takes from the retained payload.
+    case retry_outgoing_message(state, jid, message_id, %{}, max_attempts,
+           counter_scope: "session_repair"
+         ) do
+      {true, new_state} ->
+        new_state
+
+      {false, new_state} ->
+        report_session_rejection(new_state, message_id, jid, ack, "repair unavailable")
+    end
+  end
+
+  defp report_session_rejection(state, message_id, jid, ack, reason) do
+    Logger.warning(
+      "[SEND] Session repair gave up for id=#{Log.reference(message_id)} " <>
+        "to=#{Log.reference(jid)} (#{reason}); reporting rejection to caller"
+    )
+
+    Subscribers.broadcast_delivery(state.session_id, message_id, :failed, %{
+      jid: jid,
+      error: ack
+    })
+
+    state
+  end
+
+  # `Retry` owns the repair counter and keys it by the JID it resends to, which
+  # is taken from the retained payload and need not be the JID the rejection
+  # arrived on — an ack can come back in the peer's other addressing family. The
+  # message ID is what both sides agree on, so the count is read back through it.
+  @spec session_repair_attempts(map(), String.t()) :: non_neg_integer()
+  defp session_repair_attempts(state, message_id) do
+    suffix = "|" <> message_id
+
+    state
+    |> Map.get(:retry_counters, %{})
+    |> Enum.filter(fn {key, _count} ->
+      String.starts_with?(key, "session_repair|") and String.ends_with?(key, suffix)
+    end)
+    |> Enum.map(&elem(&1, 1))
+    |> Enum.max(fn -> 0 end)
+  end
+
+  @spec session_repair_delay_ms(map(), non_neg_integer()) :: non_neg_integer()
+  defp session_repair_delay_ms(state, attempts) do
+    case Config.get(state.runtime_cfg, [:send, :session_repair_backoff_ms], [0, 3_000]) do
+      [] -> 0
+      schedule -> Enum.at(schedule, attempts, List.last(schedule))
     end
   end
 
@@ -1915,12 +2103,32 @@ defmodule ExWapp.Session.Worker do
       start_placeholder_resend_request(state, chat_jid, sender_jid, message_id, metadata)
     else
       Logger.warning(
-        "[PLACEHOLDER] Cannot request unavailable message id=#{Log.reference(message_id)} while status=#{inspect(Map.get(state, :status))}"
+        "[PLACEHOLDER] Cannot request unavailable message id=#{Log.reference(message_id)}: " <>
+          placeholder_block_reason(state, chat_jid, sender_jid, message_id)
       )
 
       state
     end
   end
+
+  defp placeholder_block_reason(state, chat_jid, sender_jid, message_id) do
+    cond do
+      not is_map(state) -> "session state unavailable"
+      not resend_status_ready?(state) -> "status=#{inspect(Map.get(state, :status))}"
+      not is_pid(Map.get(state, :conn)) -> "transport is not connected"
+      not valid_resend_ref?(chat_jid) -> "chat reference is #{resend_ref_kind(chat_jid)}"
+      not valid_resend_ref?(sender_jid) -> "sender reference is #{resend_ref_kind(sender_jid)}"
+      not valid_resend_ref?(message_id) -> "message id is #{resend_ref_kind(message_id)}"
+      true -> "unknown precondition"
+    end
+  end
+
+  defp resend_status_ready?(state), do: Map.get(state, :status) in [:connected, :syncing]
+
+  defp resend_ref_kind(nil), do: "nil"
+  defp resend_ref_kind(value) when is_binary(value), do: "empty"
+  defp resend_ref_kind(%module{}), do: "a #{inspect(module)} struct instead of a string"
+  defp resend_ref_kind(_value), do: "not a string"
 
   defp start_placeholder_resend_request(state, chat_jid, sender_jid, message_id, metadata) do
     session_pid = self()

@@ -732,6 +732,13 @@ defmodule ExWapp.AppState.Engine do
     end)
   end
 
+  @mac_divergence_reasons [
+    :mismatching_snapshot_mac,
+    :mismatching_patch_mac,
+    :mismatching_content_mac,
+    :mismatching_index_mac
+  ]
+
   defp fetch_collection_unlocked(session, store, collection_name) do
     Store.batch(store, {:app_state_collection, collection_name}, fn ->
       case do_fetch_collection(session, store, collection_name, _want_snapshot = true) do
@@ -744,9 +751,36 @@ defmodule ExWapp.AppState.Engine do
         {:error, {:apply_snapshot_failed, _reason}} ->
           do_fetch_collection(session, store, collection_name, false)
 
+        {:error, {:apply_patch_failed, reason}} when reason in @mac_divergence_reasons ->
+          # The local hash chain no longer matches the server's, and a normal
+          # retry can never repair it: a snapshot is only requested at version
+          # 0, so the same failing patch just comes back in front of us on
+          # every fetch — and with it every mutation to this collection fails,
+          # forever. Dropping the stored version forces a fresh snapshot sync,
+          # which is exactly what whatsmeow does for this error class.
+          Logger.warning(
+            "[APP_STATE] #{collection_name} hash state diverged (#{Log.reason(reason)}); resyncing from snapshot"
+          )
+
+          :ok = reset_collection_state(store, collection_name)
+          do_fetch_collection(session, store, collection_name, true)
+
         {:error, _reason} = error ->
           error
       end
+    end)
+  end
+
+  @doc "Drop a collection's stored version, hash and mutation MACs so the next fetch starts from a snapshot."
+  @spec reset_collection_state(struct(), String.t()) :: :ok
+  def reset_collection_state(store, collection_name) do
+    Store.transaction(store, fn data ->
+      versions = Map.get(data, :app_state_versions, %{})
+      all_macs = Map.get(data, :app_state_mutation_macs, %{})
+
+      data
+      |> Map.put(:app_state_versions, Map.delete(versions, collection_name))
+      |> Map.put(:app_state_mutation_macs, Map.delete(all_macs, collection_name))
     end)
   end
 

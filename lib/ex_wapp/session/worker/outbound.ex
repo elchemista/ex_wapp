@@ -132,7 +132,7 @@ defmodule ExWapp.Session.Worker.Outbound do
 
     with destination when destination != "" <- destination_jid,
          {:ok, signal_sessions, prekey_bundles, target_hints} <-
-           ensure_signal_session_worker(state, destination),
+           ensure_signal_session_worker(state, destination, reuse_self_chat_sessions: true),
          {target_specs, _all_usync_devices} <-
            Direct.resolve_targets(
              store,
@@ -578,9 +578,9 @@ defmodule ExWapp.Session.Worker.Outbound do
     )
   end
 
-  @spec ensure_signal_session_worker(map(), String.t()) ::
+  @spec ensure_signal_session_worker(map(), String.t(), keyword()) ::
           {:ok, SessionStore.t(), map(), Direct.target_hints()} | {:error, term()}
-  defp ensure_signal_session_worker(state, jid) do
+  defp ensure_signal_session_worker(state, jid, opts \\ []) when is_list(opts) do
     Direct.prepare_sessions(
       state,
       jid,
@@ -603,7 +603,8 @@ defmodule ExWapp.Session.Worker.Outbound do
           current_sessions,
           send_node_fun(state)
         )
-      end
+      end,
+      opts
     )
   end
 
@@ -763,11 +764,12 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
+  @doc false
   @spec outbound_proto(outbound_text(), keyword()) :: Message.t()
-  defp outbound_proto(text, opts) do
+  def outbound_proto(text, opts) do
     case Keyword.get(opts, :proto_message) do
       %Message{} = proto -> proto
-      _ -> Messages.build_text_proto(text, [])
+      _ -> Messages.build_text_proto(text, opts)
     end
   end
 

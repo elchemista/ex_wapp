@@ -12,7 +12,9 @@ defmodule ExWapp.Session.Account do
   @spec prekey_to_node(pos_integer(), binary()) :: Binary.Node.t()
   def prekey_to_node(id, public)
       when is_integer(id) and id > 0 and is_binary(public) and byte_size(public) == 32 do
-    <<_::8, id3::binary-3>> = <<id::big-32>>
+    # Key IDs are 3 bytes on the wire; an out-of-range id must fail loudly
+    # rather than be advertised under a silently truncated number.
+    <<0::8, id3::binary-3>> = <<id::big-32>>
 
     %Binary.Node{
       tag: "key",
@@ -28,7 +30,7 @@ defmodule ExWapp.Session.Account do
   def signed_prekey_to_node(%{id: id, public: public, signature: signature})
       when is_integer(id) and is_binary(public) and byte_size(public) == 32 and
              is_binary(signature) and byte_size(signature) == 64 do
-    <<_::8, id3::binary-3>> = <<id::big-32>>
+    <<0::8, id3::binary-3>> = <<id::big-32>>
 
     %Binary.Node{
       tag: "skey",

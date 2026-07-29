@@ -160,6 +160,7 @@ defmodule ExWapp.Signal.Encryption do
 
           {:error, reason} ->
             Logger.error("[ENCRYPTION] Decrypt failed: #{Log.reason(reason)}")
+            note_unrecoverable_prekey(store, ciphertext, is_prekey, reason)
             {:error, reason}
         end
 
@@ -309,6 +310,35 @@ defmodule ExWapp.Signal.Encryption do
       {:error, :no_identity_key}
     end
   end
+
+  # This message is lost — its one-time prekey is not in the store and no retry
+  # brings it back. What is still recoverable is the id: the server handed it to
+  # this peer, so it belongs to the server's inventory no matter what the local
+  # state remembers, and reissuing it later with fresh key material would break
+  # every future session that draws it. Recording it here is what keeps a store
+  # that was restored from an older snapshot from doing exactly that.
+  @spec note_unrecoverable_prekey(term(), binary(), boolean(), term()) :: :ok
+  defp note_unrecoverable_prekey(store, ciphertext, true, :prekey_not_found) do
+    case WireFormat.parse_prekey_signal_message(ciphertext) do
+      {:ok, %{prekey_id: prekey_id}} when is_integer(prekey_id) and prekey_id > 0 ->
+        Logger.warning(
+          "[SIGNAL] Server is still serving one-time prekey #{prekey_id}, which is missing " <>
+            "locally; reserving the id so it is never reissued"
+        )
+
+        ExWapp.Prekeys.note_advertised_prekey_id(store, prekey_id)
+        :ok
+
+      _other ->
+        :ok
+    end
+  rescue
+    error ->
+      Logger.warning("[SIGNAL] Failed reserving unknown prekey id: #{Log.reason(error)}")
+      :ok
+  end
+
+  defp note_unrecoverable_prekey(_store, _ciphertext, _is_prekey, _reason), do: :ok
 
   @spec consume_one_time_prekey(term(), binary(), boolean(), SessionStore.t()) :: :ok
   defp consume_one_time_prekey(_store, _ciphertext, false, _sessions), do: :ok

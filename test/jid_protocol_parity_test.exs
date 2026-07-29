@@ -57,19 +57,46 @@ defmodule ExWapp.JIDProtocolParityTest do
 
       assert %JID{server: "s.whatsapp.net", raw_agent: 0, device: 2} = whatsapp
       assert %JID{server: "lid", raw_agent: 0, device: 3} = lid
-      assert %JID{server: "hosted", raw_agent: 128, device: 4} = hosted
+
+      # 128 is the canonical hosted domain type, folded to raw_agent 0 so a
+      # JID decoded off the wire compares equal to the same JID parsed from a
+      # string; actual_agent/1 restores the byte on the way out.
+      assert %JID{server: "hosted", raw_agent: 0, device: 4} = hosted
 
       assert JID.actual_agent(whatsapp) == 0
       assert JID.actual_agent(lid) == 1
       assert JID.actual_agent(hosted) == 128
     end
 
-    test "renders device and hosted-agent forms deterministically" do
+    test "a hosted JID parsed from a string keeps its hosted domain on the wire" do
+      # parse/1 has no syntax for an agent, so a hosted JID that travelled
+      # through string form carries raw_agent 0 — and agent byte 0 on the wire
+      # means s.whatsapp.net. Encoding must restore the hosted domain type
+      # (128, per the reference implementations), or the recipient is silently
+      # rerouted to the wrong server class.
+      assert {:ok, %JID{server: "hosted", raw_agent: 0} = parsed} = JID.parse("1234@hosted")
+      assert JID.actual_agent(parsed) == 128
+    end
+
+    test "uncommon hosted agent bytes survive a wire round-trip unchanged" do
+      # 129 (hosted.lid in the references) must not be rewritten into plain
+      # hosted by a decode/encode cycle.
+      decoded = JID.new_ad("1234", 129, 2)
+      assert %JID{server: "hosted", raw_agent: 129} = decoded
+      assert JID.actual_agent(decoded) == 129
+    end
+
+    test "renders device and hosted forms deterministically" do
       assert JID.to_string(%JID{user: "1234", device: 5}) ==
                "1234:5@s.whatsapp.net"
 
-      assert JID.to_string(JID.new_ad("1234", 128, 2)) ==
-               "1234.128:2@hosted"
+      # The hosted server name already encodes the agent, and parse/1 could
+      # never read the "user.128:device" form back — the reference
+      # implementations render hosted JIDs without the agent segment.
+      assert JID.to_string(JID.new_ad("1234", 128, 2)) == "1234:2@hosted"
+
+      assert {:ok, %JID{user: "1234", server: "hosted", device: 2}} =
+               JID.parse(JID.to_string(JID.new_ad("1234", 128, 2)))
     end
   end
 

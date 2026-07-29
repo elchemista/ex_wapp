@@ -499,6 +499,14 @@ defmodule ExWapp do
     * `{:error, :ack_timeout}` — no answer within `timeout`; genuinely unknown,
       and specifically *not* proof of non-delivery
 
+  A rejection blaming the Signal session is repaired before it is reported: the
+  peer's sessions are dropped and the message is resent under a fresh one, reusing
+  the same ID, so this returns the verdict on the repaired send. A repair that is
+  rejected in turn is made once more after a pause, because in practice the same
+  payload has gone through seconds later. So `timeout` has to cover several round
+  trips plus `send.session_repair_backoff_ms`, not one send — the defaults put
+  that at roughly ten seconds before a session rejection is reported.
+
   Blocks the calling process. Delivery events are consumed from this process's
   mailbox and any that arrive for other messages are discarded on the way out,
   so the caller's mailbox is left as it was. A caller that would rather not

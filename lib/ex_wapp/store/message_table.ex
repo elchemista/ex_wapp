@@ -14,20 +14,41 @@ defmodule ExWapp.Store.MessageTable do
 
   @max_timestamp 18_446_744_073_709_551_615
   @select_chunk_size 100
+  # Unbounded by default: how much history is worth keeping is the host's call,
+  # not this module's, and a library that silently forgets a caller's data is
+  # worse than one that costs more than it should.
+  @default_max_per_chat :all
 
-  defstruct [:table, :index_table]
+  defstruct [:table, :index_table, :count_table, max_per_chat: @default_max_per_chat]
 
   @type order :: :newest_first | :oldest_first
-  @type t :: %__MODULE__{table: :ets.tid(), index_table: :ets.tid()}
+  @type t :: %__MODULE__{
+          table: :ets.tid(),
+          index_table: :ets.tid(),
+          count_table: :ets.tid(),
+          max_per_chat: pos_integer() | :all
+        }
 
   @doc """
   Creates an empty message table and imports optional initial messages.
 
   Initial data is a map keyed by chat JID. Duplicate message IDs are replaced
   by the last value imported.
+
+  `:max_per_chat` bounds how much history a chat keeps, oldest dropped first;
+  `:all`, the default, keeps everything.
+
+  Bounding it is worth considering for any host that does not read old messages
+  back. The built-in file adapter re-encodes its whole snapshot on every write,
+  so unbounded history makes each arriving message cost more than the last one
+  did — the price of storing a conversation grows with the conversation. What the
+  window has to stay above is the library's own reads: finding a payload to
+  resend after a rejection, recognising a redelivery, matching a media retry.
+  Those all look at recent traffic, so a few hundred is generous; anything older
+  is being kept for the host's benefit, not the protocol's.
   """
-  @spec new(map()) :: t()
-  def new(initial_messages \\ %{}) do
+  @spec new(map(), keyword()) :: t()
+  def new(initial_messages \\ %{}, opts \\ []) do
     message_store = %__MODULE__{
       table:
         :ets.new(:ex_wapp_messages, [
@@ -42,7 +63,15 @@ defmodule ExWapp.Store.MessageTable do
           :public,
           :compressed,
           read_concurrency: true
-        ])
+        ]),
+      count_table:
+        :ets.new(:ex_wapp_message_counts, [
+          :set,
+          :public,
+          write_concurrency: true
+        ]),
+      max_per_chat:
+        normalize_max_per_chat(Keyword.get(opts, :max_per_chat, @default_max_per_chat))
     }
 
     Enum.each(normalize_initial_messages(initial_messages), fn {jid, messages} ->
@@ -50,6 +79,22 @@ defmodule ExWapp.Store.MessageTable do
     end)
 
     message_store
+  end
+
+  defp normalize_max_per_chat(:all), do: :all
+  defp normalize_max_per_chat(max) when is_integer(max) and max > 0, do: max
+  defp normalize_max_per_chat(nil), do: @default_max_per_chat
+  defp normalize_max_per_chat(:default), do: @default_max_per_chat
+
+  defp normalize_max_per_chat(other) do
+    require Logger
+
+    Logger.warning(
+      "[STORE] Ignoring invalid :max_messages_per_chat #{inspect(other)}; " <>
+        "keeping #{inspect(@default_max_per_chat)}"
+    )
+
+    @default_max_per_chat
   end
 
   @doc """
@@ -103,9 +148,13 @@ defmodule ExWapp.Store.MessageTable do
   @spec upsert_count(t(), String.t(), [map()]) :: non_neg_integer()
   def upsert_count(%__MODULE__{} = message_store, jid, messages)
       when is_binary(jid) and is_list(messages) do
-    Enum.reduce(messages, 0, fn message, count ->
-      count + upsert_one(message_store, jid, message)
-    end)
+    changed =
+      Enum.reduce(messages, 0, fn message, count ->
+        count + upsert_one(message_store, jid, message)
+      end)
+
+    trim_chat(message_store, jid)
+    changed
   end
 
   def upsert_count(%__MODULE__{}, _jid, _messages), do: 0
@@ -239,6 +288,7 @@ defmodule ExWapp.Store.MessageTable do
       case :ets.take(message_store.index_table, {jid, message_id}) do
         [{{^jid, ^message_id}, key}] ->
           :ets.delete(message_store.table, key)
+          bump_count(message_store, jid, -1)
           count + 1
 
         _ ->
@@ -272,6 +322,11 @@ defmodule ExWapp.Store.MessageTable do
       {{{jid, :_}, :_}, [], [true]}
     ])
 
+    # The per-chat counter drives trimming, so leaving it behind would make the
+    # window believe an emptied chat is still full: every message arriving after
+    # a delete would be trimmed away as excess the moment it landed.
+    :ets.delete(message_store.count_table, jid)
+
     deleted
   end
 
@@ -301,13 +356,14 @@ defmodule ExWapp.Store.MessageTable do
   def clear(%__MODULE__{} = message_store) do
     :ets.delete_all_objects(message_store.table)
     :ets.delete_all_objects(message_store.index_table)
+    :ets.delete_all_objects(message_store.count_table)
     :ok
   end
 
   defp upsert_one(message_store, jid, message) when is_map(message) do
     case Map.get(message, :id) do
       message_id when is_binary(message_id) and message_id != "" ->
-        delete_previous_key(message_store, jid, message_id)
+        replaced? = delete_previous_key(message_store, jid, message_id)
 
         timestamp = normalize_timestamp(Map.get(message, :timestamp))
         key = {jid, timestamp, message_id}
@@ -315,6 +371,7 @@ defmodule ExWapp.Store.MessageTable do
 
         :ets.insert(message_store.table, {key, normalized_message})
         :ets.insert(message_store.index_table, {{jid, message_id}, key})
+        unless replaced?, do: bump_count(message_store, jid, 1)
         1
 
       _ ->
@@ -326,8 +383,47 @@ defmodule ExWapp.Store.MessageTable do
 
   defp delete_previous_key(message_store, jid, message_id) do
     case :ets.lookup(message_store.index_table, {jid, message_id}) do
-      [{{^jid, ^message_id}, old_key}] -> :ets.delete(message_store.table, old_key)
-      _ -> :ok
+      [{{^jid, ^message_id}, old_key}] ->
+        :ets.delete(message_store.table, old_key)
+        true
+
+      _ ->
+        false
+    end
+  end
+
+  defp trim_chat(%__MODULE__{max_per_chat: :all}, _jid), do: :ok
+
+  defp trim_chat(%__MODULE__{max_per_chat: max} = message_store, jid) do
+    drop_oldest(message_store, jid, chat_count(message_store, jid) - max)
+  end
+
+  defp drop_oldest(_message_store, _jid, excess) when excess <= 0, do: :ok
+
+  defp drop_oldest(message_store, jid, excess) do
+    # All keys for one chat are contiguous under the JID, and timestamps are
+    # normalized to non-negative, so this cursor sits just below the chat's
+    # oldest entry whatever it happens to be.
+    case :ets.next(message_store.table, {jid, -1, ""}) do
+      {^jid, _timestamp, message_id} = key ->
+        :ets.delete(message_store.table, key)
+        :ets.delete(message_store.index_table, {jid, message_id})
+        bump_count(message_store, jid, -1)
+        drop_oldest(message_store, jid, excess - 1)
+
+      _end_or_other_chat ->
+        :ok
+    end
+  end
+
+  defp bump_count(message_store, jid, delta) do
+    :ets.update_counter(message_store.count_table, jid, delta, {jid, 0})
+  end
+
+  defp chat_count(message_store, jid) do
+    case :ets.lookup(message_store.count_table, jid) do
+      [{^jid, count}] -> count
+      [] -> 0
     end
   end
 

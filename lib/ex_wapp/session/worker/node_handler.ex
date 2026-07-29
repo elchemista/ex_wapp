@@ -247,7 +247,11 @@ defmodule ExWapp.Session.Worker.NodeHandler do
           message_t,
           retry_count,
           error_code,
-          retry_meta
+          retry_meta,
+          %{
+            runtime_cfg: Map.get(state, :runtime_cfg) || %{},
+            session_id: Map.get(state, :session_id)
+          }
         )
       end
     )

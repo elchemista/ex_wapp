@@ -391,6 +391,55 @@ defmodule ExWapp.Signal.SessionStore do
   end
 
   @doc """
+  Deletes sessions this device has only ever sent on.
+
+  A session with traffic in one direction and nothing coming back is the shape a
+  desync leaves behind: the peer dropped its half and re-initiated, this device
+  never managed to adopt the new one, and every send since has been encrypted
+  against a ratchet the peer abandoned. The server answers those with
+  `<ack error="463">` forever, because nothing in the send path ever concludes
+  that the session itself is the problem.
+
+  It is also the shape of a perfectly healthy session to someone who has not
+  replied yet, so age is what tells them apart — hence `min_age_ms`, and hence
+  calling this at connect rather than mid-conversation. An unstamped session is
+  treated as old: timestamps are written on every store, so their absence means
+  the session outlived the process that made it.
+
+  Returns the store and the JIDs that were dropped. The next send to those peers
+  fetches a fresh bundle and negotiates from scratch.
+  """
+  @spec evict_one_way_sessions(t(), non_neg_integer(), integer()) :: {t(), [String.t()]}
+  def evict_one_way_sessions(store, min_age_ms, now_ms \\ System.system_time(:millisecond))
+
+  def evict_one_way_sessions(store, min_age_ms, _now_ms) when min_age_ms <= 0, do: {store, []}
+
+  def evict_one_way_sessions(store, min_age_ms, now_ms)
+      when is_integer(min_age_ms) and is_integer(now_ms) do
+    evictable =
+      store
+      |> list_sessions()
+      |> Enum.filter(&one_way_session?(store, &1, min_age_ms, now_ms))
+
+    {Enum.reduce(evictable, store, &delete_session(&2, &1)), evictable}
+  end
+
+  defp one_way_session?(store, jid, min_age_ms, now_ms) do
+    with {:ok, session} <- get_session(store, jid),
+         sent when is_integer(sent) and sent > 0 <-
+           session |> Map.get(:sending_chain) |> chain_counter(),
+         received when received in [nil, 0] <-
+           session |> Map.get(:receiving_chain) |> chain_counter() do
+      case session_touched_at(store, jid) do
+        nil -> true
+        touched_at_ms -> now_ms - touched_at_ms >= min_age_ms
+      end
+    else
+      _other -> false
+    end
+  end
+
+  @doc """
   Deletes cached sessions for the target JID and any PN<->LID aliases derived from
   the current mapping store. Matching is done on the stripped base JID so all
   device variants are cleared together.
@@ -569,6 +618,12 @@ defmodule ExWapp.Signal.SessionStore do
             local_registration_id,
             updated_store
           )
+
+        {:error, _reason} = error ->
+          # A CaseClauseError here would escape the per-target error handling
+          # in the encryptor and abort the whole multi-device fanout; an error
+          # tuple records just this target as failed.
+          error
       end
     end
   end

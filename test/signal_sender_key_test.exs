@@ -108,6 +108,55 @@ defmodule ExWapp.SignalSenderKeyTest do
              SenderKey.decrypt_group_message(receiver_store, group_jid, sender_jid, second_skmsg)
   end
 
+  test "a distribution from the account's own primary device does not rotate the outbound key" do
+    # The local outbound record is keyed by the device-stripped account JID,
+    # and the primary phone is device 0 — whose JID renders with no device
+    # suffix, i.e. the exact same key. Its sender-key distribution (and the
+    # decrypt write-backs that follow) must coexist with our outbound state
+    # rather than steal the record's current pointer: losing the pointer
+    # orphans our signing key and forces a full sender-key rotation on every
+    # group send that follows a phone message.
+    store = ExWapp.Store.Memory.new(initial_data: %{signal: %{}})
+    group_jid = "120363043214477337@g.us"
+    local_jid = "199316597694686@lid"
+
+    assert {:ok, distribution_before} =
+             SenderKey.create_outbound_distribution_message(store, group_jid, local_jid)
+
+    phone_signing = Keys.generate_key_pair()
+    phone_chain_key = :crypto.strong_rand_bytes(32)
+
+    phone_payload =
+      build_sender_key_distribution_message_payload(
+        group_jid,
+        91,
+        0,
+        phone_chain_key,
+        phone_signing.public
+      )
+
+    assert {:ok, 1} =
+             SenderKey.process_distributions_from_plaintext(
+               store,
+               group_jid,
+               local_jid,
+               phone_payload
+             )
+
+    # The phone's own messages decrypt through the shared record...
+    phone_skmsg =
+      build_sender_key_message(91, 0, phone_chain_key, phone_signing.private, "from the phone")
+
+    assert {:ok, "from the phone"} =
+             SenderKey.decrypt_group_message(store, group_jid, local_jid, phone_skmsg)
+
+    # ...and our outbound key survives both writes unchanged.
+    assert {:ok, distribution_after} =
+             SenderKey.create_outbound_distribution_message(store, group_jid, local_jid)
+
+    assert distribution_after == distribution_before
+  end
+
   test "serializes concurrent outbound sender-key encryption" do
     sender_store = ExWapp.Store.Memory.new(initial_data: %{signal: %{}})
     receiver_store = ExWapp.Store.Memory.new(initial_data: %{signal: %{}})

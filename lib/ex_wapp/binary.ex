@@ -751,8 +751,11 @@ defmodule ExWapp.Binary do
       count = length_byte &&& 0x7F
       odd? = (length_byte &&& 0x80) != 0
 
+      # An empty string packs to a length byte of zero and no payload bytes, so
+      # the step has to be explicit: 1..0 counts backwards and would consume two
+      # bytes belonging to the next field, desynchronizing the rest of the frame.
       {chars, decoder} =
-        Enum.reduce(1..count, {[], decoder}, fn _, {acc, dec} ->
+        Enum.reduce(1..count//1, {[], decoder}, fn _, {acc, dec} ->
           {byte, dec} = read_int8(dec)
           upper = unpack_byte(tag, byte >>> 4)
           lower = unpack_byte(tag, byte &&& 0x0F)
@@ -785,8 +788,11 @@ defmodule ExWapp.Binary do
     defp read_list(decoder, tag) do
       {size, decoder} = read_list_size(decoder, tag)
 
+      # A zero-size list is an empty list of children, not two of them: without
+      # the explicit step, 1..0 counts backwards and reads phantom nodes out of
+      # whatever follows.
       {nodes, decoder} =
-        Enum.reduce(1..size, {[], decoder}, fn _, {acc, dec} ->
+        Enum.reduce(1..size//1, {[], decoder}, fn _, {acc, dec} ->
           {node, dec} = read_node(dec)
           {[node | acc], dec}
         end)

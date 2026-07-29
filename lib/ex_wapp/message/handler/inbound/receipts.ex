@@ -11,10 +11,16 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
   alias ExWapp.{JID, Store}
   alias ExWapp.Message.Handler.Common
   alias ExWapp.Message.Handler.Inbound.Envelope
-  alias ExWapp.Signal.SessionStore
+  alias ExWapp.Signal.{SessionStore, WireFormat}
 
   @max_retry_receipt_count 2
   @duplicate_decrypt_reasons [:message_key_not_found]
+
+  # Failures the peer cannot resend its way out of: whatever it holds for this
+  # device — a one-time prekey that is gone, a signed prekey this device never
+  # had, or no session at all — cannot produce ciphertext this device can open.
+  # Only a new key bundle changes that.
+  @key_material_decrypt_reasons [:prekey_not_found, :unknown_signed_prekey, :no_session]
 
   @doc """
   Plans receipt-related actions for one normalized inbound message.
@@ -63,7 +69,8 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
       else
         retry_meta = %{
           category: Map.get(attrs, "category"),
-          recipient: Map.get(attrs, "recipient")
+          recipient: Map.get(attrs, "recipient"),
+          force_keys?: key_material_error?(Map.get(message_data, :decrypt_status))
         }
 
         [
@@ -147,7 +154,7 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
          state
        ) do
     if needs_placeholder_resend_request?(message_data) and retry_count == 1 do
-      sender = if is_binary(participant) and participant != "", do: participant, else: from
+      sender = placeholder_sender(from, participant)
       from_me = placeholder_from_me?(attrs, from, participant, state, message_data)
       chat_jid = placeholder_chat_jid(from, attrs, from_me)
 
@@ -156,6 +163,18 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
       ]
     else
       []
+    end
+  end
+
+  @doc false
+  @spec placeholder_sender(term(), term()) :: String.t()
+  def placeholder_sender(from, participant) do
+    # The binary decoder hands JID structs for JID-typed attributes, so both
+    # references are normalized here. The resend request is dropped downstream
+    # when the sender is not a non-empty binary.
+    case Common.normalize_jid_with_device(participant) do
+      "" -> Common.normalize_jid_with_device(from)
+      sender -> sender
     end
   end
 
@@ -272,12 +291,12 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
   @spec next_retry_count(map(), term(), term(), term(), map()) ::
           {pos_integer(), map()}
   defp next_retry_count(state, from, id, participant, message_data) when is_map(state) do
-    key = retry_counter_key(from, id, participant)
+    key = retry_counter_key(from, id, participant, message_data)
     counters = Map.get(state, :retry_counters, %{})
     local_next = Map.get(counters, key, 0) + 1
     incoming_next = incoming_retry_count(message_data) + 1
     next = if local_next == 1 and incoming_next > 1, do: incoming_next, else: local_next
-    {next, Map.put(state, :retry_counters, Map.put(counters, key, next))}
+    {next, ExWapp.Session.RetryCounters.put(state, key, next)}
   end
 
   defp next_retry_count(state, _from, _id, _participant, _message_data), do: {1, state}
@@ -297,13 +316,76 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
   defp incoming_retry_count(%{enc_count: count}) when is_integer(count), do: count
   defp incoming_retry_count(_), do: 0
 
-  @spec retry_counter_key(term(), term(), term()) :: binary()
-  defp retry_counter_key(from, id, participant) do
-    [
-      Common.normalize_jid_with_device(from),
-      to_string(id || ""),
-      Common.normalize_jid_with_device(participant)
-    ]
-    |> Enum.join("|")
+  @spec retry_counter_key(term(), term(), term(), map()) :: binary()
+  defp retry_counter_key(from, id, participant, message_data) do
+    sender = Common.normalize_jid_with_device(from)
+    participant = Common.normalize_jid_with_device(participant)
+
+    case missing_prekey_fingerprint(message_data) do
+      nil ->
+        [sender, to_string(id || ""), participant]
+        |> Enum.join("|")
+
+      fingerprint ->
+        ["missing_prekey", sender, participant, fingerprint]
+        |> Enum.join("|")
+    end
   end
+
+  @spec missing_prekey_fingerprint(map()) :: binary() | nil
+  defp missing_prekey_fingerprint(message_data) when is_map(message_data) do
+    decrypt_status = Map.get(message_data, :decrypt_status)
+    candidates = Map.get(message_data, :enc_candidates, [])
+
+    if missing_prekey_error?(decrypt_status) and is_list(candidates) do
+      Enum.find_value(candidates, &prekey_candidate_fingerprint/1)
+    end
+  end
+
+  defp missing_prekey_fingerprint(_message_data), do: nil
+
+  @spec prekey_candidate_fingerprint(term()) :: binary() | nil
+  defp prekey_candidate_fingerprint(%{enc_type: "pkmsg", ciphertext: ciphertext})
+       when is_binary(ciphertext) do
+    case WireFormat.parse_prekey_signal_message(ciphertext) do
+      {:ok, parsed} ->
+        {
+          Map.get(parsed, :registration_id),
+          Map.get(parsed, :prekey_id),
+          Map.get(parsed, :signed_prekey_id),
+          Map.get(parsed, :base_key),
+          Map.get(parsed, :identity_key)
+        }
+        |> :erlang.term_to_binary()
+        |> then(&:crypto.hash(:sha256, &1))
+        |> Base.encode16(case: :lower)
+
+      {:error, _reason} ->
+        nil
+    end
+  end
+
+  defp prekey_candidate_fingerprint(_candidate), do: nil
+
+  @spec missing_prekey_error?(term()) :: boolean()
+  defp missing_prekey_error?(reason), do: root_decrypt_reason(reason) == :prekey_not_found
+
+  @doc false
+  @spec key_material_error?(term()) :: boolean()
+  def key_material_error?(reason),
+    do: root_decrypt_reason(reason) in @key_material_decrypt_reasons
+
+  # Decrypt failures arrive wrapped once per layer that tried and gave up — the
+  # payload, then the sender candidate within it — so the reason a receipt has to
+  # act on is always at the bottom of that nesting.
+  @spec root_decrypt_reason(term()) :: term()
+  defp root_decrypt_reason({:error, reason}), do: root_decrypt_reason(reason)
+
+  defp root_decrypt_reason({:decrypt_failed_for_payload, _payload, reason}),
+    do: root_decrypt_reason(reason)
+
+  defp root_decrypt_reason({:decrypt_failed_for_candidate, _candidate, reason}),
+    do: root_decrypt_reason(reason)
+
+  defp root_decrypt_reason(reason), do: reason
 end

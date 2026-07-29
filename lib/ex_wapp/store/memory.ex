@@ -282,8 +282,12 @@ defmodule ExWapp.Store.Memory do
     if Process.alive?(agent), do: Agent.stop(agent), else: :ok
     :ok
   catch
-    :exit, {:noproc, _} -> :ok
-    :exit, :noproc -> :ok
+    # The agent is linked to whoever built the store. Teardown that runs after
+    # that owner has gone races the shutdown it caused, so the stop can exit
+    # with :noproc, :shutdown, or :normal depending on how far along it is.
+    # A cleanup helper that raises on an already-stopping process turns tidying
+    # up into a failure, which is the one thing it must never do.
+    :exit, _reason -> :ok
   end
 
   @impl true

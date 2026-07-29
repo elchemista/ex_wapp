@@ -80,10 +80,40 @@ defmodule ExWapp.Message.Handler.Receipt do
 
     log_ack(class, type, id, from, to, error)
     maybe_update_ack_status(target, jid, id, status)
-    maybe_broadcast_delivery(state, class, id, jid, status, error)
+
+    if session_repair_requested?(session, class, id, jid, status, error) do
+      :ok
+    else
+      maybe_broadcast_delivery(state, class, id, jid, status, error)
+    end
 
     {:ok, state}
   end
+
+  # A rejection the library can act on is not a verdict yet. What the server
+  # refused here is the Signal session the message was encrypted under, so the
+  # send goes back to the session process, which drops that session and resends
+  # the retained payload under a fresh one. The delivery event is withheld until
+  # that attempt produces an ack of its own, so a caller blocked in
+  # `send_message_await/4` sees one outcome instead of a failure followed by a
+  # success it never asked for. When the session process cannot repair — no
+  # retained payload, retry budget spent, no connection — it broadcasts the
+  # failure itself, so withholding here never loses the verdict.
+  @spec session_repair_requested?(pid(), String.t(), String.t(), String.t(), atom(), term()) ::
+          boolean()
+  defp session_repair_requested?(session, "message", id, jid, :failed, error)
+       when is_pid(session) and id != "" and jid != "" do
+    ack = ExWapp.Error.Ack.classify(error)
+
+    if ack.category == :session do
+      send(session, {:ack_session_rejection, id, jid, ack})
+      true
+    else
+      false
+    end
+  end
+
+  defp session_repair_requested?(_session, _class, _id, _jid, _status, _error), do: false
 
   # Only message acks carry a delivery verdict; receipt/notification acks are
   # transport bookkeeping and would be noise on this topic.

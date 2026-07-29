@@ -94,8 +94,15 @@ defmodule ExWapp.Noise.Engine do
   end
 
   def decrypt({write_cipher, read_cipher, hash}, ciphertext, _counter) do
-    with {:ok, plaintext, new_read_cipher} <- decrypt_payload(read_cipher, hash, ciphertext) do
-      {:ok, {write_cipher, new_read_cipher, hash}, plaintext}
+    case decrypt_payload(read_cipher, hash, ciphertext) do
+      {:ok, plaintext, new_read_cipher} ->
+        {:ok, {write_cipher, new_read_cipher, hash}, plaintext}
+
+      {:error, reason, new_read_cipher} ->
+        {:error, reason, {write_cipher, new_read_cipher, hash}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -183,17 +190,26 @@ defmodule ExWapp.Noise.Engine do
     end
   end
 
-  defp decrypt_payload(_cipher, _hash, ciphertext) when byte_size(ciphertext) < 16 do
-    {:error, :ciphertext_too_short}
+  # The peer encrypts frame N+1 with counter N+1 whether or not we managed to
+  # read frame N, so the read counter must advance on failure too: keeping the
+  # old nonce would make every later frame undecryptable while the connection
+  # still looks alive. Both whatsmeow and whatsapp-rust consume the counter
+  # before attempting decryption.
+  defp decrypt_payload(%{counter: counter} = cipher, _hash, ciphertext)
+       when byte_size(ciphertext) < 16 do
+    {:error, :ciphertext_too_short, %{cipher | counter: counter + 1}}
   end
 
   defp decrypt_payload(%{key: key, counter: counter} = cipher, _hash, ciphertext) do
     body_len = byte_size(ciphertext) - 16
     <<body::binary-size(^body_len), tag::binary-size(16)>> = ciphertext
+    cipher = %{cipher | counter: counter + 1}
 
-    with {:ok, iv} <- transport_nonce(counter),
-         {:ok, plaintext} <- decrypt_transport_payload(key, iv, body, tag) do
-      {:ok, plaintext, %{cipher | counter: counter + 1}}
+    with {:ok, iv} <- transport_nonce(counter) do
+      case decrypt_transport_payload(key, iv, body, tag) do
+        {:ok, plaintext} -> {:ok, plaintext, cipher}
+        {:error, reason} -> {:error, reason, cipher}
+      end
     end
   end
 
