@@ -5,6 +5,7 @@ defmodule WAWebProtobufsE2E.PaymentInviteMessage do
             expiryTimestamp: nil,
             incentiveEligible: nil,
             referralID: nil,
+            inviteType: nil,
             __uf__: []
 
   (
@@ -25,6 +26,7 @@ defmodule WAWebProtobufsE2E.PaymentInviteMessage do
         |> encode_expiryTimestamp(msg)
         |> encode_incentiveEligible(msg)
         |> encode_referralID(msg)
+        |> encode_inviteType(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -85,6 +87,26 @@ defmodule WAWebProtobufsE2E.PaymentInviteMessage do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:referralID, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_inviteType(acc, msg) do
+        try do
+          case msg.inviteType do
+            nil ->
+              acc
+
+            _ ->
+              [
+                acc,
+                "(",
+                msg.inviteType
+                |> WAWebProtobufsE2E.PaymentInviteMessage.InviteType.encode()
+                |> Protox.Encode.encode_enum()
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:inviteType, "invalid field value"), __STACKTRACE__
         end
       end
     ]
@@ -163,6 +185,12 @@ defmodule WAWebProtobufsE2E.PaymentInviteMessage do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[referralID: Protox.Decode.validate_string!(delimited)], rest}
 
+            {5, _, bytes} ->
+              {value, rest} =
+                Protox.Decode.parse_enum(bytes, WAWebProtobufsE2E.PaymentInviteMessage.InviteType)
+
+              {[inviteType: value], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -229,7 +257,10 @@ defmodule WAWebProtobufsE2E.PaymentInviteMessage do
            {:enum, WAWebProtobufsE2E.PaymentInviteMessage.ServiceType}},
         2 => {:expiryTimestamp, {:scalar, 0}, :int64},
         3 => {:incentiveEligible, {:scalar, false}, :bool},
-        4 => {:referralID, {:scalar, ""}, :string}
+        4 => {:referralID, {:scalar, ""}, :string},
+        5 =>
+          {:inviteType, {:scalar, :DEFAULT},
+           {:enum, WAWebProtobufsE2E.PaymentInviteMessage.InviteType}}
       }
     end
 
@@ -241,6 +272,8 @@ defmodule WAWebProtobufsE2E.PaymentInviteMessage do
       %{
         expiryTimestamp: {2, {:scalar, 0}, :int64},
         incentiveEligible: {3, {:scalar, false}, :bool},
+        inviteType:
+          {5, {:scalar, :DEFAULT}, {:enum, WAWebProtobufsE2E.PaymentInviteMessage.InviteType}},
         referralID: {4, {:scalar, ""}, :string},
         serviceType:
           {1, {:scalar, :UNKNOWN}, {:enum, WAWebProtobufsE2E.PaymentInviteMessage.ServiceType}}
@@ -287,6 +320,15 @@ defmodule WAWebProtobufsE2E.PaymentInviteMessage do
           name: :referralID,
           tag: 4,
           type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "inviteType",
+          kind: {:scalar, :DEFAULT},
+          label: :optional,
+          name: :inviteType,
+          tag: 5,
+          type: {:enum, WAWebProtobufsE2E.PaymentInviteMessage.InviteType}
         }
       ]
     end
@@ -409,6 +451,35 @@ defmodule WAWebProtobufsE2E.PaymentInviteMessage do
 
         []
       ),
+      (
+        def field_def(:inviteType) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "inviteType",
+             kind: {:scalar, :DEFAULT},
+             label: :optional,
+             name: :inviteType,
+             tag: 5,
+             type: {:enum, WAWebProtobufsE2E.PaymentInviteMessage.InviteType}
+           }}
+        end
+
+        def field_def("inviteType") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "inviteType",
+             kind: {:scalar, :DEFAULT},
+             label: :optional,
+             name: :inviteType,
+             tag: 5,
+             type: {:enum, WAWebProtobufsE2E.PaymentInviteMessage.InviteType}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -459,6 +530,9 @@ defmodule WAWebProtobufsE2E.PaymentInviteMessage do
     end,
     def default(:referralID) do
       {:ok, ""}
+    end,
+    def default(:inviteType) do
+      {:ok, :DEFAULT}
     end,
     def default(_) do
       {:error, :no_such_field}

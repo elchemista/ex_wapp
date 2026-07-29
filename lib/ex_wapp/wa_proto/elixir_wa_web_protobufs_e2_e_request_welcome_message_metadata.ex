@@ -1,7 +1,7 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsE2E.RequestWelcomeMessageMetadata do
   @moduledoc false
-  defstruct localChatState: nil, welcomeTrigger: nil, __uf__: []
+  defstruct localChatState: nil, welcomeTrigger: nil, botAgentMetadata: nil, __uf__: []
 
   (
     (
@@ -19,6 +19,7 @@ defmodule WAWebProtobufsE2E.RequestWelcomeMessageMetadata do
         []
         |> encode_localChatState(msg)
         |> encode_welcomeTrigger(msg)
+        |> encode_botAgentMetadata(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -65,6 +66,18 @@ defmodule WAWebProtobufsE2E.RequestWelcomeMessageMetadata do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:welcomeTrigger, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_botAgentMetadata(acc, msg) do
+        try do
+          case msg.botAgentMetadata do
+            nil -> acc
+            _ -> [acc, "\x1A", Protox.Encode.encode_message(msg.botAgentMetadata)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:botAgentMetadata, "invalid field value"),
                     __STACKTRACE__
         end
       end
@@ -140,6 +153,18 @@ defmodule WAWebProtobufsE2E.RequestWelcomeMessageMetadata do
 
               {[welcomeTrigger: value], rest}
 
+            {3, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 botAgentMetadata:
+                   Protox.MergeMessage.merge(
+                     msg.botAgentMetadata,
+                     WAWebProtobufsAICommon.BotAgentMetadata.decode!(delimited)
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -206,7 +231,9 @@ defmodule WAWebProtobufsE2E.RequestWelcomeMessageMetadata do
            {:enum, WAWebProtobufsE2E.RequestWelcomeMessageMetadata.LocalChatState}},
         2 =>
           {:welcomeTrigger, {:scalar, :CHAT_OPEN},
-           {:enum, WAWebProtobufsE2E.RequestWelcomeMessageMetadata.WelcomeTrigger}}
+           {:enum, WAWebProtobufsE2E.RequestWelcomeMessageMetadata.WelcomeTrigger}},
+        3 =>
+          {:botAgentMetadata, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotAgentMetadata}}
       }
     end
 
@@ -216,6 +243,8 @@ defmodule WAWebProtobufsE2E.RequestWelcomeMessageMetadata do
           }
     def defs_by_name() do
       %{
+        botAgentMetadata:
+          {3, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotAgentMetadata}},
         localChatState:
           {1, {:scalar, :EMPTY},
            {:enum, WAWebProtobufsE2E.RequestWelcomeMessageMetadata.LocalChatState}},
@@ -247,6 +276,15 @@ defmodule WAWebProtobufsE2E.RequestWelcomeMessageMetadata do
           name: :welcomeTrigger,
           tag: 2,
           type: {:enum, WAWebProtobufsE2E.RequestWelcomeMessageMetadata.WelcomeTrigger}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "botAgentMetadata",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :botAgentMetadata,
+          tag: 3,
+          type: {:message, WAWebProtobufsAICommon.BotAgentMetadata}
         }
       ]
     end
@@ -311,6 +349,35 @@ defmodule WAWebProtobufsE2E.RequestWelcomeMessageMetadata do
 
         []
       ),
+      (
+        def field_def(:botAgentMetadata) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "botAgentMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :botAgentMetadata,
+             tag: 3,
+             type: {:message, WAWebProtobufsAICommon.BotAgentMetadata}
+           }}
+        end
+
+        def field_def("botAgentMetadata") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "botAgentMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :botAgentMetadata,
+             tag: 3,
+             type: {:message, WAWebProtobufsAICommon.BotAgentMetadata}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -355,6 +422,9 @@ defmodule WAWebProtobufsE2E.RequestWelcomeMessageMetadata do
     end,
     def default(:welcomeTrigger) do
       {:ok, :CHAT_OPEN}
+    end,
+    def default(:botAgentMetadata) do
+      {:ok, nil}
     end,
     def default(_) do
       {:error, :no_such_field}

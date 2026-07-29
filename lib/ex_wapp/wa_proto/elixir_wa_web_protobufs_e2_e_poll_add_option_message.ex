@@ -1,7 +1,7 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsE2E.PollAddOptionMessage do
   @moduledoc false
-  defstruct pollCreationMessageKey: nil, addOption: nil, __uf__: []
+  defstruct pollCreationMessageKey: nil, addOption: nil, metadata: nil, __uf__: []
 
   (
     (
@@ -19,6 +19,7 @@ defmodule WAWebProtobufsE2E.PollAddOptionMessage do
         []
         |> encode_pollCreationMessageKey(msg)
         |> encode_addOption(msg)
+        |> encode_metadata(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -47,6 +48,17 @@ defmodule WAWebProtobufsE2E.PollAddOptionMessage do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:addOption, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_metadata(acc, msg) do
+        try do
+          case msg.metadata do
+            nil -> acc
+            _ -> [acc, "\x1A", Protox.Encode.encode_message(msg.metadata)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:metadata, "invalid field value"), __STACKTRACE__
         end
       end
     ]
@@ -127,6 +139,18 @@ defmodule WAWebProtobufsE2E.PollAddOptionMessage do
                    )
                ], rest}
 
+            {3, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 metadata:
+                   Protox.MergeMessage.merge(
+                     msg.metadata,
+                     WAWebProtobufsE2E.PollUpdateMessageMetadata.decode!(delimited)
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -190,7 +214,8 @@ defmodule WAWebProtobufsE2E.PollAddOptionMessage do
       %{
         1 => {:pollCreationMessageKey, {:scalar, nil}, {:message, WACommon.MessageKey}},
         2 =>
-          {:addOption, {:scalar, nil}, {:message, WAWebProtobufsE2E.PollCreationMessage.Option}}
+          {:addOption, {:scalar, nil}, {:message, WAWebProtobufsE2E.PollCreationMessage.Option}},
+        3 => {:metadata, {:scalar, nil}, {:message, WAWebProtobufsE2E.PollUpdateMessageMetadata}}
       }
     end
 
@@ -201,6 +226,7 @@ defmodule WAWebProtobufsE2E.PollAddOptionMessage do
     def defs_by_name() do
       %{
         addOption: {2, {:scalar, nil}, {:message, WAWebProtobufsE2E.PollCreationMessage.Option}},
+        metadata: {3, {:scalar, nil}, {:message, WAWebProtobufsE2E.PollUpdateMessageMetadata}},
         pollCreationMessageKey: {1, {:scalar, nil}, {:message, WACommon.MessageKey}}
       }
     end
@@ -227,6 +253,15 @@ defmodule WAWebProtobufsE2E.PollAddOptionMessage do
           name: :addOption,
           tag: 2,
           type: {:message, WAWebProtobufsE2E.PollCreationMessage.Option}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "metadata",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :metadata,
+          tag: 3,
+          type: {:message, WAWebProtobufsE2E.PollUpdateMessageMetadata}
         }
       ]
     end
@@ -291,6 +326,35 @@ defmodule WAWebProtobufsE2E.PollAddOptionMessage do
 
         []
       ),
+      (
+        def field_def(:metadata) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "metadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :metadata,
+             tag: 3,
+             type: {:message, WAWebProtobufsE2E.PollUpdateMessageMetadata}
+           }}
+        end
+
+        def field_def("metadata") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "metadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :metadata,
+             tag: 3,
+             type: {:message, WAWebProtobufsE2E.PollUpdateMessageMetadata}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -334,6 +398,9 @@ defmodule WAWebProtobufsE2E.PollAddOptionMessage do
       {:ok, nil}
     end,
     def default(:addOption) do
+      {:ok, nil}
+    end,
+    def default(:metadata) do
       {:ok, nil}
     end,
     def default(_) do

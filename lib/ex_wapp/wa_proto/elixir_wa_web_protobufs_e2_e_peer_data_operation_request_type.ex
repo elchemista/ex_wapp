@@ -120,6 +120,33 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestType do
         def encode("GALAXY_FLOW_ACTION") do
           11
         end
+      ),
+      (
+        def encode(:BUSINESS_BROADCAST_INSIGHTS_DELIVERED_TO) do
+          12
+        end
+
+        def encode("BUSINESS_BROADCAST_INSIGHTS_DELIVERED_TO") do
+          12
+        end
+      ),
+      (
+        def encode(:BUSINESS_BROADCAST_INSIGHTS_REFRESH) do
+          13
+        end
+
+        def encode("BUSINESS_BROADCAST_INSIGHTS_REFRESH") do
+          13
+        end
+      ),
+      (
+        def encode(:CONTACT_REFRESH_REQUEST) do
+          14
+        end
+
+        def encode("CONTACT_REFRESH_REQUEST") do
+          14
+        end
       )
     ]
 
@@ -164,6 +191,15 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestType do
       end,
       def decode(11) do
         :GALAXY_FLOW_ACTION
+      end,
+      def decode(12) do
+        :BUSINESS_BROADCAST_INSIGHTS_DELIVERED_TO
+      end,
+      def decode(13) do
+        :BUSINESS_BROADCAST_INSIGHTS_REFRESH
+      end,
+      def decode(14) do
+        :CONTACT_REFRESH_REQUEST
       end
     ]
 
@@ -185,7 +221,10 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestType do
         {8, :COMPANION_SYNCD_SNAPSHOT_FATAL_RECOVERY},
         {9, :COMPANION_CANONICAL_USER_NONCE_FETCH},
         {10, :HISTORY_SYNC_CHUNK_RETRY},
-        {11, :GALAXY_FLOW_ACTION}
+        {11, :GALAXY_FLOW_ACTION},
+        {12, :BUSINESS_BROADCAST_INSIGHTS_DELIVERED_TO},
+        {13, :BUSINESS_BROADCAST_INSIGHTS_REFRESH},
+        {14, :CONTACT_REFRESH_REQUEST}
       ]
     end
 
@@ -226,6 +265,15 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestType do
           true
         end,
         def has_constant?(:GALAXY_FLOW_ACTION) do
+          true
+        end,
+        def has_constant?(:BUSINESS_BROADCAST_INSIGHTS_DELIVERED_TO) do
+          true
+        end,
+        def has_constant?(:BUSINESS_BROADCAST_INSIGHTS_REFRESH) do
+          true
+        end,
+        def has_constant?(:CONTACT_REFRESH_REQUEST) do
           true
         end
       ]

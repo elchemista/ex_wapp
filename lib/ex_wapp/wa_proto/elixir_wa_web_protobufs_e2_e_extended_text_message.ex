@@ -26,7 +26,7 @@ defmodule WAWebProtobufsE2E.ExtendedTextMessage do
             viewOnce: nil,
             videoHeight: nil,
             videoWidth: nil,
-            faviconMMSMetadata: nil,
+            faviconMmsMetadata: nil,
             linkPreviewMetadata: nil,
             paymentLinkMetadata: nil,
             endCardTiles: [],
@@ -74,7 +74,7 @@ defmodule WAWebProtobufsE2E.ExtendedTextMessage do
         |> encode_viewOnce(msg)
         |> encode_videoHeight(msg)
         |> encode_videoWidth(msg)
-        |> encode_faviconMMSMetadata(msg)
+        |> encode_faviconMmsMetadata(msg)
         |> encode_linkPreviewMetadata(msg)
         |> encode_paymentLinkMetadata(msg)
         |> encode_endCardTiles(msg)
@@ -424,15 +424,15 @@ defmodule WAWebProtobufsE2E.ExtendedTextMessage do
             reraise Protox.EncodingError.new(:videoWidth, "invalid field value"), __STACKTRACE__
         end
       end,
-      defp encode_faviconMMSMetadata(acc, msg) do
+      defp encode_faviconMmsMetadata(acc, msg) do
         try do
-          case msg.faviconMMSMetadata do
+          case msg.faviconMmsMetadata do
             nil -> acc
-            _ -> [acc, "\x8A\x02", Protox.Encode.encode_message(msg.faviconMMSMetadata)]
+            _ -> [acc, "\x8A\x02", Protox.Encode.encode_message(msg.faviconMmsMetadata)]
           end
         rescue
           ArgumentError ->
-            reraise Protox.EncodingError.new(:faviconMMSMetadata, "invalid field value"),
+            reraise Protox.EncodingError.new(:faviconMmsMetadata, "invalid field value"),
                     __STACKTRACE__
         end
       end,
@@ -707,9 +707,9 @@ defmodule WAWebProtobufsE2E.ExtendedTextMessage do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
 
               {[
-                 faviconMMSMetadata:
+                 faviconMmsMetadata:
                    Protox.MergeMessage.merge(
-                     msg.faviconMMSMetadata,
+                     msg.faviconMmsMetadata,
                      WAWebProtobufsE2E.MMSThumbnailMetadata.decode!(delimited)
                    )
                ], rest}
@@ -869,7 +869,7 @@ defmodule WAWebProtobufsE2E.ExtendedTextMessage do
         31 => {:videoHeight, {:scalar, 0}, :uint32},
         32 => {:videoWidth, {:scalar, 0}, :uint32},
         33 =>
-          {:faviconMMSMetadata, {:scalar, nil},
+          {:faviconMmsMetadata, {:scalar, nil},
            {:message, WAWebProtobufsE2E.MMSThumbnailMetadata}},
         34 =>
           {:linkPreviewMetadata, {:scalar, nil},
@@ -898,7 +898,7 @@ defmodule WAWebProtobufsE2E.ExtendedTextMessage do
         description: {5, {:scalar, ""}, :string},
         doNotPlayInline: {18, {:scalar, false}, :bool},
         endCardTiles: {36, :unpacked, {:message, WAWebProtobufsE2E.VideoEndCard}},
-        faviconMMSMetadata:
+        faviconMmsMetadata:
           {33, {:scalar, nil}, {:message, WAWebProtobufsE2E.MMSThumbnailMetadata}},
         font: {9, {:scalar, :SYSTEM}, {:enum, WAWebProtobufsE2E.ExtendedTextMessage.FontType}},
         inviteLinkGroupType:
@@ -1168,10 +1168,10 @@ defmodule WAWebProtobufsE2E.ExtendedTextMessage do
         },
         %{
           __struct__: Protox.Field,
-          json_name: "faviconMMSMetadata",
+          json_name: "faviconMmsMetadata",
           kind: {:scalar, nil},
           label: :optional,
-          name: :faviconMMSMetadata,
+          name: :faviconMmsMetadata,
           tag: 33,
           type: {:message, WAWebProtobufsE2E.MMSThumbnailMetadata}
         },
@@ -1960,27 +1960,27 @@ defmodule WAWebProtobufsE2E.ExtendedTextMessage do
         []
       ),
       (
-        def field_def(:faviconMMSMetadata) do
+        def field_def(:faviconMmsMetadata) do
           {:ok,
            %{
              __struct__: Protox.Field,
-             json_name: "faviconMMSMetadata",
+             json_name: "faviconMmsMetadata",
              kind: {:scalar, nil},
              label: :optional,
-             name: :faviconMMSMetadata,
+             name: :faviconMmsMetadata,
              tag: 33,
              type: {:message, WAWebProtobufsE2E.MMSThumbnailMetadata}
            }}
         end
 
-        def field_def("faviconMMSMetadata") do
+        def field_def("faviconMmsMetadata") do
           {:ok,
            %{
              __struct__: Protox.Field,
-             json_name: "faviconMMSMetadata",
+             json_name: "faviconMmsMetadata",
              kind: {:scalar, nil},
              label: :optional,
-             name: :faviconMMSMetadata,
+             name: :faviconMmsMetadata,
              tag: 33,
              type: {:message, WAWebProtobufsE2E.MMSThumbnailMetadata}
            }}
@@ -2276,7 +2276,7 @@ defmodule WAWebProtobufsE2E.ExtendedTextMessage do
     def default(:videoWidth) do
       {:ok, 0}
     end,
-    def default(:faviconMMSMetadata) do
+    def default(:faviconMmsMetadata) do
       {:ok, nil}
     end,
     def default(:linkPreviewMetadata) do

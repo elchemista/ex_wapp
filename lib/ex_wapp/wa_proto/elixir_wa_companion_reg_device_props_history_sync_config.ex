@@ -20,6 +20,11 @@ defmodule WACompanionReg.DeviceProps.HistorySyncConfig do
             supportGuestChat: nil,
             completeOnDemandReady: nil,
             thumbnailSyncDaysLimit: nil,
+            initialSyncMaxMessagesPerChat: nil,
+            supportManusHistory: nil,
+            supportHatchHistory: nil,
+            supportedBotChannelFbids: [],
+            supportInlineContacts: nil,
             __uf__: []
 
   (
@@ -55,6 +60,11 @@ defmodule WACompanionReg.DeviceProps.HistorySyncConfig do
         |> encode_supportGuestChat(msg)
         |> encode_completeOnDemandReady(msg)
         |> encode_thumbnailSyncDaysLimit(msg)
+        |> encode_initialSyncMaxMessagesPerChat(msg)
+        |> encode_supportManusHistory(msg)
+        |> encode_supportHatchHistory(msg)
+        |> encode_supportedBotChannelFbids(msg)
+        |> encode_supportInlineContacts(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -304,6 +314,77 @@ defmodule WACompanionReg.DeviceProps.HistorySyncConfig do
             reraise Protox.EncodingError.new(:thumbnailSyncDaysLimit, "invalid field value"),
                     __STACKTRACE__
         end
+      end,
+      defp encode_initialSyncMaxMessagesPerChat(acc, msg) do
+        try do
+          case msg.initialSyncMaxMessagesPerChat do
+            nil -> acc
+            _ -> [acc, "\xA0\x01", Protox.Encode.encode_uint32(msg.initialSyncMaxMessagesPerChat)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :initialSyncMaxMessagesPerChat,
+                      "invalid field value"
+                    ),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_supportManusHistory(acc, msg) do
+        try do
+          case msg.supportManusHistory do
+            nil -> acc
+            _ -> [acc, "\xA8\x01", Protox.Encode.encode_bool(msg.supportManusHistory)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:supportManusHistory, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_supportHatchHistory(acc, msg) do
+        try do
+          case msg.supportHatchHistory do
+            nil -> acc
+            _ -> [acc, "\xB0\x01", Protox.Encode.encode_bool(msg.supportHatchHistory)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:supportHatchHistory, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_supportedBotChannelFbids(acc, msg) do
+        try do
+          case msg.supportedBotChannelFbids do
+            [] ->
+              acc
+
+            values ->
+              [
+                acc,
+                Enum.reduce(values, [], fn value, acc ->
+                  [acc, "\xBA\x01", Protox.Encode.encode_string(value)]
+                end)
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:supportedBotChannelFbids, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_supportInlineContacts(acc, msg) do
+        try do
+          case msg.supportInlineContacts do
+            nil -> acc
+            _ -> [acc, "\xC0\x01", Protox.Encode.encode_bool(msg.supportInlineContacts)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:supportInlineContacts, "invalid field value"),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -435,6 +516,31 @@ defmodule WACompanionReg.DeviceProps.HistorySyncConfig do
               {value, rest} = Protox.Decode.parse_uint32(bytes)
               {[thumbnailSyncDaysLimit: value], rest}
 
+            {20, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_uint32(bytes)
+              {[initialSyncMaxMessagesPerChat: value], rest}
+
+            {21, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_bool(bytes)
+              {[supportManusHistory: value], rest}
+
+            {22, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_bool(bytes)
+              {[supportHatchHistory: value], rest}
+
+            {23, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 supportedBotChannelFbids:
+                   msg.supportedBotChannelFbids ++ [Protox.Decode.validate_string!(delimited)]
+               ], rest}
+
+            {24, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_bool(bytes)
+              {[supportInlineContacts: value], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -514,7 +620,12 @@ defmodule WACompanionReg.DeviceProps.HistorySyncConfig do
         16 => {:onDemandReady, {:scalar, false}, :bool},
         17 => {:supportGuestChat, {:scalar, false}, :bool},
         18 => {:completeOnDemandReady, {:scalar, false}, :bool},
-        19 => {:thumbnailSyncDaysLimit, {:scalar, 0}, :uint32}
+        19 => {:thumbnailSyncDaysLimit, {:scalar, 0}, :uint32},
+        20 => {:initialSyncMaxMessagesPerChat, {:scalar, 0}, :uint32},
+        21 => {:supportManusHistory, {:scalar, false}, :bool},
+        22 => {:supportHatchHistory, {:scalar, false}, :bool},
+        23 => {:supportedBotChannelFbids, :unpacked, :string},
+        24 => {:supportInlineContacts, {:scalar, false}, :bool}
       }
     end
 
@@ -527,6 +638,7 @@ defmodule WACompanionReg.DeviceProps.HistorySyncConfig do
         completeOnDemandReady: {18, {:scalar, false}, :bool},
         fullSyncDaysLimit: {1, {:scalar, 0}, :uint32},
         fullSyncSizeMbLimit: {2, {:scalar, 0}, :uint32},
+        initialSyncMaxMessagesPerChat: {20, {:scalar, 0}, :uint32},
         inlineInitialPayloadInE2EeMsg: {4, {:scalar, false}, :bool},
         onDemandReady: {16, {:scalar, false}, :bool},
         recentSyncDaysLimit: {5, {:scalar, 0}, :uint32},
@@ -539,9 +651,13 @@ defmodule WACompanionReg.DeviceProps.HistorySyncConfig do
         supportFbidBotChatHistory: {12, {:scalar, false}, :bool},
         supportGroupHistory: {15, {:scalar, false}, :bool},
         supportGuestChat: {17, {:scalar, false}, :bool},
+        supportHatchHistory: {22, {:scalar, false}, :bool},
         supportHostedGroupMsg: {11, {:scalar, false}, :bool},
+        supportInlineContacts: {24, {:scalar, false}, :bool},
+        supportManusHistory: {21, {:scalar, false}, :bool},
         supportMessageAssociation: {14, {:scalar, false}, :bool},
         supportRecentSyncChunkMessageCountTuning: {10, {:scalar, false}, :bool},
+        supportedBotChannelFbids: {23, :unpacked, :string},
         thumbnailSyncDaysLimit: {19, {:scalar, 0}, :uint32}
       }
     end
@@ -721,6 +837,51 @@ defmodule WACompanionReg.DeviceProps.HistorySyncConfig do
           name: :thumbnailSyncDaysLimit,
           tag: 19,
           type: :uint32
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "initialSyncMaxMessagesPerChat",
+          kind: {:scalar, 0},
+          label: :optional,
+          name: :initialSyncMaxMessagesPerChat,
+          tag: 20,
+          type: :uint32
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "supportManusHistory",
+          kind: {:scalar, false},
+          label: :optional,
+          name: :supportManusHistory,
+          tag: 21,
+          type: :bool
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "supportHatchHistory",
+          kind: {:scalar, false},
+          label: :optional,
+          name: :supportHatchHistory,
+          tag: 22,
+          type: :bool
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "supportedBotChannelFbids",
+          kind: :unpacked,
+          label: :repeated,
+          name: :supportedBotChannelFbids,
+          tag: 23,
+          type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "supportInlineContacts",
+          kind: {:scalar, false},
+          label: :optional,
+          name: :supportInlineContacts,
+          tag: 24,
+          type: :bool
         }
       ]
     end
@@ -1278,6 +1439,151 @@ defmodule WACompanionReg.DeviceProps.HistorySyncConfig do
 
         []
       ),
+      (
+        def field_def(:initialSyncMaxMessagesPerChat) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "initialSyncMaxMessagesPerChat",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :initialSyncMaxMessagesPerChat,
+             tag: 20,
+             type: :uint32
+           }}
+        end
+
+        def field_def("initialSyncMaxMessagesPerChat") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "initialSyncMaxMessagesPerChat",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :initialSyncMaxMessagesPerChat,
+             tag: 20,
+             type: :uint32
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:supportManusHistory) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "supportManusHistory",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :supportManusHistory,
+             tag: 21,
+             type: :bool
+           }}
+        end
+
+        def field_def("supportManusHistory") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "supportManusHistory",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :supportManusHistory,
+             tag: 21,
+             type: :bool
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:supportHatchHistory) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "supportHatchHistory",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :supportHatchHistory,
+             tag: 22,
+             type: :bool
+           }}
+        end
+
+        def field_def("supportHatchHistory") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "supportHatchHistory",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :supportHatchHistory,
+             tag: 22,
+             type: :bool
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:supportedBotChannelFbids) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "supportedBotChannelFbids",
+             kind: :unpacked,
+             label: :repeated,
+             name: :supportedBotChannelFbids,
+             tag: 23,
+             type: :string
+           }}
+        end
+
+        def field_def("supportedBotChannelFbids") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "supportedBotChannelFbids",
+             kind: :unpacked,
+             label: :repeated,
+             name: :supportedBotChannelFbids,
+             tag: 23,
+             type: :string
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:supportInlineContacts) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "supportInlineContacts",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :supportInlineContacts,
+             tag: 24,
+             type: :bool
+           }}
+        end
+
+        def field_def("supportInlineContacts") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "supportInlineContacts",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :supportInlineContacts,
+             tag: 24,
+             type: :bool
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -1373,6 +1679,21 @@ defmodule WACompanionReg.DeviceProps.HistorySyncConfig do
     end,
     def default(:thumbnailSyncDaysLimit) do
       {:ok, 0}
+    end,
+    def default(:initialSyncMaxMessagesPerChat) do
+      {:ok, 0}
+    end,
+    def default(:supportManusHistory) do
+      {:ok, false}
+    end,
+    def default(:supportHatchHistory) do
+      {:ok, false}
+    end,
+    def default(:supportedBotChannelFbids) do
+      {:error, :no_default_value}
+    end,
+    def default(:supportInlineContacts) do
+      {:ok, false}
     end,
     def default(_) do
       {:error, :no_such_field}

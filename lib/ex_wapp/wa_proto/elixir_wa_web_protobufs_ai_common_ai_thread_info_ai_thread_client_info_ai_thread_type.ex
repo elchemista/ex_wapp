@@ -39,6 +39,15 @@ defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo.AIThreadType do
         def encode("INCOGNITO") do
           2
         end
+      ),
+      (
+        def encode(:SIDE_CHAT) do
+          3
+        end
+
+        def encode("SIDE_CHAT") do
+          3
+        end
       )
     ]
 
@@ -56,6 +65,9 @@ defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo.AIThreadType do
       end,
       def decode(2) do
         :INCOGNITO
+      end,
+      def decode(3) do
+        :SIDE_CHAT
       end
     ]
 
@@ -65,7 +77,7 @@ defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo.AIThreadType do
 
     @spec constants() :: [{integer(), atom()}]
     def constants() do
-      [{0, :UNKNOWN}, {1, :DEFAULT}, {2, :INCOGNITO}]
+      [{0, :UNKNOWN}, {1, :DEFAULT}, {2, :INCOGNITO}, {3, :SIDE_CHAT}]
     end
 
     @spec has_constant?(any()) :: boolean()
@@ -78,6 +90,9 @@ defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo.AIThreadType do
           true
         end,
         def has_constant?(:INCOGNITO) do
+          true
+        end,
+        def has_constant?(:SIDE_CHAT) do
           true
         end
       ]

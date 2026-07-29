@@ -1,7 +1,7 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsE2E.ThreadID do
   @moduledoc false
-  defstruct threadType: nil, threadKey: nil, sourceChatJID: nil, __uf__: []
+  defstruct threadType: nil, threadKey: nil, __uf__: []
 
   (
     (
@@ -16,11 +16,7 @@ defmodule WAWebProtobufsE2E.ThreadID do
 
       @spec encode!(struct) :: iodata | no_return
       def encode!(msg) do
-        []
-        |> encode_threadType(msg)
-        |> encode_threadKey(msg)
-        |> encode_sourceChatJID(msg)
-        |> encode_unknown_fields(msg)
+        [] |> encode_threadType(msg) |> encode_threadKey(msg) |> encode_unknown_fields(msg)
       end
     )
 
@@ -56,18 +52,6 @@ defmodule WAWebProtobufsE2E.ThreadID do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:threadKey, "invalid field value"), __STACKTRACE__
-        end
-      end,
-      defp encode_sourceChatJID(acc, msg) do
-        try do
-          case msg.sourceChatJID do
-            nil -> acc
-            _ -> [acc, "\x1A", Protox.Encode.encode_string(msg.sourceChatJID)]
-          end
-        rescue
-          ArgumentError ->
-            reraise Protox.EncodingError.new(:sourceChatJID, "invalid field value"),
-                    __STACKTRACE__
         end
       end
     ]
@@ -142,11 +126,6 @@ defmodule WAWebProtobufsE2E.ThreadID do
                    )
                ], rest}
 
-            {3, _, bytes} ->
-              {len, bytes} = Protox.Varint.decode(bytes)
-              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
-              {[sourceChatJID: Protox.Decode.validate_string!(delimited)], rest}
-
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -209,8 +188,7 @@ defmodule WAWebProtobufsE2E.ThreadID do
     def defs() do
       %{
         1 => {:threadType, {:scalar, :UNKNOWN}, {:enum, WAWebProtobufsE2E.ThreadID.ThreadType}},
-        2 => {:threadKey, {:scalar, nil}, {:message, WACommon.MessageKey}},
-        3 => {:sourceChatJID, {:scalar, ""}, :string}
+        2 => {:threadKey, {:scalar, nil}, {:message, WACommon.MessageKey}}
       }
     end
 
@@ -220,7 +198,6 @@ defmodule WAWebProtobufsE2E.ThreadID do
           }
     def defs_by_name() do
       %{
-        sourceChatJID: {3, {:scalar, ""}, :string},
         threadKey: {2, {:scalar, nil}, {:message, WACommon.MessageKey}},
         threadType: {1, {:scalar, :UNKNOWN}, {:enum, WAWebProtobufsE2E.ThreadID.ThreadType}}
       }
@@ -248,15 +225,6 @@ defmodule WAWebProtobufsE2E.ThreadID do
           name: :threadKey,
           tag: 2,
           type: {:message, WACommon.MessageKey}
-        },
-        %{
-          __struct__: Protox.Field,
-          json_name: "sourceChatJID",
-          kind: {:scalar, ""},
-          label: :optional,
-          name: :sourceChatJID,
-          tag: 3,
-          type: :string
         }
       ]
     end
@@ -321,35 +289,6 @@ defmodule WAWebProtobufsE2E.ThreadID do
 
         []
       ),
-      (
-        def field_def(:sourceChatJID) do
-          {:ok,
-           %{
-             __struct__: Protox.Field,
-             json_name: "sourceChatJID",
-             kind: {:scalar, ""},
-             label: :optional,
-             name: :sourceChatJID,
-             tag: 3,
-             type: :string
-           }}
-        end
-
-        def field_def("sourceChatJID") do
-          {:ok,
-           %{
-             __struct__: Protox.Field,
-             json_name: "sourceChatJID",
-             kind: {:scalar, ""},
-             label: :optional,
-             name: :sourceChatJID,
-             tag: 3,
-             type: :string
-           }}
-        end
-
-        []
-      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -394,9 +333,6 @@ defmodule WAWebProtobufsE2E.ThreadID do
     end,
     def default(:threadKey) do
       {:ok, nil}
-    end,
-    def default(:sourceChatJID) do
-      {:ok, ""}
     end,
     def default(_) do
       {:error, :no_such_field}

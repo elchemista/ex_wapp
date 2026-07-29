@@ -1,7 +1,10 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsE2E.MessageHistoryNotice do
   @moduledoc false
-  defstruct contextInfo: nil, messageHistoryMetadata: nil, __uf__: []
+  defstruct contextInfo: nil,
+            messageHistoryMetadata: nil,
+            botHistoryShareSyncMetadata: nil,
+            __uf__: []
 
   (
     (
@@ -19,6 +22,7 @@ defmodule WAWebProtobufsE2E.MessageHistoryNotice do
         []
         |> encode_contextInfo(msg)
         |> encode_messageHistoryMetadata(msg)
+        |> encode_botHistoryShareSyncMetadata(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -46,6 +50,18 @@ defmodule WAWebProtobufsE2E.MessageHistoryNotice do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:messageHistoryMetadata, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_botHistoryShareSyncMetadata(acc, msg) do
+        try do
+          case msg.botHistoryShareSyncMetadata do
+            nil -> acc
+            _ -> [acc, "\x1A", Protox.Encode.encode_message(msg.botHistoryShareSyncMetadata)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:botHistoryShareSyncMetadata, "invalid field value"),
                     __STACKTRACE__
         end
       end
@@ -127,6 +143,18 @@ defmodule WAWebProtobufsE2E.MessageHistoryNotice do
                    )
                ], rest}
 
+            {3, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 botHistoryShareSyncMetadata:
+                   Protox.MergeMessage.merge(
+                     msg.botHistoryShareSyncMetadata,
+                     WAWebProtobufsE2E.BotHistoryShareSyncMetadata.decode!(delimited)
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -191,7 +219,10 @@ defmodule WAWebProtobufsE2E.MessageHistoryNotice do
         1 => {:contextInfo, {:scalar, nil}, {:message, WAWebProtobufsE2E.ContextInfo}},
         2 =>
           {:messageHistoryMetadata, {:scalar, nil},
-           {:message, WAWebProtobufsE2E.MessageHistoryMetadata}}
+           {:message, WAWebProtobufsE2E.MessageHistoryMetadata}},
+        3 =>
+          {:botHistoryShareSyncMetadata, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.BotHistoryShareSyncMetadata}}
       }
     end
 
@@ -201,6 +232,8 @@ defmodule WAWebProtobufsE2E.MessageHistoryNotice do
           }
     def defs_by_name() do
       %{
+        botHistoryShareSyncMetadata:
+          {3, {:scalar, nil}, {:message, WAWebProtobufsE2E.BotHistoryShareSyncMetadata}},
         contextInfo: {1, {:scalar, nil}, {:message, WAWebProtobufsE2E.ContextInfo}},
         messageHistoryMetadata:
           {2, {:scalar, nil}, {:message, WAWebProtobufsE2E.MessageHistoryMetadata}}
@@ -229,6 +262,15 @@ defmodule WAWebProtobufsE2E.MessageHistoryNotice do
           name: :messageHistoryMetadata,
           tag: 2,
           type: {:message, WAWebProtobufsE2E.MessageHistoryMetadata}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "botHistoryShareSyncMetadata",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :botHistoryShareSyncMetadata,
+          tag: 3,
+          type: {:message, WAWebProtobufsE2E.BotHistoryShareSyncMetadata}
         }
       ]
     end
@@ -293,6 +335,35 @@ defmodule WAWebProtobufsE2E.MessageHistoryNotice do
 
         []
       ),
+      (
+        def field_def(:botHistoryShareSyncMetadata) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "botHistoryShareSyncMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :botHistoryShareSyncMetadata,
+             tag: 3,
+             type: {:message, WAWebProtobufsE2E.BotHistoryShareSyncMetadata}
+           }}
+        end
+
+        def field_def("botHistoryShareSyncMetadata") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "botHistoryShareSyncMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :botHistoryShareSyncMetadata,
+             tag: 3,
+             type: {:message, WAWebProtobufsE2E.BotHistoryShareSyncMetadata}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -336,6 +407,9 @@ defmodule WAWebProtobufsE2E.MessageHistoryNotice do
       {:ok, nil}
     end,
     def default(:messageHistoryMetadata) do
+      {:ok, nil}
+    end,
+    def default(:botHistoryShareSyncMetadata) do
       {:ok, nil}
     end,
     def default(_) do

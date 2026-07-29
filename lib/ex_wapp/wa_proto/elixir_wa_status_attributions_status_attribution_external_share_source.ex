@@ -111,6 +111,15 @@ defmodule WAStatusAttributions.StatusAttribution.ExternalShare.Source do
         def encode("GOOGLE_PHOTOS") do
           10
         end
+      ),
+      (
+        def encode(:SOUNDCLOUD) do
+          11
+        end
+
+        def encode("SOUNDCLOUD") do
+          11
+        end
       )
     ]
 
@@ -152,6 +161,9 @@ defmodule WAStatusAttributions.StatusAttribution.ExternalShare.Source do
       end,
       def decode(10) do
         :GOOGLE_PHOTOS
+      end,
+      def decode(11) do
+        :SOUNDCLOUD
       end
     ]
 
@@ -172,7 +184,8 @@ defmodule WAStatusAttributions.StatusAttribution.ExternalShare.Source do
         {7, :THREADS},
         {8, :APPLE_MUSIC},
         {9, :SHARECHAT},
-        {10, :GOOGLE_PHOTOS}
+        {10, :GOOGLE_PHOTOS},
+        {11, :SOUNDCLOUD}
       ]
     end
 
@@ -210,6 +223,9 @@ defmodule WAStatusAttributions.StatusAttribution.ExternalShare.Source do
           true
         end,
         def has_constant?(:GOOGLE_PHOTOS) do
+          true
+        end,
+        def has_constant?(:SOUNDCLOUD) do
           true
         end
       ]

@@ -28,6 +28,11 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
             adType: nil,
             wtwaWebsiteURL: nil,
             adPreviewURL: nil,
+            containsCtwaFlowsAutoReply: nil,
+            agmThumbnailStrategy: nil,
+            agmTitleStrategy: nil,
+            agmSubtitleStrategy: nil,
+            agmHeaderInteractionStrategy: nil,
             __uf__: []
 
   (
@@ -71,6 +76,11 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
         |> encode_adType(msg)
         |> encode_wtwaWebsiteURL(msg)
         |> encode_adPreviewURL(msg)
+        |> encode_containsCtwaFlowsAutoReply(msg)
+        |> encode_agmThumbnailStrategy(msg)
+        |> encode_agmTitleStrategy(msg)
+        |> encode_agmSubtitleStrategy(msg)
+        |> encode_agmHeaderInteractionStrategy(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -411,6 +421,69 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
           ArgumentError ->
             reraise Protox.EncodingError.new(:adPreviewURL, "invalid field value"), __STACKTRACE__
         end
+      end,
+      defp encode_containsCtwaFlowsAutoReply(acc, msg) do
+        try do
+          case msg.containsCtwaFlowsAutoReply do
+            nil -> acc
+            _ -> [acc, "\xE0\x01", Protox.Encode.encode_bool(msg.containsCtwaFlowsAutoReply)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:containsCtwaFlowsAutoReply, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_agmThumbnailStrategy(acc, msg) do
+        try do
+          case msg.agmThumbnailStrategy do
+            nil -> acc
+            _ -> [acc, "\xE8\x01", Protox.Encode.encode_int32(msg.agmThumbnailStrategy)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:agmThumbnailStrategy, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_agmTitleStrategy(acc, msg) do
+        try do
+          case msg.agmTitleStrategy do
+            nil -> acc
+            _ -> [acc, "\xF0\x01", Protox.Encode.encode_int32(msg.agmTitleStrategy)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:agmTitleStrategy, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_agmSubtitleStrategy(acc, msg) do
+        try do
+          case msg.agmSubtitleStrategy do
+            nil -> acc
+            _ -> [acc, "\xF8\x01", Protox.Encode.encode_int32(msg.agmSubtitleStrategy)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:agmSubtitleStrategy, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_agmHeaderInteractionStrategy(acc, msg) do
+        try do
+          case msg.agmHeaderInteractionStrategy do
+            nil -> acc
+            _ -> [acc, "\x80\x02", Protox.Encode.encode_int32(msg.agmHeaderInteractionStrategy)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :agmHeaderInteractionStrategy,
+                      "invalid field value"
+                    ),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -601,6 +674,26 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[adPreviewURL: Protox.Decode.validate_string!(delimited)], rest}
 
+            {28, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_bool(bytes)
+              {[containsCtwaFlowsAutoReply: value], rest}
+
+            {29, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_int32(bytes)
+              {[agmThumbnailStrategy: value], rest}
+
+            {30, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_int32(bytes)
+              {[agmTitleStrategy: value], rest}
+
+            {31, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_int32(bytes)
+              {[agmSubtitleStrategy: value], rest}
+
+            {32, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_int32(bytes)
+              {[agmHeaderInteractionStrategy: value], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -692,7 +785,12 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
           {:adType, {:scalar, :CTWA},
            {:enum, WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo.AdType}},
         26 => {:wtwaWebsiteURL, {:scalar, ""}, :string},
-        27 => {:adPreviewURL, {:scalar, ""}, :string}
+        27 => {:adPreviewURL, {:scalar, ""}, :string},
+        28 => {:containsCtwaFlowsAutoReply, {:scalar, false}, :bool},
+        29 => {:agmThumbnailStrategy, {:scalar, 0}, :int32},
+        30 => {:agmTitleStrategy, {:scalar, 0}, :int32},
+        31 => {:agmSubtitleStrategy, {:scalar, 0}, :int32},
+        32 => {:agmHeaderInteractionStrategy, {:scalar, 0}, :int32}
       }
     end
 
@@ -707,11 +805,16 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
         adType:
           {25, {:scalar, :CTWA},
            {:enum, WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo.AdType}},
+        agmHeaderInteractionStrategy: {32, {:scalar, 0}, :int32},
+        agmSubtitleStrategy: {31, {:scalar, 0}, :int32},
+        agmThumbnailStrategy: {29, {:scalar, 0}, :int32},
+        agmTitleStrategy: {30, {:scalar, 0}, :int32},
         automatedGreetingMessageCtaType: {23, {:scalar, ""}, :string},
         automatedGreetingMessageShown: {18, {:scalar, false}, :bool},
         body: {2, {:scalar, ""}, :string},
         clickToWhatsappCall: {15, {:scalar, false}, :bool},
         containsAutoReply: {10, {:scalar, false}, :bool},
+        containsCtwaFlowsAutoReply: {28, {:scalar, false}, :bool},
         ctaPayload: {20, {:scalar, ""}, :string},
         ctwaClid: {13, {:scalar, ""}, :string},
         disableNudge: {21, {:scalar, false}, :bool},
@@ -983,6 +1086,51 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
           name: :adPreviewURL,
           tag: 27,
           type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "containsCtwaFlowsAutoReply",
+          kind: {:scalar, false},
+          label: :optional,
+          name: :containsCtwaFlowsAutoReply,
+          tag: 28,
+          type: :bool
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "agmThumbnailStrategy",
+          kind: {:scalar, 0},
+          label: :optional,
+          name: :agmThumbnailStrategy,
+          tag: 29,
+          type: :int32
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "agmTitleStrategy",
+          kind: {:scalar, 0},
+          label: :optional,
+          name: :agmTitleStrategy,
+          tag: 30,
+          type: :int32
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "agmSubtitleStrategy",
+          kind: {:scalar, 0},
+          label: :optional,
+          name: :agmSubtitleStrategy,
+          tag: 31,
+          type: :int32
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "agmHeaderInteractionStrategy",
+          kind: {:scalar, 0},
+          label: :optional,
+          name: :agmHeaderInteractionStrategy,
+          tag: 32,
+          type: :int32
         }
       ]
     end
@@ -1772,6 +1920,151 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
 
         []
       ),
+      (
+        def field_def(:containsCtwaFlowsAutoReply) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "containsCtwaFlowsAutoReply",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :containsCtwaFlowsAutoReply,
+             tag: 28,
+             type: :bool
+           }}
+        end
+
+        def field_def("containsCtwaFlowsAutoReply") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "containsCtwaFlowsAutoReply",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :containsCtwaFlowsAutoReply,
+             tag: 28,
+             type: :bool
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:agmThumbnailStrategy) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "agmThumbnailStrategy",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :agmThumbnailStrategy,
+             tag: 29,
+             type: :int32
+           }}
+        end
+
+        def field_def("agmThumbnailStrategy") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "agmThumbnailStrategy",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :agmThumbnailStrategy,
+             tag: 29,
+             type: :int32
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:agmTitleStrategy) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "agmTitleStrategy",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :agmTitleStrategy,
+             tag: 30,
+             type: :int32
+           }}
+        end
+
+        def field_def("agmTitleStrategy") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "agmTitleStrategy",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :agmTitleStrategy,
+             tag: 30,
+             type: :int32
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:agmSubtitleStrategy) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "agmSubtitleStrategy",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :agmSubtitleStrategy,
+             tag: 31,
+             type: :int32
+           }}
+        end
+
+        def field_def("agmSubtitleStrategy") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "agmSubtitleStrategy",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :agmSubtitleStrategy,
+             tag: 31,
+             type: :int32
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:agmHeaderInteractionStrategy) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "agmHeaderInteractionStrategy",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :agmHeaderInteractionStrategy,
+             tag: 32,
+             type: :int32
+           }}
+        end
+
+        def field_def("agmHeaderInteractionStrategy") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "agmHeaderInteractionStrategy",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :agmHeaderInteractionStrategy,
+             tag: 32,
+             type: :int32
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -1891,6 +2184,21 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
     end,
     def default(:adPreviewURL) do
       {:ok, ""}
+    end,
+    def default(:containsCtwaFlowsAutoReply) do
+      {:ok, false}
+    end,
+    def default(:agmThumbnailStrategy) do
+      {:ok, 0}
+    end,
+    def default(:agmTitleStrategy) do
+      {:ok, 0}
+    end,
+    def default(:agmSubtitleStrategy) do
+      {:ok, 0}
+    end,
+    def default(:agmHeaderInteractionStrategy) do
+      {:ok, 0}
     end,
     def default(_) do
       {:error, :no_such_field}

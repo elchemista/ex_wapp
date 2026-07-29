@@ -1,7 +1,7 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsE2E.PaymentExtendedMetadata do
   @moduledoc false
-  defstruct type: nil, platform: nil, __uf__: []
+  defstruct type: nil, platform: nil, messageParamsJSON: nil, __uf__: []
 
   (
     (
@@ -16,7 +16,11 @@ defmodule WAWebProtobufsE2E.PaymentExtendedMetadata do
 
       @spec encode!(struct) :: iodata | no_return
       def encode!(msg) do
-        [] |> encode_type(msg) |> encode_platform(msg) |> encode_unknown_fields(msg)
+        []
+        |> encode_type(msg)
+        |> encode_platform(msg)
+        |> encode_messageParamsJSON(msg)
+        |> encode_unknown_fields(msg)
       end
     )
 
@@ -43,6 +47,18 @@ defmodule WAWebProtobufsE2E.PaymentExtendedMetadata do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:platform, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_messageParamsJSON(acc, msg) do
+        try do
+          case msg.messageParamsJSON do
+            nil -> acc
+            _ -> [acc, "\x1A", Protox.Encode.encode_string(msg.messageParamsJSON)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:messageParamsJSON, "invalid field value"),
+                    __STACKTRACE__
         end
       end
     ]
@@ -108,6 +124,11 @@ defmodule WAWebProtobufsE2E.PaymentExtendedMetadata do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[platform: Protox.Decode.validate_string!(delimited)], rest}
 
+            {3, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[messageParamsJSON: Protox.Decode.validate_string!(delimited)], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -168,7 +189,11 @@ defmodule WAWebProtobufsE2E.PaymentExtendedMetadata do
             required(non_neg_integer) => {atom, Protox.Types.kind(), Protox.Types.type()}
           }
     def defs() do
-      %{1 => {:type, {:scalar, 0}, :uint32}, 2 => {:platform, {:scalar, ""}, :string}}
+      %{
+        1 => {:type, {:scalar, 0}, :uint32},
+        2 => {:platform, {:scalar, ""}, :string},
+        3 => {:messageParamsJSON, {:scalar, ""}, :string}
+      }
     end
 
     @deprecated "Use fields_defs()/0 instead"
@@ -176,7 +201,11 @@ defmodule WAWebProtobufsE2E.PaymentExtendedMetadata do
             required(atom) => {non_neg_integer, Protox.Types.kind(), Protox.Types.type()}
           }
     def defs_by_name() do
-      %{platform: {2, {:scalar, ""}, :string}, type: {1, {:scalar, 0}, :uint32}}
+      %{
+        messageParamsJSON: {3, {:scalar, ""}, :string},
+        platform: {2, {:scalar, ""}, :string},
+        type: {1, {:scalar, 0}, :uint32}
+      }
     end
   )
 
@@ -200,6 +229,15 @@ defmodule WAWebProtobufsE2E.PaymentExtendedMetadata do
           label: :optional,
           name: :platform,
           tag: 2,
+          type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "messageParamsJSON",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :messageParamsJSON,
+          tag: 3,
           type: :string
         }
       ]
@@ -265,6 +303,35 @@ defmodule WAWebProtobufsE2E.PaymentExtendedMetadata do
 
         []
       ),
+      (
+        def field_def(:messageParamsJSON) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "messageParamsJSON",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :messageParamsJSON,
+             tag: 3,
+             type: :string
+           }}
+        end
+
+        def field_def("messageParamsJSON") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "messageParamsJSON",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :messageParamsJSON,
+             tag: 3,
+             type: :string
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -308,6 +375,9 @@ defmodule WAWebProtobufsE2E.PaymentExtendedMetadata do
       {:ok, 0}
     end,
     def default(:platform) do
+      {:ok, ""}
+    end,
+    def default(:messageParamsJSON) do
       {:ok, ""}
     end,
     def default(_) do

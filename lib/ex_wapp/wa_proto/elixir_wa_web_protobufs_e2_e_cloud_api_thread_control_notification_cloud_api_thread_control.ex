@@ -39,6 +39,15 @@ defmodule WAWebProtobufsE2E.CloudAPIThreadControlNotification.CloudAPIThreadCont
         def encode("CONTROL_TAKEN") do
           2
         end
+      ),
+      (
+        def encode(:INFO) do
+          3
+        end
+
+        def encode("INFO") do
+          3
+        end
       )
     ]
 
@@ -56,6 +65,9 @@ defmodule WAWebProtobufsE2E.CloudAPIThreadControlNotification.CloudAPIThreadCont
       end,
       def decode(2) do
         :CONTROL_TAKEN
+      end,
+      def decode(3) do
+        :INFO
       end
     ]
 
@@ -65,7 +77,7 @@ defmodule WAWebProtobufsE2E.CloudAPIThreadControlNotification.CloudAPIThreadCont
 
     @spec constants() :: [{integer(), atom()}]
     def constants() do
-      [{0, :UNKNOWN}, {1, :CONTROL_PASSED}, {2, :CONTROL_TAKEN}]
+      [{0, :UNKNOWN}, {1, :CONTROL_PASSED}, {2, :CONTROL_TAKEN}, {3, :INFO}]
     end
 
     @spec has_constant?(any()) :: boolean()
@@ -78,6 +90,9 @@ defmodule WAWebProtobufsE2E.CloudAPIThreadControlNotification.CloudAPIThreadCont
           true
         end,
         def has_constant?(:CONTROL_TAKEN) do
+          true
+        end,
+        def has_constant?(:INFO) do
           true
         end
       ]

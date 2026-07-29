@@ -17,6 +17,9 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
             limitSharingV2: nil,
             threadID: [],
             weblinkRenderConfig: nil,
+            teeBotMetadata: nil,
+            accountEncryptionAttestation: nil,
+            associatedPrimaryIdentityKey: nil,
             __uf__: []
 
   (
@@ -49,6 +52,9 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
         |> encode_limitSharingV2(msg)
         |> encode_threadID(msg)
         |> encode_weblinkRenderConfig(msg)
+        |> encode_teeBotMetadata(msg)
+        |> encode_accountEncryptionAttestation(msg)
+        |> encode_associatedPrimaryIdentityKey(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -269,6 +275,48 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
             reraise Protox.EncodingError.new(:weblinkRenderConfig, "invalid field value"),
                     __STACKTRACE__
         end
+      end,
+      defp encode_teeBotMetadata(acc, msg) do
+        try do
+          case msg.teeBotMetadata do
+            nil -> acc
+            _ -> [acc, "\x8A\x01", Protox.Encode.encode_bytes(msg.teeBotMetadata)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:teeBotMetadata, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_accountEncryptionAttestation(acc, msg) do
+        try do
+          case msg.accountEncryptionAttestation do
+            nil -> acc
+            _ -> [acc, "\x92\x01", Protox.Encode.encode_message(msg.accountEncryptionAttestation)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :accountEncryptionAttestation,
+                      "invalid field value"
+                    ),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_associatedPrimaryIdentityKey(acc, msg) do
+        try do
+          case msg.associatedPrimaryIdentityKey do
+            nil -> acc
+            _ -> [acc, "\x9A\x01", Protox.Encode.encode_bytes(msg.associatedPrimaryIdentityKey)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :associatedPrimaryIdentityKey,
+                      "invalid field value"
+                    ),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -440,6 +488,28 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
 
               {[weblinkRenderConfig: value], rest}
 
+            {17, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[teeBotMetadata: delimited], rest}
+
+            {18, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 accountEncryptionAttestation:
+                   Protox.MergeMessage.merge(
+                     msg.accountEncryptionAttestation,
+                     WAWebProtobufsAea.NonE2EEAttestation.decode!(delimited)
+                   )
+               ], rest}
+
+            {19, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[associatedPrimaryIdentityKey: delimited], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -522,7 +592,12 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
         15 => {:threadID, :unpacked, {:message, WAWebProtobufsE2E.ThreadID}},
         16 =>
           {:weblinkRenderConfig, {:scalar, :WEBVIEW},
-           {:enum, WAWebProtobufsE2E.WebLinkRenderConfig}}
+           {:enum, WAWebProtobufsE2E.WebLinkRenderConfig}},
+        17 => {:teeBotMetadata, {:scalar, ""}, :bytes},
+        18 =>
+          {:accountEncryptionAttestation, {:scalar, nil},
+           {:message, WAWebProtobufsAea.NonE2EEAttestation}},
+        19 => {:associatedPrimaryIdentityKey, {:scalar, ""}, :bytes}
       }
     end
 
@@ -532,6 +607,9 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
           }
     def defs_by_name() do
       %{
+        accountEncryptionAttestation:
+          {18, {:scalar, nil}, {:message, WAWebProtobufsAea.NonE2EEAttestation}},
+        associatedPrimaryIdentityKey: {19, {:scalar, ""}, :bytes},
         botMessageSecret: {6, {:scalar, ""}, :bytes},
         botMetadata: {7, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotMetadata}},
         capiCreatedGroup: {11, {:scalar, false}, :bool},
@@ -549,6 +627,7 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
         paddingBytes: {4, {:scalar, ""}, :bytes},
         reportingTokenVersion: {8, {:scalar, 0}, :int32},
         supportPayload: {12, {:scalar, ""}, :string},
+        teeBotMetadata: {17, {:scalar, ""}, :bytes},
         threadID: {15, :unpacked, {:message, WAWebProtobufsE2E.ThreadID}},
         weblinkRenderConfig:
           {16, {:scalar, :WEBVIEW}, {:enum, WAWebProtobufsE2E.WebLinkRenderConfig}}
@@ -703,6 +782,33 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
           name: :weblinkRenderConfig,
           tag: 16,
           type: {:enum, WAWebProtobufsE2E.WebLinkRenderConfig}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "teeBotMetadata",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :teeBotMetadata,
+          tag: 17,
+          type: :bytes
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "accountEncryptionAttestation",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :accountEncryptionAttestation,
+          tag: 18,
+          type: {:message, WAWebProtobufsAea.NonE2EEAttestation}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "associatedPrimaryIdentityKey",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :associatedPrimaryIdentityKey,
+          tag: 19,
+          type: :bytes
         }
       ]
     end
@@ -1173,6 +1279,93 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
 
         []
       ),
+      (
+        def field_def(:teeBotMetadata) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "teeBotMetadata",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :teeBotMetadata,
+             tag: 17,
+             type: :bytes
+           }}
+        end
+
+        def field_def("teeBotMetadata") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "teeBotMetadata",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :teeBotMetadata,
+             tag: 17,
+             type: :bytes
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:accountEncryptionAttestation) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "accountEncryptionAttestation",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :accountEncryptionAttestation,
+             tag: 18,
+             type: {:message, WAWebProtobufsAea.NonE2EEAttestation}
+           }}
+        end
+
+        def field_def("accountEncryptionAttestation") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "accountEncryptionAttestation",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :accountEncryptionAttestation,
+             tag: 18,
+             type: {:message, WAWebProtobufsAea.NonE2EEAttestation}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:associatedPrimaryIdentityKey) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "associatedPrimaryIdentityKey",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :associatedPrimaryIdentityKey,
+             tag: 19,
+             type: :bytes
+           }}
+        end
+
+        def field_def("associatedPrimaryIdentityKey") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "associatedPrimaryIdentityKey",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :associatedPrimaryIdentityKey,
+             tag: 19,
+             type: :bytes
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -1259,6 +1452,15 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
     end,
     def default(:weblinkRenderConfig) do
       {:ok, :WEBVIEW}
+    end,
+    def default(:teeBotMetadata) do
+      {:ok, ""}
+    end,
+    def default(:accountEncryptionAttestation) do
+      {:ok, nil}
+    end,
+    def default(:associatedPrimaryIdentityKey) do
+      {:ok, ""}
     end,
     def default(_) do
       {:error, :no_such_field}

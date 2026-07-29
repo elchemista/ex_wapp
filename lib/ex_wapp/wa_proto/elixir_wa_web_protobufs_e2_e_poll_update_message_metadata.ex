@@ -1,7 +1,7 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsE2E.PollUpdateMessageMetadata do
   @moduledoc false
-  defstruct __uf__: []
+  defstruct pollNameHash: nil, lastEditStanzaID: nil, __uf__: []
 
   (
     (
@@ -16,12 +16,40 @@ defmodule WAWebProtobufsE2E.PollUpdateMessageMetadata do
 
       @spec encode!(struct) :: iodata | no_return
       def encode!(msg) do
-        [] |> encode_unknown_fields(msg)
+        []
+        |> encode_pollNameHash(msg)
+        |> encode_lastEditStanzaID(msg)
+        |> encode_unknown_fields(msg)
       end
     )
 
     []
-    []
+
+    [
+      defp encode_pollNameHash(acc, msg) do
+        try do
+          case msg.pollNameHash do
+            nil -> acc
+            _ -> [acc, "\n", Protox.Encode.encode_bytes(msg.pollNameHash)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:pollNameHash, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_lastEditStanzaID(acc, msg) do
+        try do
+          case msg.lastEditStanzaID do
+            nil -> acc
+            _ -> [acc, "\x12", Protox.Encode.encode_string(msg.lastEditStanzaID)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:lastEditStanzaID, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end
+    ]
 
     defp encode_unknown_fields(acc, msg) do
       Enum.reduce(msg.__struct__.unknown_fields(msg), acc, fn {tag, wire_type, bytes}, acc ->
@@ -74,6 +102,16 @@ defmodule WAWebProtobufsE2E.PollUpdateMessageMetadata do
           case Protox.Decode.parse_key(bytes) do
             {0, _, _} ->
               raise %Protox.IllegalTagError{}
+
+            {1, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[pollNameHash: delimited], rest}
+
+            {2, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[lastEditStanzaID: Protox.Decode.validate_string!(delimited)], rest}
 
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
@@ -135,7 +173,10 @@ defmodule WAWebProtobufsE2E.PollUpdateMessageMetadata do
             required(non_neg_integer) => {atom, Protox.Types.kind(), Protox.Types.type()}
           }
     def defs() do
-      %{}
+      %{
+        1 => {:pollNameHash, {:scalar, ""}, :bytes},
+        2 => {:lastEditStanzaID, {:scalar, ""}, :string}
+      }
     end
 
     @deprecated "Use fields_defs()/0 instead"
@@ -143,18 +184,95 @@ defmodule WAWebProtobufsE2E.PollUpdateMessageMetadata do
             required(atom) => {non_neg_integer, Protox.Types.kind(), Protox.Types.type()}
           }
     def defs_by_name() do
-      %{}
+      %{lastEditStanzaID: {2, {:scalar, ""}, :string}, pollNameHash: {1, {:scalar, ""}, :bytes}}
     end
   )
 
   (
     @spec fields_defs() :: list(Protox.Field.t())
     def fields_defs() do
-      []
+      [
+        %{
+          __struct__: Protox.Field,
+          json_name: "pollNameHash",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :pollNameHash,
+          tag: 1,
+          type: :bytes
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "lastEditStanzaID",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :lastEditStanzaID,
+          tag: 2,
+          type: :string
+        }
+      ]
     end
 
     [
       @spec(field_def(atom) :: {:ok, Protox.Field.t()} | {:error, :no_such_field}),
+      (
+        def field_def(:pollNameHash) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "pollNameHash",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :pollNameHash,
+             tag: 1,
+             type: :bytes
+           }}
+        end
+
+        def field_def("pollNameHash") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "pollNameHash",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :pollNameHash,
+             tag: 1,
+             type: :bytes
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:lastEditStanzaID) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "lastEditStanzaID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :lastEditStanzaID,
+             tag: 2,
+             type: :string
+           }}
+        end
+
+        def field_def("lastEditStanzaID") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "lastEditStanzaID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :lastEditStanzaID,
+             tag: 2,
+             type: :string
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -194,6 +312,12 @@ defmodule WAWebProtobufsE2E.PollUpdateMessageMetadata do
 
   [
     @spec(default(atom) :: {:ok, boolean | integer | String.t() | float} | {:error, atom}),
+    def default(:pollNameHash) do
+      {:ok, ""}
+    end,
+    def default(:lastEditStanzaID) do
+      {:ok, ""}
+    end,
     def default(_) do
       {:error, :no_such_field}
     end

@@ -60,6 +60,11 @@ defmodule WAWebProtobufsE2E.ContextInfo do
             mediaDomainInfo: nil,
             partiallySelectedContent: nil,
             afterReadDuration: nil,
+            crossAppSource: nil,
+            businessInteractionPills: nil,
+            posterStatusID: nil,
+            instagramThreadLink: nil,
+            aiProvenance: nil,
             __uf__: []
 
   (
@@ -135,6 +140,11 @@ defmodule WAWebProtobufsE2E.ContextInfo do
         |> encode_mediaDomainInfo(msg)
         |> encode_partiallySelectedContent(msg)
         |> encode_afterReadDuration(msg)
+        |> encode_crossAppSource(msg)
+        |> encode_businessInteractionPills(msg)
+        |> encode_posterStatusID(msg)
+        |> encode_instagramThreadLink(msg)
+        |> encode_aiProvenance(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -933,6 +943,74 @@ defmodule WAWebProtobufsE2E.ContextInfo do
             reraise Protox.EncodingError.new(:afterReadDuration, "invalid field value"),
                     __STACKTRACE__
         end
+      end,
+      defp encode_crossAppSource(acc, msg) do
+        try do
+          case msg.crossAppSource do
+            nil ->
+              acc
+
+            _ ->
+              [
+                acc,
+                "\xE8\x04",
+                msg.crossAppSource
+                |> WAWebProtobufsE2E.ContextInfo.CrossAppSource.encode()
+                |> Protox.Encode.encode_enum()
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:crossAppSource, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_businessInteractionPills(acc, msg) do
+        try do
+          case msg.businessInteractionPills do
+            nil -> acc
+            _ -> [acc, "\xF2\x04", Protox.Encode.encode_message(msg.businessInteractionPills)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:businessInteractionPills, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_posterStatusID(acc, msg) do
+        try do
+          case msg.posterStatusID do
+            nil -> acc
+            _ -> [acc, "\xFA\x04", Protox.Encode.encode_string(msg.posterStatusID)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:posterStatusID, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_instagramThreadLink(acc, msg) do
+        try do
+          case msg.instagramThreadLink do
+            nil -> acc
+            _ -> [acc, "\x82\x05", Protox.Encode.encode_message(msg.instagramThreadLink)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:instagramThreadLink, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_aiProvenance(acc, msg) do
+        try do
+          case msg.aiProvenance do
+            nil -> acc
+            _ -> [acc, "\x8A\x05", Protox.Encode.encode_message(msg.aiProvenance)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:aiProvenance, "invalid field value"), __STACKTRACE__
+        end
       end
     ]
 
@@ -1426,6 +1504,53 @@ defmodule WAWebProtobufsE2E.ContextInfo do
               {value, rest} = Protox.Decode.parse_uint32(bytes)
               {[afterReadDuration: value], rest}
 
+            {77, _, bytes} ->
+              {value, rest} =
+                Protox.Decode.parse_enum(bytes, WAWebProtobufsE2E.ContextInfo.CrossAppSource)
+
+              {[crossAppSource: value], rest}
+
+            {78, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 businessInteractionPills:
+                   Protox.MergeMessage.merge(
+                     msg.businessInteractionPills,
+                     WAWebProtobufsE2E.ContextInfo.BusinessInteractionPills.decode!(delimited)
+                   )
+               ], rest}
+
+            {79, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[posterStatusID: Protox.Decode.validate_string!(delimited)], rest}
+
+            {80, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 instagramThreadLink:
+                   Protox.MergeMessage.merge(
+                     msg.instagramThreadLink,
+                     WAWebProtobufsE2E.ContextInfo.InstagramThreadLink.decode!(delimited)
+                   )
+               ], rest}
+
+            {81, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 aiProvenance:
+                   Protox.MergeMessage.merge(
+                     msg.aiProvenance,
+                     WAWebProtobufsAICommon.AIProvenance.decode!(delimited)
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -1575,7 +1700,18 @@ defmodule WAWebProtobufsE2E.ContextInfo do
         75 =>
           {:partiallySelectedContent, {:scalar, nil},
            {:message, WAWebProtobufsE2E.ContextInfo.PartiallySelectedContent}},
-        76 => {:afterReadDuration, {:scalar, 0}, :uint32}
+        76 => {:afterReadDuration, {:scalar, 0}, :uint32},
+        77 =>
+          {:crossAppSource, {:scalar, :CROSS_APP_SOURCE_UNKNOWN},
+           {:enum, WAWebProtobufsE2E.ContextInfo.CrossAppSource}},
+        78 =>
+          {:businessInteractionPills, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.ContextInfo.BusinessInteractionPills}},
+        79 => {:posterStatusID, {:scalar, ""}, :string},
+        80 =>
+          {:instagramThreadLink, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.ContextInfo.InstagramThreadLink}},
+        81 => {:aiProvenance, {:scalar, nil}, {:message, WAWebProtobufsAICommon.AIProvenance}}
       }
     end
 
@@ -1587,15 +1723,21 @@ defmodule WAWebProtobufsE2E.ContextInfo do
       %{
         actionLink: {33, {:scalar, nil}, {:message, WAWebProtobufsE2E.ActionLink}},
         afterReadDuration: {76, {:scalar, 0}, :uint32},
+        aiProvenance: {81, {:scalar, nil}, {:message, WAWebProtobufsAICommon.AIProvenance}},
         alwaysShowAdAttribution: {48, {:scalar, false}, :bool},
         botMessageSharingInfo:
           {72, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotMessageSharingInfo}},
+        businessInteractionPills:
+          {78, {:scalar, nil}, {:message, WAWebProtobufsE2E.ContextInfo.BusinessInteractionPills}},
         businessMessageForwardInfo:
           {44, {:scalar, nil},
            {:message, WAWebProtobufsE2E.ContextInfo.BusinessMessageForwardInfo}},
         conversionData: {19, {:scalar, ""}, :bytes},
         conversionDelaySeconds: {20, {:scalar, 0}, :uint32},
         conversionSource: {18, {:scalar, ""}, :string},
+        crossAppSource:
+          {77, {:scalar, :CROSS_APP_SOURCE_UNKNOWN},
+           {:enum, WAWebProtobufsE2E.ContextInfo.CrossAppSource}},
         ctwaPayload: {55, {:scalar, ""}, :bytes},
         ctwaSignals: {54, {:scalar, ""}, :string},
         dataSharingContext:
@@ -1623,6 +1765,8 @@ defmodule WAWebProtobufsE2E.ContextInfo do
         forwardingScore: {21, {:scalar, 0}, :uint32},
         groupMentions: {40, :unpacked, {:message, WAWebProtobufsE2E.GroupMention}},
         groupSubject: {34, {:scalar, ""}, :string},
+        instagramThreadLink:
+          {80, {:scalar, nil}, {:message, WAWebProtobufsE2E.ContextInfo.InstagramThreadLink}},
         isForwarded: {22, {:scalar, false}, :bool},
         isGroupStatus: {66, {:scalar, false}, :bool},
         isQuestion: {63, {:scalar, false}, :bool},
@@ -1640,6 +1784,7 @@ defmodule WAWebProtobufsE2E.ContextInfo do
           {75, {:scalar, nil}, {:message, WAWebProtobufsE2E.ContextInfo.PartiallySelectedContent}},
         participant: {2, {:scalar, ""}, :string},
         placeholderKey: {24, {:scalar, nil}, {:message, WACommon.MessageKey}},
+        posterStatusID: {79, {:scalar, ""}, :string},
         questionReplyQuotedMessage:
           {68, {:scalar, nil},
            {:message, WAWebProtobufsE2E.ContextInfo.QuestionReplyQuotedMessage}},
@@ -2200,6 +2345,51 @@ defmodule WAWebProtobufsE2E.ContextInfo do
           name: :afterReadDuration,
           tag: 76,
           type: :uint32
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "crossAppSource",
+          kind: {:scalar, :CROSS_APP_SOURCE_UNKNOWN},
+          label: :optional,
+          name: :crossAppSource,
+          tag: 77,
+          type: {:enum, WAWebProtobufsE2E.ContextInfo.CrossAppSource}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "businessInteractionPills",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :businessInteractionPills,
+          tag: 78,
+          type: {:message, WAWebProtobufsE2E.ContextInfo.BusinessInteractionPills}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "posterStatusID",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :posterStatusID,
+          tag: 79,
+          type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "instagramThreadLink",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :instagramThreadLink,
+          tag: 80,
+          type: {:message, WAWebProtobufsE2E.ContextInfo.InstagramThreadLink}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "aiProvenance",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :aiProvenance,
+          tag: 81,
+          type: {:message, WAWebProtobufsAICommon.AIProvenance}
         }
       ]
     end
@@ -3917,6 +4107,151 @@ defmodule WAWebProtobufsE2E.ContextInfo do
 
         []
       ),
+      (
+        def field_def(:crossAppSource) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "crossAppSource",
+             kind: {:scalar, :CROSS_APP_SOURCE_UNKNOWN},
+             label: :optional,
+             name: :crossAppSource,
+             tag: 77,
+             type: {:enum, WAWebProtobufsE2E.ContextInfo.CrossAppSource}
+           }}
+        end
+
+        def field_def("crossAppSource") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "crossAppSource",
+             kind: {:scalar, :CROSS_APP_SOURCE_UNKNOWN},
+             label: :optional,
+             name: :crossAppSource,
+             tag: 77,
+             type: {:enum, WAWebProtobufsE2E.ContextInfo.CrossAppSource}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:businessInteractionPills) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "businessInteractionPills",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :businessInteractionPills,
+             tag: 78,
+             type: {:message, WAWebProtobufsE2E.ContextInfo.BusinessInteractionPills}
+           }}
+        end
+
+        def field_def("businessInteractionPills") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "businessInteractionPills",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :businessInteractionPills,
+             tag: 78,
+             type: {:message, WAWebProtobufsE2E.ContextInfo.BusinessInteractionPills}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:posterStatusID) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "posterStatusID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :posterStatusID,
+             tag: 79,
+             type: :string
+           }}
+        end
+
+        def field_def("posterStatusID") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "posterStatusID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :posterStatusID,
+             tag: 79,
+             type: :string
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:instagramThreadLink) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "instagramThreadLink",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :instagramThreadLink,
+             tag: 80,
+             type: {:message, WAWebProtobufsE2E.ContextInfo.InstagramThreadLink}
+           }}
+        end
+
+        def field_def("instagramThreadLink") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "instagramThreadLink",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :instagramThreadLink,
+             tag: 80,
+             type: {:message, WAWebProtobufsE2E.ContextInfo.InstagramThreadLink}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:aiProvenance) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "aiProvenance",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :aiProvenance,
+             tag: 81,
+             type: {:message, WAWebProtobufsAICommon.AIProvenance}
+           }}
+        end
+
+        def field_def("aiProvenance") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "aiProvenance",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :aiProvenance,
+             tag: 81,
+             type: {:message, WAWebProtobufsAICommon.AIProvenance}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -4132,6 +4467,21 @@ defmodule WAWebProtobufsE2E.ContextInfo do
     end,
     def default(:afterReadDuration) do
       {:ok, 0}
+    end,
+    def default(:crossAppSource) do
+      {:ok, :CROSS_APP_SOURCE_UNKNOWN}
+    end,
+    def default(:businessInteractionPills) do
+      {:ok, nil}
+    end,
+    def default(:posterStatusID) do
+      {:ok, ""}
+    end,
+    def default(:instagramThreadLink) do
+      {:ok, nil}
+    end,
+    def default(:aiProvenance) do
+      {:ok, nil}
     end,
     def default(_) do
       {:error, :no_such_field}

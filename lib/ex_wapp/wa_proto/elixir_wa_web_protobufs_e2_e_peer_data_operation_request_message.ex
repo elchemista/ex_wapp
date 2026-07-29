@@ -11,6 +11,8 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage do
             historySyncChunkRetryRequest: nil,
             galaxyFlowAction: nil,
             companionCanonicalUserNonceFetchRequest: nil,
+            bizBroadcastInsightsContactListRequest: nil,
+            bizBroadcastInsightsRefreshRequest: nil,
             __uf__: []
 
   (
@@ -37,6 +39,8 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage do
         |> encode_historySyncChunkRetryRequest(msg)
         |> encode_galaxyFlowAction(msg)
         |> encode_companionCanonicalUserNonceFetchRequest(msg)
+        |> encode_bizBroadcastInsightsContactListRequest(msg)
+        |> encode_bizBroadcastInsightsRefreshRequest(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -217,6 +221,39 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage do
           ArgumentError ->
             reraise Protox.EncodingError.new(
                       :companionCanonicalUserNonceFetchRequest,
+                      "invalid field value"
+                    ),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_bizBroadcastInsightsContactListRequest(acc, msg) do
+        try do
+          case msg.bizBroadcastInsightsContactListRequest do
+            nil ->
+              acc
+
+            _ ->
+              [acc, "Z", Protox.Encode.encode_message(msg.bizBroadcastInsightsContactListRequest)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :bizBroadcastInsightsContactListRequest,
+                      "invalid field value"
+                    ),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_bizBroadcastInsightsRefreshRequest(acc, msg) do
+        try do
+          case msg.bizBroadcastInsightsRefreshRequest do
+            nil -> acc
+            _ -> [acc, "b", Protox.Encode.encode_message(msg.bizBroadcastInsightsRefreshRequest)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :bizBroadcastInsightsRefreshRequest,
                       "invalid field value"
                     ),
                     __STACKTRACE__
@@ -408,6 +445,34 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage do
                    )
                ], rest}
 
+            {11, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 bizBroadcastInsightsContactListRequest:
+                   Protox.MergeMessage.merge(
+                     msg.bizBroadcastInsightsContactListRequest,
+                     WAWebProtobufsE2E.PeerDataOperationRequestMessage.BizBroadcastInsightsContactListRequest.decode!(
+                       delimited
+                     )
+                   )
+               ], rest}
+
+            {12, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 bizBroadcastInsightsRefreshRequest:
+                   Protox.MergeMessage.merge(
+                     msg.bizBroadcastInsightsRefreshRequest,
+                     WAWebProtobufsE2E.PeerDataOperationRequestMessage.BizBroadcastInsightsRefreshRequest.decode!(
+                       delimited
+                     )
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -504,7 +569,15 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage do
         10 =>
           {:companionCanonicalUserNonceFetchRequest, {:scalar, nil},
            {:message,
-            WAWebProtobufsE2E.PeerDataOperationRequestMessage.CompanionCanonicalUserNonceFetchRequest}}
+            WAWebProtobufsE2E.PeerDataOperationRequestMessage.CompanionCanonicalUserNonceFetchRequest}},
+        11 =>
+          {:bizBroadcastInsightsContactListRequest, {:scalar, nil},
+           {:message,
+            WAWebProtobufsE2E.PeerDataOperationRequestMessage.BizBroadcastInsightsContactListRequest}},
+        12 =>
+          {:bizBroadcastInsightsRefreshRequest, {:scalar, nil},
+           {:message,
+            WAWebProtobufsE2E.PeerDataOperationRequestMessage.BizBroadcastInsightsRefreshRequest}}
       }
     end
 
@@ -514,6 +587,14 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage do
           }
     def defs_by_name() do
       %{
+        bizBroadcastInsightsContactListRequest:
+          {11, {:scalar, nil},
+           {:message,
+            WAWebProtobufsE2E.PeerDataOperationRequestMessage.BizBroadcastInsightsContactListRequest}},
+        bizBroadcastInsightsRefreshRequest:
+          {12, {:scalar, nil},
+           {:message,
+            WAWebProtobufsE2E.PeerDataOperationRequestMessage.BizBroadcastInsightsRefreshRequest}},
         companionCanonicalUserNonceFetchRequest:
           {10, {:scalar, nil},
            {:message,
@@ -659,6 +740,28 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage do
           type:
             {:message,
              WAWebProtobufsE2E.PeerDataOperationRequestMessage.CompanionCanonicalUserNonceFetchRequest}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "bizBroadcastInsightsContactListRequest",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :bizBroadcastInsightsContactListRequest,
+          tag: 11,
+          type:
+            {:message,
+             WAWebProtobufsE2E.PeerDataOperationRequestMessage.BizBroadcastInsightsContactListRequest}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "bizBroadcastInsightsRefreshRequest",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :bizBroadcastInsightsRefreshRequest,
+          tag: 12,
+          type:
+            {:message,
+             WAWebProtobufsE2E.PeerDataOperationRequestMessage.BizBroadcastInsightsRefreshRequest}
         }
       ]
     end
@@ -983,6 +1086,72 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage do
 
         []
       ),
+      (
+        def field_def(:bizBroadcastInsightsContactListRequest) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "bizBroadcastInsightsContactListRequest",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :bizBroadcastInsightsContactListRequest,
+             tag: 11,
+             type:
+               {:message,
+                WAWebProtobufsE2E.PeerDataOperationRequestMessage.BizBroadcastInsightsContactListRequest}
+           }}
+        end
+
+        def field_def("bizBroadcastInsightsContactListRequest") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "bizBroadcastInsightsContactListRequest",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :bizBroadcastInsightsContactListRequest,
+             tag: 11,
+             type:
+               {:message,
+                WAWebProtobufsE2E.PeerDataOperationRequestMessage.BizBroadcastInsightsContactListRequest}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:bizBroadcastInsightsRefreshRequest) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "bizBroadcastInsightsRefreshRequest",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :bizBroadcastInsightsRefreshRequest,
+             tag: 12,
+             type:
+               {:message,
+                WAWebProtobufsE2E.PeerDataOperationRequestMessage.BizBroadcastInsightsRefreshRequest}
+           }}
+        end
+
+        def field_def("bizBroadcastInsightsRefreshRequest") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "bizBroadcastInsightsRefreshRequest",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :bizBroadcastInsightsRefreshRequest,
+             tag: 12,
+             type:
+               {:message,
+                WAWebProtobufsE2E.PeerDataOperationRequestMessage.BizBroadcastInsightsRefreshRequest}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -1050,6 +1219,12 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage do
       {:ok, nil}
     end,
     def default(:companionCanonicalUserNonceFetchRequest) do
+      {:ok, nil}
+    end,
+    def default(:bizBroadcastInsightsContactListRequest) do
+      {:ok, nil}
+    end,
+    def default(:bizBroadcastInsightsRefreshRequest) do
       {:ok, nil}
     end,
     def default(_) do

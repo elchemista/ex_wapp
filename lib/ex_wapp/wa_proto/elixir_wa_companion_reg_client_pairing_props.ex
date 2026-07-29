@@ -4,6 +4,8 @@ defmodule WACompanionReg.ClientPairingProps do
   defstruct isChatDbLidMigrated: nil,
             isSyncdPureLidSession: nil,
             isSyncdSnapshotRecoveryEnabled: nil,
+            isHsThumbnailSyncEnabled: nil,
+            subscriptionSyncPayload: nil,
             __uf__: []
 
   (
@@ -23,6 +25,8 @@ defmodule WACompanionReg.ClientPairingProps do
         |> encode_isChatDbLidMigrated(msg)
         |> encode_isSyncdPureLidSession(msg)
         |> encode_isSyncdSnapshotRecoveryEnabled(msg)
+        |> encode_isHsThumbnailSyncEnabled(msg)
+        |> encode_subscriptionSyncPayload(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -66,6 +70,30 @@ defmodule WACompanionReg.ClientPairingProps do
                       :isSyncdSnapshotRecoveryEnabled,
                       "invalid field value"
                     ),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_isHsThumbnailSyncEnabled(acc, msg) do
+        try do
+          case msg.isHsThumbnailSyncEnabled do
+            nil -> acc
+            _ -> [acc, " ", Protox.Encode.encode_bool(msg.isHsThumbnailSyncEnabled)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:isHsThumbnailSyncEnabled, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_subscriptionSyncPayload(acc, msg) do
+        try do
+          case msg.subscriptionSyncPayload do
+            nil -> acc
+            _ -> [acc, "*", Protox.Encode.encode_bytes(msg.subscriptionSyncPayload)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:subscriptionSyncPayload, "invalid field value"),
                     __STACKTRACE__
         end
       end
@@ -135,6 +163,15 @@ defmodule WACompanionReg.ClientPairingProps do
               {value, rest} = Protox.Decode.parse_bool(bytes)
               {[isSyncdSnapshotRecoveryEnabled: value], rest}
 
+            {4, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_bool(bytes)
+              {[isHsThumbnailSyncEnabled: value], rest}
+
+            {5, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[subscriptionSyncPayload: delimited], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -198,7 +235,9 @@ defmodule WACompanionReg.ClientPairingProps do
       %{
         1 => {:isChatDbLidMigrated, {:scalar, false}, :bool},
         2 => {:isSyncdPureLidSession, {:scalar, false}, :bool},
-        3 => {:isSyncdSnapshotRecoveryEnabled, {:scalar, false}, :bool}
+        3 => {:isSyncdSnapshotRecoveryEnabled, {:scalar, false}, :bool},
+        4 => {:isHsThumbnailSyncEnabled, {:scalar, false}, :bool},
+        5 => {:subscriptionSyncPayload, {:scalar, ""}, :bytes}
       }
     end
 
@@ -209,8 +248,10 @@ defmodule WACompanionReg.ClientPairingProps do
     def defs_by_name() do
       %{
         isChatDbLidMigrated: {1, {:scalar, false}, :bool},
+        isHsThumbnailSyncEnabled: {4, {:scalar, false}, :bool},
         isSyncdPureLidSession: {2, {:scalar, false}, :bool},
-        isSyncdSnapshotRecoveryEnabled: {3, {:scalar, false}, :bool}
+        isSyncdSnapshotRecoveryEnabled: {3, {:scalar, false}, :bool},
+        subscriptionSyncPayload: {5, {:scalar, ""}, :bytes}
       }
     end
   )
@@ -245,6 +286,24 @@ defmodule WACompanionReg.ClientPairingProps do
           name: :isSyncdSnapshotRecoveryEnabled,
           tag: 3,
           type: :bool
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "isHsThumbnailSyncEnabled",
+          kind: {:scalar, false},
+          label: :optional,
+          name: :isHsThumbnailSyncEnabled,
+          tag: 4,
+          type: :bool
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "subscriptionSyncPayload",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :subscriptionSyncPayload,
+          tag: 5,
+          type: :bytes
         }
       ]
     end
@@ -338,6 +397,64 @@ defmodule WACompanionReg.ClientPairingProps do
 
         []
       ),
+      (
+        def field_def(:isHsThumbnailSyncEnabled) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "isHsThumbnailSyncEnabled",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :isHsThumbnailSyncEnabled,
+             tag: 4,
+             type: :bool
+           }}
+        end
+
+        def field_def("isHsThumbnailSyncEnabled") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "isHsThumbnailSyncEnabled",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :isHsThumbnailSyncEnabled,
+             tag: 4,
+             type: :bool
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:subscriptionSyncPayload) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "subscriptionSyncPayload",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :subscriptionSyncPayload,
+             tag: 5,
+             type: :bytes
+           }}
+        end
+
+        def field_def("subscriptionSyncPayload") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "subscriptionSyncPayload",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :subscriptionSyncPayload,
+             tag: 5,
+             type: :bytes
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -385,6 +502,12 @@ defmodule WACompanionReg.ClientPairingProps do
     end,
     def default(:isSyncdSnapshotRecoveryEnabled) do
       {:ok, false}
+    end,
+    def default(:isHsThumbnailSyncEnabled) do
+      {:ok, false}
+    end,
+    def default(:subscriptionSyncPayload) do
+      {:ok, ""}
     end,
     def default(_) do
       {:error, :no_such_field}

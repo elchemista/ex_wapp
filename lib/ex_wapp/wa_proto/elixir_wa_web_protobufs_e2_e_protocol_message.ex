@@ -27,6 +27,11 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
             memberLabel: nil,
             aiMediaCollectionMessage: nil,
             afterReadDuration: nil,
+            chatThemeSetting: nil,
+            aiMetadataOperation: nil,
+            markAsVerifiedAction: nil,
+            coexStateSync: nil,
+            syncRequestMutationRetry: nil,
             __uf__: []
 
   (
@@ -69,6 +74,11 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
         |> encode_memberLabel(msg)
         |> encode_aiMediaCollectionMessage(msg)
         |> encode_afterReadDuration(msg)
+        |> encode_chatThemeSetting(msg)
+        |> encode_aiMetadataOperation(msg)
+        |> encode_markAsVerifiedAction(msg)
+        |> encode_coexStateSync(msg)
+        |> encode_syncRequestMutationRetry(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -437,6 +447,66 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
             reraise Protox.EncodingError.new(:afterReadDuration, "invalid field value"),
                     __STACKTRACE__
         end
+      end,
+      defp encode_chatThemeSetting(acc, msg) do
+        try do
+          case msg.chatThemeSetting do
+            nil -> acc
+            _ -> [acc, "\xF2\x01", Protox.Encode.encode_message(msg.chatThemeSetting)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:chatThemeSetting, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_aiMetadataOperation(acc, msg) do
+        try do
+          case msg.aiMetadataOperation do
+            nil -> acc
+            _ -> [acc, "\xFA\x01", Protox.Encode.encode_message(msg.aiMetadataOperation)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:aiMetadataOperation, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_markAsVerifiedAction(acc, msg) do
+        try do
+          case msg.markAsVerifiedAction do
+            nil -> acc
+            _ -> [acc, "\x82\x02", Protox.Encode.encode_message(msg.markAsVerifiedAction)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:markAsVerifiedAction, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_coexStateSync(acc, msg) do
+        try do
+          case msg.coexStateSync do
+            nil -> acc
+            _ -> [acc, "\x8A\x02", Protox.Encode.encode_message(msg.coexStateSync)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:coexStateSync, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_syncRequestMutationRetry(acc, msg) do
+        try do
+          case msg.syncRequestMutationRetry do
+            nil -> acc
+            _ -> [acc, "\x92\x02", Protox.Encode.encode_message(msg.syncRequestMutationRetry)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:syncRequestMutationRetry, "invalid field value"),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -747,6 +817,66 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
               {value, rest} = Protox.Decode.parse_uint32(bytes)
               {[afterReadDuration: value], rest}
 
+            {30, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 chatThemeSetting:
+                   Protox.MergeMessage.merge(
+                     msg.chatThemeSetting,
+                     WAWebProtobufsE2E.ChatThemeSetting.decode!(delimited)
+                   )
+               ], rest}
+
+            {31, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 aiMetadataOperation:
+                   Protox.MergeMessage.merge(
+                     msg.aiMetadataOperation,
+                     WAWebProtobufsAICommon.AIMetadataOperation.decode!(delimited)
+                   )
+               ], rest}
+
+            {32, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 markAsVerifiedAction:
+                   Protox.MergeMessage.merge(
+                     msg.markAsVerifiedAction,
+                     WAWebProtobufsE2E.MarkAsVerifiedAction.decode!(delimited)
+                   )
+               ], rest}
+
+            {33, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 coexStateSync:
+                   Protox.MergeMessage.merge(
+                     msg.coexStateSync,
+                     WAWebProtobufsServerSync.CoexStateSync.decode!(delimited)
+                   )
+               ], rest}
+
+            {34, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 syncRequestMutationRetry:
+                   Protox.MergeMessage.merge(
+                     msg.syncRequestMutationRetry,
+                     WAWebProtobufsE2E.SyncRequestMutationRetry.decode!(delimited)
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -858,7 +988,19 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
         28 =>
           {:aiMediaCollectionMessage, {:scalar, nil},
            {:message, WAWebProtobufsAICommon.AIMediaCollectionMessage}},
-        29 => {:afterReadDuration, {:scalar, 0}, :uint32}
+        29 => {:afterReadDuration, {:scalar, 0}, :uint32},
+        30 => {:chatThemeSetting, {:scalar, nil}, {:message, WAWebProtobufsE2E.ChatThemeSetting}},
+        31 =>
+          {:aiMetadataOperation, {:scalar, nil},
+           {:message, WAWebProtobufsAICommon.AIMetadataOperation}},
+        32 =>
+          {:markAsVerifiedAction, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.MarkAsVerifiedAction}},
+        33 =>
+          {:coexStateSync, {:scalar, nil}, {:message, WAWebProtobufsServerSync.CoexStateSync}},
+        34 =>
+          {:syncRequestMutationRetry, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.SyncRequestMutationRetry}}
       }
     end
 
@@ -871,6 +1013,8 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
         afterReadDuration: {29, {:scalar, 0}, :uint32},
         aiMediaCollectionMessage:
           {28, {:scalar, nil}, {:message, WAWebProtobufsAICommon.AIMediaCollectionMessage}},
+        aiMetadataOperation:
+          {31, {:scalar, nil}, {:message, WAWebProtobufsAICommon.AIMetadataOperation}},
         aiPsiMetadata: {25, {:scalar, ""}, :bytes},
         aiQueryFanout: {26, {:scalar, nil}, {:message, WAWebProtobufsE2E.AIQueryFanout}},
         appStateFatalExceptionNotification:
@@ -881,8 +1025,10 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
           {7, {:scalar, nil}, {:message, WAWebProtobufsE2E.AppStateSyncKeyShare}},
         botFeedbackMessage:
           {18, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotFeedbackMessage}},
+        chatThemeSetting: {30, {:scalar, nil}, {:message, WAWebProtobufsE2E.ChatThemeSetting}},
         cloudApiThreadControlNotification:
           {22, {:scalar, nil}, {:message, WAWebProtobufsE2E.CloudAPIThreadControlNotification}},
+        coexStateSync: {33, {:scalar, nil}, {:message, WAWebProtobufsServerSync.CoexStateSync}},
         disappearingMode: {11, {:scalar, nil}, {:message, WAWebProtobufsE2E.DisappearingMode}},
         editedMessage: {14, {:scalar, nil}, {:message, WAWebProtobufsE2E.Message}},
         ephemeralExpiration: {4, {:scalar, 0}, :uint32},
@@ -897,6 +1043,8 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
         lidMigrationMappingSyncMessage:
           {23, {:scalar, nil}, {:message, WAWebProtobufsE2E.LIDMigrationMappingSyncMessage}},
         limitSharing: {24, {:scalar, nil}, {:message, WACommon.LimitSharing}},
+        markAsVerifiedAction:
+          {32, {:scalar, nil}, {:message, WAWebProtobufsE2E.MarkAsVerifiedAction}},
         mediaNotifyMessage:
           {21, {:scalar, nil}, {:message, WAWebProtobufsE2E.MediaNotifyMessage}},
         memberLabel: {27, {:scalar, nil}, {:message, WAWebProtobufsE2E.MemberLabel}},
@@ -907,6 +1055,8 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
            {:message, WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage}},
         requestWelcomeMessageMetadata:
           {20, {:scalar, nil}, {:message, WAWebProtobufsE2E.RequestWelcomeMessageMetadata}},
+        syncRequestMutationRetry:
+          {34, {:scalar, nil}, {:message, WAWebProtobufsE2E.SyncRequestMutationRetry}},
         timestampMS: {15, {:scalar, 0}, :int64},
         type: {2, {:scalar, :REVOKE}, {:enum, WAWebProtobufsE2E.ProtocolMessage.Type}}
       }
@@ -1150,6 +1300,51 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
           name: :afterReadDuration,
           tag: 29,
           type: :uint32
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "chatThemeSetting",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :chatThemeSetting,
+          tag: 30,
+          type: {:message, WAWebProtobufsE2E.ChatThemeSetting}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "aiMetadataOperation",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :aiMetadataOperation,
+          tag: 31,
+          type: {:message, WAWebProtobufsAICommon.AIMetadataOperation}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "markAsVerifiedAction",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :markAsVerifiedAction,
+          tag: 32,
+          type: {:message, WAWebProtobufsE2E.MarkAsVerifiedAction}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "coexStateSync",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :coexStateSync,
+          tag: 33,
+          type: {:message, WAWebProtobufsServerSync.CoexStateSync}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "syncRequestMutationRetry",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :syncRequestMutationRetry,
+          tag: 34,
+          type: {:message, WAWebProtobufsE2E.SyncRequestMutationRetry}
         }
       ]
     end
@@ -1910,6 +2105,151 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
 
         []
       ),
+      (
+        def field_def(:chatThemeSetting) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "chatThemeSetting",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :chatThemeSetting,
+             tag: 30,
+             type: {:message, WAWebProtobufsE2E.ChatThemeSetting}
+           }}
+        end
+
+        def field_def("chatThemeSetting") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "chatThemeSetting",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :chatThemeSetting,
+             tag: 30,
+             type: {:message, WAWebProtobufsE2E.ChatThemeSetting}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:aiMetadataOperation) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "aiMetadataOperation",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :aiMetadataOperation,
+             tag: 31,
+             type: {:message, WAWebProtobufsAICommon.AIMetadataOperation}
+           }}
+        end
+
+        def field_def("aiMetadataOperation") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "aiMetadataOperation",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :aiMetadataOperation,
+             tag: 31,
+             type: {:message, WAWebProtobufsAICommon.AIMetadataOperation}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:markAsVerifiedAction) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "markAsVerifiedAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :markAsVerifiedAction,
+             tag: 32,
+             type: {:message, WAWebProtobufsE2E.MarkAsVerifiedAction}
+           }}
+        end
+
+        def field_def("markAsVerifiedAction") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "markAsVerifiedAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :markAsVerifiedAction,
+             tag: 32,
+             type: {:message, WAWebProtobufsE2E.MarkAsVerifiedAction}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:coexStateSync) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "coexStateSync",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :coexStateSync,
+             tag: 33,
+             type: {:message, WAWebProtobufsServerSync.CoexStateSync}
+           }}
+        end
+
+        def field_def("coexStateSync") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "coexStateSync",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :coexStateSync,
+             tag: 33,
+             type: {:message, WAWebProtobufsServerSync.CoexStateSync}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:syncRequestMutationRetry) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "syncRequestMutationRetry",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :syncRequestMutationRetry,
+             tag: 34,
+             type: {:message, WAWebProtobufsE2E.SyncRequestMutationRetry}
+           }}
+        end
+
+        def field_def("syncRequestMutationRetry") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "syncRequestMutationRetry",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :syncRequestMutationRetry,
+             tag: 34,
+             type: {:message, WAWebProtobufsE2E.SyncRequestMutationRetry}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -2026,6 +2366,21 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
     end,
     def default(:afterReadDuration) do
       {:ok, 0}
+    end,
+    def default(:chatThemeSetting) do
+      {:ok, nil}
+    end,
+    def default(:aiMetadataOperation) do
+      {:ok, nil}
+    end,
+    def default(:markAsVerifiedAction) do
+      {:ok, nil}
+    end,
+    def default(:coexStateSync) do
+      {:ok, nil}
+    end,
+    def default(:syncRequestMutationRetry) do
+      {:ok, nil}
     end,
     def default(_) do
       {:error, :no_such_field}

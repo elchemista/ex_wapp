@@ -12,6 +12,7 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
             companionCanonicalUserNonceFetchRequestResponse: nil,
             historySyncChunkRetryResponse: nil,
             flowResponsesCsvBundle: nil,
+            bizBroadcastInsightsContactListResponse: nil,
             __uf__: []
 
   (
@@ -39,6 +40,7 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
         |> encode_companionCanonicalUserNonceFetchRequestResponse(msg)
         |> encode_historySyncChunkRetryResponse(msg)
         |> encode_flowResponsesCsvBundle(msg)
+        |> encode_bizBroadcastInsightsContactListResponse(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -218,6 +220,28 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:flowResponsesCsvBundle, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_bizBroadcastInsightsContactListResponse(acc, msg) do
+        try do
+          case msg.bizBroadcastInsightsContactListResponse do
+            nil ->
+              acc
+
+            _ ->
+              [
+                acc,
+                "b",
+                Protox.Encode.encode_message(msg.bizBroadcastInsightsContactListResponse)
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :bizBroadcastInsightsContactListResponse,
+                      "invalid field value"
+                    ),
                     __STACKTRACE__
         end
       end
@@ -424,6 +448,20 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
                    )
                ], rest}
 
+            {12, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 bizBroadcastInsightsContactListResponse:
+                   Protox.MergeMessage.merge(
+                     msg.bizBroadcastInsightsContactListResponse,
+                     WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.BizBroadcastInsightsContactListResponse.decode!(
+                       delimited
+                     )
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -524,7 +562,11 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
         11 =>
           {:flowResponsesCsvBundle, {:scalar, nil},
            {:message,
-            WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.FlowResponsesCsvBundle}}
+            WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.FlowResponsesCsvBundle}},
+        12 =>
+          {:bizBroadcastInsightsContactListResponse, {:scalar, nil},
+           {:message,
+            WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.BizBroadcastInsightsContactListResponse}}
       }
     end
 
@@ -534,6 +576,10 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
           }
     def defs_by_name() do
       %{
+        bizBroadcastInsightsContactListResponse:
+          {12, {:scalar, nil},
+           {:message,
+            WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.BizBroadcastInsightsContactListResponse}},
         companionCanonicalUserNonceFetchRequestResponse:
           {9, {:scalar, nil},
            {:message,
@@ -697,6 +743,17 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
           type:
             {:message,
              WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.FlowResponsesCsvBundle}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "bizBroadcastInsightsContactListResponse",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :bizBroadcastInsightsContactListResponse,
+          tag: 12,
+          type:
+            {:message,
+             WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.BizBroadcastInsightsContactListResponse}
         }
       ]
     end
@@ -1058,6 +1115,39 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
 
         []
       ),
+      (
+        def field_def(:bizBroadcastInsightsContactListResponse) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "bizBroadcastInsightsContactListResponse",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :bizBroadcastInsightsContactListResponse,
+             tag: 12,
+             type:
+               {:message,
+                WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.BizBroadcastInsightsContactListResponse}
+           }}
+        end
+
+        def field_def("bizBroadcastInsightsContactListResponse") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "bizBroadcastInsightsContactListResponse",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :bizBroadcastInsightsContactListResponse,
+             tag: 12,
+             type:
+               {:message,
+                WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.BizBroadcastInsightsContactListResponse}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -1128,6 +1218,9 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
       {:ok, nil}
     end,
     def default(:flowResponsesCsvBundle) do
+      {:ok, nil}
+    end,
+    def default(:bizBroadcastInsightsContactListResponse) do
       {:ok, nil}
     end,
     def default(_) do

@@ -534,6 +534,114 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
         def encode("RICH_RESPONSE_UR_IMAGINE_VIDEO") do
           57
         end
+      ),
+      (
+        def encode(:JSON_PATCH_STREAMING) do
+          58
+        end
+
+        def encode("JSON_PATCH_STREAMING") do
+          58
+        end
+      ),
+      (
+        def encode(:AI_TAB_FORCE_CLIPPY) do
+          59
+        end
+
+        def encode("AI_TAB_FORCE_CLIPPY") do
+          59
+        end
+      ),
+      (
+        def encode(:UNIFIED_RESPONSE_EMBEDDED_SCREENS) do
+          60
+        end
+
+        def encode("UNIFIED_RESPONSE_EMBEDDED_SCREENS") do
+          60
+        end
+      ),
+      (
+        def encode(:AI_SUBSCRIPTION_ENABLED) do
+          61
+        end
+
+        def encode("AI_SUBSCRIPTION_ENABLED") do
+          61
+        end
+      ),
+      (
+        def encode(:UNIFIED_RESPONSE_AI_CONTENT_SEARCH_ENABLED) do
+          62
+        end
+
+        def encode("UNIFIED_RESPONSE_AI_CONTENT_SEARCH_ENABLED") do
+          62
+        end
+      ),
+      (
+        def encode(:UNIFIED_RESPONSE_MARKDOWN_LINKS_ENABLED) do
+          63
+        end
+
+        def encode("UNIFIED_RESPONSE_MARKDOWN_LINKS_ENABLED") do
+          63
+        end
+      ),
+      (
+        def encode(:AI_RICH_RESPONSE_MAPS_V2_ENABLED) do
+          64
+        end
+
+        def encode("AI_RICH_RESPONSE_MAPS_V2_ENABLED") do
+          64
+        end
+      ),
+      (
+        def encode(:AI_SUBSCRIPTION_METERING_ENABLED) do
+          65
+        end
+
+        def encode("AI_SUBSCRIPTION_METERING_ENABLED") do
+          65
+        end
+      ),
+      (
+        def encode(:RICH_RESPONSE_SPORTS_WIDGET_ENABLED) do
+          66
+        end
+
+        def encode("RICH_RESPONSE_SPORTS_WIDGET_ENABLED") do
+          66
+        end
+      ),
+      (
+        def encode(:AI_RICH_RESPONSE_ARTIFACTS_ENABLED) do
+          67
+        end
+
+        def encode("AI_RICH_RESPONSE_ARTIFACTS_ENABLED") do
+          67
+        end
+      ),
+      (
+        def encode(:AI_RICH_RESPONSE_EMAIL_CALENDAR_ENABLED) do
+          68
+        end
+
+        def encode("AI_RICH_RESPONSE_EMAIL_CALENDAR_ENABLED") do
+          68
+        end
+      ),
+      (
+        def encode(:AI_RICH_RESPONSE_REMINDERS_ENABLED) do
+          69
+        end
+
+        def encode("AI_RICH_RESPONSE_REMINDERS_ENABLED") do
+          69
+        end
       )
     ]
 
@@ -551,6 +659,9 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       end,
       def decode(4) do
         :AI_MEMORY
+      end,
+      def decode(68) do
+        :AI_RICH_RESPONSE_EMAIL_CALENDAR_ENABLED
       end,
       def decode(34) do
         :RICH_RESPONSE_UNIFIED_RESPONSE
@@ -594,6 +705,12 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       def decode(56) do
         :RICH_RESPONSE_INLINE_LINKS_ENABLED
       end,
+      def decode(61) do
+        :AI_SUBSCRIPTION_ENABLED
+      end,
+      def decode(65) do
+        :AI_SUBSCRIPTION_METERING_ENABLED
+      end,
       def decode(31) do
         :RICH_RESPONSE_LATEX_INLINE
       end,
@@ -615,6 +732,12 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       def decode(49) do
         :RICH_RESPONSE_UR_REASONING
       end,
+      def decode(66) do
+        :RICH_RESPONSE_SPORTS_WIDGET_ENABLED
+      end,
+      def decode(64) do
+        :AI_RICH_RESPONSE_MAPS_V2_ENABLED
+      end,
       def decode(15) do
         :WA_IG_1P_PLUGIN_RANKING_UPDATE_5
       end,
@@ -627,6 +750,9 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       def decode(32) do
         :QUERY_PLAN
       end,
+      def decode(58) do
+        :JSON_PATCH_STREAMING
+      end,
       def decode(1) do
         :PROGRESS_INDICATOR
       end,
@@ -635,6 +761,9 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       end,
       def decode(28) do
         :ACCOUNT_LINKING
+      end,
+      def decode(60) do
+        :UNIFIED_RESPONSE_EMBEDDED_SCREENS
       end,
       def decode(20) do
         :WA_IG_1P_PLUGIN_RANKING_UPDATE_10
@@ -684,6 +813,9 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       def decode(30) do
         :RICH_RESPONSE_GRID_IMAGE_3P
       end,
+      def decode(62) do
+        :UNIFIED_RESPONSE_AI_CONTENT_SEARCH_ENABLED
+      end,
       def decode(21) do
         :RICH_RESPONSE_SUB_HEADING
       end,
@@ -699,6 +831,9 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       def decode(47) do
         :AI_RESPONSE_MODEL_BRANDING
       end,
+      def decode(63) do
+        :UNIFIED_RESPONSE_MARKDOWN_LINKS_ENABLED
+      end,
       def decode(26) do
         :RICH_RESPONSE_INLINE_REELS
       end,
@@ -713,6 +848,15 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       end,
       def decode(45) do
         :RICH_RESPONSE_UR_TIMESTAMP_PLACEHOLDER
+      end,
+      def decode(67) do
+        :AI_RICH_RESPONSE_ARTIFACTS_ENABLED
+      end,
+      def decode(69) do
+        :AI_RICH_RESPONSE_REMINDERS_ENABLED
+      end,
+      def decode(59) do
+        :AI_TAB_FORCE_CLIPPY
       end,
       def decode(39) do
         :RICH_RESPONSE_UNIFIED_TEXT_COMPONENT
@@ -783,7 +927,19 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
         {54, :AI_IMAGINE_UR_TO_NATIVE_LOADING_INDICATOR},
         {55, :RICH_RESPONSE_UR_BLOKS_ENABLED},
         {56, :RICH_RESPONSE_INLINE_LINKS_ENABLED},
-        {57, :RICH_RESPONSE_UR_IMAGINE_VIDEO}
+        {57, :RICH_RESPONSE_UR_IMAGINE_VIDEO},
+        {58, :JSON_PATCH_STREAMING},
+        {59, :AI_TAB_FORCE_CLIPPY},
+        {60, :UNIFIED_RESPONSE_EMBEDDED_SCREENS},
+        {61, :AI_SUBSCRIPTION_ENABLED},
+        {62, :UNIFIED_RESPONSE_AI_CONTENT_SEARCH_ENABLED},
+        {63, :UNIFIED_RESPONSE_MARKDOWN_LINKS_ENABLED},
+        {64, :AI_RICH_RESPONSE_MAPS_V2_ENABLED},
+        {65, :AI_SUBSCRIPTION_METERING_ENABLED},
+        {66, :RICH_RESPONSE_SPORTS_WIDGET_ENABLED},
+        {67, :AI_RICH_RESPONSE_ARTIFACTS_ENABLED},
+        {68, :AI_RICH_RESPONSE_EMAIL_CALENDAR_ENABLED},
+        {69, :AI_RICH_RESPONSE_REMINDERS_ENABLED}
       ]
     end
 
@@ -962,6 +1118,42 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
           true
         end,
         def has_constant?(:RICH_RESPONSE_UR_IMAGINE_VIDEO) do
+          true
+        end,
+        def has_constant?(:JSON_PATCH_STREAMING) do
+          true
+        end,
+        def has_constant?(:AI_TAB_FORCE_CLIPPY) do
+          true
+        end,
+        def has_constant?(:UNIFIED_RESPONSE_EMBEDDED_SCREENS) do
+          true
+        end,
+        def has_constant?(:AI_SUBSCRIPTION_ENABLED) do
+          true
+        end,
+        def has_constant?(:UNIFIED_RESPONSE_AI_CONTENT_SEARCH_ENABLED) do
+          true
+        end,
+        def has_constant?(:UNIFIED_RESPONSE_MARKDOWN_LINKS_ENABLED) do
+          true
+        end,
+        def has_constant?(:AI_RICH_RESPONSE_MAPS_V2_ENABLED) do
+          true
+        end,
+        def has_constant?(:AI_SUBSCRIPTION_METERING_ENABLED) do
+          true
+        end,
+        def has_constant?(:RICH_RESPONSE_SPORTS_WIDGET_ENABLED) do
+          true
+        end,
+        def has_constant?(:AI_RICH_RESPONSE_ARTIFACTS_ENABLED) do
+          true
+        end,
+        def has_constant?(:AI_RICH_RESPONSE_EMAIL_CALENDAR_ENABLED) do
+          true
+        end,
+        def has_constant?(:AI_RICH_RESPONSE_REMINDERS_ENABLED) do
           true
         end
       ]

@@ -102,6 +102,13 @@ defmodule WAWebProtobufsE2E.Message do
             pollCreationMessageV6: nil,
             conditionalRevealMessage: nil,
             pollAddOptionMessage: nil,
+            eventInviteMessage: nil,
+            groupRootKeyShare: nil,
+            paymentReminderMessage: nil,
+            splitPaymentMessage: nil,
+            newsletterAdminProfileStatusMessage: nil,
+            rootSecretDistributeMessage: nil,
+            splitPaymentUpdateMessage: nil,
             __uf__: []
 
   (
@@ -219,6 +226,13 @@ defmodule WAWebProtobufsE2E.Message do
         |> encode_pollCreationMessageV6(msg)
         |> encode_conditionalRevealMessage(msg)
         |> encode_pollAddOptionMessage(msg)
+        |> encode_eventInviteMessage(msg)
+        |> encode_groupRootKeyShare(msg)
+        |> encode_paymentReminderMessage(msg)
+        |> encode_splitPaymentMessage(msg)
+        |> encode_newsletterAdminProfileStatusMessage(msg)
+        |> encode_rootSecretDistributeMessage(msg)
+        |> encode_splitPaymentUpdateMessage(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -1472,6 +1486,100 @@ defmodule WAWebProtobufsE2E.Message do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:pollAddOptionMessage, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_eventInviteMessage(acc, msg) do
+        try do
+          case msg.eventInviteMessage do
+            nil -> acc
+            _ -> [acc, "\xD2\a", Protox.Encode.encode_message(msg.eventInviteMessage)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:eventInviteMessage, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_groupRootKeyShare(acc, msg) do
+        try do
+          case msg.groupRootKeyShare do
+            nil -> acc
+            _ -> [acc, "\xDA\a", Protox.Encode.encode_message(msg.groupRootKeyShare)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:groupRootKeyShare, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_paymentReminderMessage(acc, msg) do
+        try do
+          case msg.paymentReminderMessage do
+            nil -> acc
+            _ -> [acc, "\xE2\a", Protox.Encode.encode_message(msg.paymentReminderMessage)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:paymentReminderMessage, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_splitPaymentMessage(acc, msg) do
+        try do
+          case msg.splitPaymentMessage do
+            nil -> acc
+            _ -> [acc, "\xEA\a", Protox.Encode.encode_message(msg.splitPaymentMessage)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:splitPaymentMessage, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_newsletterAdminProfileStatusMessage(acc, msg) do
+        try do
+          case msg.newsletterAdminProfileStatusMessage do
+            nil ->
+              acc
+
+            _ ->
+              [
+                acc,
+                "\xF2\a",
+                Protox.Encode.encode_message(msg.newsletterAdminProfileStatusMessage)
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :newsletterAdminProfileStatusMessage,
+                      "invalid field value"
+                    ),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_rootSecretDistributeMessage(acc, msg) do
+        try do
+          case msg.rootSecretDistributeMessage do
+            nil -> acc
+            _ -> [acc, "\xFA\a", Protox.Encode.encode_message(msg.rootSecretDistributeMessage)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:rootSecretDistributeMessage, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_splitPaymentUpdateMessage(acc, msg) do
+        try do
+          case msg.splitPaymentUpdateMessage do
+            nil -> acc
+            _ -> [acc, "\x82\b", Protox.Encode.encode_message(msg.splitPaymentUpdateMessage)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:splitPaymentUpdateMessage, "invalid field value"),
                     __STACKTRACE__
         end
       end
@@ -2728,6 +2836,90 @@ defmodule WAWebProtobufsE2E.Message do
                    )
                ], rest}
 
+            {122, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 eventInviteMessage:
+                   Protox.MergeMessage.merge(
+                     msg.eventInviteMessage,
+                     WAWebProtobufsE2E.EventInviteMessage.decode!(delimited)
+                   )
+               ], rest}
+
+            {123, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 groupRootKeyShare:
+                   Protox.MergeMessage.merge(
+                     msg.groupRootKeyShare,
+                     WAWebProtobufsE2E.GroupRootKeyShare.decode!(delimited)
+                   )
+               ], rest}
+
+            {124, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 paymentReminderMessage:
+                   Protox.MergeMessage.merge(
+                     msg.paymentReminderMessage,
+                     WAWebProtobufsE2E.PaymentReminderMessage.decode!(delimited)
+                   )
+               ], rest}
+
+            {125, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 splitPaymentMessage:
+                   Protox.MergeMessage.merge(
+                     msg.splitPaymentMessage,
+                     WAWebProtobufsE2E.SplitPaymentMessage.decode!(delimited)
+                   )
+               ], rest}
+
+            {126, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 newsletterAdminProfileStatusMessage:
+                   Protox.MergeMessage.merge(
+                     msg.newsletterAdminProfileStatusMessage,
+                     WAWebProtobufsE2E.FutureProofMessage.decode!(delimited)
+                   )
+               ], rest}
+
+            {127, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 rootSecretDistributeMessage:
+                   Protox.MergeMessage.merge(
+                     msg.rootSecretDistributeMessage,
+                     WAWebProtobufsE2E.RootSecretDistributeMessage.decode!(delimited)
+                   )
+               ], rest}
+
+            {128, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 splitPaymentUpdateMessage:
+                   Protox.MergeMessage.merge(
+                     msg.splitPaymentUpdateMessage,
+                     WAWebProtobufsE2E.SplitPaymentUpdateMessage.decode!(delimited)
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -3015,7 +3207,26 @@ defmodule WAWebProtobufsE2E.Message do
            {:message, WAWebProtobufsE2E.ConditionalRevealMessage}},
         121 =>
           {:pollAddOptionMessage, {:scalar, nil},
-           {:message, WAWebProtobufsE2E.PollAddOptionMessage}}
+           {:message, WAWebProtobufsE2E.PollAddOptionMessage}},
+        122 =>
+          {:eventInviteMessage, {:scalar, nil}, {:message, WAWebProtobufsE2E.EventInviteMessage}},
+        123 =>
+          {:groupRootKeyShare, {:scalar, nil}, {:message, WAWebProtobufsE2E.GroupRootKeyShare}},
+        124 =>
+          {:paymentReminderMessage, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.PaymentReminderMessage}},
+        125 =>
+          {:splitPaymentMessage, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.SplitPaymentMessage}},
+        126 =>
+          {:newsletterAdminProfileStatusMessage, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.FutureProofMessage}},
+        127 =>
+          {:rootSecretDistributeMessage, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.RootSecretDistributeMessage}},
+        128 =>
+          {:splitPaymentUpdateMessage, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.SplitPaymentUpdateMessage}}
       }
     end
 
@@ -3063,6 +3274,8 @@ defmodule WAWebProtobufsE2E.Message do
           {56, {:scalar, nil}, {:message, WAWebProtobufsE2E.EncReactionMessage}},
         ephemeralMessage: {40, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         eventCoverImage: {85, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
+        eventInviteMessage:
+          {122, {:scalar, nil}, {:message, WAWebProtobufsE2E.EventInviteMessage}},
         eventMessage: {75, {:scalar, nil}, {:message, WAWebProtobufsE2E.EventMessage}},
         extendedTextMessage:
           {6, {:scalar, nil}, {:message, WAWebProtobufsE2E.ExtendedTextMessage}},
@@ -3072,6 +3285,7 @@ defmodule WAWebProtobufsE2E.Message do
           {28, {:scalar, nil}, {:message, WAWebProtobufsE2E.GroupInviteMessage}},
         groupMentionedMessage:
           {62, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
+        groupRootKeyShare: {123, {:scalar, nil}, {:message, WAWebProtobufsE2E.GroupRootKeyShare}},
         groupStatusMentionMessage:
           {92, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         groupStatusMessage:
@@ -3109,11 +3323,15 @@ defmodule WAWebProtobufsE2E.Message do
           {116, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         newsletterAdminProfileMessageV2:
           {117, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
+        newsletterAdminProfileStatusMessage:
+          {126, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         newsletterFollowerInviteMessageV2:
           {113, {:scalar, nil}, {:message, WAWebProtobufsE2E.NewsletterFollowerInviteMessage}},
         orderMessage: {38, {:scalar, nil}, {:message, WAWebProtobufsE2E.OrderMessage}},
         paymentInviteMessage:
           {44, {:scalar, nil}, {:message, WAWebProtobufsE2E.PaymentInviteMessage}},
+        paymentReminderMessage:
+          {124, {:scalar, nil}, {:message, WAWebProtobufsE2E.PaymentReminderMessage}},
         pinInChatMessage: {63, {:scalar, nil}, {:message, WAWebProtobufsE2E.PinInChatMessage}},
         placeholderMessage:
           {80, {:scalar, nil}, {:message, WAWebProtobufsE2E.PlaceholderMessage}},
@@ -3153,6 +3371,8 @@ defmodule WAWebProtobufsE2E.Message do
           {54, {:scalar, nil}, {:message, WAWebProtobufsE2E.RequestPhoneNumberMessage}},
         richResponseMessage:
           {97, {:scalar, nil}, {:message, WAWebProtobufsE2E.AIRichResponseMessage}},
+        rootSecretDistributeMessage:
+          {127, {:scalar, nil}, {:message, WAWebProtobufsE2E.RootSecretDistributeMessage}},
         scheduledCallCreationMessage:
           {61, {:scalar, nil}, {:message, WAWebProtobufsE2E.ScheduledCallCreationMessage}},
         scheduledCallEditMessage:
@@ -3163,6 +3383,10 @@ defmodule WAWebProtobufsE2E.Message do
           {16, {:scalar, nil}, {:message, WAWebProtobufsE2E.SendPaymentMessage}},
         senderKeyDistributionMessage:
           {2, {:scalar, nil}, {:message, WAWebProtobufsE2E.SenderKeyDistributionMessage}},
+        splitPaymentMessage:
+          {125, {:scalar, nil}, {:message, WAWebProtobufsE2E.SplitPaymentMessage}},
+        splitPaymentUpdateMessage:
+          {128, {:scalar, nil}, {:message, WAWebProtobufsE2E.SplitPaymentUpdateMessage}},
         spoilerMessage: {118, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         statusAddYours: {95, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         statusMentionMessage:
@@ -4104,6 +4328,69 @@ defmodule WAWebProtobufsE2E.Message do
           name: :pollAddOptionMessage,
           tag: 121,
           type: {:message, WAWebProtobufsE2E.PollAddOptionMessage}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "eventInviteMessage",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :eventInviteMessage,
+          tag: 122,
+          type: {:message, WAWebProtobufsE2E.EventInviteMessage}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "groupRootKeyShare",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :groupRootKeyShare,
+          tag: 123,
+          type: {:message, WAWebProtobufsE2E.GroupRootKeyShare}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "paymentReminderMessage",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :paymentReminderMessage,
+          tag: 124,
+          type: {:message, WAWebProtobufsE2E.PaymentReminderMessage}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "splitPaymentMessage",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :splitPaymentMessage,
+          tag: 125,
+          type: {:message, WAWebProtobufsE2E.SplitPaymentMessage}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "newsletterAdminProfileStatusMessage",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :newsletterAdminProfileStatusMessage,
+          tag: 126,
+          type: {:message, WAWebProtobufsE2E.FutureProofMessage}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "rootSecretDistributeMessage",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :rootSecretDistributeMessage,
+          tag: 127,
+          type: {:message, WAWebProtobufsE2E.RootSecretDistributeMessage}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "splitPaymentUpdateMessage",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :splitPaymentUpdateMessage,
+          tag: 128,
+          type: {:message, WAWebProtobufsE2E.SplitPaymentUpdateMessage}
         }
       ]
     end
@@ -7039,6 +7326,209 @@ defmodule WAWebProtobufsE2E.Message do
 
         []
       ),
+      (
+        def field_def(:eventInviteMessage) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "eventInviteMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :eventInviteMessage,
+             tag: 122,
+             type: {:message, WAWebProtobufsE2E.EventInviteMessage}
+           }}
+        end
+
+        def field_def("eventInviteMessage") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "eventInviteMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :eventInviteMessage,
+             tag: 122,
+             type: {:message, WAWebProtobufsE2E.EventInviteMessage}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:groupRootKeyShare) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "groupRootKeyShare",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :groupRootKeyShare,
+             tag: 123,
+             type: {:message, WAWebProtobufsE2E.GroupRootKeyShare}
+           }}
+        end
+
+        def field_def("groupRootKeyShare") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "groupRootKeyShare",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :groupRootKeyShare,
+             tag: 123,
+             type: {:message, WAWebProtobufsE2E.GroupRootKeyShare}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:paymentReminderMessage) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "paymentReminderMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :paymentReminderMessage,
+             tag: 124,
+             type: {:message, WAWebProtobufsE2E.PaymentReminderMessage}
+           }}
+        end
+
+        def field_def("paymentReminderMessage") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "paymentReminderMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :paymentReminderMessage,
+             tag: 124,
+             type: {:message, WAWebProtobufsE2E.PaymentReminderMessage}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:splitPaymentMessage) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "splitPaymentMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :splitPaymentMessage,
+             tag: 125,
+             type: {:message, WAWebProtobufsE2E.SplitPaymentMessage}
+           }}
+        end
+
+        def field_def("splitPaymentMessage") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "splitPaymentMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :splitPaymentMessage,
+             tag: 125,
+             type: {:message, WAWebProtobufsE2E.SplitPaymentMessage}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:newsletterAdminProfileStatusMessage) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "newsletterAdminProfileStatusMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :newsletterAdminProfileStatusMessage,
+             tag: 126,
+             type: {:message, WAWebProtobufsE2E.FutureProofMessage}
+           }}
+        end
+
+        def field_def("newsletterAdminProfileStatusMessage") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "newsletterAdminProfileStatusMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :newsletterAdminProfileStatusMessage,
+             tag: 126,
+             type: {:message, WAWebProtobufsE2E.FutureProofMessage}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:rootSecretDistributeMessage) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "rootSecretDistributeMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :rootSecretDistributeMessage,
+             tag: 127,
+             type: {:message, WAWebProtobufsE2E.RootSecretDistributeMessage}
+           }}
+        end
+
+        def field_def("rootSecretDistributeMessage") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "rootSecretDistributeMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :rootSecretDistributeMessage,
+             tag: 127,
+             type: {:message, WAWebProtobufsE2E.RootSecretDistributeMessage}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:splitPaymentUpdateMessage) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "splitPaymentUpdateMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :splitPaymentUpdateMessage,
+             tag: 128,
+             type: {:message, WAWebProtobufsE2E.SplitPaymentUpdateMessage}
+           }}
+        end
+
+        def field_def("splitPaymentUpdateMessage") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "splitPaymentUpdateMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :splitPaymentUpdateMessage,
+             tag: 128,
+             type: {:message, WAWebProtobufsE2E.SplitPaymentUpdateMessage}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -7379,6 +7869,27 @@ defmodule WAWebProtobufsE2E.Message do
       {:ok, nil}
     end,
     def default(:pollAddOptionMessage) do
+      {:ok, nil}
+    end,
+    def default(:eventInviteMessage) do
+      {:ok, nil}
+    end,
+    def default(:groupRootKeyShare) do
+      {:ok, nil}
+    end,
+    def default(:paymentReminderMessage) do
+      {:ok, nil}
+    end,
+    def default(:splitPaymentMessage) do
+      {:ok, nil}
+    end,
+    def default(:newsletterAdminProfileStatusMessage) do
+      {:ok, nil}
+    end,
+    def default(:rootSecretDistributeMessage) do
+      {:ok, nil}
+    end,
+    def default(:splitPaymentUpdateMessage) do
       {:ok, nil}
     end,
     def default(_) do

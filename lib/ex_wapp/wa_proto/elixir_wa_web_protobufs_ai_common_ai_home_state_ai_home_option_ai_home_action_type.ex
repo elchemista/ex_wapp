@@ -57,6 +57,15 @@ defmodule WAWebProtobufsAICommon.AIHomeState.AIHomeOption.AIHomeActionType do
         def encode("COLLABORATE") do
           4
         end
+      ),
+      (
+        def encode(:OPEN_GREETING_CARD) do
+          5
+        end
+
+        def encode("OPEN_GREETING_CARD") do
+          5
+        end
       )
     ]
 
@@ -80,6 +89,9 @@ defmodule WAWebProtobufsAICommon.AIHomeState.AIHomeOption.AIHomeActionType do
       end,
       def decode(4) do
         :COLLABORATE
+      end,
+      def decode(5) do
+        :OPEN_GREETING_CARD
       end
     ]
 
@@ -94,7 +106,8 @@ defmodule WAWebProtobufsAICommon.AIHomeState.AIHomeOption.AIHomeActionType do
         {1, :CREATE_IMAGE},
         {2, :ANIMATE_PHOTO},
         {3, :ANALYZE_FILE},
-        {4, :COLLABORATE}
+        {4, :COLLABORATE},
+        {5, :OPEN_GREETING_CARD}
       ]
     end
 
@@ -114,6 +127,9 @@ defmodule WAWebProtobufsAICommon.AIHomeState.AIHomeOption.AIHomeActionType do
           true
         end,
         def has_constant?(:COLLABORATE) do
+          true
+        end,
+        def has_constant?(:OPEN_GREETING_CARD) do
           true
         end
       ]

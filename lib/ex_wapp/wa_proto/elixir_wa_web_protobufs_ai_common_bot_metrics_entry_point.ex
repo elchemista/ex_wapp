@@ -426,6 +426,33 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
         def encode("GROUP_MEMBER") do
           54
         end
+      ),
+      (
+        def encode(:CHATLIST_SEARCH) do
+          55
+        end
+
+        def encode("CHATLIST_SEARCH") do
+          55
+        end
+      ),
+      (
+        def encode(:NEW_CHAT_LIST) do
+          56
+        end
+
+        def encode("NEW_CHAT_LIST") do
+          56
+        end
+      ),
+      (
+        def encode(:CONTACTS_TAB) do
+          57
+        end
+
+        def encode("CONTACTS_TAB") do
+          57
+        end
       )
     ]
 
@@ -465,6 +492,9 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
       def decode(13) do
         :NOTIFICATION
       end,
+      def decode(55) do
+        :CHATLIST_SEARCH
+      end,
       def decode(2) do
         :CHATLIST
       end,
@@ -473,6 +503,9 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
       end,
       def decode(38) do
         :ASK_META_AI_MEDIA_VIEWER_GROUP
+      end,
+      def decode(56) do
+        :NEW_CHAT_LIST
       end,
       def decode(31) do
         :META_AI_FORWARD
@@ -515,6 +548,9 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
       end,
       def decode(6) do
         :AISEARCH_TYPE_AHEAD_PAPER_PLANE
+      end,
+      def decode(57) do
+        :CONTACTS_TAB
       end,
       def decode(11) do
         :AISTUDIO
@@ -627,7 +663,10 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
         {45, :META_AI_SETTINGS},
         {46, :WEB_INTRO_PANEL},
         {47, :WEB_NAVIGATION_BAR},
-        {54, :GROUP_MEMBER}
+        {54, :GROUP_MEMBER},
+        {55, :CHATLIST_SEARCH},
+        {56, :NEW_CHAT_LIST},
+        {57, :CONTACTS_TAB}
       ]
     end
 
@@ -770,6 +809,15 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
           true
         end,
         def has_constant?(:GROUP_MEMBER) do
+          true
+        end,
+        def has_constant?(:CHATLIST_SEARCH) do
+          true
+        end,
+        def has_constant?(:NEW_CHAT_LIST) do
+          true
+        end,
+        def has_constant?(:CONTACTS_TAB) do
           true
         end
       ]

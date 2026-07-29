@@ -1,7 +1,7 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsE2E.InteractiveMessage.BloksWidget do
   @moduledoc false
-  defstruct uuid: nil, data: nil, type: nil, __uf__: []
+  defstruct uuid: nil, data: nil, type: nil, fallback: nil, __uf__: []
 
   (
     (
@@ -20,6 +20,7 @@ defmodule WAWebProtobufsE2E.InteractiveMessage.BloksWidget do
         |> encode_uuid(msg)
         |> encode_data(msg)
         |> encode_type(msg)
+        |> encode_fallback(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -58,6 +59,17 @@ defmodule WAWebProtobufsE2E.InteractiveMessage.BloksWidget do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:type, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_fallback(acc, msg) do
+        try do
+          case msg.fallback do
+            nil -> acc
+            _ -> [acc, "\"", Protox.Encode.encode_string(msg.fallback)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:fallback, "invalid field value"), __STACKTRACE__
         end
       end
     ]
@@ -129,6 +141,11 @@ defmodule WAWebProtobufsE2E.InteractiveMessage.BloksWidget do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[type: Protox.Decode.validate_string!(delimited)], rest}
 
+            {4, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[fallback: Protox.Decode.validate_string!(delimited)], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -192,7 +209,8 @@ defmodule WAWebProtobufsE2E.InteractiveMessage.BloksWidget do
       %{
         1 => {:uuid, {:scalar, ""}, :string},
         2 => {:data, {:scalar, ""}, :string},
-        3 => {:type, {:scalar, ""}, :string}
+        3 => {:type, {:scalar, ""}, :string},
+        4 => {:fallback, {:scalar, ""}, :string}
       }
     end
 
@@ -203,6 +221,7 @@ defmodule WAWebProtobufsE2E.InteractiveMessage.BloksWidget do
     def defs_by_name() do
       %{
         data: {2, {:scalar, ""}, :string},
+        fallback: {4, {:scalar, ""}, :string},
         type: {3, {:scalar, ""}, :string},
         uuid: {1, {:scalar, ""}, :string}
       }
@@ -238,6 +257,15 @@ defmodule WAWebProtobufsE2E.InteractiveMessage.BloksWidget do
           label: :optional,
           name: :type,
           tag: 3,
+          type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "fallback",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :fallback,
+          tag: 4,
           type: :string
         }
       ]
@@ -332,6 +360,35 @@ defmodule WAWebProtobufsE2E.InteractiveMessage.BloksWidget do
 
         []
       ),
+      (
+        def field_def(:fallback) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "fallback",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :fallback,
+             tag: 4,
+             type: :string
+           }}
+        end
+
+        def field_def("fallback") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "fallback",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :fallback,
+             tag: 4,
+             type: :string
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -378,6 +435,9 @@ defmodule WAWebProtobufsE2E.InteractiveMessage.BloksWidget do
       {:ok, ""}
     end,
     def default(:type) do
+      {:ok, ""}
+    end,
+    def default(:fallback) do
       {:ok, ""}
     end,
     def default(_) do

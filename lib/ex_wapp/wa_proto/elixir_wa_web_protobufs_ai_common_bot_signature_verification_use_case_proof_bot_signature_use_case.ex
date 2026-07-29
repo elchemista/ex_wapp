@@ -39,6 +39,15 @@ defmodule WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof.BotSignatu
         def encode("WA_TEE_BOT_MSG") do
           2
         end
+      ),
+      (
+        def encode(:P2P_PILLS) do
+          3
+        end
+
+        def encode("P2P_PILLS") do
+          3
+        end
       )
     ]
 
@@ -56,6 +65,9 @@ defmodule WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof.BotSignatu
       end,
       def decode(2) do
         :WA_TEE_BOT_MSG
+      end,
+      def decode(3) do
+        :P2P_PILLS
       end
     ]
 
@@ -65,7 +77,7 @@ defmodule WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof.BotSignatu
 
     @spec constants() :: [{integer(), atom()}]
     def constants() do
-      [{0, :UNSPECIFIED}, {1, :WA_BOT_MSG}, {2, :WA_TEE_BOT_MSG}]
+      [{0, :UNSPECIFIED}, {1, :WA_BOT_MSG}, {2, :WA_TEE_BOT_MSG}, {3, :P2P_PILLS}]
     end
 
     @spec has_constant?(any()) :: boolean()
@@ -78,6 +90,9 @@ defmodule WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof.BotSignatu
           true
         end,
         def has_constant?(:WA_TEE_BOT_MSG) do
+          true
+        end,
+        def has_constant?(:P2P_PILLS) do
           true
         end
       ]

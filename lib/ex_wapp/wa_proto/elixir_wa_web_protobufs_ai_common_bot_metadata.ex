@@ -38,6 +38,11 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
             botRenderingConfigMetadata: nil,
             botInfrastructureDiagnostics: nil,
             aiMediaCollectionMetadata: nil,
+            commandMetadata: nil,
+            resolvedToolCallMetadata: nil,
+            subscriptionUpsellMetadata: nil,
+            pttPromptMetadata: nil,
+            botHistoryShareMetadata: nil,
             internalMetadata: nil,
             __uf__: []
 
@@ -92,6 +97,11 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
         |> encode_botRenderingConfigMetadata(msg)
         |> encode_botInfrastructureDiagnostics(msg)
         |> encode_aiMediaCollectionMetadata(msg)
+        |> encode_commandMetadata(msg)
+        |> encode_resolvedToolCallMetadata(msg)
+        |> encode_subscriptionUpsellMetadata(msg)
+        |> encode_pttPromptMetadata(msg)
+        |> encode_botHistoryShareMetadata(msg)
         |> encode_internalMetadata(msg)
         |> encode_unknown_fields(msg)
       end
@@ -540,6 +550,66 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:aiMediaCollectionMetadata, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_commandMetadata(acc, msg) do
+        try do
+          case msg.commandMetadata do
+            nil -> acc
+            _ -> [acc, "\xBA\x02", Protox.Encode.encode_message(msg.commandMetadata)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:commandMetadata, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_resolvedToolCallMetadata(acc, msg) do
+        try do
+          case msg.resolvedToolCallMetadata do
+            nil -> acc
+            _ -> [acc, "\xC2\x02", Protox.Encode.encode_message(msg.resolvedToolCallMetadata)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:resolvedToolCallMetadata, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_subscriptionUpsellMetadata(acc, msg) do
+        try do
+          case msg.subscriptionUpsellMetadata do
+            nil -> acc
+            _ -> [acc, "\xCA\x02", Protox.Encode.encode_message(msg.subscriptionUpsellMetadata)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:subscriptionUpsellMetadata, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_pttPromptMetadata(acc, msg) do
+        try do
+          case msg.pttPromptMetadata do
+            nil -> acc
+            _ -> [acc, "\xD2\x02", Protox.Encode.encode_message(msg.pttPromptMetadata)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:pttPromptMetadata, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_botHistoryShareMetadata(acc, msg) do
+        try do
+          case msg.botHistoryShareMetadata do
+            nil -> acc
+            _ -> [acc, "\xDA\x02", Protox.Encode.encode_message(msg.botHistoryShareMetadata)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:botHistoryShareMetadata, "invalid field value"),
                     __STACKTRACE__
         end
       end,
@@ -1004,6 +1074,66 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
                    )
                ], rest}
 
+            {39, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 commandMetadata:
+                   Protox.MergeMessage.merge(
+                     msg.commandMetadata,
+                     WAWebProtobufsAICommon.BotCommandMetadata.decode!(delimited)
+                   )
+               ], rest}
+
+            {40, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 resolvedToolCallMetadata:
+                   Protox.MergeMessage.merge(
+                     msg.resolvedToolCallMetadata,
+                     WAWebProtobufsAICommon.BotResolvedToolCallMetadata.decode!(delimited)
+                   )
+               ], rest}
+
+            {41, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 subscriptionUpsellMetadata:
+                   Protox.MergeMessage.merge(
+                     msg.subscriptionUpsellMetadata,
+                     WAWebProtobufsAICommon.AISubscriptionUpsellMetadata.decode!(delimited)
+                   )
+               ], rest}
+
+            {42, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 pttPromptMetadata:
+                   Protox.MergeMessage.merge(
+                     msg.pttPromptMetadata,
+                     WAWebProtobufsAICommon.BotPttPromptMetadata.decode!(delimited)
+                   )
+               ], rest}
+
+            {43, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 botHistoryShareMetadata:
+                   Protox.MergeMessage.merge(
+                     msg.botHistoryShareMetadata,
+                     WAWebProtobufsAICommon.BotHistoryShareMetadata.decode!(delimited)
+                   )
+               ], rest}
+
             {999, _, bytes} ->
               {len, bytes} = Protox.Varint.decode(bytes)
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
@@ -1158,6 +1288,21 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
         38 =>
           {:aiMediaCollectionMetadata, {:scalar, nil},
            {:message, WAWebProtobufsAICommon.AIMediaCollectionMetadata}},
+        39 =>
+          {:commandMetadata, {:scalar, nil},
+           {:message, WAWebProtobufsAICommon.BotCommandMetadata}},
+        40 =>
+          {:resolvedToolCallMetadata, {:scalar, nil},
+           {:message, WAWebProtobufsAICommon.BotResolvedToolCallMetadata}},
+        41 =>
+          {:subscriptionUpsellMetadata, {:scalar, nil},
+           {:message, WAWebProtobufsAICommon.AISubscriptionUpsellMetadata}},
+        42 =>
+          {:pttPromptMetadata, {:scalar, nil},
+           {:message, WAWebProtobufsAICommon.BotPttPromptMetadata}},
+        43 =>
+          {:botHistoryShareMetadata, {:scalar, nil},
+           {:message, WAWebProtobufsAICommon.BotHistoryShareMetadata}},
         999 => {:internalMetadata, {:scalar, ""}, :bytes}
       }
     end
@@ -1177,6 +1322,8 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
           {34, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotDocumentMessageMetadata}},
         botGroupMetadata:
           {35, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotGroupMetadata}},
+        botHistoryShareMetadata:
+          {43, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotHistoryShareMetadata}},
         botInfrastructureDiagnostics:
           {37, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotInfrastructureDiagnostics}},
         botLinkedAccountsMetadata:
@@ -1197,6 +1344,8 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
         botThreadInfo: {31, {:scalar, nil}, {:message, WAWebProtobufsAICommon.AIThreadInfo}},
         capabilityMetadata:
           {13, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotCapabilityMetadata}},
+        commandMetadata:
+          {39, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotCommandMetadata}},
         conversationStarterPromptID: {25, {:scalar, ""}, :string},
         imagineMetadata:
           {14, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotImagineMetadata}},
@@ -1213,18 +1362,24 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
         pluginMetadata: {3, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotPluginMetadata}},
         progressIndicatorMetadata:
           {12, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotProgressIndicatorMetadata}},
+        pttPromptMetadata:
+          {42, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotPttPromptMetadata}},
         regenerateMetadata:
           {32, {:scalar, nil}, {:message, WAWebProtobufsAICommon.AIRegenerateMetadata}},
         reminderMetadata:
           {9, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotReminderMetadata}},
         renderingMetadata:
           {16, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotRenderingMetadata}},
+        resolvedToolCallMetadata:
+          {40, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotResolvedToolCallMetadata}},
         richResponseSourcesMetadata:
           {19, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotSourcesMetadata}},
         sessionMetadata:
           {6, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotSessionMetadata}},
         sessionTransparencyMetadata:
           {33, {:scalar, nil}, {:message, WAWebProtobufsAICommon.SessionTransparencyMetadata}},
+        subscriptionUpsellMetadata:
+          {41, {:scalar, nil}, {:message, WAWebProtobufsAICommon.AISubscriptionUpsellMetadata}},
         suggestedPromptMetadata:
           {4, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotSuggestedPromptMetadata}},
         timezone: {8, {:scalar, ""}, :string},
@@ -1573,6 +1728,51 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
           name: :aiMediaCollectionMetadata,
           tag: 38,
           type: {:message, WAWebProtobufsAICommon.AIMediaCollectionMetadata}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "commandMetadata",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :commandMetadata,
+          tag: 39,
+          type: {:message, WAWebProtobufsAICommon.BotCommandMetadata}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "resolvedToolCallMetadata",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :resolvedToolCallMetadata,
+          tag: 40,
+          type: {:message, WAWebProtobufsAICommon.BotResolvedToolCallMetadata}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "subscriptionUpsellMetadata",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :subscriptionUpsellMetadata,
+          tag: 41,
+          type: {:message, WAWebProtobufsAICommon.AISubscriptionUpsellMetadata}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "pttPromptMetadata",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :pttPromptMetadata,
+          tag: 42,
+          type: {:message, WAWebProtobufsAICommon.BotPttPromptMetadata}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "botHistoryShareMetadata",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :botHistoryShareMetadata,
+          tag: 43,
+          type: {:message, WAWebProtobufsAICommon.BotHistoryShareMetadata}
         },
         %{
           __struct__: Protox.Field,
@@ -2662,6 +2862,151 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
         []
       ),
       (
+        def field_def(:commandMetadata) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "commandMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :commandMetadata,
+             tag: 39,
+             type: {:message, WAWebProtobufsAICommon.BotCommandMetadata}
+           }}
+        end
+
+        def field_def("commandMetadata") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "commandMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :commandMetadata,
+             tag: 39,
+             type: {:message, WAWebProtobufsAICommon.BotCommandMetadata}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:resolvedToolCallMetadata) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "resolvedToolCallMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :resolvedToolCallMetadata,
+             tag: 40,
+             type: {:message, WAWebProtobufsAICommon.BotResolvedToolCallMetadata}
+           }}
+        end
+
+        def field_def("resolvedToolCallMetadata") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "resolvedToolCallMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :resolvedToolCallMetadata,
+             tag: 40,
+             type: {:message, WAWebProtobufsAICommon.BotResolvedToolCallMetadata}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:subscriptionUpsellMetadata) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "subscriptionUpsellMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :subscriptionUpsellMetadata,
+             tag: 41,
+             type: {:message, WAWebProtobufsAICommon.AISubscriptionUpsellMetadata}
+           }}
+        end
+
+        def field_def("subscriptionUpsellMetadata") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "subscriptionUpsellMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :subscriptionUpsellMetadata,
+             tag: 41,
+             type: {:message, WAWebProtobufsAICommon.AISubscriptionUpsellMetadata}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:pttPromptMetadata) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "pttPromptMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :pttPromptMetadata,
+             tag: 42,
+             type: {:message, WAWebProtobufsAICommon.BotPttPromptMetadata}
+           }}
+        end
+
+        def field_def("pttPromptMetadata") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "pttPromptMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :pttPromptMetadata,
+             tag: 42,
+             type: {:message, WAWebProtobufsAICommon.BotPttPromptMetadata}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:botHistoryShareMetadata) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "botHistoryShareMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :botHistoryShareMetadata,
+             tag: 43,
+             type: {:message, WAWebProtobufsAICommon.BotHistoryShareMetadata}
+           }}
+        end
+
+        def field_def("botHistoryShareMetadata") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "botHistoryShareMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :botHistoryShareMetadata,
+             tag: 43,
+             type: {:message, WAWebProtobufsAICommon.BotHistoryShareMetadata}
+           }}
+        end
+
+        []
+      ),
+      (
         def field_def(:internalMetadata) do
           {:ok,
            %{
@@ -2838,6 +3183,21 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
       {:ok, nil}
     end,
     def default(:aiMediaCollectionMetadata) do
+      {:ok, nil}
+    end,
+    def default(:commandMetadata) do
+      {:ok, nil}
+    end,
+    def default(:resolvedToolCallMetadata) do
+      {:ok, nil}
+    end,
+    def default(:subscriptionUpsellMetadata) do
+      {:ok, nil}
+    end,
+    def default(:pttPromptMetadata) do
+      {:ok, nil}
+    end,
+    def default(:botHistoryShareMetadata) do
       {:ok, nil}
     end,
     def default(:internalMetadata) do

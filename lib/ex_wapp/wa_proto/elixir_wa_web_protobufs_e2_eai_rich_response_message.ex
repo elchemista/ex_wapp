@@ -39,7 +39,7 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
                 acc,
                 "\b",
                 msg.messageType
-                |> WAWebProtobufsAICommonDeprecated.AIRichResponseMessageType.encode()
+                |> WAAICommonDeprecated.AIRichResponseMessageType.encode()
                 |> Protox.Encode.encode_enum()
               ]
           end
@@ -146,10 +146,7 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
 
             {1, _, bytes} ->
               {value, rest} =
-                Protox.Decode.parse_enum(
-                  bytes,
-                  WAWebProtobufsAICommonDeprecated.AIRichResponseMessageType
-                )
+                Protox.Decode.parse_enum(bytes, WAAICommonDeprecated.AIRichResponseMessageType)
 
               {[messageType: value], rest}
 
@@ -160,11 +157,7 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
               {[
                  submessages:
                    msg.submessages ++
-                     [
-                       WAWebProtobufsAICommonDeprecated.AIRichResponseSubMessage.decode!(
-                         delimited
-                       )
-                     ]
+                     [WAAICommonDeprecated.AIRichResponseSubMessage.decode!(delimited)]
                ], rest}
 
             {3, _, bytes} ->
@@ -254,10 +247,8 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
       %{
         1 =>
           {:messageType, {:scalar, :AI_RICH_RESPONSE_TYPE_UNKNOWN},
-           {:enum, WAWebProtobufsAICommonDeprecated.AIRichResponseMessageType}},
-        2 =>
-          {:submessages, :unpacked,
-           {:message, WAWebProtobufsAICommonDeprecated.AIRichResponseSubMessage}},
+           {:enum, WAAICommonDeprecated.AIRichResponseMessageType}},
+        2 => {:submessages, :unpacked, {:message, WAAICommonDeprecated.AIRichResponseSubMessage}},
         3 =>
           {:unifiedResponse, {:scalar, nil},
            {:message, WAWebProtobufsAICommon.AIRichResponseUnifiedResponse}},
@@ -274,9 +265,8 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
         contextInfo: {4, {:scalar, nil}, {:message, WAWebProtobufsE2E.ContextInfo}},
         messageType:
           {1, {:scalar, :AI_RICH_RESPONSE_TYPE_UNKNOWN},
-           {:enum, WAWebProtobufsAICommonDeprecated.AIRichResponseMessageType}},
-        submessages:
-          {2, :unpacked, {:message, WAWebProtobufsAICommonDeprecated.AIRichResponseSubMessage}},
+           {:enum, WAAICommonDeprecated.AIRichResponseMessageType}},
+        submessages: {2, :unpacked, {:message, WAAICommonDeprecated.AIRichResponseSubMessage}},
         unifiedResponse:
           {3, {:scalar, nil}, {:message, WAWebProtobufsAICommon.AIRichResponseUnifiedResponse}}
       }
@@ -294,7 +284,7 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
           label: :optional,
           name: :messageType,
           tag: 1,
-          type: {:enum, WAWebProtobufsAICommonDeprecated.AIRichResponseMessageType}
+          type: {:enum, WAAICommonDeprecated.AIRichResponseMessageType}
         },
         %{
           __struct__: Protox.Field,
@@ -303,7 +293,7 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
           label: :repeated,
           name: :submessages,
           tag: 2,
-          type: {:message, WAWebProtobufsAICommonDeprecated.AIRichResponseSubMessage}
+          type: {:message, WAAICommonDeprecated.AIRichResponseSubMessage}
         },
         %{
           __struct__: Protox.Field,
@@ -338,7 +328,7 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
              label: :optional,
              name: :messageType,
              tag: 1,
-             type: {:enum, WAWebProtobufsAICommonDeprecated.AIRichResponseMessageType}
+             type: {:enum, WAAICommonDeprecated.AIRichResponseMessageType}
            }}
         end
 
@@ -351,7 +341,7 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
              label: :optional,
              name: :messageType,
              tag: 1,
-             type: {:enum, WAWebProtobufsAICommonDeprecated.AIRichResponseMessageType}
+             type: {:enum, WAAICommonDeprecated.AIRichResponseMessageType}
            }}
         end
 
@@ -367,7 +357,7 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
              label: :repeated,
              name: :submessages,
              tag: 2,
-             type: {:message, WAWebProtobufsAICommonDeprecated.AIRichResponseSubMessage}
+             type: {:message, WAAICommonDeprecated.AIRichResponseSubMessage}
            }}
         end
 
@@ -380,7 +370,7 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
              label: :repeated,
              name: :submessages,
              tag: 2,
-             type: {:message, WAWebProtobufsAICommonDeprecated.AIRichResponseSubMessage}
+             type: {:message, WAAICommonDeprecated.AIRichResponseSubMessage}
            }}
         end
 

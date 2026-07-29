@@ -1,7 +1,7 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo do
   @moduledoc false
-  defstruct type: nil, __uf__: []
+  defstruct type: nil, sourceChatJID: nil, __uf__: []
 
   (
     (
@@ -16,7 +16,7 @@ defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo do
 
       @spec encode!(struct) :: iodata | no_return
       def encode!(msg) do
-        [] |> encode_type(msg) |> encode_unknown_fields(msg)
+        [] |> encode_type(msg) |> encode_sourceChatJID(msg) |> encode_unknown_fields(msg)
       end
     )
 
@@ -41,6 +41,18 @@ defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:type, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_sourceChatJID(acc, msg) do
+        try do
+          case msg.sourceChatJID do
+            nil -> acc
+            _ -> [acc, "\x12", Protox.Encode.encode_string(msg.sourceChatJID)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:sourceChatJID, "invalid field value"),
+                    __STACKTRACE__
         end
       end
     ]
@@ -106,6 +118,11 @@ defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo do
 
               {[type: value], rest}
 
+            {2, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[sourceChatJID: Protox.Decode.validate_string!(delimited)], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -169,7 +186,8 @@ defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo do
       %{
         1 =>
           {:type, {:scalar, :UNKNOWN},
-           {:enum, WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo.AIThreadType}}
+           {:enum, WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo.AIThreadType}},
+        2 => {:sourceChatJID, {:scalar, ""}, :string}
       }
     end
 
@@ -179,6 +197,7 @@ defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo do
           }
     def defs_by_name() do
       %{
+        sourceChatJID: {2, {:scalar, ""}, :string},
         type:
           {1, {:scalar, :UNKNOWN},
            {:enum, WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo.AIThreadType}}
@@ -198,6 +217,15 @@ defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo do
           name: :type,
           tag: 1,
           type: {:enum, WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo.AIThreadType}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "sourceChatJID",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :sourceChatJID,
+          tag: 2,
+          type: :string
         }
       ]
     end
@@ -228,6 +256,35 @@ defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo do
              name: :type,
              tag: 1,
              type: {:enum, WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo.AIThreadType}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:sourceChatJID) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "sourceChatJID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :sourceChatJID,
+             tag: 2,
+             type: :string
+           }}
+        end
+
+        def field_def("sourceChatJID") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "sourceChatJID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :sourceChatJID,
+             tag: 2,
+             type: :string
            }}
         end
 
@@ -274,6 +331,9 @@ defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo do
     @spec(default(atom) :: {:ok, boolean | integer | String.t() | float} | {:error, atom}),
     def default(:type) do
       {:ok, :UNKNOWN}
+    end,
+    def default(:sourceChatJID) do
+      {:ok, ""}
     end,
     def default(_) do
       {:error, :no_such_field}

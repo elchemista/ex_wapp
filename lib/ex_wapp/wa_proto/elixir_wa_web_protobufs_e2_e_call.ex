@@ -12,6 +12,7 @@ defmodule WAWebProtobufsE2E.Call do
             deeplinkPayload: nil,
             messageContextInfo: nil,
             callEntryPoint: nil,
+            callReason: nil,
             __uf__: []
 
   (
@@ -39,6 +40,7 @@ defmodule WAWebProtobufsE2E.Call do
         |> encode_deeplinkPayload(msg)
         |> encode_messageContextInfo(msg)
         |> encode_callEntryPoint(msg)
+        |> encode_callReason(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -173,6 +175,17 @@ defmodule WAWebProtobufsE2E.Call do
             reraise Protox.EncodingError.new(:callEntryPoint, "invalid field value"),
                     __STACKTRACE__
         end
+      end,
+      defp encode_callReason(acc, msg) do
+        try do
+          case msg.callReason do
+            nil -> acc
+            _ -> [acc, "b", Protox.Encode.encode_string(msg.callReason)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:callReason, "invalid field value"), __STACKTRACE__
+        end
       end
     ]
 
@@ -295,6 +308,11 @@ defmodule WAWebProtobufsE2E.Call do
               {value, rest} = Protox.Decode.parse_uint32(bytes)
               {[callEntryPoint: value], rest}
 
+            {12, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[callReason: Protox.Decode.validate_string!(delimited)], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -367,7 +385,8 @@ defmodule WAWebProtobufsE2E.Call do
         9 => {:deeplinkPayload, {:scalar, ""}, :string},
         10 =>
           {:messageContextInfo, {:scalar, nil}, {:message, WAWebProtobufsE2E.MessageContextInfo}},
-        11 => {:callEntryPoint, {:scalar, 0}, :uint32}
+        11 => {:callEntryPoint, {:scalar, 0}, :uint32},
+        12 => {:callReason, {:scalar, ""}, :string}
       }
     end
 
@@ -379,6 +398,7 @@ defmodule WAWebProtobufsE2E.Call do
       %{
         callEntryPoint: {11, {:scalar, 0}, :uint32},
         callKey: {1, {:scalar, ""}, :bytes},
+        callReason: {12, {:scalar, ""}, :string},
         contextInfo: {7, {:scalar, nil}, {:message, WAWebProtobufsE2E.ContextInfo}},
         conversionData: {3, {:scalar, ""}, :bytes},
         conversionDelaySeconds: {4, {:scalar, 0}, :uint32},
@@ -495,6 +515,15 @@ defmodule WAWebProtobufsE2E.Call do
           name: :callEntryPoint,
           tag: 11,
           type: :uint32
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "callReason",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :callReason,
+          tag: 12,
+          type: :string
         }
       ]
     end
@@ -820,6 +849,35 @@ defmodule WAWebProtobufsE2E.Call do
 
         []
       ),
+      (
+        def field_def(:callReason) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "callReason",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :callReason,
+             tag: 12,
+             type: :string
+           }}
+        end
+
+        def field_def("callReason") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "callReason",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :callReason,
+             tag: 12,
+             type: :string
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -891,6 +949,9 @@ defmodule WAWebProtobufsE2E.Call do
     end,
     def default(:callEntryPoint) do
       {:ok, 0}
+    end,
+    def default(:callReason) do
+      {:ok, ""}
     end,
     def default(_) do
       {:error, :no_such_field}

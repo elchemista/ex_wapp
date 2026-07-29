@@ -1,7 +1,7 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsAICommon.AIMediaCollectionMetadata do
   @moduledoc false
-  defstruct collectionID: nil, __uf__: []
+  defstruct collectionID: nil, uploadOrderIndex: nil, __uf__: []
 
   (
     (
@@ -16,7 +16,10 @@ defmodule WAWebProtobufsAICommon.AIMediaCollectionMetadata do
 
       @spec encode!(struct) :: iodata | no_return
       def encode!(msg) do
-        [] |> encode_collectionID(msg) |> encode_unknown_fields(msg)
+        []
+        |> encode_collectionID(msg)
+        |> encode_uploadOrderIndex(msg)
+        |> encode_unknown_fields(msg)
       end
     )
 
@@ -32,6 +35,18 @@ defmodule WAWebProtobufsAICommon.AIMediaCollectionMetadata do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:collectionID, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_uploadOrderIndex(acc, msg) do
+        try do
+          case msg.uploadOrderIndex do
+            nil -> acc
+            _ -> [acc, "\x10", Protox.Encode.encode_uint32(msg.uploadOrderIndex)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:uploadOrderIndex, "invalid field value"),
+                    __STACKTRACE__
         end
       end
     ]
@@ -93,6 +108,10 @@ defmodule WAWebProtobufsAICommon.AIMediaCollectionMetadata do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[collectionID: Protox.Decode.validate_string!(delimited)], rest}
 
+            {2, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_uint32(bytes)
+              {[uploadOrderIndex: value], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -153,7 +172,10 @@ defmodule WAWebProtobufsAICommon.AIMediaCollectionMetadata do
             required(non_neg_integer) => {atom, Protox.Types.kind(), Protox.Types.type()}
           }
     def defs() do
-      %{1 => {:collectionID, {:scalar, ""}, :string}}
+      %{
+        1 => {:collectionID, {:scalar, ""}, :string},
+        2 => {:uploadOrderIndex, {:scalar, 0}, :uint32}
+      }
     end
 
     @deprecated "Use fields_defs()/0 instead"
@@ -161,7 +183,7 @@ defmodule WAWebProtobufsAICommon.AIMediaCollectionMetadata do
             required(atom) => {non_neg_integer, Protox.Types.kind(), Protox.Types.type()}
           }
     def defs_by_name() do
-      %{collectionID: {1, {:scalar, ""}, :string}}
+      %{collectionID: {1, {:scalar, ""}, :string}, uploadOrderIndex: {2, {:scalar, 0}, :uint32}}
     end
   )
 
@@ -177,6 +199,15 @@ defmodule WAWebProtobufsAICommon.AIMediaCollectionMetadata do
           name: :collectionID,
           tag: 1,
           type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "uploadOrderIndex",
+          kind: {:scalar, 0},
+          label: :optional,
+          name: :uploadOrderIndex,
+          tag: 2,
+          type: :uint32
         }
       ]
     end
@@ -207,6 +238,35 @@ defmodule WAWebProtobufsAICommon.AIMediaCollectionMetadata do
              name: :collectionID,
              tag: 1,
              type: :string
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:uploadOrderIndex) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "uploadOrderIndex",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :uploadOrderIndex,
+             tag: 2,
+             type: :uint32
+           }}
+        end
+
+        def field_def("uploadOrderIndex") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "uploadOrderIndex",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :uploadOrderIndex,
+             tag: 2,
+             type: :uint32
            }}
         end
 
@@ -253,6 +313,9 @@ defmodule WAWebProtobufsAICommon.AIMediaCollectionMetadata do
     @spec(default(atom) :: {:ok, boolean | integer | String.t() | float} | {:error, atom}),
     def default(:collectionID) do
       {:ok, ""}
+    end,
+    def default(:uploadOrderIndex) do
+      {:ok, 0}
     end,
     def default(_) do
       {:error, :no_such_field}

@@ -48,15 +48,6 @@ defmodule WACommon.LimitSharing.Trigger do
         def encode("UNKNOWN_GROUP") do
           3
         end
-      ),
-      (
-        def encode(:DEPRECATION) do
-          4
-        end
-
-        def encode("DEPRECATION") do
-          4
-        end
       )
     ]
 
@@ -77,9 +68,6 @@ defmodule WACommon.LimitSharing.Trigger do
       end,
       def decode(3) do
         :UNKNOWN_GROUP
-      end,
-      def decode(4) do
-        :DEPRECATION
       end
     ]
 
@@ -89,13 +77,7 @@ defmodule WACommon.LimitSharing.Trigger do
 
     @spec constants() :: [{integer(), atom()}]
     def constants() do
-      [
-        {0, :UNKNOWN},
-        {1, :CHAT_SETTING},
-        {2, :BIZ_SUPPORTS_FB_HOSTING},
-        {3, :UNKNOWN_GROUP},
-        {4, :DEPRECATION}
-      ]
+      [{0, :UNKNOWN}, {1, :CHAT_SETTING}, {2, :BIZ_SUPPORTS_FB_HOSTING}, {3, :UNKNOWN_GROUP}]
     end
 
     @spec has_constant?(any()) :: boolean()
@@ -111,9 +93,6 @@ defmodule WACommon.LimitSharing.Trigger do
           true
         end,
         def has_constant?(:UNKNOWN_GROUP) do
-          true
-        end,
-        def has_constant?(:DEPRECATION) do
           true
         end
       ]

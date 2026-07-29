@@ -1,7 +1,13 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsWa6.HandshakeMessage.ServerHello do
   @moduledoc false
-  defstruct ephemeral: nil, static: nil, payload: nil, __uf__: []
+  defstruct ephemeral: nil,
+            static: nil,
+            payload: nil,
+            extendedStatic: nil,
+            paddingBytes: nil,
+            extendedCiphertext: nil,
+            __uf__: []
 
   (
     (
@@ -20,6 +26,9 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ServerHello do
         |> encode_ephemeral(msg)
         |> encode_static(msg)
         |> encode_payload(msg)
+        |> encode_extendedStatic(msg)
+        |> encode_paddingBytes(msg)
+        |> encode_extendedCiphertext(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -58,6 +67,41 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ServerHello do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:payload, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_extendedStatic(acc, msg) do
+        try do
+          case msg.extendedStatic do
+            nil -> acc
+            _ -> [acc, "\"", Protox.Encode.encode_bytes(msg.extendedStatic)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:extendedStatic, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_paddingBytes(acc, msg) do
+        try do
+          case msg.paddingBytes do
+            nil -> acc
+            _ -> [acc, "*", Protox.Encode.encode_bytes(msg.paddingBytes)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:paddingBytes, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_extendedCiphertext(acc, msg) do
+        try do
+          case msg.extendedCiphertext do
+            nil -> acc
+            _ -> [acc, "2", Protox.Encode.encode_bytes(msg.extendedCiphertext)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:extendedCiphertext, "invalid field value"),
+                    __STACKTRACE__
         end
       end
     ]
@@ -129,6 +173,21 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ServerHello do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[payload: delimited], rest}
 
+            {4, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[extendedStatic: delimited], rest}
+
+            {5, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[paddingBytes: delimited], rest}
+
+            {6, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[extendedCiphertext: delimited], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -192,7 +251,10 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ServerHello do
       %{
         1 => {:ephemeral, {:scalar, ""}, :bytes},
         2 => {:static, {:scalar, ""}, :bytes},
-        3 => {:payload, {:scalar, ""}, :bytes}
+        3 => {:payload, {:scalar, ""}, :bytes},
+        4 => {:extendedStatic, {:scalar, ""}, :bytes},
+        5 => {:paddingBytes, {:scalar, ""}, :bytes},
+        6 => {:extendedCiphertext, {:scalar, ""}, :bytes}
       }
     end
 
@@ -203,6 +265,9 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ServerHello do
     def defs_by_name() do
       %{
         ephemeral: {1, {:scalar, ""}, :bytes},
+        extendedCiphertext: {6, {:scalar, ""}, :bytes},
+        extendedStatic: {4, {:scalar, ""}, :bytes},
+        paddingBytes: {5, {:scalar, ""}, :bytes},
         payload: {3, {:scalar, ""}, :bytes},
         static: {2, {:scalar, ""}, :bytes}
       }
@@ -238,6 +303,33 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ServerHello do
           label: :optional,
           name: :payload,
           tag: 3,
+          type: :bytes
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "extendedStatic",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :extendedStatic,
+          tag: 4,
+          type: :bytes
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "paddingBytes",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :paddingBytes,
+          tag: 5,
+          type: :bytes
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "extendedCiphertext",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :extendedCiphertext,
+          tag: 6,
           type: :bytes
         }
       ]
@@ -332,6 +424,93 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ServerHello do
 
         []
       ),
+      (
+        def field_def(:extendedStatic) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "extendedStatic",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :extendedStatic,
+             tag: 4,
+             type: :bytes
+           }}
+        end
+
+        def field_def("extendedStatic") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "extendedStatic",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :extendedStatic,
+             tag: 4,
+             type: :bytes
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:paddingBytes) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "paddingBytes",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :paddingBytes,
+             tag: 5,
+             type: :bytes
+           }}
+        end
+
+        def field_def("paddingBytes") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "paddingBytes",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :paddingBytes,
+             tag: 5,
+             type: :bytes
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:extendedCiphertext) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "extendedCiphertext",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :extendedCiphertext,
+             tag: 6,
+             type: :bytes
+           }}
+        end
+
+        def field_def("extendedCiphertext") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "extendedCiphertext",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :extendedCiphertext,
+             tag: 6,
+             type: :bytes
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -378,6 +557,15 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ServerHello do
       {:ok, ""}
     end,
     def default(:payload) do
+      {:ok, ""}
+    end,
+    def default(:extendedStatic) do
+      {:ok, ""}
+    end,
+    def default(:paddingBytes) do
+      {:ok, ""}
+    end,
+    def default(:extendedCiphertext) do
       {:ok, ""}
     end,
     def default(_) do

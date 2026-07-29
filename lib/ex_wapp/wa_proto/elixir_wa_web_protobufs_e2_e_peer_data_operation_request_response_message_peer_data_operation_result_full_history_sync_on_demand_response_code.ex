@@ -75,6 +75,15 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
         def encode("ERROR_HOSTED_DEVICE_LOGIN_TIME_NOT_SET") do
           6
         end
+      ),
+      (
+        def encode(:ERROR_MULTI_PROVIDER_NOT_CONFIGURED) do
+          7
+        end
+
+        def encode("ERROR_MULTI_PROVIDER_NOT_CONFIGURED") do
+          7
+        end
       )
     ]
 
@@ -104,6 +113,9 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
       end,
       def decode(6) do
         :ERROR_HOSTED_DEVICE_LOGIN_TIME_NOT_SET
+      end,
+      def decode(7) do
+        :ERROR_MULTI_PROVIDER_NOT_CONFIGURED
       end
     ]
 
@@ -120,7 +132,8 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
         {3, :GENERIC_ERROR},
         {4, :ERROR_REQUEST_ON_NON_SMB_PRIMARY},
         {5, :ERROR_HOSTED_DEVICE_NOT_CONNECTED},
-        {6, :ERROR_HOSTED_DEVICE_LOGIN_TIME_NOT_SET}
+        {6, :ERROR_HOSTED_DEVICE_LOGIN_TIME_NOT_SET},
+        {7, :ERROR_MULTI_PROVIDER_NOT_CONFIGURED}
       ]
     end
 
@@ -146,6 +159,9 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
           true
         end,
         def has_constant?(:ERROR_HOSTED_DEVICE_LOGIN_TIME_NOT_SET) do
+          true
+        end,
+        def has_constant?(:ERROR_MULTI_PROVIDER_NOT_CONFIGURED) do
           true
         end
       ]

@@ -7,6 +7,7 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandR
             onDemandMsgCount: nil,
             oldestMsgTimestampMS: nil,
             accountLid: nil,
+            supportInlineResponse: nil,
             __uf__: []
 
   (
@@ -29,6 +30,7 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandR
         |> encode_onDemandMsgCount(msg)
         |> encode_oldestMsgTimestampMS(msg)
         |> encode_accountLid(msg)
+        |> encode_supportInlineResponse(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -103,6 +105,18 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandR
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:accountLid, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_supportInlineResponse(acc, msg) do
+        try do
+          case msg.supportInlineResponse do
+            nil -> acc
+            _ -> [acc, "8", Protox.Encode.encode_bool(msg.supportInlineResponse)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:supportInlineResponse, "invalid field value"),
+                    __STACKTRACE__
         end
       end
     ]
@@ -189,6 +203,10 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandR
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[accountLid: Protox.Decode.validate_string!(delimited)], rest}
 
+            {7, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_bool(bytes)
+              {[supportInlineResponse: value], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -255,7 +273,8 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandR
         3 => {:oldestMsgFromMe, {:scalar, false}, :bool},
         4 => {:onDemandMsgCount, {:scalar, 0}, :int32},
         5 => {:oldestMsgTimestampMS, {:scalar, 0}, :int64},
-        6 => {:accountLid, {:scalar, ""}, :string}
+        6 => {:accountLid, {:scalar, ""}, :string},
+        7 => {:supportInlineResponse, {:scalar, false}, :bool}
       }
     end
 
@@ -270,7 +289,8 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandR
         oldestMsgFromMe: {3, {:scalar, false}, :bool},
         oldestMsgID: {2, {:scalar, ""}, :string},
         oldestMsgTimestampMS: {5, {:scalar, 0}, :int64},
-        onDemandMsgCount: {4, {:scalar, 0}, :int32}
+        onDemandMsgCount: {4, {:scalar, 0}, :int32},
+        supportInlineResponse: {7, {:scalar, false}, :bool}
       }
     end
   )
@@ -332,6 +352,15 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandR
           name: :accountLid,
           tag: 6,
           type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "supportInlineResponse",
+          kind: {:scalar, false},
+          label: :optional,
+          name: :supportInlineResponse,
+          tag: 7,
+          type: :bool
         }
       ]
     end
@@ -512,6 +541,35 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandR
 
         []
       ),
+      (
+        def field_def(:supportInlineResponse) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "supportInlineResponse",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :supportInlineResponse,
+             tag: 7,
+             type: :bool
+           }}
+        end
+
+        def field_def("supportInlineResponse") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "supportInlineResponse",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :supportInlineResponse,
+             tag: 7,
+             type: :bool
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -568,6 +626,9 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandR
     end,
     def default(:accountLid) do
       {:ok, ""}
+    end,
+    def default(:supportInlineResponse) do
+      {:ok, false}
     end,
     def default(_) do
       {:error, :no_such_field}

@@ -2,9 +2,10 @@
 defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
   @moduledoc false
   defstruct historyReceivers: [],
-            oldestMessageTimestamp: nil,
+            oldestMessageTimestampInWindow: nil,
             messageCount: nil,
             nonHistoryReceivers: [],
+            oldestMessageTimestampInBundle: nil,
             __uf__: []
 
   (
@@ -22,9 +23,10 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
       def encode!(msg) do
         []
         |> encode_historyReceivers(msg)
-        |> encode_oldestMessageTimestamp(msg)
+        |> encode_oldestMessageTimestampInWindow(msg)
         |> encode_messageCount(msg)
         |> encode_nonHistoryReceivers(msg)
+        |> encode_oldestMessageTimestampInBundle(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -52,15 +54,18 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
                     __STACKTRACE__
         end
       end,
-      defp encode_oldestMessageTimestamp(acc, msg) do
+      defp encode_oldestMessageTimestampInWindow(acc, msg) do
         try do
-          case msg.oldestMessageTimestamp do
+          case msg.oldestMessageTimestampInWindow do
             nil -> acc
-            _ -> [acc, "\x10", Protox.Encode.encode_int64(msg.oldestMessageTimestamp)]
+            _ -> [acc, "\x10", Protox.Encode.encode_int64(msg.oldestMessageTimestampInWindow)]
           end
         rescue
           ArgumentError ->
-            reraise Protox.EncodingError.new(:oldestMessageTimestamp, "invalid field value"),
+            reraise Protox.EncodingError.new(
+                      :oldestMessageTimestampInWindow,
+                      "invalid field value"
+                    ),
                     __STACKTRACE__
         end
       end,
@@ -92,6 +97,21 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:nonHistoryReceivers, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_oldestMessageTimestampInBundle(acc, msg) do
+        try do
+          case msg.oldestMessageTimestampInBundle do
+            nil -> acc
+            _ -> [acc, "(", Protox.Encode.encode_int64(msg.oldestMessageTimestampInBundle)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :oldestMessageTimestampInBundle,
+                      "invalid field value"
+                    ),
                     __STACKTRACE__
         end
       end
@@ -160,7 +180,7 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
 
             {2, _, bytes} ->
               {value, rest} = Protox.Decode.parse_int64(bytes)
-              {[oldestMessageTimestamp: value], rest}
+              {[oldestMessageTimestampInWindow: value], rest}
 
             {3, _, bytes} ->
               {value, rest} = Protox.Decode.parse_int64(bytes)
@@ -174,6 +194,10 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
                  nonHistoryReceivers:
                    msg.nonHistoryReceivers ++ [Protox.Decode.validate_string!(delimited)]
                ], rest}
+
+            {5, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_int64(bytes)
+              {[oldestMessageTimestampInBundle: value], rest}
 
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
@@ -237,9 +261,10 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
     def defs() do
       %{
         1 => {:historyReceivers, :unpacked, :string},
-        2 => {:oldestMessageTimestamp, {:scalar, 0}, :int64},
+        2 => {:oldestMessageTimestampInWindow, {:scalar, 0}, :int64},
         3 => {:messageCount, {:scalar, 0}, :int64},
-        4 => {:nonHistoryReceivers, :unpacked, :string}
+        4 => {:nonHistoryReceivers, :unpacked, :string},
+        5 => {:oldestMessageTimestampInBundle, {:scalar, 0}, :int64}
       }
     end
 
@@ -252,7 +277,8 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
         historyReceivers: {1, :unpacked, :string},
         messageCount: {3, {:scalar, 0}, :int64},
         nonHistoryReceivers: {4, :unpacked, :string},
-        oldestMessageTimestamp: {2, {:scalar, 0}, :int64}
+        oldestMessageTimestampInBundle: {5, {:scalar, 0}, :int64},
+        oldestMessageTimestampInWindow: {2, {:scalar, 0}, :int64}
       }
     end
   )
@@ -272,10 +298,10 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
         },
         %{
           __struct__: Protox.Field,
-          json_name: "oldestMessageTimestamp",
+          json_name: "oldestMessageTimestampInWindow",
           kind: {:scalar, 0},
           label: :optional,
-          name: :oldestMessageTimestamp,
+          name: :oldestMessageTimestampInWindow,
           tag: 2,
           type: :int64
         },
@@ -296,6 +322,15 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
           name: :nonHistoryReceivers,
           tag: 4,
           type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "oldestMessageTimestampInBundle",
+          kind: {:scalar, 0},
+          label: :optional,
+          name: :oldestMessageTimestampInBundle,
+          tag: 5,
+          type: :int64
         }
       ]
     end
@@ -332,27 +367,27 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
         []
       ),
       (
-        def field_def(:oldestMessageTimestamp) do
+        def field_def(:oldestMessageTimestampInWindow) do
           {:ok,
            %{
              __struct__: Protox.Field,
-             json_name: "oldestMessageTimestamp",
+             json_name: "oldestMessageTimestampInWindow",
              kind: {:scalar, 0},
              label: :optional,
-             name: :oldestMessageTimestamp,
+             name: :oldestMessageTimestampInWindow,
              tag: 2,
              type: :int64
            }}
         end
 
-        def field_def("oldestMessageTimestamp") do
+        def field_def("oldestMessageTimestampInWindow") do
           {:ok,
            %{
              __struct__: Protox.Field,
-             json_name: "oldestMessageTimestamp",
+             json_name: "oldestMessageTimestampInWindow",
              kind: {:scalar, 0},
              label: :optional,
-             name: :oldestMessageTimestamp,
+             name: :oldestMessageTimestampInWindow,
              tag: 2,
              type: :int64
            }}
@@ -418,6 +453,35 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
 
         []
       ),
+      (
+        def field_def(:oldestMessageTimestampInBundle) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "oldestMessageTimestampInBundle",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :oldestMessageTimestampInBundle,
+             tag: 5,
+             type: :int64
+           }}
+        end
+
+        def field_def("oldestMessageTimestampInBundle") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "oldestMessageTimestampInBundle",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :oldestMessageTimestampInBundle,
+             tag: 5,
+             type: :int64
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -460,7 +524,7 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
     def default(:historyReceivers) do
       {:error, :no_default_value}
     end,
-    def default(:oldestMessageTimestamp) do
+    def default(:oldestMessageTimestampInWindow) do
       {:ok, 0}
     end,
     def default(:messageCount) do
@@ -468,6 +532,9 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
     end,
     def default(:nonHistoryReceivers) do
       {:error, :no_default_value}
+    end,
+    def default(:oldestMessageTimestampInBundle) do
+      {:ok, 0}
     end,
     def default(_) do
       {:error, :no_such_field}

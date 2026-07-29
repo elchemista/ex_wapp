@@ -93,6 +93,24 @@ defmodule WAStatusAttributions.StatusAttribution.Type do
         def encode("LAYOUTS") do
           8
         end
+      ),
+      (
+        def encode(:NEWSLETTER_STATUS) do
+          9
+        end
+
+        def encode("NEWSLETTER_STATUS") do
+          9
+        end
+      ),
+      (
+        def encode(:STATUS_CLOSE_SHARING) do
+          10
+        end
+
+        def encode("STATUS_CLOSE_SHARING") do
+          10
+        end
       )
     ]
 
@@ -128,6 +146,12 @@ defmodule WAStatusAttributions.StatusAttribution.Type do
       end,
       def decode(8) do
         :LAYOUTS
+      end,
+      def decode(9) do
+        :NEWSLETTER_STATUS
+      end,
+      def decode(10) do
+        :STATUS_CLOSE_SHARING
       end
     ]
 
@@ -146,7 +170,9 @@ defmodule WAStatusAttributions.StatusAttribution.Type do
         {5, :GROUP_STATUS},
         {6, :RL_ATTRIBUTION},
         {7, :AI_CREATED},
-        {8, :LAYOUTS}
+        {8, :LAYOUTS},
+        {9, :NEWSLETTER_STATUS},
+        {10, :STATUS_CLOSE_SHARING}
       ]
     end
 
@@ -178,6 +204,12 @@ defmodule WAStatusAttributions.StatusAttribution.Type do
           true
         end,
         def has_constant?(:LAYOUTS) do
+          true
+        end,
+        def has_constant?(:NEWSLETTER_STATUS) do
+          true
+        end,
+        def has_constant?(:STATUS_CLOSE_SHARING) do
           true
         end
       ]

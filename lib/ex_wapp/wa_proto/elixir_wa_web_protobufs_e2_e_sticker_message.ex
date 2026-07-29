@@ -22,6 +22,7 @@ defmodule WAWebProtobufsE2E.StickerMessage do
             isLottie: nil,
             accessibilityLabel: nil,
             premium: nil,
+            emojis: nil,
             __uf__: []
 
   (
@@ -59,6 +60,7 @@ defmodule WAWebProtobufsE2E.StickerMessage do
         |> encode_isLottie(msg)
         |> encode_accessibilityLabel(msg)
         |> encode_premium(msg)
+        |> encode_emojis(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -302,6 +304,17 @@ defmodule WAWebProtobufsE2E.StickerMessage do
           ArgumentError ->
             reraise Protox.EncodingError.new(:premium, "invalid field value"), __STACKTRACE__
         end
+      end,
+      defp encode_emojis(acc, msg) do
+        try do
+          case msg.emojis do
+            nil -> acc
+            _ -> [acc, "\xCA\x01", Protox.Encode.encode_string(msg.emojis)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:emojis, "invalid field value"), __STACKTRACE__
+        end
       end
     ]
 
@@ -458,6 +471,11 @@ defmodule WAWebProtobufsE2E.StickerMessage do
               {value, rest} = Protox.Decode.parse_int32(bytes)
               {[premium: value], rest}
 
+            {25, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[emojis: Protox.Decode.validate_string!(delimited)], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -539,7 +557,8 @@ defmodule WAWebProtobufsE2E.StickerMessage do
         20 => {:isAiSticker, {:scalar, false}, :bool},
         21 => {:isLottie, {:scalar, false}, :bool},
         22 => {:accessibilityLabel, {:scalar, ""}, :string},
-        24 => {:premium, {:scalar, 0}, :int32}
+        24 => {:premium, {:scalar, 0}, :int32},
+        25 => {:emojis, {:scalar, ""}, :string}
       }
     end
 
@@ -553,6 +572,7 @@ defmodule WAWebProtobufsE2E.StickerMessage do
         accessibilityLabel: {22, {:scalar, ""}, :string},
         contextInfo: {17, {:scalar, nil}, {:message, WAWebProtobufsE2E.ContextInfo}},
         directPath: {8, {:scalar, ""}, :string},
+        emojis: {25, {:scalar, ""}, :string},
         fileEncSHA256: {3, {:scalar, ""}, :bytes},
         fileLength: {9, {:scalar, 0}, :uint64},
         fileSHA256: {2, {:scalar, ""}, :bytes},
@@ -766,6 +786,15 @@ defmodule WAWebProtobufsE2E.StickerMessage do
           name: :premium,
           tag: 24,
           type: :int32
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "emojis",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :emojis,
+          tag: 25,
+          type: :string
         }
       ]
     end
@@ -1381,6 +1410,35 @@ defmodule WAWebProtobufsE2E.StickerMessage do
 
         []
       ),
+      (
+        def field_def(:emojis) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "emojis",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :emojis,
+             tag: 25,
+             type: :string
+           }}
+        end
+
+        def field_def("emojis") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "emojis",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :emojis,
+             tag: 25,
+             type: :string
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -1482,6 +1540,9 @@ defmodule WAWebProtobufsE2E.StickerMessage do
     end,
     def default(:premium) do
       {:ok, 0}
+    end,
+    def default(:emojis) do
+      {:ok, ""}
     end,
     def default(_) do
       {:error, :no_such_field}
