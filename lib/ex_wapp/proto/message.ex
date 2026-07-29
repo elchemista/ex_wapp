@@ -212,10 +212,10 @@ defmodule ExWapp.Proto.ContextInfo do
     end)
   end
 
-  # Field 18: isForwarded (bool)
+  # Field 22: isForwarded (bool); 18 is conversionSource, a different field.
   defp encode_is_forwarded(acc, %{isForwarded: nil}), do: acc
-  defp encode_is_forwarded(acc, %{isForwarded: true}), do: [acc, <<0x90, 0x01, 0x01>>]
-  defp encode_is_forwarded(acc, %{isForwarded: false}), do: [acc, <<0x90, 0x01, 0x00>>]
+  defp encode_is_forwarded(acc, %{isForwarded: true}), do: [acc, <<0xB0, 0x01, 0x01>>]
+  defp encode_is_forwarded(acc, %{isForwarded: false}), do: [acc, <<0xB0, 0x01, 0x00>>]
 
   defp encode_varint(n) when n < 128, do: <<n::8>>
 
