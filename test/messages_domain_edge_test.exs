@@ -1,12 +1,12 @@
 defmodule ExWapp.MessagesDomainEdgeTest do
   @moduledoc """
-  Coverage for the hand-rolled message builders in `ExWapp.Messages`.
+  Wire-format coverage for the message builders in `ExWapp.Messages`.
 
-  The media and event builders write raw protobuf bytes (field numbers, wire
-  types, defaults) without a schema library, so nothing but a test notices a
-  field moving to the wrong number or wire type — and the receiving phone
-  decodes exactly these bytes. The assertions here parse the emitted payloads
-  back into `{field, wire_type, value}` triples and pin the mapping.
+  The builders assemble protox structs generated from WhatsApp's official
+  protos, but the receiving phone decodes bytes, not structs — so these
+  assertions encode each payload and parse it back into
+  `{field, wire_type, value}` triples, pinning every field to its protobuf
+  number and wire type independently of the encoder implementation.
   """
 
   use ExUnit.Case, async: true
@@ -16,7 +16,7 @@ defmodule ExWapp.MessagesDomainEdgeTest do
   alias ExWapp.Binary.Node
   alias ExWapp.Media.Upload
   alias ExWapp.Messages
-  alias ExWapp.Proto.ContextInfo
+  alias WAWebProtobufsE2E.ContextInfo
 
   @jid "15550001111@s.whatsapp.net"
   @group "120363000000000000@g.us"
@@ -79,14 +79,15 @@ defmodule ExWapp.MessagesDomainEdgeTest do
     test "every populated field lands on its protobuf number and wire type" do
       upload = upload_fixture()
 
-      [{3, 2, payload}] =
+      payload =
         Messages.build_image_proto(upload,
           caption: "look",
           height: 480,
           width: 640,
           jpeg_thumbnail: <<0xFF, 0xD8>>,
           view_once: true
-        ).__uf__
+        )
+        |> message_field(3)
 
       fields = decode_fields(payload)
 
@@ -108,7 +109,7 @@ defmodule ExWapp.MessagesDomainEdgeTest do
     test "optional fields are absent rather than encoded empty" do
       # An empty caption field would render as a blank caption on the phone
       # instead of no caption.
-      [{3, 2, payload}] = Messages.build_image_proto(upload_fixture()).__uf__
+      payload = Messages.build_image_proto(upload_fixture()) |> message_field(3)
       field_numbers = payload |> decode_fields() |> Enum.map(&elem(&1, 0))
 
       refute 3 in field_numbers
@@ -118,12 +119,13 @@ defmodule ExWapp.MessagesDomainEdgeTest do
     end
 
     test "a quoted reply embeds ContextInfo on field 17" do
-      [{3, 2, payload}] =
+      payload =
         Messages.build_image_proto(upload_fixture(),
           quoted_id: "3EB0AA",
           quoted_participant: @jid,
           mentions: ["15550002222@s.whatsapp.net"]
-        ).__uf__
+        )
+        |> message_field(3)
 
       {17, :ld, context} = payload |> decode_fields() |> List.keyfind(17, 0)
       context_fields = decode_fields(context)
@@ -139,7 +141,7 @@ defmodule ExWapp.MessagesDomainEdgeTest do
       upload = upload_fixture()
 
       seconds = fn opts ->
-        [{8, 2, payload}] = Messages.build_audio_proto(upload, opts).__uf__
+        payload = Messages.build_audio_proto(upload, opts) |> message_field(8)
         {5, :varint, value} = List.keyfind(decode_fields(payload), 5, 0)
         value
       end
@@ -154,7 +156,7 @@ defmodule ExWapp.MessagesDomainEdgeTest do
       upload = upload_fixture()
 
       ptt = fn opts ->
-        [{8, 2, payload}] = Messages.build_audio_proto(upload, opts).__uf__
+        payload = Messages.build_audio_proto(upload, opts) |> message_field(8)
         {6, :varint, value} = List.keyfind(decode_fields(payload), 6, 0)
         value
       end
@@ -165,7 +167,9 @@ defmodule ExWapp.MessagesDomainEdgeTest do
 
     test "the waveform rides field 19" do
       waveform = :binary.copy(<<7>>, 64)
-      [{8, 2, payload}] = Messages.build_audio_proto(upload_fixture(), waveform: waveform).__uf__
+
+      payload =
+        Messages.build_audio_proto(upload_fixture(), waveform: waveform) |> message_field(8)
 
       assert {19, :ld, waveform} in decode_fields(payload)
     end
@@ -175,19 +179,20 @@ defmodule ExWapp.MessagesDomainEdgeTest do
     test "a document without a name still carries one" do
       # WhatsApp displays field 8 as the file name; a missing field renders
       # as an unnamed attachment on some clients.
-      [{7, 2, payload}] = Messages.build_document_proto(upload_fixture()).__uf__
+      payload = Messages.build_document_proto(upload_fixture()) |> message_field(7)
 
       assert {8, :ld, "document"} in decode_fields(payload)
     end
 
     test "title, page count and vcard flag land on their fields" do
-      [{7, 2, payload}] =
+      payload =
         Messages.build_document_proto(upload_fixture(),
           title: "Q3 report",
           file_name: "q3.pdf",
           page_count: 14,
           contact_vcard: true
-        ).__uf__
+        )
+        |> message_field(7)
 
       fields = decode_fields(payload)
       assert {3, :ld, "Q3 report"} in fields
@@ -199,8 +204,8 @@ defmodule ExWapp.MessagesDomainEdgeTest do
     test "the caption rides field 20, not the title field" do
       # DocumentMessage keeps title (3) and caption (20) distinct; a caption
       # landing on 3 would silently replace the display title.
-      [{7, 2, payload}] =
-        Messages.build_document_proto(upload_fixture(), caption: "read me").__uf__
+      payload =
+        Messages.build_document_proto(upload_fixture(), caption: "read me") |> message_field(7)
 
       fields = decode_fields(payload)
       assert {20, :ld, "read me"} in fields
@@ -211,7 +216,7 @@ defmodule ExWapp.MessagesDomainEdgeTest do
   describe "contact proto wire format" do
     test "display name and vcard land on fields 1 and 16 of message field 4" do
       vcard = "BEGIN:VCARD\nVERSION:3.0\nFN:Mario\nEND:VCARD"
-      [{4, 2, payload}] = Messages.build_contact_proto("Mario", vcard).__uf__
+      payload = Messages.build_contact_proto("Mario", vcard) |> message_field(4)
 
       fields = decode_fields(payload)
       assert {1, :ld, "Mario"} in fields
@@ -220,8 +225,9 @@ defmodule ExWapp.MessagesDomainEdgeTest do
     end
 
     test "the self-contact flag rides field 18 only when requested" do
-      [{4, 2, payload}] =
-        Messages.build_contact_proto("Me", "BEGIN:VCARD\nEND:VCARD", is_self_contact: true).__uf__
+      payload =
+        Messages.build_contact_proto("Me", "BEGIN:VCARD\nEND:VCARD", is_self_contact: true)
+        |> message_field(4)
 
       assert {18, :varint, 1} in decode_fields(payload)
     end
@@ -229,7 +235,7 @@ defmodule ExWapp.MessagesDomainEdgeTest do
 
   describe "location proto wire format" do
     test "coordinates travel as little-endian doubles" do
-      [{5, 2, payload}] = Messages.build_location_proto(45.4642, 9.19, []).__uf__
+      payload = Messages.build_location_proto(45.4642, 9.19, []) |> message_field(5)
       fields = decode_fields(payload)
 
       assert {1, :fixed64, <<45.4642::little-float-64>>} in fields
@@ -239,7 +245,7 @@ defmodule ExWapp.MessagesDomainEdgeTest do
     test "integer coordinates are promoted to doubles rather than varints" do
       # encode_double_field multiplies by 1.0; an integer slipping through as
       # a varint would shift every following byte.
-      [{5, 2, payload}] = Messages.build_location_proto(45, 9, []).__uf__
+      payload = Messages.build_location_proto(45, 9, []) |> message_field(5)
       fields = decode_fields(payload)
 
       assert {1, :fixed64, <<45.0::little-float-64>>} in fields
@@ -247,14 +253,15 @@ defmodule ExWapp.MessagesDomainEdgeTest do
     end
 
     test "live-location extras use their exact wire types" do
-      [{5, 2, payload}] =
+      payload =
         Messages.build_location_proto(1.5, -2.5,
           name: "Piazza",
           is_live: true,
           accuracy: 12,
           speed: 3.5,
           bearing: 270
-        ).__uf__
+        )
+        |> message_field(5)
 
       fields = decode_fields(payload)
       assert {3, :ld, "Piazza"} in fields
@@ -265,13 +272,14 @@ defmodule ExWapp.MessagesDomainEdgeTest do
     end
 
     test "address, url, comment and thumbnail land on 4, 5, 11 and 16" do
-      [{5, 2, payload}] =
+      payload =
         Messages.build_location_proto(1.5, -2.5,
           address: "Via Roma 1",
           url: "https://maps.example/x",
           comment: "meet here",
           jpeg_thumbnail: <<0xFF, 0xD8>>
-        ).__uf__
+        )
+        |> message_field(5)
 
       fields = decode_fields(payload)
       assert {4, :ld, "Via Roma 1"} in fields
@@ -284,7 +292,7 @@ defmodule ExWapp.MessagesDomainEdgeTest do
   describe "event proto wire format" do
     test "name and start time land on fields 3 and 7, DateTime included" do
       start = ~U[2026-07-29 18:00:00Z]
-      [{35, 2, _ctx}, {75, 2, payload}] = Messages.build_event_proto("standup", start).__uf__
+      {_ctx, payload} = Messages.build_event_proto("standup", start) |> event_fields()
 
       fields = decode_fields(payload)
       assert {3, :ld, "standup"} in fields
@@ -294,8 +302,9 @@ defmodule ExWapp.MessagesDomainEdgeTest do
     test "a supplied 32-byte message secret is used verbatim" do
       secret = :binary.copy(<<0xAB>>, 32)
 
-      [{35, 2, context}, {75, 2, _payload}] =
-        Messages.build_event_proto("standup", 1_800_000_000, message_secret: secret).__uf__
+      {context, _payload} =
+        Messages.build_event_proto("standup", 1_800_000_000, message_secret: secret)
+        |> event_fields()
 
       assert decode_fields(context) == [{3, :ld, secret}]
     end
@@ -303,8 +312,9 @@ defmodule ExWapp.MessagesDomainEdgeTest do
     test "an invalid secret is replaced by a random 32-byte one" do
       # A short secret would break the phone's message-secret handling; the
       # builder must never forward one.
-      [{35, 2, context}, _] =
-        Messages.build_event_proto("standup", 1_800_000_000, message_secret: <<1, 2, 3>>).__uf__
+      {context, _} =
+        Messages.build_event_proto("standup", 1_800_000_000, message_secret: <<1, 2, 3>>)
+        |> event_fields()
 
       assert [{3, :ld, secret}] = decode_fields(context)
       assert byte_size(secret) == 32
@@ -312,10 +322,11 @@ defmodule ExWapp.MessagesDomainEdgeTest do
     end
 
     test "an event location nests a full location payload on field 5" do
-      [{35, 2, _}, {75, 2, payload}] =
+      {_, payload} =
         Messages.build_event_proto("standup", 1_800_000_000,
           location: %{latitude: 45.4642, longitude: 9.19, name: "Piazza"}
-        ).__uf__
+        )
+        |> event_fields()
 
       {5, :ld, location} = payload |> decode_fields() |> List.keyfind(5, 0)
       location_fields = decode_fields(location)
@@ -326,29 +337,32 @@ defmodule ExWapp.MessagesDomainEdgeTest do
     end
 
     test "string-keyed location maps work too" do
-      [{35, 2, _}, {75, 2, payload}] =
+      {_, payload} =
         Messages.build_event_proto("standup", 1_800_000_000,
           location: %{"latitude" => 1.0, "longitude" => 2.0, "name" => "HQ"}
-        ).__uf__
+        )
+        |> event_fields()
 
       {5, :ld, location} = payload |> decode_fields() |> List.keyfind(5, 0)
       assert {3, :ld, "HQ"} in decode_fields(location)
     end
 
     test "a location without coordinates is dropped, not half-encoded" do
-      [{35, 2, _}, {75, 2, payload}] =
-        Messages.build_event_proto("standup", 1_800_000_000, location: %{name: "nowhere"}).__uf__
+      {_, payload} =
+        Messages.build_event_proto("standup", 1_800_000_000, location: %{name: "nowhere"})
+        |> event_fields()
 
       refute payload |> decode_fields() |> List.keyfind(5, 0)
     end
 
     test "cancellation and reminders ride their optional fields" do
-      [{35, 2, _}, {75, 2, payload}] =
+      {_, payload} =
         Messages.build_event_proto("standup", 1_800_000_000,
           canceled: true,
           end_time: 1_800_003_600,
           reminder_offset_seconds: 900
-        ).__uf__
+        )
+        |> event_fields()
 
       fields = decode_fields(payload)
       assert {2, :varint, 1} in fields
@@ -412,8 +426,8 @@ defmodule ExWapp.MessagesDomainEdgeTest do
     test "the protocol message is a peer data operation request" do
       proto = Messages.build_placeholder_resend_proto(@jid, @jid, "3EB0AA")
 
-      assert proto.protocolMessage.type == :PEER_DATA_OPERATION_REQUEST
-      assert [{16, 2, request}] = proto.protocolMessage.__uf__
+      assert proto.protocolMessage.type == :PEER_DATA_OPERATION_REQUEST_MESSAGE
+      request = proto |> message_field(12) |> ld_field(16)
       # Operation type 4 = placeholder resend.
       assert {1, :varint, 4} in decode_fields(request)
     end
@@ -481,10 +495,30 @@ defmodule ExWapp.MessagesDomainEdgeTest do
   end
 
   defp extract_message_key(proto) do
-    [{16, 2, request}] = proto.protocolMessage.__uf__
-    {5, :ld, resend_request} = request |> decode_fields() |> List.keyfind(5, 0)
-    {1, :ld, message_key} = resend_request |> decode_fields() |> List.keyfind(1, 0)
-    decode_fields(message_key)
+    proto
+    |> message_field(12)
+    |> ld_field(16)
+    |> ld_field(5)
+    |> ld_field(1)
+    |> decode_fields()
+  end
+
+  # Encodes the whole Message and returns the LD payload of one top-level
+  # field, so assertions keep reading the exact bytes a phone would parse.
+  defp message_field(proto, field_num) do
+    proto
+    |> WAWebProtobufsE2E.Message.encode!()
+    |> IO.iodata_to_binary()
+    |> ld_field(field_num)
+  end
+
+  defp ld_field(binary, field_num) do
+    {^field_num, :ld, value} = binary |> decode_fields() |> List.keyfind(field_num, 0)
+    value
+  end
+
+  defp event_fields(proto) do
+    {message_field(proto, 35), message_field(proto, 75)}
   end
 
   # A minimal protobuf reader: enough to turn a payload back into

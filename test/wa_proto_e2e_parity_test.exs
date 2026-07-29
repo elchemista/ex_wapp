@@ -1,145 +1,32 @@
 defmodule ExWapp.WaProtoE2EParityTest do
   @moduledoc """
-  Byte-parity between the hand-rolled encoders in `ExWapp.Proto.*` and the
-  protox modules generated from WhatsApp's official proto files
-  (`tmp/whatsmeow_upstream/proto/waE2E`, generated into `lib/ex_wapp/wa_proto`).
+  Round-trips the `ExWapp.Messages` builders through the protox modules
+  generated from WhatsApp's official proto files.
 
-  The hand-rolled modules predate the generated ones and are what the message
-  builders still use; these tests pin that both encoders emit identical bytes
-  so call sites can migrate to the generated structs one by one without any
-  wire-format risk. If a regeneration from a newer upstream ever changes these
-  bytes, that is a protocol change worth noticing — not a formatting detail.
+  The builders construct generated structs directly; encoding and decoding
+  them back proves the payloads conform to the official schema — every field
+  lands where a real WhatsApp client will look for it. Golden byte vectors pin
+  the exact wire image of the most protocol-sensitive payloads so an upstream
+  regeneration that shifts bytes fails loudly.
   """
 
   use ExUnit.Case, async: true
 
   alias ExWapp.Messages
+  alias WAWebProtobufsE2E.Message
 
   @group "120363000000000000@g.us"
   @jid "15550001111@s.whatsapp.net"
   @peer "15550002222@s.whatsapp.net"
 
-  describe "MessageKey" do
-    test "a peer's key (explicit fromMe=false) encodes identically" do
-      hand =
-        ExWapp.Proto.MessageKey.encode!(%ExWapp.Proto.MessageKey{
-          remoteJID: @group,
-          fromMe: false,
-          id: "3EB0AA",
-          participant: @peer
-        })
+  defp encode(proto), do: proto |> Message.encode!() |> IO.iodata_to_binary()
+  defp roundtrip(proto), do: proto |> encode() |> Message.decode!()
 
-      gen =
-        %WACommon.MessageKey{
-          remoteJID: @group,
-          fromMe: false,
-          ID: "3EB0AA",
-          participant: @peer
-        }
-        |> WACommon.MessageKey.encode!()
-        |> IO.iodata_to_binary()
-
-      assert hand == gen
-    end
-
-    test "our own key (fromMe=true, no participant) encodes identically" do
-      hand =
-        ExWapp.Proto.MessageKey.encode!(%ExWapp.Proto.MessageKey{
-          remoteJID: @jid,
-          fromMe: true,
-          id: "3EB0BB"
-        })
-
-      gen =
-        %WACommon.MessageKey{remoteJID: @jid, fromMe: true, ID: "3EB0BB"}
-        |> WACommon.MessageKey.encode!()
-        |> IO.iodata_to_binary()
-
-      assert hand == gen
-    end
-
-    test "unset fields are omitted by both encoders" do
-      hand = ExWapp.Proto.MessageKey.encode!(%ExWapp.Proto.MessageKey{id: "3EB0CC"})
-
-      gen =
-        %WACommon.MessageKey{ID: "3EB0CC"}
-        |> WACommon.MessageKey.encode!()
-        |> IO.iodata_to_binary()
-
-      assert hand == gen
-    end
-  end
-
-  describe "ContextInfo" do
-    test "quote plus mentions encode identically, mention order preserved" do
-      hand =
-        ExWapp.Proto.ContextInfo.encode!(%ExWapp.Proto.ContextInfo{
-          stanzaID: "3EB0AA",
-          participant: @jid,
-          mentionedJID: [@peer, "70000001111@lid"]
-        })
-
-      gen =
-        %WAWebProtobufsE2E.ContextInfo{
-          stanzaID: "3EB0AA",
-          participant: @jid,
-          mentionedJID: [@peer, "70000001111@lid"]
-        }
-        |> WAWebProtobufsE2E.ContextInfo.encode!()
-        |> IO.iodata_to_binary()
-
-      assert hand == gen
-    end
-
-    test "the forwarded flag encodes identically" do
-      hand = ExWapp.Proto.ContextInfo.encode!(%ExWapp.Proto.ContextInfo{isForwarded: true})
-
-      gen =
-        %WAWebProtobufsE2E.ContextInfo{isForwarded: true}
-        |> WAWebProtobufsE2E.ContextInfo.encode!()
-        |> IO.iodata_to_binary()
-
-      assert hand == gen
-    end
-  end
-
-  describe "placeholder-resend Message" do
-    test "the hand-rolled __uf__ construction matches fully typed generated structs" do
-      hand =
+  describe "placeholder-resend round-trip" do
+    test "a group request decodes back with the device-stripped participant" do
+      decoded =
         Messages.build_placeholder_resend_proto(@group, "15550002222:9@s.whatsapp.net", "3EB0AA")
-        |> ExWapp.Proto.Message.encode!()
-
-      gen =
-        %WAWebProtobufsE2E.Message{
-          protocolMessage: %WAWebProtobufsE2E.ProtocolMessage{
-            type: :PEER_DATA_OPERATION_REQUEST_MESSAGE,
-            peerDataOperationRequestMessage: %WAWebProtobufsE2E.PeerDataOperationRequestMessage{
-              peerDataOperationRequestType: :PLACEHOLDER_MESSAGE_RESEND,
-              placeholderMessageResendRequest: [
-                %WAWebProtobufsE2E.PeerDataOperationRequestMessage.PlaceholderMessageResendRequest{
-                  messageKey: %WACommon.MessageKey{
-                    remoteJID: @group,
-                    fromMe: false,
-                    ID: "3EB0AA",
-                    participant: @peer
-                  }
-                }
-              ]
-            }
-          }
-        }
-        |> WAWebProtobufsE2E.Message.encode!()
-        |> IO.iodata_to_binary()
-
-      assert hand == gen
-    end
-
-    test "the generated decoder round-trips the hand-rolled builder's bytes" do
-      bytes =
-        Messages.build_placeholder_resend_proto(@group, "15550002222:9@s.whatsapp.net", "3EB0AA")
-        |> ExWapp.Proto.Message.encode!()
-
-      assert {:ok, decoded} = WAWebProtobufsE2E.Message.decode(bytes)
+        |> roundtrip()
 
       protocol = decoded.protocolMessage
       assert protocol.type == :PEER_DATA_OPERATION_REQUEST_MESSAGE
@@ -153,33 +40,91 @@ defmodule ExWapp.WaProtoE2EParityTest do
       assert Map.get(resend.messageKey, :ID) == "3EB0AA"
       assert resend.messageKey.participant == @peer
     end
+
+    test "the wire image is byte-stable" do
+      bytes =
+        Messages.build_placeholder_resend_proto(@group, "15550002222:9@s.whatsapp.net", "3EB0AA")
+        |> encode()
+
+      assert bytes ==
+               <<0x62, 0x4A, 0x10, 0x10, 0x82, 0x01, 0x45, 0x08, 0x04, 0x2A, 0x41, 0x0A, 0x3F,
+                 0x0A, 0x17>> <>
+                 @group <>
+                 <<0x10, 0x00, 0x1A, 0x06, "3EB0AA", 0x22, 0x1A>> <> @peer
+    end
   end
 
-  describe "media Message via __uf__ passthrough" do
-    test "raw media fields survive the generated encoder unchanged" do
-      hand_proto = Messages.build_image_proto(upload_fixture(), caption: "look")
-      hand = ExWapp.Proto.Message.encode!(hand_proto)
-
-      gen =
-        %WAWebProtobufsE2E.Message{__uf__: hand_proto.__uf__}
-        |> WAWebProtobufsE2E.Message.encode!()
-        |> IO.iodata_to_binary()
-
-      assert hand == gen
-    end
-
-    test "the generated decoder types the hand-rolled image payload" do
-      bytes =
-        Messages.build_image_proto(upload_fixture(), caption: "look")
-        |> ExWapp.Proto.Message.encode!()
-
-      assert {:ok, decoded} = WAWebProtobufsE2E.Message.decode(bytes)
+  describe "media round-trip" do
+    test "an image builder decodes back with every field typed" do
+      decoded =
+        Messages.build_image_proto(upload_fixture(),
+          caption: "look",
+          height: 480,
+          width: 640,
+          view_once: true
+        )
+        |> roundtrip()
 
       image = decoded.imageMessage
       assert Map.get(image, :URL) == upload_fixture().url
       assert image.caption == "look"
+      assert image.height == 480
+      assert image.width == 640
       assert image.fileLength == upload_fixture().file_length
       assert image.mediaKey == upload_fixture().media_key
+      assert image.viewOnce == true
+    end
+
+    test "an audio builder keeps the voice-note flag and waveform" do
+      waveform = :binary.copy(<<7>>, 64)
+
+      decoded =
+        Messages.build_audio_proto(upload_fixture(), ptt: true, seconds: 12, waveform: waveform)
+        |> roundtrip()
+
+      audio = decoded.audioMessage
+      assert Map.get(audio, :PTT) == true
+      assert audio.seconds == 12
+      assert audio.waveform == waveform
+    end
+  end
+
+  describe "text and context round-trip" do
+    test "a quoted reply decodes back with its context" do
+      decoded =
+        Messages.build_text_proto("reply", quoted_id: "3EB0AA", quoted_participant: @jid)
+        |> roundtrip()
+
+      extended = decoded.extendedTextMessage
+      assert extended.text == "reply"
+      assert extended.contextInfo.stanzaID == "3EB0AA"
+      assert extended.contextInfo.participant == @jid
+    end
+
+    test "plain text stays a bare conversation" do
+      assert %{conversation: "ciao", extendedTextMessage: nil} =
+               Messages.build_text_proto("ciao") |> roundtrip()
+    end
+  end
+
+  describe "event round-trip" do
+    test "the message secret and event fields survive" do
+      secret = :binary.copy(<<0xAB>>, 32)
+
+      decoded =
+        Messages.build_event_proto("standup", 1_800_000_000,
+          message_secret: secret,
+          location: %{latitude: 45.4642, longitude: 9.19, name: "Piazza"}
+        )
+        |> roundtrip()
+
+      assert decoded.messageContextInfo.messageSecret == secret
+
+      event = decoded.eventMessage
+      assert event.name == "standup"
+      assert event.startTime == 1_800_000_000
+      assert event.location.degreesLatitude == 45.4642
+      assert event.location.name == "Piazza"
     end
   end
 

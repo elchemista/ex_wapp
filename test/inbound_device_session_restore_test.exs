@@ -48,9 +48,10 @@ defmodule ExWapp.InboundDeviceSessionRestoreTest do
       prekey: %{id: prekey_id, public: bob_one_time_prekey.public}
     }
 
-    {:ok, first_payload} =
+    first_payload =
       ExWapp.Messages.build_text_proto("establish session", [])
-      |> ExWapp.Proto.Message.encode()
+      |> WAWebProtobufsE2E.Message.encode!()
+      |> IO.iodata_to_binary()
 
     {:ok, first_ciphertext, :prekey, alice_sessions} =
       SessionStore.encrypt_message(
@@ -80,9 +81,10 @@ defmodule ExWapp.InboundDeviceSessionRestoreTest do
     refute SessionStore.has_session?(persisted_sessions, sender_base_jid)
     assert SessionStore.has_session?(persisted_sessions, sender_device_jid)
 
-    {:ok, second_payload} =
+    second_payload =
       ExWapp.Messages.build_text_proto("device-specific session survived restart", [])
-      |> ExWapp.Proto.Message.encode()
+      |> WAWebProtobufsE2E.Message.encode!()
+      |> IO.iodata_to_binary()
 
     {:ok, second_ciphertext, :prekey, _alice_sessions_2} =
       SessionStore.encrypt_message(

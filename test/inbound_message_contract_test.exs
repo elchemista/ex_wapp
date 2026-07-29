@@ -3,7 +3,7 @@ defmodule ExWapp.InboundMessageContractTest do
 
   alias ExWapp.{Media, Messages}
   alias ExWapp.Message.Handler.Wire
-  alias ExWapp.Proto.Message
+  alias WAWebProtobufsE2E.Message
 
   test "image payload exposes a direct public media reference" do
     message =
@@ -154,11 +154,12 @@ defmodule ExWapp.InboundMessageContractTest do
   end
 
   test "supported content is decoded through ephemeral wrappers" do
-    {:ok, image_payload} =
+    image_payload =
       :image
       |> upload()
       |> Messages.build_image_proto(caption: "wrapped image")
-      |> Message.encode()
+      |> Message.encode!()
+      |> IO.iodata_to_binary()
 
     wrapped_payload = encode_length_delimited(31, encode_length_delimited(2, image_payload))
     message = Wire.apply_media_from_plaintext(%{text: nil, media: nil}, wrapped_payload)
@@ -171,7 +172,7 @@ defmodule ExWapp.InboundMessageContractTest do
   end
 
   defp decode_inbound(proto) do
-    {:ok, payload} = Message.encode(proto)
+    payload = IO.iodata_to_binary(Message.encode!(proto))
     Wire.apply_media_from_plaintext(%{text: nil, media: nil}, payload)
   end
 

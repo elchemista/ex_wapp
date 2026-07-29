@@ -412,9 +412,10 @@ defmodule ExWapp.SignalSenderKeyTest do
              action == :send_receipt
            end)
 
-    {:ok, text_payload} =
+    text_payload =
       ExWapp.Messages.build_text_proto("group message works", [])
-      |> ExWapp.Proto.Message.encode()
+      |> WAWebProtobufsE2E.Message.encode!()
+      |> IO.iodata_to_binary()
 
     skmsg_ciphertext =
       build_sender_key_message(

@@ -3,7 +3,7 @@ defmodule ExWapp.Message.Handler.Inbound.SyncTest do
 
   alias ExWapp.{Chat, Messages}
   alias ExWapp.Message.Handler.Inbound.Sync
-  alias ExWapp.Proto.Message
+  alias WAWebProtobufsE2E.Message
   alias ExWapp.Store
   alias ExWapp.Store.Memory
 
@@ -81,6 +81,7 @@ defmodule ExWapp.Message.Handler.Inbound.SyncTest do
     original_message =
       Messages.build_text_proto("recovered from primary", [])
       |> Message.encode!()
+      |> IO.iodata_to_binary()
 
     message_key =
       length_delimited(1, chat_jid) <>

@@ -4,14 +4,15 @@ defmodule ExWapp.Message.Handler.Inbound.ContentTest do
   alias ExWapp.Media.Upload
   alias ExWapp.Message.Handler.Inbound.Content
   alias ExWapp.Messages
-  alias ExWapp.Proto.Message
+  alias WAWebProtobufsE2E.Message
   alias ExWapp.Signal.SessionStore
 
   test "decodes decrypted text while preserving envelope fields" do
-    {:ok, plaintext} =
+    plaintext =
       "hello from inbound"
       |> Messages.build_text_proto()
-      |> Message.encode()
+      |> Message.encode!()
+      |> IO.iodata_to_binary()
 
     message_data = %{
       encrypted: true,
@@ -41,10 +42,11 @@ defmodule ExWapp.Message.Handler.Inbound.ContentTest do
   end
 
   test "keeps sender-key distribution plaintext as protocol content" do
-    {:ok, plaintext} =
+    plaintext =
       "distribution"
       |> Messages.build_text_proto()
-      |> Message.encode()
+      |> Message.encode!()
+      |> IO.iodata_to_binary()
 
     decoded =
       Content.decode_decrypted(%{
@@ -89,7 +91,7 @@ defmodule ExWapp.Message.Handler.Inbound.ContentTest do
     ]
 
     Enum.each(cases, fn {proto, expected_kind, expected_media_type} ->
-      {:ok, plaintext} = Message.encode(proto)
+      plaintext = IO.iodata_to_binary(Message.encode!(proto))
 
       decoded =
         Content.decode_decrypted(%{

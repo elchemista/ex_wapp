@@ -58,15 +58,15 @@ defmodule ExWapp.SendPathTest do
 
     destination_jid = "15550001111@s.whatsapp.net"
 
-    wrapped = %ExWapp.Proto.Message{
-      deviceSentMessage: %ExWapp.Proto.DeviceSentMessage{
-        destinationJid: destination_jid,
+    wrapped = %WAWebProtobufsE2E.Message{
+      deviceSentMessage: %WAWebProtobufsE2E.DeviceSentMessage{
+        destinationJID: destination_jid,
         message: inner_proto,
         phash: nil
       }
     }
 
-    {:ok, encoded} = ExWapp.Proto.Message.encode(wrapped)
+    encoded = IO.iodata_to_binary(WAWebProtobufsE2E.Message.encode!(wrapped))
     encoded_bin = IO.iodata_to_binary(encoded)
 
     # Outer message starts with DeviceSentMessage field (31, wire type 2)
@@ -87,15 +87,15 @@ defmodule ExWapp.SendPathTest do
     # DeviceSentMessage is field 31 of Message -> tag = (31 << 3) | 2 = 0xFA 0x01
     inner_proto = ExWapp.Messages.build_text_proto("test", [])
 
-    wrapped = %ExWapp.Proto.Message{
-      deviceSentMessage: %ExWapp.Proto.DeviceSentMessage{
-        destinationJid: "111@s.whatsapp.net",
+    wrapped = %WAWebProtobufsE2E.Message{
+      deviceSentMessage: %WAWebProtobufsE2E.DeviceSentMessage{
+        destinationJID: "111@s.whatsapp.net",
         message: inner_proto,
         phash: nil
       }
     }
 
-    {:ok, encoded} = ExWapp.Proto.Message.encode(wrapped)
+    encoded = IO.iodata_to_binary(WAWebProtobufsE2E.Message.encode!(wrapped))
     encoded_bin = IO.iodata_to_binary(encoded)
 
     # Field 31, wire type 2 (length-delimited) = (31 << 3) | 2 = 250 = 0xFA
@@ -107,15 +107,15 @@ defmodule ExWapp.SendPathTest do
     inner_proto = ExWapp.Messages.build_text_proto("test", [])
     phash = "2:abc123"
 
-    wrapped = %ExWapp.Proto.Message{
-      deviceSentMessage: %ExWapp.Proto.DeviceSentMessage{
-        destinationJid: "111@s.whatsapp.net",
+    wrapped = %WAWebProtobufsE2E.Message{
+      deviceSentMessage: %WAWebProtobufsE2E.DeviceSentMessage{
+        destinationJID: "111@s.whatsapp.net",
         message: inner_proto,
         phash: phash
       }
     }
 
-    {:ok, encoded} = ExWapp.Proto.Message.encode(wrapped)
+    encoded = IO.iodata_to_binary(WAWebProtobufsE2E.Message.encode!(wrapped))
     encoded_bin = IO.iodata_to_binary(encoded)
 
     assert :binary.match(encoded_bin, phash) != :nomatch
@@ -259,19 +259,19 @@ defmodule ExWapp.SendPathTest do
 
     # Build two payloads: recipient (plain) and own (DeviceSentMessage wrapped)
     proto = ExWapp.Messages.build_text_proto("test message", [])
-    {:ok, plain_payload} = ExWapp.Proto.Message.encode(proto)
+    plain_payload = IO.iodata_to_binary(WAWebProtobufsE2E.Message.encode!(proto))
 
     destination_jid = "6287865904022@s.whatsapp.net"
 
-    dsm_wrapped = %ExWapp.Proto.Message{
-      deviceSentMessage: %ExWapp.Proto.DeviceSentMessage{
-        destinationJid: destination_jid,
+    dsm_wrapped = %WAWebProtobufsE2E.Message{
+      deviceSentMessage: %WAWebProtobufsE2E.DeviceSentMessage{
+        destinationJID: destination_jid,
         message: proto,
         phash: nil
       }
     }
 
-    {:ok, own_payload} = ExWapp.Proto.Message.encode(dsm_wrapped)
+    own_payload = IO.iodata_to_binary(WAWebProtobufsE2E.Message.encode!(dsm_wrapped))
 
     recipient_padded = ExWapp.Signal.Encryption.pad_message(plain_payload)
     own_padded = ExWapp.Signal.Encryption.pad_message(own_payload)
