@@ -10,7 +10,13 @@ defmodule ExWapp.Noise.ClientPayloadTest do
   alias WAWebProtobufsWa6.ClientPayload, as: ClientPayloadProto
   alias WAWebProtobufsWa6.ClientPayload.DevicePairingRegistrationData
 
-  @version_hash :crypto.hash(:md5, "2.3000.1041871181")
+  # Derived from the configured default so this test tracks version bumps
+  # instead of failing on them; what it protects is hash = md5 of the exact
+  # dotted version string the payload reports.
+  @version_hash (
+                  v = ExWapp.Config.default_client_version()
+                  :crypto.hash(:md5, "#{v.primary}.#{v.secondary}.#{v.tertiary}")
+                )
   @firefox_device_props <<
     0x0A,
     0x05,
