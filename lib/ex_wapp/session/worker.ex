@@ -88,6 +88,7 @@ defmodule ExWapp.Session.Worker do
     Resilience,
     Retry,
     Safety,
+    SendHealth,
     Subscribers
   }
 
@@ -98,23 +99,6 @@ defmodule ExWapp.Session.Worker do
   @typedoc "Session status"
   @type status ::
           :idle | :connecting | :handshaking | :syncing | :connected | :disconnected
-
-  @default_send_health %{
-    paused: false,
-    hard_stopped: false,
-    send_errors_total: 0,
-    consecutive_send_errors: 0,
-    retries_total: 0,
-    drops_total: 0,
-    outbound_queue_errors_total: 0,
-    guard_trips: 0,
-    last_error_reason: nil,
-    last_error_at_ms: nil,
-    last_guard_action: nil,
-    last_guard_reason: nil,
-    errors_window_ms: [],
-    drops_window_ms: []
-  }
 
   @max_outgoing_retry_payloads 512
   @explicit_app_state_sync_timeout :timer.minutes(5)
@@ -137,7 +121,7 @@ defmodule ExWapp.Session.Worker do
     send_coordinator: %SendCoordinator{},
     opts: [],
     runtime_cfg: %{},
-    send_health: @default_send_health,
+    send_health: SendHealth.default(),
     rate_limiter: %{},
     quota: %{},
     safety: %{},
@@ -831,26 +815,26 @@ defmodule ExWapp.Session.Worker do
   def handle_cast(:pause_sends, state) do
     new_state =
       state
-      |> health_put(:paused, true)
-      |> health_put(:last_guard_action, :pause)
+      |> SendHealth.put(:paused, true)
+      |> SendHealth.put(:last_guard_action, :pause)
 
-    broadcast_health_event(new_state, :control, %{action: :pause_sends})
+    SendHealth.broadcast_event(new_state, :control, %{action: :pause_sends})
     {:noreply, new_state}
   end
 
   def handle_cast(:resume_sends, state) do
     new_state =
       state
-      |> health_put(:paused, false)
-      |> health_put(:consecutive_send_errors, 0)
-      |> health_put(:last_guard_action, :resume)
+      |> SendHealth.put(:paused, false)
+      |> SendHealth.put(:consecutive_send_errors, 0)
+      |> SendHealth.put(:last_guard_action, :resume)
 
-    broadcast_health_event(new_state, :control, %{action: :resume_sends})
+    SendHealth.broadcast_event(new_state, :control, %{action: :resume_sends})
     {:noreply, new_state}
   end
 
   def handle_cast(:stop_worker, state) do
-    broadcast_health_event(state, :control, %{action: :stop_worker})
+    SendHealth.broadcast_event(state, :control, %{action: :stop_worker})
     {:stop, {:control, :stop_worker}, state}
   end
 
@@ -1155,7 +1139,7 @@ defmodule ExWapp.Session.Worker do
     Logger.warning("[SESSION] outbound queue error: #{Log.reason(reason)}")
     emit_telemetry(:error, %{reason: reason, phase: :outbound}, state)
     state = update_stats(state, :errors)
-    state = increment_outbound_queue_errors(state, reason)
+    state = SendHealth.increment_outbound_queue_errors(state, reason)
 
     case maybe_apply_send_error_guard(state, {:outbound_queue_error, reason}) do
       {:continue, new_state} -> {:noreply, new_state}
@@ -1254,14 +1238,14 @@ defmodule ExWapp.Session.Worker do
     state =
       state
       |> remember_outgoing_retry_payload(jid, text, message_id)
-      |> clear_consecutive_send_errors()
+      |> SendHealth.clear_consecutive_send_errors()
 
     {:noreply, schedule_outbound_confirmation(state, jid, text, message_id, strategy, attempt)}
   end
 
   def handle_info({:send_result, jid, _text, {:error, reason}, strategy, attempt}, state) do
     state =
-      register_send_error(state, {:send_failed, reason}, %{
+      SendHealth.register_send_error(state, {:send_failed, reason}, %{
         jid: jid,
         strategy: strategy,
         attempt: attempt
@@ -1296,7 +1280,7 @@ defmodule ExWapp.Session.Worker do
             end
           )
 
-        new_state = register_drop_timeout(new_state, message_id, confirmation)
+        new_state = SendHealth.register_drop_timeout(new_state, message_id, confirmation)
 
         case maybe_apply_send_error_guard(new_state, {:drop_timeout, message_id}) do
           {:continue, guarded_state} -> {:noreply, guarded_state}
@@ -1307,7 +1291,7 @@ defmodule ExWapp.Session.Worker do
 
   def handle_info({:silent_drop_failed, jid, message_id, attempt}, state) do
     state =
-      register_send_error(
+      SendHealth.register_send_error(
         state,
         {:silent_drop_failed, message_id},
         %{jid: jid, attempt: attempt}
@@ -1915,7 +1899,7 @@ defmodule ExWapp.Session.Worker do
       state_with_retries =
         update_in(new_state.send_health.retries_total, fn value -> (value || 0) + delta end)
 
-      broadcast_health_event(state_with_retries, :retry, %{
+      SendHealth.broadcast_event(state_with_retries, :retry, %{
         jid: jid,
         message_id: message_id,
         retries_started: delta
@@ -2118,7 +2102,7 @@ defmodule ExWapp.Session.Worker do
 
   defp dispatch_outbound_message(state, message, from) do
     with {:ok, message} <- Command.prepare(message),
-         {:ok, state} <- ensure_send_enabled(state, message.to),
+         {:ok, state} <- SendHealth.ensure_send_enabled(state, message.to),
          :ok <- ensure_connected_for_send(state),
          {:ok, policy_state} <- enforce_send_policies(state, message.to) do
       task = outbound_message_task(self(), policy_state, message)
@@ -2774,78 +2758,6 @@ defmodule ExWapp.Session.Worker do
 
   defp ensure_connected_for_send(_state), do: :ok
 
-  defp ensure_send_enabled(state, jid) do
-    cond do
-      health_get(state, :hard_stopped, false) ->
-        blocked_state =
-          register_send_error(
-            state,
-            :send_guard_hard_stopped,
-            %{jid: jid, source: :guard_gate}
-          )
-
-        {:error, :send_guard_hard_stopped, blocked_state}
-
-      health_get(state, :paused, false) ->
-        blocked_state = register_send_error(state, :send_paused, %{jid: jid, source: :guard_gate})
-        {:error, :send_paused, blocked_state}
-
-      true ->
-        {:ok, state}
-    end
-  end
-
-  defp increment_outbound_queue_errors(state, reason) do
-    state =
-      state
-      |> health_inc(:outbound_queue_errors_total)
-      |> health_put(:last_error_reason, {:outbound_queue_error, reason})
-      |> health_put(:last_error_at_ms, now_ms())
-
-    broadcast_health_event(state, :outbound_queue_error, %{reason: reason})
-    state
-  end
-
-  defp clear_consecutive_send_errors(state) do
-    health_put(state, :consecutive_send_errors, 0)
-  end
-
-  defp register_send_error(state, reason, metadata) when is_map(metadata) do
-    now = now_ms()
-
-    errors_window = prune_old_window([now | health_get(state, :errors_window_ms, [])], now)
-
-    state =
-      state
-      |> health_inc(:send_errors_total)
-      |> health_inc(:consecutive_send_errors)
-      |> health_put(:errors_window_ms, errors_window)
-      |> health_put(:last_error_reason, reason)
-      |> health_put(:last_error_at_ms, now)
-
-    broadcast_health_event(state, :send_error, Map.merge(%{reason: reason}, metadata))
-    state
-  end
-
-  defp register_drop_timeout(state, message_id, confirmation) do
-    now = now_ms()
-
-    drops_window = prune_old_window([now | health_get(state, :drops_window_ms, [])], now)
-
-    state =
-      state
-      |> health_inc(:drops_total)
-      |> health_put(:drops_window_ms, drops_window)
-
-    broadcast_health_event(state, :drop_timeout, %{
-      message_id: message_id,
-      jid: Map.get(confirmation, :jid),
-      attempt: Map.get(confirmation, :attempt)
-    })
-
-    state
-  end
-
   defp maybe_apply_send_error_guard(state, reason) do
     guard_cfg = Config.get(state.runtime_cfg, [:send_error_guard], %{})
 
@@ -2857,9 +2769,9 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp apply_enabled_send_error_guard(state, reason, guard_cfg) do
-    metrics = send_error_guard_metrics(state)
+    metrics = SendHealth.guard_metrics(state)
 
-    case compute_guard_trigger_reason(metrics, guard_cfg) do
+    case SendHealth.guard_trigger_reason(metrics, guard_cfg) do
       nil ->
         {:continue, state}
 
@@ -2869,11 +2781,11 @@ defmodule ExWapp.Session.Worker do
 
         state =
           state
-          |> health_inc(:guard_trips)
-          |> health_put(:last_guard_action, action)
-          |> health_put(:last_guard_reason, trigger_reason)
+          |> SendHealth.increment(:guard_trips)
+          |> SendHealth.put(:last_guard_action, action)
+          |> SendHealth.put(:last_guard_reason, trigger_reason)
 
-        broadcast_health_event(state, :guard_trip, %{
+        SendHealth.broadcast_event(state, :guard_trip, %{
           action: action,
           reason: reason,
           trigger_reason: trigger_reason,
@@ -2884,34 +2796,6 @@ defmodule ExWapp.Session.Worker do
         })
 
         continue_or_apply_guard_action(state, action, trigger_reason, notify_only)
-    end
-  end
-
-  defp send_error_guard_metrics(state) do
-    %{
-      consecutive: health_get(state, :consecutive_send_errors, 0),
-      errors_min: length(health_get(state, :errors_window_ms, [])),
-      drops_min: length(health_get(state, :drops_window_ms, []))
-    }
-  end
-
-  defp compute_guard_trigger_reason(metrics, guard_cfg) do
-    max_consecutive = Map.get(guard_cfg, :max_consecutive_errors, 3)
-    max_errors_min = Map.get(guard_cfg, :max_errors_per_minute, 20)
-    max_drops_min = Map.get(guard_cfg, :max_drops_per_minute, 10)
-
-    cond do
-      metrics.consecutive >= max_consecutive ->
-        {:max_consecutive_errors, metrics.consecutive}
-
-      metrics.errors_min >= max_errors_min ->
-        {:max_errors_per_minute, metrics.errors_min}
-
-      metrics.drops_min >= max_drops_min ->
-        {:max_drops_per_minute, metrics.drops_min}
-
-      true ->
-        nil
     end
   end
 
@@ -2927,9 +2811,9 @@ defmodule ExWapp.Session.Worker do
   defp apply_guard_action(state, :pause, trigger_reason) do
     state =
       state
-      |> health_put(:paused, true)
-      |> health_put(:hard_stopped, false)
-      |> health_put(:last_guard_reason, trigger_reason)
+      |> SendHealth.put(:paused, true)
+      |> SendHealth.put(:hard_stopped, false)
+      |> SendHealth.put(:last_guard_reason, trigger_reason)
 
     {:continue, state}
   end
@@ -2937,9 +2821,9 @@ defmodule ExWapp.Session.Worker do
   defp apply_guard_action(state, :disconnect, trigger_reason) do
     state =
       state
-      |> health_put(:paused, true)
-      |> health_put(:hard_stopped, true)
-      |> health_put(:last_guard_reason, trigger_reason)
+      |> SendHealth.put(:paused, true)
+      |> SendHealth.put(:hard_stopped, true)
+      |> SendHealth.put(:last_guard_reason, trigger_reason)
       |> do_disconnect({:send_error_guard_trip, trigger_reason})
       |> Map.put(:status, :idle)
       |> Map.put(:reconnect_attempts, 0)
@@ -2950,9 +2834,9 @@ defmodule ExWapp.Session.Worker do
   defp apply_guard_action(state, :stop_session, trigger_reason) do
     state =
       state
-      |> health_put(:paused, true)
-      |> health_put(:hard_stopped, true)
-      |> health_put(:last_guard_reason, trigger_reason)
+      |> SendHealth.put(:paused, true)
+      |> SendHealth.put(:hard_stopped, true)
+      |> SendHealth.put(:last_guard_reason, trigger_reason)
 
     {:stop, {:send_error_guard_trip, trigger_reason}, state}
   end
@@ -2962,22 +2846,22 @@ defmodule ExWapp.Session.Worker do
   defp apply_control_action(state, :pause_sends, source) do
     state =
       state
-      |> health_put(:paused, true)
-      |> health_put(:last_guard_action, {:pause_sends, source})
+      |> SendHealth.put(:paused, true)
+      |> SendHealth.put(:last_guard_action, {:pause_sends, source})
 
-    broadcast_health_event(state, :control, %{source: source, action: :pause_sends})
+    SendHealth.broadcast_event(state, :control, %{source: source, action: :pause_sends})
     {:noreply, state}
   end
 
   defp apply_control_action(state, :resume_sends, source) do
     state =
       state
-      |> health_put(:paused, false)
-      |> health_put(:hard_stopped, false)
-      |> health_put(:consecutive_send_errors, 0)
-      |> health_put(:last_guard_action, {:resume_sends, source})
+      |> SendHealth.put(:paused, false)
+      |> SendHealth.put(:hard_stopped, false)
+      |> SendHealth.put(:consecutive_send_errors, 0)
+      |> SendHealth.put(:last_guard_action, {:resume_sends, source})
 
-    broadcast_health_event(state, :control, %{source: source, action: :resume_sends})
+    SendHealth.broadcast_event(state, :control, %{source: source, action: :resume_sends})
     {:noreply, state}
   end
 
@@ -2988,43 +2872,19 @@ defmodule ExWapp.Session.Worker do
       |> Map.put(:status, :idle)
       |> Map.put(:reconnect_attempts, 0)
 
-    broadcast_health_event(state, :control, %{source: source, action: :disconnect})
+    SendHealth.broadcast_event(state, :control, %{source: source, action: :disconnect})
     {:noreply, state}
   end
 
   defp apply_control_action(state, :stop_session, source) do
-    broadcast_health_event(state, :control, %{source: source, action: :stop_session})
+    SendHealth.broadcast_event(state, :control, %{source: source, action: :stop_session})
     {:stop, {:control, :stop_session, source}, state}
   end
 
   defp apply_control_action(state, action, source) do
-    broadcast_health_event(state, :control, %{source: source, action: :unknown, value: action})
+    SendHealth.broadcast_event(state, :control, %{source: source, action: :unknown, value: action})
+
     {:noreply, state}
-  end
-
-  defp broadcast_health_event(state, type, metadata) when is_map(metadata) do
-    Subscribers.broadcast_health(state.session_id, {:ex_wapp_health, type, metadata})
-  rescue
-    _ -> :ok
-  end
-
-  defp send_health(state), do: state.send_health || @default_send_health
-
-  defp health_get(state, key, default), do: Map.get(send_health(state), key, default)
-
-  defp health_put(state, key, value) do
-    %{state | send_health: Map.put(send_health(state), key, value)}
-  end
-
-  defp health_inc(state, key, by \\ 1) do
-    %{state | send_health: Map.update(send_health(state), key, by, &((&1 || 0) + by))}
-  end
-
-  defp now_ms, do: System.monotonic_time(:millisecond)
-
-  defp prune_old_window(values, now_ms) when is_list(values) do
-    threshold = now_ms - 60_000
-    Enum.filter(values, &(&1 >= threshold))
   end
 
   defp total_retry_attempts(state) do
