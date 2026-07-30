@@ -10,8 +10,9 @@ defmodule ExWapp.Session.Worker.Outbound do
   require Logger
 
   alias ExWapp.{Binary, Chat, Config, JID, Log, Messages, Store, Telemetry}
-  alias WAWebProtobufsE2E.Message
+  alias ExWapp.Session.Worker
   alias ExWapp.Signal.SessionStore
+  alias WAWebProtobufsE2E.Message
 
   alias ExWapp.Session.{
     Account,
@@ -30,7 +31,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     Prekeys
   }
 
-  @typep worker_state :: map()
+  @typep worker_state :: Worker.t()
   @typep outbound_text :: iodata() | nil
   @doc "Sends text or an optional prebuilt protobuf payload through the session pipeline."
   @spec send_text_worker(pid(), map(), String.t(), outbound_text(), keyword()) ::

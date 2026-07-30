@@ -9,6 +9,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
   require Logger
 
   alias ExWapp.{Binary, Config, Log, MapPath, Store}
+  alias ExWapp.Session.Worker
   alias ExWapp.Session.Worker.Subscribers
 
   @min_prekey_threshold 5
@@ -16,7 +17,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
   @doc """
   Persists the LID value from the success node and creates own PN↔LID mapping.
   """
-  @spec persist_lid_and_mapping(map(), binary() | nil) :: map()
+  @spec persist_lid_and_mapping(Worker.t(), binary() | nil) :: Worker.t()
   def persist_lid_and_mapping(state, nil), do: state
 
   def persist_lid_and_mapping(state, lid) when is_binary(lid) do
@@ -68,7 +69,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
   by default because some fresh-pair sessions are being invalidated immediately
   after the digest IQ is sent.
   """
-  @spec start(map(), (-> Binary.Node.t())) :: {map(), list()}
+  @spec start(Worker.t(), (-> Binary.Node.t())) :: {Worker.t(), list()}
   def start(state, build_passive_iq_fun) when is_function(build_passive_iq_fun, 0) do
     prekey_count_query = ExWapp.Prekeys.build_prekey_count_query()
     query_id = Map.get(prekey_count_query.attrs, "id")
@@ -320,7 +321,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
   The upload restores the pool toward the configured initial size instead of
   adding only a tiny fixed batch. An already in-flight upload is left alone.
   """
-  @spec refill_from_notification(map(), non_neg_integer()) :: {map(), list()}
+  @spec refill_from_notification(Worker.t(), non_neg_integer()) :: {Worker.t(), list()}
   def refill_from_notification(%{prekey_upload_iq_id: request_id} = state, _server_count)
       when is_binary(request_id),
       do: {state, []}

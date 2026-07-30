@@ -4,13 +4,14 @@ defmodule ExWapp.Session.Worker.Resilience do
   """
 
   alias ExWapp.Config
+  alias ExWapp.Session.Worker
 
   @type reconnect_decision ::
           :session_invalid
           | :give_up
           | {:reconnect, attempt :: pos_integer(), delay_ms :: non_neg_integer()}
 
-  @spec reconnect_decision(map()) :: reconnect_decision()
+  @spec reconnect_decision(Worker.t()) :: reconnect_decision()
   def reconnect_decision(state) when is_map(state) do
     reconnect_cfg = Config.get(state, [:runtime_cfg, :reconnect], %{})
     enabled? = reconnect_enabled?(state, reconnect_cfg)
@@ -29,7 +30,7 @@ defmodule ExWapp.Session.Worker.Resilience do
     end
   end
 
-  @spec reconnect_enabled?(map(), map()) :: boolean()
+  @spec reconnect_enabled?(Worker.t(), map()) :: boolean()
   def reconnect_enabled?(state, reconnect_cfg) when is_map(state) and is_map(reconnect_cfg) do
     cfg_enabled = Config.get(reconnect_cfg, [:enabled], true)
 

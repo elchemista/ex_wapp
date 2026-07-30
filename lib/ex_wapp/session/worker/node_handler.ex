@@ -11,6 +11,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   alias ExWapp.{Binary, Config, Log, Pairing}
   alias ExWapp.Message.Handler.Ack
   alias ExWapp.Session.{OutboundQueue, SendCoordinator}
+  alias ExWapp.Session.Worker
   alias ExWapp.Signal.SessionStore
 
   alias ExWapp.Session.Worker.{
@@ -51,7 +52,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   @doc """
   Safely handles a node, catching any exceptions.
   """
-  @spec safe_handle_node(Binary.Node.t(), map()) :: {map(), list()}
+  @spec safe_handle_node(Binary.Node.t(), Worker.t()) :: {Worker.t(), list()}
   def safe_handle_node(node, state) do
     Logger.debug(
       "[NODE_HANDLER] handling node session=#{Log.reference(Map.get(state, :session_id))} tag=#{node.tag} attrs=#{inspect(loggable_attrs(node.attrs || %{}), limit: 50)}"
@@ -92,7 +93,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   @doc """
   Safely executes an action returned by a node handler.
   """
-  @spec safe_handle_action(term(), map()) :: :ok
+  @spec safe_handle_action(term(), Worker.t()) :: :ok
   def safe_handle_action(action, state) do
     Logger.debug(
       "[NODE_HANDLER] executing action session=#{Log.reference(Map.get(state, :session_id))} action=#{inspect(compact_action(action), limit: 80)}"
