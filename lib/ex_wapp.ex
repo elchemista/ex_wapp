@@ -788,11 +788,9 @@ defmodule ExWapp do
   """
   @spec send_typing(GenServer.server(), String.t(), boolean()) :: :ok | {:error, term()}
   def send_typing(session, jid, composing \\ true) do
-    try do
-      Session.send_typing(session, jid, composing)
-    catch
-      :exit, _ -> {:error, :session_unavailable}
-    end
+    Session.send_typing(session, jid, composing)
+  catch
+    :exit, _ -> {:error, :session_unavailable}
   end
 
   @doc """

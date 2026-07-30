@@ -491,17 +491,15 @@ defmodule ExWapp.Messages do
   end
 
   defp send_node(session, node) do
-    try do
-      conn = GenServer.call(session, :get_conn)
+    conn = GenServer.call(session, :get_conn)
 
-      if conn && Process.alive?(conn) do
-        Conn.send_node(conn, node)
-      else
-        {:error, :not_connected}
-      end
-    catch
-      :exit, _ -> {:error, :session_unavailable}
+    if conn && Process.alive?(conn) do
+      Conn.send_node(conn, node)
+    else
+      {:error, :not_connected}
     end
+  catch
+    :exit, _ -> {:error, :session_unavailable}
   end
 
   defp record_outgoing(session, jid, message_id, text, timestamp) do

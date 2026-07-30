@@ -60,11 +60,9 @@ defmodule ExWapp.Binary do
   def unpack(_), do: {:error, :invalid_frame}
 
   defp inflate(data) when is_binary(data) do
-    try do
-      {:ok, :zlib.uncompress(data)}
-    rescue
-      error -> {:error, error}
-    end
+    {:ok, :zlib.uncompress(data)}
+  rescue
+    error -> {:error, error}
   end
 
   @type binary_node :: %Node{
@@ -109,11 +107,9 @@ defmodule ExWapp.Binary do
   """
   @spec decode(binary()) :: {:ok, binary_node()} | {:error, any()}
   def decode(payload) when is_binary(payload) do
-    try do
-      {:ok, decode!(payload)}
-    rescue
-      e -> {:error, e}
-    end
+    {:ok, decode!(payload)}
+  rescue
+    e -> {:error, e}
   end
 
   @doc """

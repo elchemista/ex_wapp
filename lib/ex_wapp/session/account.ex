@@ -227,15 +227,15 @@ defmodule ExWapp.Session.Account do
     jid
     |> JIDUtils.related_bases(lid_mapping)
     |> Enum.sort_by(fn candidate -> if JIDUtils.lid_jid?(candidate), do: 0, else: 1 end)
-    |> Enum.find_value(fn candidate ->
-      case Map.get(tctokens, candidate) do
-        nil ->
-          nil
+    |> Enum.find_value(&valid_tctoken(tctokens, &1))
+  end
 
-        token_record ->
-          if PrivacyToken.valid?(token_record), do: token_record
-      end
-    end)
+  @spec valid_tctoken(map(), binary()) :: map() | nil
+  defp valid_tctoken(tctokens, candidate) do
+    case Map.get(tctokens, candidate) do
+      nil -> nil
+      token_record -> if PrivacyToken.valid?(token_record), do: token_record
+    end
   end
 
   @spec get_device_identity_node(term()) ::

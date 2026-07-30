@@ -36,13 +36,15 @@ defmodule ExWapp.KeyMaterialAnnouncementTest do
     receipt =
       ReceiptBuilder.build_retry_receipt_ack(
         store,
-        "15550007777@s.whatsapp.net",
-        "RETRY_ANNOUNCED",
-        nil,
-        "1730000300",
-        1,
-        0,
-        %{force_keys?: true},
+        %{
+          to: "15550007777@s.whatsapp.net",
+          id: "RETRY_ANNOUNCED",
+          participant: nil,
+          message_t: "1730000300",
+          retry_count: 1,
+          error_code: 0,
+          retry_meta: %{force_keys?: true}
+        },
         %{session_id: session_id}
       )
 
@@ -59,13 +61,15 @@ defmodule ExWapp.KeyMaterialAnnouncementTest do
 
     ReceiptBuilder.build_retry_receipt_ack(
       store,
-      "15550007777@s.whatsapp.net",
-      "RETRY_PLAIN",
-      nil,
-      "1730000300",
-      1,
-      0,
-      %{},
+      %{
+        to: "15550007777@s.whatsapp.net",
+        id: "RETRY_PLAIN",
+        participant: nil,
+        message_t: "1730000300",
+        retry_count: 1,
+        error_code: 0,
+        retry_meta: %{}
+      },
       %{session_id: session_id}
     )
 

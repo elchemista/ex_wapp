@@ -153,12 +153,10 @@ defmodule ExWapp.Signal.WireFormat do
       when is_binary(ciphertext) and byte_size(ciphertext) > 0 and
              rem(byte_size(ciphertext), 16) == 0 and is_binary(cipher_key) and
              byte_size(cipher_key) == 32 and is_binary(iv) and byte_size(iv) == 16 do
-    try do
-      padded = :crypto.crypto_one_time(:aes_256_cbc, cipher_key, iv, ciphertext, false)
-      unpad_pkcs7(padded)
-    rescue
-      _error -> {:error, :decrypt_failed}
-    end
+    padded = :crypto.crypto_one_time(:aes_256_cbc, cipher_key, iv, ciphertext, false)
+    unpad_pkcs7(padded)
+  rescue
+    _error -> {:error, :decrypt_failed}
   end
 
   def decrypt_aes_cbc(_ciphertext, _cipher_key, _iv), do: {:error, :invalid_ciphertext}

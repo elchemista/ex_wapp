@@ -35,27 +35,31 @@ defmodule ExWapp.Session.Worker.ReceiptBuilder do
     }
   end
 
-  @spec build_retry_receipt_ack(
-          Store.t(),
-          String.t(),
-          String.t(),
-          String.t() | nil,
-          String.t() | integer() | nil,
-          non_neg_integer() | nil,
-          integer() | nil,
-          map() | nil
-        ) :: Binary.Node.t()
-  def build_retry_receipt_ack(
-        store,
-        to,
-        id,
-        participant,
-        message_t,
-        retry_count,
-        error_code,
-        retry_meta,
-        session_ctx \\ %{}
-      ) do
+  @typedoc """
+  What a retry receipt is about: who to answer, which message, and why.
+
+  Grouped rather than passed positionally — `nil, nil, 2, nil` at a call site
+  says nothing about which field is which.
+  """
+  @type retry_receipt :: %{
+          required(:to) => String.t(),
+          required(:id) => String.t(),
+          optional(:participant) => String.t() | nil,
+          optional(:message_t) => String.t() | integer() | nil,
+          optional(:retry_count) => non_neg_integer() | nil,
+          optional(:error_code) => integer() | nil,
+          optional(:retry_meta) => map() | nil
+        }
+
+  @spec build_retry_receipt_ack(Store.t(), retry_receipt(), map()) :: Binary.Node.t()
+  def build_retry_receipt_ack(store, receipt, session_ctx \\ %{}) do
+    %{to: to, id: id} = receipt
+    participant = Map.get(receipt, :participant)
+    message_t = Map.get(receipt, :message_t)
+    retry_count = Map.get(receipt, :retry_count)
+    error_code = Map.get(receipt, :error_code)
+    retry_meta = Map.get(receipt, :retry_meta)
+
     attrs = %{
       "id" => id,
       "to" => to,

@@ -86,11 +86,12 @@ defmodule ExWapp.Session.Outbound.Direct do
       self_chat? and Keyword.get(opts, :reuse_self_chat_sessions, false)
 
     signal_sessions =
-      if self_chat? and not reuse_self_chat_sessions? do
-        clear_self_chat_sessions(state.store, signal_sessions, all_device_jids)
-      else
-        signal_sessions
-      end
+      maybe_clear_self_chat_sessions(
+        state.store,
+        signal_sessions,
+        all_device_jids,
+        self_chat? and not reuse_self_chat_sessions?
+      )
 
     own_target_candidates =
       own_devices
@@ -115,19 +116,20 @@ defmodule ExWapp.Session.Outbound.Direct do
         state.store,
         signal_sessions,
         all_target_device_jids,
-        if(reuse_self_chat_sessions?,
-          do: [],
-          else: own_target_candidates ++ own_cached_devices
+        own_targets_needing_prekeys(
+          own_target_candidates,
+          own_cached_devices,
+          reuse_self_chat_sessions?
         ),
         now_ms
       )
 
     devices_needing_prekeys =
-      if self_chat? do
-        devices_needing_prekeys
-      else
-        Prekeys.expand_recipient_identity_targets(devices_needing_prekeys, recipient_devices)
-      end
+      maybe_expand_recipient_identity_targets(
+        devices_needing_prekeys,
+        recipient_devices,
+        self_chat?
+      )
 
     {updated_sessions, prekey_bundles} =
       Prekeys.fetch_direct(
@@ -149,6 +151,30 @@ defmodule ExWapp.Session.Outbound.Direct do
       all_participant_devices
     )
   end
+
+  # Reusing a self-chat session leaves stale ratchet state behind, which makes
+  # the whisper undecryptable on the other device; clearing forces a fresh pkmsg.
+  @spec maybe_clear_self_chat_sessions(term(), SessionStore.t(), [String.t()], boolean()) ::
+          SessionStore.t()
+  defp maybe_clear_self_chat_sessions(store, sessions, all_device_jids, true),
+    do: clear_self_chat_sessions(store, sessions, all_device_jids)
+
+  defp maybe_clear_self_chat_sessions(_store, sessions, _all_device_jids, false), do: sessions
+
+  # When self-chat sessions are reused none of our own devices needs a bundle.
+  @spec own_targets_needing_prekeys([String.t()], [String.t()], boolean()) :: [String.t()]
+  defp own_targets_needing_prekeys(_candidates, _cached, true = _reuse?), do: []
+
+  defp own_targets_needing_prekeys(candidates, cached, false = _reuse?), do: candidates ++ cached
+
+  # A self-chat has no recipient identity to expand: every target is our own.
+  @spec maybe_expand_recipient_identity_targets([String.t()], [String.t()], boolean()) ::
+          [String.t()]
+  defp maybe_expand_recipient_identity_targets(devices, _recipient_devices, true = _self_chat?),
+    do: devices
+
+  defp maybe_expand_recipient_identity_targets(devices, recipient_devices, false = _self_chat?),
+    do: Prekeys.expand_recipient_identity_targets(devices, recipient_devices)
 
   @doc """
   Builds padded recipient and own-device payloads for a direct send.

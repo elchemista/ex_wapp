@@ -606,13 +606,7 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
       store ->
         lid_mapping = store |> Store.load!() |> Map.get(:lid_mapping, %{})
         token_entries = history_sync_privacy_token_entries(conversations, lid_mapping)
-
-        if token_entries != [] do
-          Store.update(store, :tctokens, %{}, fn existing_tokens ->
-            merge_history_sync_privacy_tokens(existing_tokens, token_entries)
-          end)
-        end
-
+        store_privacy_tokens(store, token_entries)
         length(token_entries)
     end
   rescue
@@ -656,14 +650,22 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
 
   defp direct_user_jid?(_jid), do: false
 
+  @spec store_privacy_tokens(struct(), list()) :: :ok
+  defp store_privacy_tokens(_store, []), do: :ok
+
+  defp store_privacy_tokens(store, token_entries) do
+    Store.update(store, :tctokens, %{}, &merge_history_sync_privacy_tokens(&1, token_entries))
+    :ok
+  end
+
+  @spec merge_history_sync_privacy_tokens(map(), list()) :: map()
   defp merge_history_sync_privacy_tokens(existing_tokens, token_entries) do
-    Enum.reduce(token_entries, existing_tokens, fn {storage_jids, record}, tokens ->
-      Enum.reduce(storage_jids, tokens, fn jid, aliases ->
-        Map.update(aliases, jid, record, fn existing ->
-          if PrivacyToken.newer_or_equal?(record, existing), do: record, else: existing
-        end)
-      end)
-    end)
+    Enum.reduce(token_entries, existing_tokens, &merge_privacy_token_entry/2)
+  end
+
+  @spec merge_privacy_token_entry({[binary()], map()}, map()) :: map()
+  defp merge_privacy_token_entry({storage_jids, record}, tokens) do
+    PrivacyToken.put_newer(tokens, storage_jids, record)
   end
 
   defp merge_lid_mappings(existing_mappings, normalized_mappings) do

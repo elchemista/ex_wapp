@@ -268,10 +268,10 @@ defmodule ExWapp.Debug do
 
     defp build_real_client_payload do
       alias WAWebProtobufsWa6.ClientPayload
+      alias WAWebProtobufsWa6.ClientPayload.DevicePairingRegistrationData
       alias WAWebProtobufsWa6.ClientPayload.UserAgent
       alias WAWebProtobufsWa6.ClientPayload.UserAgent.AppVersion
       alias WAWebProtobufsWa6.ClientPayload.WebInfo
-      alias WAWebProtobufsWa6.ClientPayload.DevicePairingRegistrationData
 
       # Generate signal keys
       identity = Keys.generate_key_pair()

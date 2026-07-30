@@ -265,13 +265,7 @@ defmodule ExWapp.Message.Handler.Notification do
   defp do_store_tctoken(store, jids, token, timestamp) do
     record = %{token: token, timestamp: timestamp}
 
-    Store.update(store, :tctokens, %{}, fn tctokens ->
-      Enum.reduce(jids, tctokens, fn jid, acc ->
-        Map.update(acc, jid, record, fn existing ->
-          if PrivacyToken.newer_or_equal?(record, existing), do: record, else: existing
-        end)
-      end)
-    end)
+    Store.update(store, :tctokens, %{}, &PrivacyToken.put_newer(&1, jids, record))
   end
 
   defp handle_devices_notification(attrs, content, _session, state) do

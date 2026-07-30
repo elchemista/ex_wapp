@@ -91,12 +91,10 @@ defmodule ExWapp.Noise.Handshake do
   @spec mix_shared_secret(t(), binary(), binary()) :: {:ok, t()} | {:error, term()}
   def mix_shared_secret(%__MODULE__{} = state, private_key, public_key)
       when byte_size(private_key) == 32 and byte_size(public_key) == 32 do
-    try do
-      secret = :crypto.compute_key(:ecdh, public_key, private_key, :x25519)
-      {:ok, mix_into_key(state, secret)}
-    rescue
-      e -> {:error, e}
-    end
+    secret = :crypto.compute_key(:ecdh, public_key, private_key, :x25519)
+    {:ok, mix_into_key(state, secret)}
+  rescue
+    e -> {:error, e}
   end
 
   @doc """

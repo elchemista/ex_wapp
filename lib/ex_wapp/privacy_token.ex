@@ -29,6 +29,25 @@ defmodule ExWapp.PrivacyToken do
 
   def valid?(_record, _now_seconds), do: false
 
+  @doc """
+  Stores `record` under every JID in `jids`, keeping whichever token is newer.
+
+  One contact reaches the store under several JID aliases (phone number and LID),
+  and the same token arrives through more than one path — a notification and a
+  history sync chunk. Overwriting blindly would let a stale copy win.
+  """
+  @spec put_newer(map(), [binary()], map()) :: map()
+  def put_newer(tokens, jids, record) do
+    Enum.reduce(jids, tokens, fn jid, acc ->
+      Map.update(acc, jid, record, &keep_newer(record, &1))
+    end)
+  end
+
+  @spec keep_newer(map(), map()) :: map()
+  defp keep_newer(candidate, existing) do
+    if newer_or_equal?(candidate, existing), do: candidate, else: existing
+  end
+
   @spec newer_or_equal?(term(), term()) :: boolean()
   def newer_or_equal?(candidate, existing) do
     case {record_timestamp(candidate), record_timestamp(existing)} do
