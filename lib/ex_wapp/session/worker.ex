@@ -13,6 +13,30 @@ defmodule ExWapp.Session.Worker do
   - Telemetry events for observability
   - Crash recovery via supervision
 
+  ## What lives here, and what does not
+
+  This module owns the process: the state struct, the GenServer callbacks and
+  the decision of what each incoming message means. The work each decision
+  triggers lives in a module named after the concern, all of them called from
+  this process — a module is not a process, so the transport is still linked to
+  the session, monitors are registered against it and timers land in its mailbox.
+
+    * `ExWapp.Session.Worker.Connection` — opening, tearing down and retrying the
+      transport, and the connection events it reports
+    * `ExWapp.Session.Worker.SendRecovery` — resending, repairing a rejected
+      peer session, and asking the primary device for a placeholder resend
+    * `ExWapp.Session.Worker.SendHealth` — send counters and the error guard
+    * `ExWapp.Session.Worker.SignalSessions` — loading, persisting and pruning
+      Signal sessions
+    * `ExWapp.Session.Worker.PostAuth` — the prekey and passive handshake that
+      follows a successful login
+    * `ExWapp.Session.Worker.NodeHandler` — turning an inbound stanza into state
+      plus a list of actions
+    * `ExWapp.Session.Worker.Outbound` / `OutboundConfirmation` / `Retry` — the
+      send path and its delivery confirmations
+    * `ExWapp.Session.Worker.Subscribers` / `Events` — what the session reports
+      to subscribers and to telemetry
+
   ## Supervision
 
   For production use, run Session under `ExWapp.Session.Supervisor`:
@@ -60,8 +84,7 @@ defmodule ExWapp.Session.Worker do
     Pairing,
     Quota,
     RateLimiter,
-    Store,
-    Telemetry
+    Store
   }
 
   alias ExWapp.Pairing.LinkCode
@@ -72,7 +95,6 @@ defmodule ExWapp.Session.Worker do
     AppStateSync,
     InboundRouter,
     InitialSync,
-    JIDUtils,
     Options,
     OutboundQueue,
     SendCoordinator
@@ -80,14 +102,19 @@ defmodule ExWapp.Session.Worker do
 
   alias ExWapp.Session.Outbound.{Command, Content}
 
+  alias ExWapp.AppState.Engine
+  alias ExWapp.Session.Account
+
   alias ExWapp.Session.Worker.{
+    Connection,
+    Events,
     NodeHandler,
-    Outbound,
     OutboundConfirmation,
     PostAuth,
-    Resilience,
-    Retry,
     Safety,
+    SendHealth,
+    SendRecovery,
+    SignalSessions,
     Subscribers
   }
 
@@ -99,24 +126,6 @@ defmodule ExWapp.Session.Worker do
   @type status ::
           :idle | :connecting | :handshaking | :syncing | :connected | :disconnected
 
-  @default_send_health %{
-    paused: false,
-    hard_stopped: false,
-    send_errors_total: 0,
-    consecutive_send_errors: 0,
-    retries_total: 0,
-    drops_total: 0,
-    outbound_queue_errors_total: 0,
-    guard_trips: 0,
-    last_error_reason: nil,
-    last_error_at_ms: nil,
-    last_guard_action: nil,
-    last_guard_reason: nil,
-    errors_window_ms: [],
-    drops_window_ms: []
-  }
-
-  @max_outgoing_retry_payloads 512
   @explicit_app_state_sync_timeout :timer.minutes(5)
 
   defstruct [
@@ -137,7 +146,7 @@ defmodule ExWapp.Session.Worker do
     send_coordinator: %SendCoordinator{},
     opts: [],
     runtime_cfg: %{},
-    send_health: @default_send_health,
+    send_health: SendHealth.default(),
     rate_limiter: %{},
     quota: %{},
     safety: %{},
@@ -440,13 +449,13 @@ defmodule ExWapp.Session.Worker do
       send_worker_sup: send_worker_sup,
       session_id: session_id,
       pairing: Pairing.new(store),
-      signal_sessions: load_persisted_signal_sessions(store),
+      signal_sessions: SignalSessions.load(store),
       rate_limiter: RateLimiter.new(),
       quota: Quota.new(runtime_cfg),
       safety: Safety.new()
     }
 
-    emit_telemetry(:init, %{session_id: session_id}, state)
+    Events.emit_telemetry(:init, %{session_id: session_id}, state)
 
     if options.auto_connect do
       send(self(), :connect)
@@ -489,7 +498,7 @@ defmodule ExWapp.Session.Worker do
         OutboundQueue.enqueue_node(outbound_queue, node)
 
         Subscribers.notify_qr(state, {:pairing_code, code}, fn ->
-          emit_telemetry(
+          Events.emit_telemetry(
             :qr,
             %{subscriber_count: map_size(state.qr_subscribers)},
             state,
@@ -531,9 +540,10 @@ defmodule ExWapp.Session.Worker do
 
       task = fn -> safe_download_media(session_pid, state, ref, opts) end
 
-      case start_send_worker(state, "media_download", task) do
+      case SendRecovery.start_send_worker(state, "media_download", task) do
         {:ok, worker, mon} ->
-          {:noreply, register_send_worker(state, worker, mon, "media_download", from)}
+          {:noreply,
+           SendRecovery.register_send_worker(state, worker, mon, "media_download", from)}
 
         {:error, reason} ->
           {:reply, {:error, {:download_worker_start_failed, reason}}, state}
@@ -561,7 +571,7 @@ defmodule ExWapp.Session.Worker do
           own_jid,
           chat_jid,
           Map.get(message, :from_me, false) == true,
-          normalize_retry_participant(Map.get(message, :participant)),
+          SendRecovery.normalize_retry_participant(Map.get(message, :participant)),
           media_key
         )
 
@@ -695,15 +705,16 @@ defmodule ExWapp.Session.Worker do
 
     # Spawn a worker to avoid deadlock: send_mutation calls GenServer.call(session, {:send_iq, ...})
     # which would deadlock if run inside handle_call of the same GenServer.
-    case start_send_worker(state, "app_state_mutation", fn ->
+    case SendRecovery.start_send_worker(state, "app_state_mutation", fn ->
            try do
-             ExWapp.AppState.Engine.send_mutation(session_pid, patch_info, state.store)
+             Engine.send_mutation(session_pid, patch_info, state.store)
            rescue
              e -> {:error, {:exception, e}}
            end
          end) do
       {:ok, worker, mon} ->
-        new_state = register_send_worker(state, worker, mon, "app_state_mutation", from)
+        new_state =
+          SendRecovery.register_send_worker(state, worker, mon, "app_state_mutation", from)
 
         {:noreply, new_state}
 
@@ -749,8 +760,8 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_call({:update_signal_sessions, sessions}, _from, state) do
-    sessions = normalize_persisted_signal_sessions(sessions)
-    persist_signal_sessions_store(state.store, sessions)
+    sessions = SignalSessions.normalize(sessions)
+    SignalSessions.persist(state.store, sessions)
     {:reply, :ok, %{state | signal_sessions: sessions}}
   end
 
@@ -815,7 +826,7 @@ defmodule ExWapp.Session.Worker do
   def handle_cast(:connect, %__MODULE__{status: status} = state)
       when status in [:idle, :disconnected] do
     Logger.debug("[SESSION] handle_cast(:connect) - status=#{status}, scheduling connect...")
-    {:noreply, schedule_connect(state, 0)}
+    {:noreply, Connection.schedule_connect(state, 0)}
   end
 
   def handle_cast(:connect, state) do
@@ -824,33 +835,33 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_cast(:disconnect, state) do
-    new_state = do_disconnect(state, :user_requested)
+    new_state = Connection.do_disconnect(state, :user_requested)
     {:noreply, %{new_state | status: :idle, reconnect_attempts: 0}}
   end
 
   def handle_cast(:pause_sends, state) do
     new_state =
       state
-      |> health_put(:paused, true)
-      |> health_put(:last_guard_action, :pause)
+      |> SendHealth.put(:paused, true)
+      |> SendHealth.put(:last_guard_action, :pause)
 
-    broadcast_health_event(new_state, :control, %{action: :pause_sends})
+    SendHealth.broadcast_event(new_state, :control, %{action: :pause_sends})
     {:noreply, new_state}
   end
 
   def handle_cast(:resume_sends, state) do
     new_state =
       state
-      |> health_put(:paused, false)
-      |> health_put(:consecutive_send_errors, 0)
-      |> health_put(:last_guard_action, :resume)
+      |> SendHealth.put(:paused, false)
+      |> SendHealth.put(:consecutive_send_errors, 0)
+      |> SendHealth.put(:last_guard_action, :resume)
 
-    broadcast_health_event(new_state, :control, %{action: :resume_sends})
+    SendHealth.broadcast_event(new_state, :control, %{action: :resume_sends})
     {:noreply, new_state}
   end
 
   def handle_cast(:stop_worker, state) do
-    broadcast_health_event(state, :control, %{action: :stop_worker})
+    SendHealth.broadcast_event(state, :control, %{action: :stop_worker})
     {:stop, {:control, :stop_worker}, state}
   end
 
@@ -867,40 +878,40 @@ defmodule ExWapp.Session.Worker do
   @impl true
   def handle_info(:connect, state) do
     Logger.debug("[SESSION] handle_info(:connect) - calling do_connect...")
-    {:noreply, do_connect(state)}
+    {:noreply, Connection.do_connect(state)}
   end
 
   def handle_info(:health_check, state) do
-    new_state = do_health_check(state)
+    new_state = Connection.do_health_check(state)
     {:noreply, new_state}
   end
 
   def handle_info({:reconnect, attempt}, state) do
     Logger.debug("Reconnection attempt #{attempt}")
-    emit_telemetry(:reconnect, %{attempt: attempt}, state)
-    {:noreply, do_connect(%{state | reconnect_attempts: attempt})}
+    Events.emit_telemetry(:reconnect, %{attempt: attempt}, state)
+    {:noreply, Connection.do_connect(%{state | reconnect_attempts: attempt})}
   end
 
   # Connection process exited
   def handle_info({:EXIT, pid, reason}, %__MODULE__{conn: pid} = state) do
     Logger.warning("Connection process exited: #{Log.reason(reason)}")
-    new_state = handle_connection_exit(state, reason)
+    new_state = Connection.handle_connection_exit(state, reason)
     {:noreply, new_state}
   end
 
   def handle_info({:EXIT, pid, reason}, %__MODULE__{outbound_queue: pid} = state) do
     Logger.warning("[SESSION] outbound queue exited: #{Log.reason(reason)}")
-    {:noreply, restart_outbound_queue(state)}
+    {:noreply, Connection.restart_outbound_queue(state)}
   end
 
   def handle_info({:EXIT, pid, reason}, %__MODULE__{inbound_router: pid} = state) do
     Logger.warning("[SESSION] inbound router exited: #{Log.reason(reason)}")
-    {:noreply, restart_inbound_router(state)}
+    {:noreply, Connection.restart_inbound_router(state)}
   end
 
   def handle_info({:EXIT, pid, reason}, %__MODULE__{send_worker_sup: pid} = state) do
     Logger.warning("[SESSION] send worker supervisor exited: #{Log.reason(reason)}")
-    state = fail_all_send_workers(state, {:send_worker_supervisor_exited, reason})
+    state = Connection.fail_all_send_workers(state, {:send_worker_supervisor_exited, reason})
 
     case Task.Supervisor.start_link() do
       {:ok, send_worker_sup} ->
@@ -925,20 +936,20 @@ defmodule ExWapp.Session.Worker do
   # Connection events from Conn process
   def handle_info({:connection_event, event}, state) do
     Logger.debug(
-      "[SESSION] connection_event session=#{Log.reference(state.session_id)} event=#{inspect(connection_event_summary(event))} status_before=#{inspect(state.status)} post_auth_phase=#{inspect(state.post_auth_phase)}"
+      "[SESSION] connection_event session=#{Log.reference(state.session_id)} event=#{inspect(Connection.connection_event_summary(event))} status_before=#{inspect(state.status)} post_auth_phase=#{inspect(state.post_auth_phase)}"
     )
 
-    new_state = handle_connection_event(event, state)
+    new_state = Connection.handle_connection_event(event, state)
 
     Logger.debug(
-      "[SESSION] connection_event handled session=#{Log.reference(state.session_id)} event=#{inspect(connection_event_summary(event))} status_after=#{inspect(new_state.status)} post_auth_phase=#{inspect(new_state.post_auth_phase)}"
+      "[SESSION] connection_event handled session=#{Log.reference(state.session_id)} event=#{inspect(Connection.connection_event_summary(event))} status_after=#{inspect(new_state.status)} post_auth_phase=#{inspect(new_state.post_auth_phase)}"
     )
 
     {:noreply, new_state}
   catch
     kind, reason ->
       Logger.error("Error handling connection event: #{kind} #{Log.reason(reason)}")
-      new_state = update_stats(state, :errors)
+      new_state = Events.update_stats(state, :errors)
       {:noreply, new_state}
   end
 
@@ -964,7 +975,7 @@ defmodule ExWapp.Session.Worker do
 
     state =
       state
-      |> clear_initial_sync_task()
+      |> Connection.clear_initial_sync_task()
       |> maybe_mark_synced()
 
     {:noreply, state}
@@ -1015,7 +1026,7 @@ defmodule ExWapp.Session.Worker do
       "[WORKER] New message from=#{Log.reference(jid)} id=#{Log.reference(Map.get(message, :id))} session=#{Log.reference(state.session_id)}"
     )
 
-    emit_telemetry(
+    Events.emit_telemetry(
       :message_received,
       %{message_count: 1},
       state,
@@ -1035,7 +1046,7 @@ defmodule ExWapp.Session.Worker do
         state
       ) do
     {:noreply,
-     maybe_start_placeholder_resend_request(
+     SendRecovery.maybe_start_placeholder_resend_request(
        state,
        chat_jid,
        sender_jid,
@@ -1139,7 +1150,7 @@ defmodule ExWapp.Session.Worker do
 
     state =
       state
-      |> clear_initial_sync_task()
+      |> Connection.clear_initial_sync_task()
       |> maybe_mark_synced()
 
     {:noreply, state}
@@ -1153,9 +1164,9 @@ defmodule ExWapp.Session.Worker do
 
   def handle_info({:outbound_error, _item, reason}, state) do
     Logger.warning("[SESSION] outbound queue error: #{Log.reason(reason)}")
-    emit_telemetry(:error, %{reason: reason, phase: :outbound}, state)
-    state = update_stats(state, :errors)
-    state = increment_outbound_queue_errors(state, reason)
+    Events.emit_telemetry(:error, %{reason: reason, phase: :outbound}, state)
+    state = Events.update_stats(state, :errors)
+    state = SendHealth.increment_outbound_queue_errors(state, reason)
 
     case maybe_apply_send_error_guard(state, {:outbound_queue_error, reason}) do
       {:continue, new_state} -> {:noreply, new_state}
@@ -1176,10 +1187,10 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_info({:signal_sessions_updated, sessions}, state) do
-    sessions = normalize_persisted_signal_sessions(sessions)
+    sessions = SignalSessions.normalize(sessions)
     session_count = sessions |> SessionStore.list_sessions() |> length()
     Logger.debug("[SEND] Async signal session update received (sessions=#{session_count})")
-    persist_signal_sessions_store(state.store, sessions)
+    SignalSessions.persist(state.store, sessions)
     {:noreply, %{state | signal_sessions: sessions}}
   end
 
@@ -1212,7 +1223,7 @@ defmodule ExWapp.Session.Worker do
   def handle_info({:refresh_identity_session, _jid}, state), do: {:noreply, state}
 
   def handle_info({:identity_prekey_bundle, jid, {:ok, bundle}}, state) do
-    {:noreply, install_refreshed_identity_session(state, jid, bundle)}
+    {:noreply, SignalSessions.install_refreshed_identity(state, jid, bundle)}
   end
 
   def handle_info({:identity_prekey_bundle, jid, {:error, reason}}, state) do
@@ -1232,36 +1243,37 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_info({:retry_outgoing_message, jid, message_id}, state) do
-    {:noreply, maybe_retry_outgoing_message(state, jid, message_id, %{})}
+    {:noreply, SendRecovery.maybe_retry_outgoing_message(state, jid, message_id, %{})}
   end
 
   def handle_info({:retry_outgoing_message, jid, message_id, retry_meta}, state) do
-    {:noreply, maybe_retry_outgoing_message(state, jid, message_id, retry_meta)}
+    {:noreply, SendRecovery.maybe_retry_outgoing_message(state, jid, message_id, retry_meta)}
   end
 
   def handle_info({:ack_session_rejection, message_id, jid, ack}, state) do
-    {:noreply, repair_session_and_retry(state, message_id, jid, ack)}
+    {:noreply, SendRecovery.repair_session_and_retry(state, message_id, jid, ack)}
   end
 
   def handle_info({:session_repair_due, message_id, jid, ack}, state) do
-    attempts = session_repair_attempts(state, message_id)
+    attempts = SendRecovery.session_repair_attempts(state, message_id)
     max_attempts = Config.get(state.runtime_cfg, [:send, :max_session_repair_attempts], 2)
 
-    {:noreply, run_session_repair(state, message_id, jid, ack, attempts, max_attempts)}
+    {:noreply,
+     SendRecovery.run_session_repair(state, message_id, jid, ack, attempts, max_attempts)}
   end
 
   def handle_info({:send_result, jid, text, {:ok, message_id}, strategy, attempt}, state) do
     state =
       state
-      |> remember_outgoing_retry_payload(jid, text, message_id)
-      |> clear_consecutive_send_errors()
+      |> SendRecovery.remember_outgoing_retry_payload(jid, text, message_id)
+      |> SendHealth.clear_consecutive_send_errors()
 
     {:noreply, schedule_outbound_confirmation(state, jid, text, message_id, strategy, attempt)}
   end
 
   def handle_info({:send_result, jid, _text, {:error, reason}, strategy, attempt}, state) do
     state =
-      register_send_error(state, {:send_failed, reason}, %{
+      SendHealth.register_send_error(state, {:send_failed, reason}, %{
         jid: jid,
         strategy: strategy,
         attempt: attempt
@@ -1286,9 +1298,9 @@ defmodule ExWapp.Session.Worker do
             state,
             message_id,
             confirmation,
-            &start_send_worker/3,
-            &do_send_text_worker/5,
-            &register_send_worker/4,
+            &SendRecovery.start_send_worker/3,
+            &SendRecovery.do_send_text_worker/5,
+            &SendRecovery.register_send_worker/4,
             max_silent_drop_fallback_attempts:
               Config.get(state.runtime_cfg, [:send, :max_silent_drop_fallback_attempts], 1),
             on_drop: fn jid, drop_message_id, attempt ->
@@ -1296,7 +1308,7 @@ defmodule ExWapp.Session.Worker do
             end
           )
 
-        new_state = register_drop_timeout(new_state, message_id, confirmation)
+        new_state = SendHealth.register_drop_timeout(new_state, message_id, confirmation)
 
         case maybe_apply_send_error_guard(new_state, {:drop_timeout, message_id}) do
           {:continue, guarded_state} -> {:noreply, guarded_state}
@@ -1307,7 +1319,7 @@ defmodule ExWapp.Session.Worker do
 
   def handle_info({:silent_drop_failed, jid, message_id, attempt}, state) do
     state =
-      register_send_error(
+      SendHealth.register_send_error(
         state,
         {:silent_drop_failed, message_id},
         %{jid: jid, attempt: attempt}
@@ -1321,7 +1333,7 @@ defmodule ExWapp.Session.Worker do
 
   # NodeHandler delegates stream:error "replaced" back to Worker
   def handle_info({:restart_connection, reason}, state) do
-    {:noreply, restart_connection_now(state, reason)}
+    {:noreply, Connection.restart_connection_now(state, reason)}
   end
 
   def handle_info(msg, state) do
@@ -1332,11 +1344,11 @@ defmodule ExWapp.Session.Worker do
   @impl true
   def terminate(reason, state) do
     Logger.debug("Session terminating: #{Log.reason(reason)}")
-    emit_telemetry(:terminate, %{reason: reason}, state)
+    Events.emit_telemetry(:terminate, %{reason: reason}, state)
 
     Subscribers.broadcast_lifecycle(
       state.session_id,
-      {:ex_wapp_session, :terminated, reason, lifecycle_event_meta(state)}
+      {:ex_wapp_session, :terminated, reason, Events.lifecycle_event_meta(state)}
     )
 
     if state.session_id do
@@ -1350,7 +1362,7 @@ defmodule ExWapp.Session.Worker do
     # Stop every operation that can still mutate the store before persisting
     # the final snapshot. Then explicitly stop linked helpers, because normal
     # exits are ignored by linked processes when this worker traps exits.
-    state = do_disconnect(state, reason)
+    state = Connection.do_disconnect(state, reason)
     flush_store(state.store)
     stop_session_helpers(state)
     close_owned_store(state)
@@ -1400,253 +1412,9 @@ defmodule ExWapp.Session.Worker do
     end
   end
 
-  defp do_connect(%__MODULE__{status: status} = state)
-       when status not in [:idle, :disconnected] do
-    Logger.debug("[SESSION] do_connect SKIPPED - status=#{status} not in [:idle, :disconnected]")
-    state
-  end
-
-  defp do_connect(%__MODULE__{} = state) do
-    Logger.debug("[SESSION] do_connect starting connection...")
-    Logger.debug("[SESSION] store_adapter=#{inspect(state.store.__struct__)}")
-    emit_telemetry(:connect, %{attempt: state.reconnect_attempts}, state)
-
-    case safe_start_connection(state) do
-      {:ok, conn_pid} ->
-        Logger.debug("[SESSION] ✓ Connection started: #{inspect(conn_pid)}")
-        conn_ref = Process.monitor(conn_pid)
-
-        %{
-          state
-          | conn: conn_pid,
-            conn_ref: conn_ref,
-            status: :connecting,
-            transport_ready?: false
-        }
-        |> schedule_health_check()
-
-      {:error, reason} ->
-        Logger.debug("[SESSION] ✗ Connection FAILED: #{Log.reason(reason)}")
-        Logger.error("Failed to start connection: #{Log.reason(reason)}")
-        emit_telemetry(:error, %{reason: reason, phase: :connect}, state)
-
-        if vext_managed_runtime?(state) do
-          disconnect_reason = {:connect_failed, reason}
-
-          Subscribers.broadcast_lifecycle(
-            state.session_id,
-            {:ex_wapp_session, :disconnected, disconnect_reason, lifecycle_event_meta(state)}
-          )
-
-          state
-          |> update_stats(:errors)
-          |> Map.put(:status, :disconnected)
-          |> Map.put(:last_disconnect_reason, disconnect_reason)
-        else
-          notify_qr(state, {:error, reason})
-          schedule_reconnect(state, reason)
-        end
-    end
-  end
-
-  defp safe_start_connection(state) do
-    Logger.debug("[SESSION] safe_start_connection calling transport.start_link...")
-
-    noise_opts =
-      state.opts.noise
-      |> Keyword.put_new(
-        :client_payload_fun,
-        &ExWapp.Noise.ClientPayload.build(&1, state.runtime_cfg)
-      )
-
-    result =
-      state.transport_mod.start_link(session: self(), store: state.store, noise: noise_opts)
-
-    Logger.debug("[SESSION] transport.start_link result: #{Log.reason(result)}")
-    result
-  rescue
-    e ->
-      Logger.debug("[SESSION] ✗ transport.start_link EXCEPTION: #{Log.reason(e)}")
-      {:error, {:exception, e}}
-  catch
-    :exit, reason ->
-      Logger.debug("[SESSION] ✗ transport.start_link EXIT: #{Log.reason(reason)}")
-      {:error, {:exit, reason}}
-  end
-
-  defp do_disconnect(%__MODULE__{conn: nil} = state, reason) do
-    state =
-      state
-      |> cancel_health_check()
-      |> cancel_session_tasks(reason)
-      |> clear_pending_requests(reason)
-
-    OutboundQueue.clear_conn(state.outbound_queue)
-
-    %{
-      state
-      | transport_ready?: false,
-        post_auth_phase: :idle,
-        prekey_count_query_id: nil,
-        prekey_upload_iq_id: nil,
-        pending_prekey_upload: [],
-        passive_iq_id: nil,
-        digest_iq_id: nil
-    }
-  end
-
-  defp do_disconnect(%__MODULE__{conn: conn, conn_ref: ref} = state, reason) do
-    if ref, do: Process.demonitor(ref, [:flush])
-
-    state =
-      state
-      |> cancel_health_check()
-      |> cancel_session_tasks(reason)
-      |> clear_pending_requests(reason)
-
-    OutboundQueue.clear_conn(state.outbound_queue)
-
-    # Gracefully stop connection
-    try do
-      GenServer.stop(conn, :normal, 5_000)
-    catch
-      :exit, _ -> :ok
-    end
-
-    emit_telemetry(:disconnected, %{reason: reason}, state)
-
-    Subscribers.broadcast_lifecycle(
-      state.session_id,
-      {:ex_wapp_session, :disconnected, reason, lifecycle_event_meta(state)}
-    )
-
-    %{
-      state
-      | conn: nil,
-        conn_ref: nil,
-        status: :disconnected,
-        last_disconnect_reason: reason,
-        connected_at: nil,
-        transport_ready?: false,
-        post_auth_phase: :idle,
-        prekey_count_query_id: nil,
-        prekey_upload_iq_id: nil,
-        pending_prekey_upload: [],
-        passive_iq_id: nil,
-        digest_iq_id: nil
-    }
-  end
-
-  defp handle_connection_exit(state, reason) do
-    OutboundQueue.clear_conn(state.outbound_queue)
-
-    next_state =
-      state
-      |> cancel_session_tasks(reason)
-      |> clear_pending_requests(reason)
-      |> cancel_health_check()
-      |> Map.merge(%{
-        conn: nil,
-        conn_ref: nil,
-        status: :disconnected,
-        last_disconnect_reason: reason,
-        connected_at: nil,
-        transport_ready?: false,
-        post_auth_phase: :idle,
-        prekey_count_query_id: nil,
-        prekey_upload_iq_id: nil,
-        pending_prekey_upload: [],
-        passive_iq_id: nil,
-        digest_iq_id: nil
-      })
-      |> update_stats(:reconnects)
-
-    emit_telemetry(:disconnected, %{reason: reason}, next_state)
-
-    Subscribers.broadcast_lifecycle(
-      next_state.session_id,
-      {:ex_wapp_session, :disconnected, reason, lifecycle_event_meta(next_state)}
-    )
-
-    if vext_managed_runtime?(next_state) do
-      next_state
-    else
-      notify_qr(next_state, {:error, {:disconnected, reason}})
-      schedule_reconnect(next_state, reason)
-    end
-  end
-
   # Reconnect scheduling and backoff
 
-  defp schedule_connect(state, delay_ms) do
-    Logger.debug("[SESSION] schedule_connect with delay=#{delay_ms}ms")
-    Process.send_after(self(), :connect, delay_ms)
-    # Don't change status here - do_connect will set it after successful connection
-    state
-  end
-
-  defp restart_connection_now(state, reason) do
-    reconnect_cfg = Config.get(state, [:runtime_cfg, :reconnect], %{})
-
-    if Resilience.reconnect_enabled?(state, reconnect_cfg) do
-      state
-      |> do_disconnect(reason)
-      |> Map.put(:reconnect_attempts, 0)
-      |> schedule_connect(0)
-    else
-      Logger.error(
-        "[SESSION] Immediate reconnect suppressed: reconnect disabled, reason=#{Log.reason(reason)}"
-      )
-
-      state
-      |> do_disconnect(reason)
-      |> Map.put(:reconnect_attempts, 0)
-      |> Map.put(:status, :idle)
-    end
-  end
-
-  defp schedule_reconnect(state, _reason) do
-    if vext_managed_runtime?(state) do
-      Logger.debug("[SESSION] Reconnect delegated to Vext runtime owner")
-      %{state | status: :disconnected}
-    else
-      case Resilience.reconnect_decision(state) do
-        :session_invalid ->
-          Logger.error(
-            "[SESSION] Session invalid (401), not reconnecting. Clear session to re-pair."
-          )
-
-          notify_qr(state, {:error, :session_invalid})
-          %{state | status: :idle}
-
-        {:reconnect, attempt, delay} ->
-          Logger.debug("Scheduling reconnect attempt #{attempt} in #{delay}ms")
-          Process.send_after(self(), {:reconnect, attempt}, delay)
-
-          %{state | status: :disconnected}
-
-        :give_up ->
-          Logger.error("Reconnect disabled or max reconnect attempts reached, giving up")
-          notify_qr(state, {:error, :max_reconnect_attempts})
-          %{state | status: :idle}
-      end
-    end
-  end
-
   # Periodic health checks
-
-  defp schedule_health_check(state) do
-    interval_ms = Config.get(state.runtime_cfg, [:health, :check_interval_ms], 30_000)
-    timer = Process.send_after(self(), :health_check, interval_ms)
-    %{state | health_timer: timer}
-  end
-
-  defp cancel_health_check(%{health_timer: nil} = state), do: state
-
-  defp cancel_health_check(%{health_timer: timer} = state) do
-    Process.cancel_timer(timer)
-    %{state | health_timer: nil}
-  end
 
   # A reconnect is the one moment this client knows its view of every peer may
   # have gone stale without being told: messages it never saw were exchanged
@@ -1656,479 +1424,23 @@ defmodule ExWapp.Session.Worker do
   # buys back the case where the alternative is an unbounded run of rejected
   # sends. Deployments that restore the store from an external snapshot can turn
   # `reset_sessions_on_connect` on and pay that cost for every peer instead.
-  defp refresh_signal_sessions_on_connect(%{signal_sessions: nil} = state), do: state
-
-  defp refresh_signal_sessions_on_connect(state) do
-    runtime_cfg = Map.get(state, :runtime_cfg) || %{}
-
-    reset? = Config.get(runtime_cfg, [:signal, :reset_sessions_on_connect], false)
-
-    {sessions, dropped} =
-      if reset? do
-        drop_all_signal_sessions(state.signal_sessions)
-      else
-        SessionStore.evict_one_way_sessions(
-          state.signal_sessions,
-          Config.get(runtime_cfg, [:signal, :evict_one_way_sessions_after_ms], :timer.hours(1))
-        )
-      end
-
-    if dropped == [] do
-      state
-    else
-      scope = if reset?, do: "every", else: "one-way"
-
-      Logger.warning(
-        "[SESSION] Dropped #{length(dropped)} #{scope} Signal session(s) at connect; " <>
-          "the next send to those peers negotiates a fresh one"
-      )
-
-      persist_signal_sessions_store(state.store, sessions)
-      %{state | signal_sessions: sessions}
-    end
-  end
-
-  defp drop_all_signal_sessions(signal_sessions) do
-    jids = SessionStore.list_sessions(signal_sessions)
-    {Enum.reduce(jids, signal_sessions, &SessionStore.delete_session(&2, &1)), jids}
-  end
-
-  defp clear_signal_sessions_for_jid_in_memory(%{signal_sessions: nil} = state, _jid), do: state
-
-  defp clear_signal_sessions_for_jid_in_memory(state, jid) do
-    %{
-      state
-      | signal_sessions: clear_signal_sessions_in_store(state.signal_sessions, jid, state.store)
-    }
-  end
-
-  defp clear_signal_sessions_in_store(signal_sessions, jid, store) do
-    lid_mapping = ExWapp.Session.Account.load_lid_mapping(store)
-    SessionStore.delete_sessions_for_user(signal_sessions, jid, lid_mapping)
-  end
-
-  defp do_health_check(%{conn: nil} = state), do: state
-
-  defp do_health_check(%{conn: conn} = state) when is_pid(conn) do
-    if Process.alive?(conn) do
-      # Keepalive is a lightweight client ping.
-      # Presence and passive-state assertions belong to the post-auth path, not
-      # to every health tick.
-      if state.status in [:connected, :syncing] and is_pid(state.outbound_queue) do
-        ping_node = %ExWapp.Binary.Node{
-          tag: "iq",
-          attrs: %{
-            "id" => to_string(System.unique_integer([:positive])),
-            "to" => "s.whatsapp.net",
-            "type" => "get",
-            "xmlns" => "w:p"
-          },
-          content: [
-            %ExWapp.Binary.Node{tag: "ping", attrs: %{}, content: nil}
-          ]
-        }
-
-        OutboundQueue.enqueue_node(state.outbound_queue, ping_node)
-      end
-
-      schedule_health_check(state)
-    else
-      Logger.warning("Connection process died unexpectedly")
-      handle_connection_exit(state, :process_died)
-    end
-  end
-
   # Transport and authentication events
-
-  defp handle_connection_event({:noise, :handshake_started}, state) do
-    %{
-      state
-      | status: :handshaking,
-        transport_ready?: false
-    }
-  end
-
-  defp handle_connection_event({:transport, :connected}, state) do
-    %{state | status: :connecting, transport_ready?: false}
-  end
-
-  defp handle_connection_event({:transport, {:closed, reason}}, %{conn: nil} = state) do
-    Logger.debug(
-      "[SESSION] Ignoring stale transport close: #{inspect(connection_close_reason_summary(reason))}"
-    )
-
-    state
-  end
-
-  defp handle_connection_event({:transport, {:closed, reason}}, state) do
-    Logger.warning(
-      "[SESSION] Transport closed: #{inspect(connection_close_reason_summary(reason))}"
-    )
-
-    handle_connection_exit(state, {:transport_closed, reason})
-  end
-
-  defp handle_connection_event({:noise, :handshake_completed}, state) do
-    Logger.debug("[SESSION] Noise handshake completed, waiting for post-auth success")
-
-    state =
-      %{
-        state
-        | status: :handshaking,
-          transport_ready?: true,
-          post_auth_phase: :idle,
-          prekey_count_query_id: nil,
-          prekey_upload_iq_id: nil,
-          pending_prekey_upload: [],
-          passive_iq_id: nil,
-          digest_iq_id: nil
-      }
-
-    maybe_set_conn(state.outbound_queue, state)
-
-    Subscribers.broadcast_lifecycle(
-      state.session_id,
-      {:ex_wapp_session, :transport_ready, lifecycle_event_meta(state)}
-    )
-
-    state
-  end
-
-  defp handle_connection_event({:auth, :success_received}, state) do
-    Subscribers.broadcast_lifecycle(
-      state.session_id,
-      {:ex_wapp_session, :connected, lifecycle_event_meta(state)}
-    )
-
-    state
-  end
-
-  defp handle_connection_event({:auth, :ready}, state) do
-    emit_telemetry(:connected, %{}, state)
-
-    initial_sync? =
-      AppStateSync.initial_enabled?(state) and AppStateSync.keys_available?(state.store)
-
-    state =
-      %{
-        state
-        | status: if(initial_sync?, do: :syncing, else: :connected),
-          reconnect_attempts: 0,
-          connected_at: DateTime.utc_now(),
-          post_auth_phase: :complete
-      }
-      |> refresh_signal_sessions_on_connect()
-
-    Subscribers.broadcast_lifecycle(
-      state.session_id,
-      {:ex_wapp_session, :post_auth_ready,
-       lifecycle_event_meta(state, %{initial_sync_pending?: initial_sync?})}
-    )
-
-    AppStateSync.schedule_initial(state, self())
-  end
-
-  defp handle_connection_event({:connection_message, %Binary.Node{} = node}, state) do
-    # ACK at the connection boundary, before routing/decryption/persistence.
-    # This keeps protocol liveness independent from application work.
-    node
-    |> NodeHandler.immediate_actions()
-    |> Enum.each(&NodeHandler.safe_handle_action(&1, state))
-
-    InboundRouter.route(state.inbound_router, node)
-    state
-  end
-
-  defp handle_connection_event({:connection_binary, _payload}, state), do: state
-
-  defp handle_connection_event({:error, reason}, state) do
-    Logger.warning("Connection error: #{Log.reason(reason)}")
-    emit_telemetry(:error, %{reason: reason}, state)
-    state = update_stats(state, :errors)
-
-    if vext_managed_runtime?(state) do
-      Subscribers.broadcast_error(state.session_id, reason)
-      state
-    else
-      notify_qr(state, {:error, reason})
-      state
-    end
-  end
-
-  defp handle_connection_event(event, state) do
-    Logger.debug("Unhandled connection event: #{inspect(connection_event_summary(event))}")
-    state
-  end
-
-  defp maybe_retry_outgoing_message(state, jid, message_id, retry_meta) do
-    max_attempts = Config.get(state.runtime_cfg, [:send, :max_outgoing_retry_attempts], 2)
-
-    {_started?, new_state} =
-      retry_outgoing_message(state, jid, message_id, retry_meta, max_attempts)
-
-    new_state
-  end
-
-  # Returns whether a retry worker was actually started alongside the new state,
-  # because a caller repairing a rejected send has to know: nothing was resent
-  # means the rejection it withheld is the final verdict and has to be reported.
-  @spec retry_outgoing_message(
-          map(),
-          String.t(),
-          String.t(),
-          map(),
-          non_neg_integer(),
-          keyword()
-        ) ::
-          {boolean(), map()}
-  defp retry_outgoing_message(state, jid, message_id, retry_meta, max_attempts, opts \\ []) do
-    session_pid = self()
-    retries_before = total_retry_attempts(state)
-
-    new_state =
-      Retry.maybe_retry_outgoing_message(state, jid, message_id,
-        max_attempts: max_attempts,
-        counter_scope: Keyword.get(opts, :counter_scope, "outbound_retry"),
-        normalize_jid: &JIDUtils.normalize_for_signal/1,
-        start_worker: &start_send_worker/3,
-        register_worker: &register_send_worker/4,
-        outgoing_payloads: Map.get(state, :outgoing_retry_payloads, %{}),
-        retry_meta: retry_meta,
-        send_fun: fn normalized_jid, text ->
-          retry_state = clear_signal_sessions_for_jid_in_memory(state, normalized_jid)
-
-          retry_opts =
-            [
-              retry_message_id: message_id,
-              suppress_outgoing_chat_add: true
-            ]
-            |> maybe_put_retry_own_device_destination(retry_meta)
-
-          do_send_text_worker(session_pid, retry_state, normalized_jid, text, retry_opts)
-        end
-      )
-
-    retries_after = total_retry_attempts(new_state)
-    delta = max(retries_after - retries_before, 0)
-
-    if delta > 0 do
-      state_with_retries =
-        update_in(new_state.send_health.retries_total, fn value -> (value || 0) + delta end)
-
-      broadcast_health_event(state_with_retries, :retry, %{
-        jid: jid,
-        message_id: message_id,
-        retries_started: delta
-      })
-
-      {true, state_with_retries}
-    else
-      {false, new_state}
-    end
-  end
-
-  # The server refused the message because the Signal session it was encrypted
-  # under no longer matches the one the peer is using. Resending the same bytes
-  # reproduces the rejection exactly, so the retained payload is re-encrypted
-  # after the peer's sessions are dropped, which forces a fresh prekey fetch on
-  # the way back out. `Retry` reuses the original message ID, so the peer still
-  # deduplicates it and a caller awaiting delivery keeps correlating on the ID it
-  # was handed.
-  #
-  # `Receipt` withholds the delivery event for exactly this case, so a repair
-  # that never starts has to report the failure here or the caller waits for an
-  # ack that is not coming.
-  @spec repair_session_and_retry(map(), String.t(), String.t(), ExWapp.Error.Ack.t()) :: map()
-  defp repair_session_and_retry(state, message_id, jid, ack) do
-    attempts = session_repair_attempts(state, message_id)
-    max_attempts = Config.get(state.runtime_cfg, [:send, :max_session_repair_attempts], 2)
-    delay_ms = session_repair_delay_ms(state, attempts)
-
-    cond do
-      attempts >= max_attempts ->
-        report_session_rejection(state, message_id, jid, ack, "repair budget spent")
-
-      delay_ms > 0 ->
-        # A repair that renegotiated from a freshly fetched bundle and was
-        # refused again is not evidence that the payload is unsendable: the same
-        # payload, to the same peer, over another fresh session, has gone through
-        # seconds later. Something on the far side is still catching up, and the
-        # only lever this client has is to stop racing it.
-        Logger.warning(
-          "[SEND] Session rejected again id=#{Log.reference(message_id)} " <>
-            "to=#{Log.reference(jid)} code=#{ack.code}; repair #{attempts + 1}/#{max_attempts} " <>
-            "in #{delay_ms}ms"
-        )
-
-        Process.send_after(self(), {:session_repair_due, message_id, jid, ack}, delay_ms)
-        state
-
-      true ->
-        run_session_repair(state, message_id, jid, ack, attempts, max_attempts)
-    end
-  end
-
-  @spec run_session_repair(
-          map(),
-          String.t(),
-          String.t(),
-          ExWapp.Error.Ack.t(),
-          non_neg_integer(),
-          non_neg_integer()
-        ) :: map()
-  defp run_session_repair(state, message_id, jid, ack, attempts, max_attempts) do
-    Logger.warning(
-      "[SEND] Session rejected id=#{Log.reference(message_id)} to=#{Log.reference(jid)} " <>
-        "code=#{ack.code}; dropping peer sessions and resending " <>
-        "(repair #{attempts + 1}/#{max_attempts})"
-    )
-
-    # No `:recipient` hint: an ack can come back addressed in the peer's other
-    # family, and pinning the own-device destination to it would put a PN inside
-    # a LID send. The resend derives that destination from the JID it actually
-    # sends to, which `Retry` takes from the retained payload.
-    case retry_outgoing_message(state, jid, message_id, %{}, max_attempts,
-           counter_scope: "session_repair"
-         ) do
-      {true, new_state} ->
-        new_state
-
-      {false, new_state} ->
-        report_session_rejection(new_state, message_id, jid, ack, "repair unavailable")
-    end
-  end
-
-  defp report_session_rejection(state, message_id, jid, ack, reason) do
-    Logger.warning(
-      "[SEND] Session repair gave up for id=#{Log.reference(message_id)} " <>
-        "to=#{Log.reference(jid)} (#{reason}); reporting rejection to caller"
-    )
-
-    Subscribers.broadcast_delivery(state.session_id, message_id, :failed, %{
-      jid: jid,
-      error: ack
-    })
-
-    state
-  end
-
-  # `Retry` owns the repair counter and keys it by the JID it resends to, which
-  # is taken from the retained payload and need not be the JID the rejection
-  # arrived on — an ack can come back in the peer's other addressing family. The
-  # message ID is what both sides agree on, so the count is read back through it.
-  @spec session_repair_attempts(map(), String.t()) :: non_neg_integer()
-  defp session_repair_attempts(state, message_id) do
-    suffix = "|" <> message_id
-
-    state
-    |> Map.get(:retry_counters, %{})
-    |> Enum.filter(fn {key, _count} ->
-      String.starts_with?(key, "session_repair|") and String.ends_with?(key, suffix)
-    end)
-    |> Enum.map(&elem(&1, 1))
-    |> Enum.max(fn -> 0 end)
-  end
-
-  @spec session_repair_delay_ms(map(), non_neg_integer()) :: non_neg_integer()
-  defp session_repair_delay_ms(state, attempts) do
-    case Config.get(state.runtime_cfg, [:send, :session_repair_backoff_ms], [0, 3_000]) do
-      [] -> 0
-      schedule -> Enum.at(schedule, attempts, List.last(schedule))
-    end
-  end
-
-  defp maybe_start_placeholder_resend_request(
-         state,
-         chat_jid,
-         sender_jid,
-         message_id,
-         metadata
-       ) do
-    if placeholder_resend_ready?(state, chat_jid, sender_jid, message_id) do
-      start_placeholder_resend_request(state, chat_jid, sender_jid, message_id, metadata)
-    else
-      Logger.warning(
-        "[PLACEHOLDER] Cannot request unavailable message id=#{Log.reference(message_id)}: " <>
-          placeholder_block_reason(state, chat_jid, sender_jid, message_id)
-      )
-
-      state
-    end
-  end
-
-  defp placeholder_block_reason(state, chat_jid, sender_jid, message_id) do
-    cond do
-      not is_map(state) -> "session state unavailable"
-      not resend_status_ready?(state) -> "status=#{inspect(Map.get(state, :status))}"
-      not is_pid(Map.get(state, :conn)) -> "transport is not connected"
-      not valid_resend_ref?(chat_jid) -> "chat reference is #{resend_ref_kind(chat_jid)}"
-      not valid_resend_ref?(sender_jid) -> "sender reference is #{resend_ref_kind(sender_jid)}"
-      not valid_resend_ref?(message_id) -> "message id is #{resend_ref_kind(message_id)}"
-      true -> "unknown precondition"
-    end
-  end
-
-  defp resend_status_ready?(state), do: Map.get(state, :status) in [:connected, :syncing]
-
-  defp resend_ref_kind(nil), do: "nil"
-  defp resend_ref_kind(value) when is_binary(value), do: "empty"
-  defp resend_ref_kind(%module{}), do: "a #{inspect(module)} struct instead of a string"
-  defp resend_ref_kind(_value), do: "not a string"
-
-  defp start_placeholder_resend_request(state, chat_jid, sender_jid, message_id, metadata) do
-    session_pid = self()
-
-    proto =
-      Messages.build_placeholder_resend_proto(chat_jid, sender_jid, message_id,
-        from_me: is_map(metadata) and Map.get(metadata, :from_me) == true
-      )
-
-    task = fn ->
-      peer_state = Map.put(state, :outbound_iq_router, session_pid)
-      Outbound.send_peer_proto_worker(session_pid, peer_state, proto)
-    end
-
-    case start_send_worker(state, "placeholder_resend:#{message_id}", task) do
-      {:ok, worker, mon} ->
-        Logger.debug(
-          "[PLACEHOLDER] Requesting unavailable message id=#{Log.reference(message_id)} chat=#{Log.reference(chat_jid)} from primary device"
-        )
-
-        register_send_worker(state, worker, mon, {:placeholder_resend, message_id})
-
-      {:error, reason} ->
-        Logger.warning(
-          "[PLACEHOLDER] Failed to start resend request for id=#{Log.reference(message_id)}: #{Log.reason(reason)}"
-        )
-
-        state
-    end
-  end
-
-  defp placeholder_resend_ready?(%{status: status, conn: conn}, chat_jid, sender_jid, message_id) do
-    status in [:connected, :syncing] and is_pid(conn) and valid_resend_ref?(chat_jid) and
-      valid_resend_ref?(sender_jid) and valid_resend_ref?(message_id)
-  end
-
-  defp placeholder_resend_ready?(_state, _chat_jid, _sender_jid, _message_id), do: false
-
-  defp valid_resend_ref?(value), do: is_binary(value) and value != ""
 
   # Outbound message dispatch
 
   defp dispatch_outbound_message(state, message, from) do
     with {:ok, message} <- Command.prepare(message),
-         {:ok, state} <- ensure_send_enabled(state, message.to),
-         :ok <- ensure_connected_for_send(state),
+         {:ok, state} <- SendHealth.ensure_send_enabled(state, message.to),
+         :ok <- Connection.ensure_connected_for_send(state),
          {:ok, policy_state} <- enforce_send_policies(state, message.to) do
       task = outbound_message_task(self(), policy_state, message)
 
-      case start_send_worker(policy_state, message.to, task) do
+      case SendRecovery.start_send_worker(policy_state, message.to, task) do
         {:ok, worker, mon} ->
           new_state =
             policy_state
-            |> register_send_worker(worker, mon, message.to, from)
-            |> update_stats(:messages_sent)
+            |> SendRecovery.register_send_worker(worker, mon, message.to, from)
+            |> Events.update_stats(:messages_sent)
 
           {:ok, new_state}
 
@@ -2158,26 +1470,6 @@ defmodule ExWapp.Session.Worker do
   end
 
   # Worker function - runs in a separate process so it can wait for IQ responses
-  defp do_send_text_worker(session_pid, state, jid, text, opts) do
-    state = Map.put(state, :outbound_iq_router, session_pid)
-    Outbound.send_text_worker(session_pid, state, jid, text, opts)
-  end
-
-  defp maybe_put_retry_own_device_destination(opts, %{recipient: recipient}) do
-    recipient =
-      recipient
-      |> JIDUtils.normalize_with_device()
-      |> JIDUtils.strip_device()
-
-    if recipient == "" do
-      opts
-    else
-      Keyword.put(opts, :own_device_destination_jid, recipient)
-    end
-  end
-
-  defp maybe_put_retry_own_device_destination(opts, _retry_meta), do: opts
-
   defp safe_download_media(session_pid, state, ref, opts) do
     with {:ok, bytes} <-
            Media.HTTP.download(state, ref, Keyword.put(opts, :session, session_pid)) do
@@ -2197,7 +1489,7 @@ defmodule ExWapp.Session.Worker do
 
   defp primary_send_task_fun(session_pid, state, jid, text, strategy, attempt, opts) do
     fn ->
-      result = do_send_text_worker(session_pid, state, jid, text, opts)
+      result = SendRecovery.do_send_text_worker(session_pid, state, jid, text, opts)
       send(session_pid, {:send_result, jid, text, result, strategy, attempt})
       result
     end
@@ -2207,7 +1499,7 @@ defmodule ExWapp.Session.Worker do
        when is_binary(jid) and is_binary(message_id) and is_integer(attempt) and attempt >= 0 do
     confirm_timeout_ms = configured_confirm_timeout_ms(state.runtime_cfg)
     max_fallback_attempts = configured_max_fallback_attempts(state.runtime_cfg)
-    normalized_text = normalize_outbound_text(text)
+    normalized_text = SendRecovery.normalize_outbound_text(text)
 
     OutboundConfirmation.schedule(state, jid, normalized_text, message_id, strategy, attempt,
       timeout_ms: confirm_timeout_ms,
@@ -2218,68 +1510,12 @@ defmodule ExWapp.Session.Worker do
   defp schedule_outbound_confirmation(state, _jid, _text, _message_id, _strategy, _attempt),
     do: state
 
-  defp remember_outgoing_retry_payload(state, jid, text, message_id)
-       when is_binary(jid) and is_binary(message_id) do
-    normalized_text = normalize_outbound_text(text)
-
-    if normalized_text == "" do
-      state
-    else
-      payloads = Map.get(state, :outgoing_retry_payloads, %{})
-
-      updated_payloads =
-        payloads
-        |> Map.put(message_id, %{
-          jid: JIDUtils.normalize_for_signal(jid),
-          text: normalized_text,
-          inserted_at_ms: System.monotonic_time(:millisecond)
-        })
-        |> trim_outgoing_retry_payloads()
-
-      %{state | outgoing_retry_payloads: updated_payloads}
-    end
-  end
-
-  defp remember_outgoing_retry_payload(state, _jid, _text, _message_id), do: state
-
-  defp trim_outgoing_retry_payloads(payloads)
-       when is_map(payloads) and map_size(payloads) > @max_outgoing_retry_payloads do
-    payloads
-    |> Enum.sort_by(fn {_message_id, payload} -> Map.get(payload, :inserted_at_ms, 0) end, :desc)
-    |> Enum.take(@max_outgoing_retry_payloads)
-    |> Map.new()
-  end
-
-  defp trim_outgoing_retry_payloads(payloads), do: payloads
-
-  defp register_send_worker(state, worker, mon, label, from \\ nil) do
-    coordinator = SendCoordinator.register(state.send_coordinator, worker, mon, label, from)
-    %{state | send_coordinator: coordinator}
-  end
-
   # QR subscriber delivery
-
-  defp notify_qr(state, {:error, _} = event) do
-    Subscribers.notify_qr(state, event, fn ->
-      emit_telemetry(
-        :qr,
-        %{subscriber_count: map_size(state.qr_subscribers)},
-        state,
-        %{event: :error}
-      )
-    end)
-  end
 
   defp remove_qr_subscriber(state, ref), do: Subscribers.remove_qr_subscriber(state, ref)
 
   defp cleanup_dead_subscriber(state, dead_mon),
     do: Subscribers.cleanup_dead_subscriber(state, dead_mon)
-
-  defp vext_managed_runtime?(%{runtime_cfg: runtime_cfg}) when is_map(runtime_cfg) do
-    Config.get(runtime_cfg, [:ownership, :vext_managed], false)
-  end
-
-  defp vext_managed_runtime?(_state), do: false
 
   # Message subscriber delivery
 
@@ -2291,104 +1527,12 @@ defmodule ExWapp.Session.Worker do
 
   # Session state helpers
 
-  defp load_persisted_signal_sessions(store) do
-    store
-    |> Store.load_signal_sessions()
-    |> normalize_persisted_signal_sessions()
-  rescue
-    error ->
-      Logger.warning("[SESSION] Failed to load persisted signal sessions: #{Log.reason(error)}")
-      nil
-  end
-
-  defp normalize_persisted_signal_sessions(nil), do: SessionStore.new_ets()
-  defp normalize_persisted_signal_sessions(%SessionStore.Ref{} = persisted), do: persisted
-
-  defp normalize_persisted_signal_sessions(%{sessions: sessions} = persisted)
-       when is_map(sessions) do
-    normalized =
-      SessionStore.new()
-      |> Map.merge(persisted)
-      |> Map.put(:pending_prekeys, Map.get(persisted, :pending_prekeys, %{}))
-      |> Map.put(:session_touched_at_ms, Map.get(persisted, :session_touched_at_ms, %{}))
-
-    SessionStore.new_ets(normalized)
-  end
-
-  defp normalize_persisted_signal_sessions(_), do: SessionStore.new_ets()
-
-  defp persist_signal_sessions_store(nil, _sessions), do: :ok
-
-  defp persist_signal_sessions_store(store, sessions) do
-    if SessionStore.store?(sessions) do
-      case Store.persist_signal_sessions(store, sessions) do
-        :ok ->
-          flush_store(store)
-          :ok
-
-        {:error, reason} ->
-          Logger.warning("[SESSION] Failed to persist signal sessions: #{Log.reason(reason)}")
-          :ok
-      end
-    else
-      :ok
-    end
-  rescue
-    error ->
-      Logger.warning("[SESSION] Failed to persist signal sessions: #{Log.reason(error)}")
-      :ok
-  end
-
-  defp install_refreshed_identity_session(state, jid, bundle) do
-    data = Store.load!(state.store)
-    local_identity = get_in(data, [:signal, :identity_key])
-    local_registration_id = get_in(data, [:signal, :registration_id]) || 0
-
-    with true <- SessionStore.store?(state.signal_sessions),
-         %{private: private, public: public} = identity <- local_identity,
-         true <- is_binary(private) and is_binary(public),
-         target_jid when is_binary(target_jid) <- Map.get(bundle, :jid) || jid,
-         {:ok, _session, _base_key, sessions} <-
-           SessionStore.get_or_create_session(
-             state.signal_sessions,
-             target_jid,
-             identity,
-             bundle,
-             local_registration_id,
-             force: true
-           ) do
-      persist_signal_sessions_store(state.store, sessions)
-      %{state | signal_sessions: sessions}
-    else
-      reason ->
-        Logger.warning(
-          "[IDENTITY] Invalid refreshed bundle for #{Log.reference(jid)}: #{Log.reason(reason)}"
-        )
-
-        state
-    end
-  rescue
-    error ->
-      Logger.warning(
-        "[IDENTITY] Failed installing refreshed bundle for #{Log.reference(jid)}: #{Log.reason(error)}"
-      )
-
-      state
-  end
-
   defp message_media_ref(%{media: %Media.Ref{} = ref}), do: ref
 
   defp message_media_ref(%{content: %ExWapp.Message.Content{media: %Media.Ref{} = ref}}),
     do: ref
 
   defp message_media_ref(_message), do: nil
-
-  defp normalize_retry_participant(participant) do
-    case JIDUtils.normalize_with_device(participant) do
-      "" -> nil
-      jid -> jid
-    end
-  end
 
   defp retry_media_timeout(opts) do
     case Keyword.get(opts, :timeout, 30_000) do
@@ -2466,59 +1610,17 @@ defmodule ExWapp.Session.Worker do
 
   defp close_owned_store(_state), do: :ok
 
-  defp restart_outbound_queue(state) do
-    {:ok, outbound_queue} =
-      OutboundQueue.start_link(
-        session: self(),
-        transport: state.transport_mod,
-        max_size: Config.get(state.runtime_cfg, [:queue, :max_size], 10_000),
-        drop_policy: Config.get(state.runtime_cfg, [:queue, :drop_policy], :reject_new),
-        flush_batch_size: Config.get(state.runtime_cfg, [:queue, :flush_batch_size], 100),
-        flush_tick_ms: Config.get(state.runtime_cfg, [:queue, :flush_tick_ms], 10)
-      )
-
-    maybe_set_conn(outbound_queue, state)
-    %{state | outbound_queue: outbound_queue}
-  end
-
-  defp restart_inbound_router(state) do
-    {:ok, inbound_router} = InboundRouter.start_link(session: self())
-    %{state | inbound_router: inbound_router}
-  end
-
-  defp maybe_set_conn(_outbound_queue, %{transport_ready?: false}), do: :ok
-
-  defp maybe_set_conn(_outbound_queue, %{conn: nil}), do: :ok
-
-  defp maybe_set_conn(outbound_queue, %{transport_ready?: true, conn: conn})
-       when is_pid(outbound_queue) and is_pid(conn) do
-    OutboundQueue.set_conn(outbound_queue, conn)
-  end
-
-  defp maybe_set_conn(_outbound_queue, _state), do: :ok
-
-  defp lifecycle_event_meta(state, extra \\ %{}) do
-    extra
-    |> Map.new()
-    |> Map.merge(%{
-      runtime_ref: self(),
-      session_id: state.session_id,
-      status: state.status,
-      transport_ready?: state.transport_ready?,
-      post_auth_phase: state.post_auth_phase
-    })
-  end
-
   defp start_contact_sync_worker(state, from) do
     session_pid = self()
 
-    case start_send_worker(
+    case SendRecovery.start_send_worker(
            state,
            "app_state_sync_contacts",
            fn -> fetch_contacts_collection(session_pid, state.store) end
          ) do
       {:ok, worker, mon} ->
-        {:noreply, register_send_worker(state, worker, mon, "app_state_sync_contacts", from)}
+        {:noreply,
+         SendRecovery.register_send_worker(state, worker, mon, "app_state_sync_contacts", from)}
 
       {:error, reason} ->
         {:reply, {:error, {:send_worker_start_failed, reason}}, state}
@@ -2531,46 +1633,11 @@ defmodule ExWapp.Session.Worker do
     error -> {:error, {:exception, error}}
   end
 
-  defp start_send_worker(%__MODULE__{send_worker_sup: sup}, label, fun)
-       when is_pid(sup) and is_function(fun, 0) do
-    session_pid = self()
-
-    case Task.Supervisor.start_child(sup, fn ->
-           run_send_worker_fun(session_pid, fun)
-         end) do
-      {:ok, worker} ->
-        mon = Process.monitor(worker)
-        {:ok, worker, mon}
-
-      {:error, reason} ->
-        Logger.warning("[SEND] Failed to start worker for #{label}: #{Log.reason(reason)}")
-        {:error, reason}
-    end
-  end
-
-  defp start_send_worker(_state, label, _fun) do
-    {:error, {:missing_send_worker_supervisor, label}}
-  end
-
-  defp run_send_worker_fun(session_pid, fun) when is_pid(session_pid) and is_function(fun, 0) do
-    result = safe_run_send_worker(fun)
-    send(session_pid, {:send_worker_finished, self(), result})
-  end
-
-  defp safe_run_send_worker(fun) do
-    fun.()
-  rescue
-    exception ->
-      {:error, {:send_worker_exception, exception.__struct__, Exception.message(exception)}}
-  catch
-    kind, reason -> {:error, {:send_worker_caught, kind, reason}}
-  end
-
   defp finish_send_worker(state, pid, result) do
     case SendCoordinator.complete(state.send_coordinator, pid) do
       {:ok, operation, coordinator} ->
         Process.demonitor(operation.monitor, [:flush])
-        reply_send_caller(operation.from, result)
+        Connection.reply_send_caller(operation.from, result)
         {:ok, %{state | send_coordinator: coordinator}}
 
       {:error, :not_found, _coordinator} ->
@@ -2582,7 +1649,7 @@ defmodule ExWapp.Session.Worker do
     case SendCoordinator.down(state.send_coordinator, monitor) do
       {:ok, operation, coordinator} ->
         result = {:error, {:send_worker_exited, reason}}
-        reply_send_caller(operation.from, result)
+        Connection.reply_send_caller(operation.from, result)
 
         Logger.warning(
           "[SEND] Worker exited label=#{inspect(operation.label)} reason=#{Log.reason(reason)}"
@@ -2595,97 +1662,12 @@ defmodule ExWapp.Session.Worker do
     end
   end
 
-  defp fail_all_send_workers(state, reason) do
-    {operations, iq_routes, coordinator} = SendCoordinator.drain(state.send_coordinator)
-
-    Enum.each(operations, fn operation ->
-      Process.demonitor(operation.monitor, [:flush])
-      reply_send_caller(operation.from, {:error, reason})
-    end)
-
-    Enum.each(iq_routes, fn {iq_id, worker_pid} ->
-      if Process.alive?(worker_pid), do: send(worker_pid, {:prekey_error, iq_id, reason})
-    end)
-
-    %{state | send_coordinator: coordinator}
-  end
-
-  defp reply_send_caller(nil, _result), do: :ok
-  defp reply_send_caller(from, result), do: GenServer.reply(from, result)
-
   defp maybe_log_inbound_node(%Binary.Node{tag: tag}) when tag in ["iq", "chatstate"], do: :ok
 
   defp maybe_log_inbound_node(%Binary.Node{} = node) do
     Logger.debug(
       "[WORKER] Inbound node tag=#{node.tag} attrs=#{inspect(Map.keys(node.attrs || %{}))}"
     )
-  end
-
-  defp clear_pending_requests(state, reason) do
-    Enum.each(state.pending_iqs, &cancel_pending_call(&1, reason))
-    Enum.each(state.outbound_confirmations, &cancel_pending_timer/1)
-    Enum.each(state.pending_media_retries, &cancel_pending_call(&1, reason))
-
-    state
-    |> fail_all_send_workers({:disconnected, reason})
-    |> Map.put(:pending_iqs, %{})
-    |> Map.put(:outbound_confirmations, %{})
-    |> Map.put(:pending_media_retries, %{})
-  end
-
-  defp cancel_session_tasks(state, reason) do
-    if InitialSync.active?(state.initial_sync) do
-      Logger.debug(
-        "[APP_STATE] cancelling initial sync session=#{Log.reference(state.session_id)} reason=#{Log.reason(reason)}"
-      )
-    end
-
-    state = clear_initial_sync_task(state)
-
-    state.send_worker_sup
-    |> task_supervisor_children()
-    |> Enum.each(&terminate_supervised_task(state.send_worker_sup, &1))
-
-    state
-  end
-
-  defp task_supervisor_children(supervisor) when is_pid(supervisor) do
-    Task.Supervisor.children(supervisor)
-  rescue
-    _ -> []
-  catch
-    :exit, _ -> []
-  end
-
-  defp task_supervisor_children(_supervisor), do: []
-
-  defp terminate_supervised_task(supervisor, task_pid)
-       when is_pid(supervisor) and is_pid(task_pid) do
-    Task.Supervisor.terminate_child(supervisor, task_pid)
-  rescue
-    _ -> :ok
-  catch
-    :exit, _ -> :ok
-  end
-
-  defp terminate_supervised_task(_supervisor, _task_pid), do: :ok
-
-  defp cancel_pending_call({_id, pending}, reason) do
-    cancel_pending_timer(pending)
-
-    case Map.get(pending, :from) do
-      nil -> :ok
-      from -> GenServer.reply(from, {:error, {:disconnected, reason}})
-    end
-  end
-
-  defp cancel_pending_timer({_id, pending}), do: cancel_pending_timer(pending)
-
-  defp cancel_pending_timer(pending) do
-    case Map.get(pending, :timer) do
-      timer when is_reference(timer) -> Process.cancel_timer(timer)
-      _ -> :ok
-    end
   end
 
   defp enforce_send_policies(state, jid) do
@@ -2695,7 +1677,10 @@ defmodule ExWapp.Session.Worker do
       {:ok, state}
     else
       {:error, reason, policy_state} ->
-        emit_telemetry(:error, %{reason: reason, phase: :send_policy}, policy_state, %{jid: jid})
+        Events.emit_telemetry(:error, %{reason: reason, phase: :send_policy}, policy_state, %{
+          jid: jid
+        })
+
         emit_policy_telemetry(reason, jid, policy_state)
         {:error, reason, policy_state}
     end
@@ -2762,90 +1747,6 @@ defmodule ExWapp.Session.Worker do
     end
   end
 
-  defp normalize_outbound_text(text) when is_binary(text), do: text
-  defp normalize_outbound_text(text) when is_list(text), do: IO.iodata_to_binary(text)
-  defp normalize_outbound_text(_), do: ""
-
-  defp ensure_connected_for_send(%{status: status}) when status != :connected,
-    do: {:error, {:not_connected, status}}
-
-  defp ensure_connected_for_send(%{conn: conn, status: status}) when not is_pid(conn),
-    do: {:error, {:not_connected, status}}
-
-  defp ensure_connected_for_send(_state), do: :ok
-
-  defp ensure_send_enabled(state, jid) do
-    cond do
-      health_get(state, :hard_stopped, false) ->
-        blocked_state =
-          register_send_error(
-            state,
-            :send_guard_hard_stopped,
-            %{jid: jid, source: :guard_gate}
-          )
-
-        {:error, :send_guard_hard_stopped, blocked_state}
-
-      health_get(state, :paused, false) ->
-        blocked_state = register_send_error(state, :send_paused, %{jid: jid, source: :guard_gate})
-        {:error, :send_paused, blocked_state}
-
-      true ->
-        {:ok, state}
-    end
-  end
-
-  defp increment_outbound_queue_errors(state, reason) do
-    state =
-      state
-      |> health_inc(:outbound_queue_errors_total)
-      |> health_put(:last_error_reason, {:outbound_queue_error, reason})
-      |> health_put(:last_error_at_ms, now_ms())
-
-    broadcast_health_event(state, :outbound_queue_error, %{reason: reason})
-    state
-  end
-
-  defp clear_consecutive_send_errors(state) do
-    health_put(state, :consecutive_send_errors, 0)
-  end
-
-  defp register_send_error(state, reason, metadata) when is_map(metadata) do
-    now = now_ms()
-
-    errors_window = prune_old_window([now | health_get(state, :errors_window_ms, [])], now)
-
-    state =
-      state
-      |> health_inc(:send_errors_total)
-      |> health_inc(:consecutive_send_errors)
-      |> health_put(:errors_window_ms, errors_window)
-      |> health_put(:last_error_reason, reason)
-      |> health_put(:last_error_at_ms, now)
-
-    broadcast_health_event(state, :send_error, Map.merge(%{reason: reason}, metadata))
-    state
-  end
-
-  defp register_drop_timeout(state, message_id, confirmation) do
-    now = now_ms()
-
-    drops_window = prune_old_window([now | health_get(state, :drops_window_ms, [])], now)
-
-    state =
-      state
-      |> health_inc(:drops_total)
-      |> health_put(:drops_window_ms, drops_window)
-
-    broadcast_health_event(state, :drop_timeout, %{
-      message_id: message_id,
-      jid: Map.get(confirmation, :jid),
-      attempt: Map.get(confirmation, :attempt)
-    })
-
-    state
-  end
-
   defp maybe_apply_send_error_guard(state, reason) do
     guard_cfg = Config.get(state.runtime_cfg, [:send_error_guard], %{})
 
@@ -2857,9 +1758,9 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp apply_enabled_send_error_guard(state, reason, guard_cfg) do
-    metrics = send_error_guard_metrics(state)
+    metrics = SendHealth.guard_metrics(state)
 
-    case compute_guard_trigger_reason(metrics, guard_cfg) do
+    case SendHealth.guard_trigger_reason(metrics, guard_cfg) do
       nil ->
         {:continue, state}
 
@@ -2869,11 +1770,11 @@ defmodule ExWapp.Session.Worker do
 
         state =
           state
-          |> health_inc(:guard_trips)
-          |> health_put(:last_guard_action, action)
-          |> health_put(:last_guard_reason, trigger_reason)
+          |> SendHealth.increment(:guard_trips)
+          |> SendHealth.put(:last_guard_action, action)
+          |> SendHealth.put(:last_guard_reason, trigger_reason)
 
-        broadcast_health_event(state, :guard_trip, %{
+        SendHealth.broadcast_event(state, :guard_trip, %{
           action: action,
           reason: reason,
           trigger_reason: trigger_reason,
@@ -2884,34 +1785,6 @@ defmodule ExWapp.Session.Worker do
         })
 
         continue_or_apply_guard_action(state, action, trigger_reason, notify_only)
-    end
-  end
-
-  defp send_error_guard_metrics(state) do
-    %{
-      consecutive: health_get(state, :consecutive_send_errors, 0),
-      errors_min: length(health_get(state, :errors_window_ms, [])),
-      drops_min: length(health_get(state, :drops_window_ms, []))
-    }
-  end
-
-  defp compute_guard_trigger_reason(metrics, guard_cfg) do
-    max_consecutive = Map.get(guard_cfg, :max_consecutive_errors, 3)
-    max_errors_min = Map.get(guard_cfg, :max_errors_per_minute, 20)
-    max_drops_min = Map.get(guard_cfg, :max_drops_per_minute, 10)
-
-    cond do
-      metrics.consecutive >= max_consecutive ->
-        {:max_consecutive_errors, metrics.consecutive}
-
-      metrics.errors_min >= max_errors_min ->
-        {:max_errors_per_minute, metrics.errors_min}
-
-      metrics.drops_min >= max_drops_min ->
-        {:max_drops_per_minute, metrics.drops_min}
-
-      true ->
-        nil
     end
   end
 
@@ -2927,9 +1800,9 @@ defmodule ExWapp.Session.Worker do
   defp apply_guard_action(state, :pause, trigger_reason) do
     state =
       state
-      |> health_put(:paused, true)
-      |> health_put(:hard_stopped, false)
-      |> health_put(:last_guard_reason, trigger_reason)
+      |> SendHealth.put(:paused, true)
+      |> SendHealth.put(:hard_stopped, false)
+      |> SendHealth.put(:last_guard_reason, trigger_reason)
 
     {:continue, state}
   end
@@ -2937,10 +1810,10 @@ defmodule ExWapp.Session.Worker do
   defp apply_guard_action(state, :disconnect, trigger_reason) do
     state =
       state
-      |> health_put(:paused, true)
-      |> health_put(:hard_stopped, true)
-      |> health_put(:last_guard_reason, trigger_reason)
-      |> do_disconnect({:send_error_guard_trip, trigger_reason})
+      |> SendHealth.put(:paused, true)
+      |> SendHealth.put(:hard_stopped, true)
+      |> SendHealth.put(:last_guard_reason, trigger_reason)
+      |> Connection.do_disconnect({:send_error_guard_trip, trigger_reason})
       |> Map.put(:status, :idle)
       |> Map.put(:reconnect_attempts, 0)
 
@@ -2950,9 +1823,9 @@ defmodule ExWapp.Session.Worker do
   defp apply_guard_action(state, :stop_session, trigger_reason) do
     state =
       state
-      |> health_put(:paused, true)
-      |> health_put(:hard_stopped, true)
-      |> health_put(:last_guard_reason, trigger_reason)
+      |> SendHealth.put(:paused, true)
+      |> SendHealth.put(:hard_stopped, true)
+      |> SendHealth.put(:last_guard_reason, trigger_reason)
 
     {:stop, {:send_error_guard_trip, trigger_reason}, state}
   end
@@ -2962,79 +1835,45 @@ defmodule ExWapp.Session.Worker do
   defp apply_control_action(state, :pause_sends, source) do
     state =
       state
-      |> health_put(:paused, true)
-      |> health_put(:last_guard_action, {:pause_sends, source})
+      |> SendHealth.put(:paused, true)
+      |> SendHealth.put(:last_guard_action, {:pause_sends, source})
 
-    broadcast_health_event(state, :control, %{source: source, action: :pause_sends})
+    SendHealth.broadcast_event(state, :control, %{source: source, action: :pause_sends})
     {:noreply, state}
   end
 
   defp apply_control_action(state, :resume_sends, source) do
     state =
       state
-      |> health_put(:paused, false)
-      |> health_put(:hard_stopped, false)
-      |> health_put(:consecutive_send_errors, 0)
-      |> health_put(:last_guard_action, {:resume_sends, source})
+      |> SendHealth.put(:paused, false)
+      |> SendHealth.put(:hard_stopped, false)
+      |> SendHealth.put(:consecutive_send_errors, 0)
+      |> SendHealth.put(:last_guard_action, {:resume_sends, source})
 
-    broadcast_health_event(state, :control, %{source: source, action: :resume_sends})
+    SendHealth.broadcast_event(state, :control, %{source: source, action: :resume_sends})
     {:noreply, state}
   end
 
   defp apply_control_action(state, :disconnect, source) do
     state =
       state
-      |> do_disconnect({:control_disconnect, source})
+      |> Connection.do_disconnect({:control_disconnect, source})
       |> Map.put(:status, :idle)
       |> Map.put(:reconnect_attempts, 0)
 
-    broadcast_health_event(state, :control, %{source: source, action: :disconnect})
+    SendHealth.broadcast_event(state, :control, %{source: source, action: :disconnect})
     {:noreply, state}
   end
 
   defp apply_control_action(state, :stop_session, source) do
-    broadcast_health_event(state, :control, %{source: source, action: :stop_session})
+    SendHealth.broadcast_event(state, :control, %{source: source, action: :stop_session})
     {:stop, {:control, :stop_session, source}, state}
   end
 
   defp apply_control_action(state, action, source) do
-    broadcast_health_event(state, :control, %{source: source, action: :unknown, value: action})
+    SendHealth.broadcast_event(state, :control, %{source: source, action: :unknown, value: action})
+
     {:noreply, state}
-  end
-
-  defp broadcast_health_event(state, type, metadata) when is_map(metadata) do
-    Subscribers.broadcast_health(state.session_id, {:ex_wapp_health, type, metadata})
-  rescue
-    _ -> :ok
-  end
-
-  defp send_health(state), do: state.send_health || @default_send_health
-
-  defp health_get(state, key, default), do: Map.get(send_health(state), key, default)
-
-  defp health_put(state, key, value) do
-    %{state | send_health: Map.put(send_health(state), key, value)}
-  end
-
-  defp health_inc(state, key, by \\ 1) do
-    %{state | send_health: Map.update(send_health(state), key, by, &((&1 || 0) + by))}
-  end
-
-  defp now_ms, do: System.monotonic_time(:millisecond)
-
-  defp prune_old_window(values, now_ms) when is_list(values) do
-    threshold = now_ms - 60_000
-    Enum.filter(values, &(&1 >= threshold))
-  end
-
-  defp total_retry_attempts(state) do
-    state.retry_counters
-    |> Map.values()
-    |> Enum.sum()
-  end
-
-  defp update_stats(state, key) do
-    update_in(state.stats[key], &((&1 || 0) + 1))
   end
 
   defp calculate_uptime(%{connected_at: nil}), do: 0
@@ -3042,40 +1881,6 @@ defmodule ExWapp.Session.Worker do
   defp calculate_uptime(%{connected_at: connected_at}) do
     DateTime.diff(DateTime.utc_now(), connected_at, :second)
   end
-
-  defp emit_telemetry(event, measurements, state, extra_metadata \\ %{}) do
-    maybe_broadcast_pubsub_error(event, measurements, extra_metadata, state)
-
-    metadata = %{
-      status: state.status,
-      reconnect_attempts: state.reconnect_attempts,
-      session_id: state.session_id
-    }
-
-    Telemetry.execute(
-      event,
-      Map.merge(%{system_time: System.system_time()}, measurements),
-      Map.merge(metadata, extra_metadata)
-    )
-  rescue
-    # Don't crash if telemetry fails
-    _ -> :ok
-  end
-
-  defp maybe_broadcast_pubsub_error(:error, measurements, extra_metadata, state) do
-    reason =
-      case {Map.get(measurements, :phase), Map.get(measurements, :reason)} do
-        {phase, reason} when not is_nil(phase) and not is_nil(reason) -> {phase, reason}
-        {_, reason} when not is_nil(reason) -> reason
-        _ -> {:error_event, measurements, extra_metadata}
-      end
-
-    Subscribers.broadcast_error(state.session_id, reason)
-  rescue
-    _ -> :ok
-  end
-
-  defp maybe_broadcast_pubsub_error(_event, _measurements, _extra_metadata, _state), do: :ok
 
   # ── Initial sync gate ──────────────────────────────────────────────────────
   # While the initial app-state sync runs the session is :syncing, which blocks
@@ -3089,35 +1894,6 @@ defmodule ExWapp.Session.Worker do
 
   defp maybe_mark_synced(%{status: :syncing} = state), do: %{state | status: :connected}
   defp maybe_mark_synced(state), do: state
-
-  defp clear_initial_sync_task(%{initial_sync: %InitialSync{monitor: ref} = initial_sync} = state) do
-    if is_reference(ref), do: Process.demonitor(ref, [:flush])
-    %{state | initial_sync: InitialSync.reset(initial_sync)}
-  end
-
-  defp connection_event_summary({:connection_message, %Binary.Node{} = node}) do
-    {:connection_message,
-     %{tag: node.tag, attrs: node.attrs |> then(&(&1 || %{})) |> Map.keys() |> Enum.sort()}}
-  end
-
-  defp connection_event_summary({:connection_binary, payload}) when is_binary(payload),
-    do: {:connection_binary, %{bytes: byte_size(payload)}}
-
-  defp connection_event_summary({:transport, {:closed, reason}}),
-    do: {:transport, {:closed, connection_close_reason_summary(reason)}}
-
-  defp connection_event_summary(event), do: Log.safe_term(event)
-
-  defp connection_close_reason_summary(%{__struct__: module}),
-    do: %{type: inspect(module)}
-
-  defp connection_close_reason_summary(reason) when is_map(reason) do
-    reason
-    |> Map.take([:reason, :attempt_number, :code])
-    |> Map.new(fn {key, value} -> {key, Log.safe_term(value)} end)
-  end
-
-  defp connection_close_reason_summary(reason), do: Log.safe_term(reason)
 
   defp format_status_state(state) when is_map(state) do
     %{

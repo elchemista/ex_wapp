@@ -407,14 +407,12 @@ defmodule ExWapp.Proto.HistorySync do
   defp normalize_jid(_), do: ""
 
   defp inflate_history_payload(payload) when is_binary(payload) do
-    try do
-      {:ok, :zlib.uncompress(payload)}
-    rescue
-      _ ->
-        # In some edge cases this payload may already be plain protobuf bytes.
-        {:ok, payload}
-    catch
-      _, _ -> {:ok, payload}
-    end
+    {:ok, :zlib.uncompress(payload)}
+  rescue
+    _ ->
+      # In some edge cases this payload may already be plain protobuf bytes.
+      {:ok, payload}
+  catch
+    _, _ -> {:ok, payload}
   end
 end

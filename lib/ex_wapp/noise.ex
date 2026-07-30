@@ -7,6 +7,7 @@ defmodule ExWapp.Noise do
   payloads once the handshake completes.
   """
 
+  alias ExWapp.Noise.Certificate
   alias ExWapp.Noise.ClientPayload
   alias ExWapp.Noise.Engine, as: NoiseEngine
   alias ExWapp.Noise.HandshakeSecrets, as: Secrets
@@ -70,7 +71,7 @@ defmodule ExWapp.Noise do
         client_payload_fun = Keyword.get(opts, :client_payload_fun, &ClientPayload.build/1)
 
         certificate_verifier =
-          Keyword.get(opts, :certificate_verifier, &ExWapp.Noise.Certificate.verify/2)
+          Keyword.get(opts, :certificate_verifier, &Certificate.verify/2)
 
         handshake_header = Keyword.get(opts, :handshake_header, Frame.header())
 

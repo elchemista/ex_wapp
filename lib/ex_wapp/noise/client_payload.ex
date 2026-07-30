@@ -10,10 +10,10 @@ defmodule ExWapp.Noise.ClientPayload do
 
   alias ExWapp.{Config, Log, MapPath, Noise}
   alias ExWapp.Signal
+  alias ExWapp.Store
   alias WACompanionReg.DeviceProps, as: CompanionDeviceProps
   alias WACompanionReg.DeviceProps.AppVersion, as: CompanionAppVersion
   alias WACompanionReg.DeviceProps.HistorySyncConfig
-  alias ExWapp.Store
   alias WAWebProtobufsWa6.ClientPayload
   alias WAWebProtobufsWa6.ClientPayload.DevicePairingRegistrationData
   alias WAWebProtobufsWa6.ClientPayload.UserAgent

@@ -120,13 +120,15 @@ defmodule ExWapp.RetryReceiptWireTest do
     receipt =
       ReceiptBuilder.build_retry_receipt_ack(
         store,
-        "15550001111@s.whatsapp.net",
-        "WIRE_RETRY_FLUSH_FAILURE",
-        nil,
-        "1730000300",
-        2,
-        0,
-        %{}
+        %{
+          to: "15550001111@s.whatsapp.net",
+          id: "WIRE_RETRY_FLUSH_FAILURE",
+          participant: nil,
+          message_t: "1730000300",
+          retry_count: 2,
+          error_code: 0,
+          retry_meta: %{}
+        }
       )
 
     assert_receive :retry_store_flushed
@@ -238,13 +240,15 @@ defmodule ExWapp.RetryReceiptWireTest do
       fn to, id, participant, timestamp, count, error, metadata ->
         ReceiptBuilder.build_retry_receipt_ack(
           store,
-          to,
-          id,
-          participant,
-          timestamp,
-          count,
-          error,
-          metadata
+          %{
+            to: to,
+            id: id,
+            participant: participant,
+            message_t: timestamp,
+            retry_count: count,
+            error_code: error,
+            retry_meta: metadata
+          }
         )
       end
     )

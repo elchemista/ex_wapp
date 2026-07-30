@@ -242,13 +242,15 @@ defmodule ExWapp.Session.Worker.NodeHandler do
       fn to, id, participant, message_t, retry_count, error_code, retry_meta ->
         ReceiptBuilder.build_retry_receipt_ack(
           state.store,
-          to,
-          id,
-          participant,
-          message_t,
-          retry_count,
-          error_code,
-          retry_meta,
+          %{
+            to: to,
+            id: id,
+            participant: participant,
+            message_t: message_t,
+            retry_count: retry_count,
+            error_code: error_code,
+            retry_meta: retry_meta
+          },
           %{
             runtime_cfg: Map.get(state, :runtime_cfg) || %{},
             session_id: Map.get(state, :session_id)

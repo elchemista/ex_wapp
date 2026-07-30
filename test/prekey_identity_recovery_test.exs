@@ -243,13 +243,15 @@ defmodule ExWapp.PrekeyIdentityRecoveryTest do
       receipt =
         ReceiptBuilder.build_retry_receipt_ack(
           store,
-          @peer_jid,
-          "RETRY_FENCED",
-          nil,
-          "1730000300",
-          1,
-          0,
-          %{force_keys?: true},
+          %{
+            to: @peer_jid,
+            id: "RETRY_FENCED",
+            participant: nil,
+            message_t: "1730000300",
+            retry_count: 1,
+            error_code: 0,
+            retry_meta: %{force_keys?: true}
+          },
           %{runtime_cfg: %{prekeys: %{id_allocator: allocator_returning(9_500)}}}
         )
 
@@ -264,13 +266,15 @@ defmodule ExWapp.PrekeyIdentityRecoveryTest do
       receipt =
         ReceiptBuilder.build_retry_receipt_ack(
           store,
-          @peer_jid,
-          "RETRY_FENCE_DOWN",
-          nil,
-          "1730000300",
-          1,
-          0,
-          %{force_keys?: true},
+          %{
+            to: @peer_jid,
+            id: "RETRY_FENCE_DOWN",
+            participant: nil,
+            message_t: "1730000300",
+            retry_count: 1,
+            error_code: 0,
+            retry_meta: %{force_keys?: true}
+          },
           %{
             runtime_cfg: %{
               prekeys: %{id_allocator: fn _floor, _count -> {:error, :database_unavailable} end}
@@ -343,13 +347,15 @@ defmodule ExWapp.PrekeyIdentityRecoveryTest do
       receipt =
         ReceiptBuilder.build_retry_receipt_ack(
           store,
-          @peer_jid,
-          "RETRY_AFTER_LOST_PREKEY",
-          nil,
-          "1730000300",
-          1,
-          0,
-          %{force_keys?: true}
+          %{
+            to: @peer_jid,
+            id: "RETRY_AFTER_LOST_PREKEY",
+            participant: nil,
+            message_t: "1730000300",
+            retry_count: 1,
+            error_code: 0,
+            retry_meta: %{force_keys?: true}
+          }
         )
 
       assert %Binary.Node{tag: "keys", content: key_children} = List.last(receipt.content)

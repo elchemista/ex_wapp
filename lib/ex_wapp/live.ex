@@ -10,8 +10,8 @@ defmodule ExWapp.Live do
   - wait for new incoming messages from the running session
   """
 
-  alias ExWapp.Store
   alias ExWapp.Session.Supervisor, as: SessionSupervisor
+  alias ExWapp.Store
 
   @default_store_path "/tmp/ex_wapp/live_test_session.etf"
   @default_qr_path "/tmp/whatsapp_qr.svg"

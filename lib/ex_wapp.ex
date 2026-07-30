@@ -106,6 +106,7 @@ defmodule ExWapp do
   - `ExWapp.Signal` - X3DH and Double Ratchet
   """
 
+  alias ExWapp.AppState.Engine
   alias ExWapp.{Chat, Client, Error, Event, Messages, Session}
 
   @doc """
@@ -787,11 +788,9 @@ defmodule ExWapp do
   """
   @spec send_typing(GenServer.server(), String.t(), boolean()) :: :ok | {:error, term()}
   def send_typing(session, jid, composing \\ true) do
-    try do
-      Session.send_typing(session, jid, composing)
-    catch
-      :exit, _ -> {:error, :session_unavailable}
-    end
+    Session.send_typing(session, jid, composing)
+  catch
+    :exit, _ -> {:error, :session_unavailable}
   end
 
   @doc """
@@ -937,7 +936,7 @@ defmodule ExWapp do
   """
   @spec pin_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
   def pin_chat(session, jid) do
-    patch = ExWapp.AppState.Engine.build_pin(jid, true)
+    patch = Engine.build_pin(jid, true)
 
     case Session.send_app_state(session, patch) do
       {:ok, _, _} -> :ok
@@ -951,7 +950,7 @@ defmodule ExWapp do
   """
   @spec unpin_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
   def unpin_chat(session, jid) do
-    patch = ExWapp.AppState.Engine.build_pin(jid, false)
+    patch = Engine.build_pin(jid, false)
 
     case Session.send_app_state(session, patch) do
       {:ok, _, _} -> :ok
@@ -979,7 +978,7 @@ defmodule ExWapp do
   """
   @spec mute_chat(GenServer.server(), String.t(), integer()) :: :ok | {:error, term()}
   def mute_chat(session, jid, mute_end_timestamp \\ -1) do
-    patch = ExWapp.AppState.Engine.build_mute(jid, true, mute_end_timestamp)
+    patch = Engine.build_mute(jid, true, mute_end_timestamp)
 
     case Session.send_app_state(session, patch) do
       {:ok, _, _} -> :ok
@@ -992,7 +991,7 @@ defmodule ExWapp do
   """
   @spec unmute_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
   def unmute_chat(session, jid) do
-    patch = ExWapp.AppState.Engine.build_mute(jid, false)
+    patch = Engine.build_mute(jid, false)
 
     case Session.send_app_state(session, patch) do
       {:ok, _, _} -> :ok
@@ -1005,7 +1004,7 @@ defmodule ExWapp do
   """
   @spec mark_chat_as_read(GenServer.server(), String.t()) :: :ok | {:error, term()}
   def mark_chat_as_read(session, jid) do
-    patch = ExWapp.AppState.Engine.build_mark_read(jid, true)
+    patch = Engine.build_mark_read(jid, true)
 
     case Session.send_app_state(session, patch) do
       {:ok, _, _} -> :ok

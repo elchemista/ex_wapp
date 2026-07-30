@@ -8,13 +8,14 @@ defmodule ExWapp.Client.Transport.RawWebSocket do
   encryption, sender keys, retries, and persistence.
 
   Use `ExWapp.Client.Transport.Session` for production messaging. Advanced
-  protocol tooling can call `ExWapp.Transport.WebSocket.send_node/2` with
+  protocol tooling can call `WebSocket.send_node/2` with
   already-prepared nodes.
   """
 
   @behaviour ExWapp.Client.Transport
 
   alias ExWapp.{Client, Message}
+  alias ExWapp.Transport.WebSocket
 
   @impl true
   @doc """
@@ -25,7 +26,7 @@ defmodule ExWapp.Client.Transport.RawWebSocket do
     opts = Map.get(client.metadata, :websocket, [])
     owner = Map.get(client.metadata, :owner, self())
 
-    case ExWapp.Transport.WebSocket.start_link(client, Keyword.put_new(opts, :owner, owner)) do
+    case WebSocket.start_link(client, Keyword.put_new(opts, :owner, owner)) do
       {:ok, pid} ->
         {:ok, put_in(client.metadata[:transport_pid], pid)}
 
