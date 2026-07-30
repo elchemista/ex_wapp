@@ -485,4 +485,6 @@ defmodule WACommon.MessageKey do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

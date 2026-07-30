@@ -379,4 +379,6 @@ defmodule WAWebProtobufsAICommon.BotImagineMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

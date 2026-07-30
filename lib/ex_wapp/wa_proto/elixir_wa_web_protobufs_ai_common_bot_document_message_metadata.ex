@@ -321,4 +321,6 @@ defmodule WAWebProtobufsAICommon.BotDocumentMessageMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

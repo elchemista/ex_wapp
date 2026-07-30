@@ -508,4 +508,6 @@ defmodule WAWebProtobufsE2E.VideoEndCard do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

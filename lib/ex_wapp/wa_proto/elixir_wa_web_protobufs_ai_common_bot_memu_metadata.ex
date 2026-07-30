@@ -312,4 +312,6 @@ defmodule WAWebProtobufsAICommon.BotMemuMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

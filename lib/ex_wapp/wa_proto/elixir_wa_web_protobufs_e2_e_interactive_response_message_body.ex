@@ -380,4 +380,6 @@ defmodule WAWebProtobufsE2E.InteractiveResponseMessage.Body do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

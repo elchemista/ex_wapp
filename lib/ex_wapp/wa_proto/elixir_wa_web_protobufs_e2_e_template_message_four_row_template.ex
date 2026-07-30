@@ -827,4 +827,6 @@ defmodule WAWebProtobufsE2E.TemplateMessage.FourRowTemplate do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

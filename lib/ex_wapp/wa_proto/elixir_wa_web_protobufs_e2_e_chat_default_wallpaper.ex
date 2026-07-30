@@ -300,4 +300,6 @@ defmodule WAWebProtobufsE2E.ChatDefaultWallpaper do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

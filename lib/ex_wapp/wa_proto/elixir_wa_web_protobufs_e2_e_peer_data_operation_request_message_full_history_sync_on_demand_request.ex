@@ -471,4 +471,6 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.FullHistorySyncOnDem
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

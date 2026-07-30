@@ -541,4 +541,6 @@ defmodule WACompanionReg.DeviceProps.AppVersion do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

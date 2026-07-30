@@ -449,4 +449,6 @@ defmodule WAWebProtobufsE2E.PollAddOptionMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

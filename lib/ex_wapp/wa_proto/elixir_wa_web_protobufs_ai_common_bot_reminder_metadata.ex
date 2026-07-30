@@ -593,4 +593,6 @@ defmodule WAWebProtobufsAICommon.BotReminderMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

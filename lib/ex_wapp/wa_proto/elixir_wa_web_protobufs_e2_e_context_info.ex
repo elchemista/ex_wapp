@@ -4529,4 +4529,6 @@ defmodule WAWebProtobufsE2E.ContextInfo do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

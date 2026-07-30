@@ -622,4 +622,6 @@ defmodule WAWebProtobufsE2E.NewsletterAdminInviteMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

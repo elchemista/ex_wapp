@@ -89,9 +89,15 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
       :not_history_sync ->
         state
 
-      {:error, :history_sync_download_required} ->
-        Logger.debug(
-          "[HISTORY_SYNC] History sync notification requires blob download (inline payload missing) from=#{Log.reference(from)} id=#{Log.reference(id)}"
+      {:pending_blob, blob} ->
+        # Downloading blob chunks is not implemented; log at :info (the default
+        # level) so an incomplete history is visible instead of silently missing.
+        # ExWapp.Proto.HistorySync documents what closing this needs.
+        Logger.info(
+          "[HISTORY_SYNC] Skipping chunk delivered as media (blob download not implemented) " <>
+            "sync_type=#{inspect(blob.sync_type)} chunk_order=#{inspect(blob.chunk_order)} " <>
+            "progress=#{inspect(blob.progress)} file_length=#{inspect(blob.file_length)} " <>
+            "from=#{Log.reference(from)} id=#{Log.reference(id)}"
         )
 
         state
@@ -165,7 +171,7 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
   defp maybe_ingest_app_state_keys(_message_data, _session, state, _own_sender?), do: state
 
   @spec extract_app_state_keys(binary()) ::
-          {:ok, [%AppStateSyncKey{}]} | :not_app_state_key_share
+          {:ok, [AppStateSyncKey.t()]} | :not_app_state_key_share
   defp extract_app_state_keys(payload) when is_binary(payload) do
     case Message.decode(payload) do
       {:ok, %Message{protocolMessage: %{appStateSyncKeyShare: %{keys: keys}}}}

@@ -301,4 +301,6 @@ defmodule WAWebProtobufsE2E.ListResponseMessage.SingleSelectReply do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

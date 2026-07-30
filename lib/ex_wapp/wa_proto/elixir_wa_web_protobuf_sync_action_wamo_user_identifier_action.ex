@@ -300,4 +300,6 @@ defmodule WAWebProtobufSyncAction.WamoUserIdentifierAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

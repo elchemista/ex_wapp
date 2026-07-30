@@ -429,4 +429,6 @@ defmodule WAWebProtobufsAICommon.InThreadSurveyMetadata.InThreadSurveyOption do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

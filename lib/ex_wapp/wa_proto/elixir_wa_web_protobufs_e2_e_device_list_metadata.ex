@@ -802,4 +802,6 @@ defmodule WAWebProtobufsE2E.DeviceListMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

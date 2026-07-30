@@ -378,4 +378,6 @@ defmodule WAWebProtobufsE2E.TemplateButton.URLButton do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

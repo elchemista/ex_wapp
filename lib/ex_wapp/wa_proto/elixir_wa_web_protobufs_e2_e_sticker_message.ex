@@ -1590,4 +1590,6 @@ defmodule WAWebProtobufsE2E.StickerMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

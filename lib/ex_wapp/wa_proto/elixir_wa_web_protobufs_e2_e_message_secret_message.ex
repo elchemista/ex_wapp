@@ -425,4 +425,6 @@ defmodule WAWebProtobufsE2E.MessageSecretMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

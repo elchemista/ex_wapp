@@ -532,4 +532,6 @@ defmodule WAWebProtobufsUserPassword.UserPassword do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

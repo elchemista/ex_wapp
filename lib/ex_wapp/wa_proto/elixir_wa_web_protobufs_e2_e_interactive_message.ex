@@ -982,4 +982,6 @@ defmodule WAWebProtobufsE2E.InteractiveMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -510,4 +510,6 @@ defmodule WAWebProtobufsE2E.DisappearingMode do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

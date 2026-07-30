@@ -694,4 +694,6 @@ defmodule WAWebProtobufsE2E.RequestPaymentMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

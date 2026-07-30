@@ -486,4 +486,6 @@ defmodule WAWebProtobufsE2E.InteractiveMessage.BloksWidget do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

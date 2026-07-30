@@ -869,4 +869,6 @@ defmodule WAWebProtobufsE2E.PaymentBackground do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

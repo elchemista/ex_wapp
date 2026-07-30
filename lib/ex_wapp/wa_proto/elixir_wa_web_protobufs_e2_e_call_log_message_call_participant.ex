@@ -376,4 +376,6 @@ defmodule WAWebProtobufsE2E.CallLogMessage.CallParticipant do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

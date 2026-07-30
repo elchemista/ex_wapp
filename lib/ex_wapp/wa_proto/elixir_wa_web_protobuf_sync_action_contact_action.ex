@@ -612,4 +612,6 @@ defmodule WAWebProtobufSyncAction.ContactAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

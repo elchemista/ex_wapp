@@ -357,4 +357,6 @@ defmodule WAWebProtobufsE2E.TapLinkAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

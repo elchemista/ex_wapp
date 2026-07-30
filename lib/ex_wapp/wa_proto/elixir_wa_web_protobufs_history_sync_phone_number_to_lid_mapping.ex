@@ -357,4 +357,6 @@ defmodule WAWebProtobufsHistorySync.PhoneNumberToLIDMapping do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

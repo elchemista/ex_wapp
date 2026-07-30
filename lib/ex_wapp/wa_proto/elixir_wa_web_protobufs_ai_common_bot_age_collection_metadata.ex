@@ -450,4 +450,6 @@ defmodule WAWebProtobufsAICommon.BotAgeCollectionMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

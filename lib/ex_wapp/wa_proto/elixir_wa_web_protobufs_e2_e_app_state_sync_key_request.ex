@@ -310,4 +310,6 @@ defmodule WAWebProtobufsE2E.AppStateSyncKeyRequest do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

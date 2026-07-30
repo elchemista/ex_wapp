@@ -299,4 +299,6 @@ defmodule WAWebProtobufsWeb.EventAdditionalMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

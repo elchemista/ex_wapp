@@ -326,4 +326,6 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.AiThread do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

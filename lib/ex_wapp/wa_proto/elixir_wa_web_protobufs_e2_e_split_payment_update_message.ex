@@ -358,4 +358,6 @@ defmodule WAWebProtobufsE2E.SplitPaymentUpdateMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

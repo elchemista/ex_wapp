@@ -433,4 +433,6 @@ defmodule WAWebProtobufsE2E.AlbumMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

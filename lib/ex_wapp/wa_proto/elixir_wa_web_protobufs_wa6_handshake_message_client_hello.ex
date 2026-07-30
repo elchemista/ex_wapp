@@ -874,4 +874,6 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ClientHello do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

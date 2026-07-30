@@ -376,4 +376,6 @@ defmodule WAWebProtobufsUserPassword.UserPassword.TransformerArg do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -426,4 +426,6 @@ defmodule WAWebProtobufsE2E.Location do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -300,4 +300,6 @@ defmodule WAWebProtobufSyncAction.PushNameSetting do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

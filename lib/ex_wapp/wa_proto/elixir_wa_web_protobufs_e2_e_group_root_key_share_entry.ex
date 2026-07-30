@@ -490,4 +490,6 @@ defmodule WAWebProtobufsE2E.GroupRootKeyShareEntry do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

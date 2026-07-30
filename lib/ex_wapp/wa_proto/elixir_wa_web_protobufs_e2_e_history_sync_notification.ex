@@ -1206,4 +1206,6 @@ defmodule WAWebProtobufsE2E.HistorySyncNotification do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

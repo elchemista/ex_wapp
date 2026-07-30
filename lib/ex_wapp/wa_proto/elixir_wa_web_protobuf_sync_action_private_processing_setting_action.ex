@@ -328,4 +328,6 @@ defmodule WAWebProtobufSyncAction.PrivateProcessingSettingAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

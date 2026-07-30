@@ -800,4 +800,6 @@ defmodule WAWebProtobufsE2E.EventInviteMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

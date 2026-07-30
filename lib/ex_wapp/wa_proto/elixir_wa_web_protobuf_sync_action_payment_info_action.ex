@@ -300,4 +300,6 @@ defmodule WAWebProtobufSyncAction.PaymentInfoAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

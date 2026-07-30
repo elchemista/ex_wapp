@@ -357,4 +357,6 @@ defmodule WAWebProtobufsE2E.PollResultSnapshotMessage.PollVote do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

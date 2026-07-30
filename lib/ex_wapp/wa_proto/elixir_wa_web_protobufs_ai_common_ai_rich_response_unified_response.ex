@@ -300,4 +300,6 @@ defmodule WAWebProtobufsAICommon.AIRichResponseUnifiedResponse do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

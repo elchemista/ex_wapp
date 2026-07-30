@@ -841,4 +841,6 @@ defmodule WAWebProtobufsE2E.LinkPreviewMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

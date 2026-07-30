@@ -445,4 +445,6 @@ defmodule WAWebProtobufsE2E.InteractiveMessage.Footer do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

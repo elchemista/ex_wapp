@@ -755,4 +755,6 @@ defmodule WAWebProtobufsE2E.GroupInviteMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

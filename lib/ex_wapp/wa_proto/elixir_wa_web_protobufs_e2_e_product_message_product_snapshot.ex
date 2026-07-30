@@ -985,4 +985,6 @@ defmodule WAWebProtobufsE2E.ProductMessage.ProductSnapshot do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

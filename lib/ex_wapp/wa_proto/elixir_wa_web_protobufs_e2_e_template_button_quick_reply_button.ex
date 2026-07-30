@@ -371,4 +371,6 @@ defmodule WAWebProtobufsE2E.TemplateButton.QuickReplyButton do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -1537,4 +1537,6 @@ defmodule WAWebProtobufsE2E.DocumentMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

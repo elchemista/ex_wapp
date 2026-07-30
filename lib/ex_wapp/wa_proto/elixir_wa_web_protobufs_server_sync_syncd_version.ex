@@ -299,4 +299,6 @@ defmodule WAWebProtobufsServerSync.SyncdVersion do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

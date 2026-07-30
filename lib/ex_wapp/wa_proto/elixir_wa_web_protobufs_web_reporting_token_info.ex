@@ -366,4 +366,6 @@ defmodule WAWebProtobufsWeb.ReportingTokenInfo do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

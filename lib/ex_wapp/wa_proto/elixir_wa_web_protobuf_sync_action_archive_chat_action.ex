@@ -372,4 +372,6 @@ defmodule WAWebProtobufSyncAction.ArchiveChatAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -442,4 +442,6 @@ defmodule WAWebProtobufsE2E.EventResponseMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

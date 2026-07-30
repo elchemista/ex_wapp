@@ -799,4 +799,6 @@ defmodule WAWebProtobufSyncAction.LabelEditAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

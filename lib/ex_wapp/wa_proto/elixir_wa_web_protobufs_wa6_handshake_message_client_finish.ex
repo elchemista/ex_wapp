@@ -552,4 +552,6 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ClientFinish do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

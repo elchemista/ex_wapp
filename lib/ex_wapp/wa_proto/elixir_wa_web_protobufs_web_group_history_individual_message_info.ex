@@ -377,4 +377,6 @@ defmodule WAWebProtobufsWeb.GroupHistoryIndividualMessageInfo do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -405,4 +405,6 @@ defmodule WAWebProtobufsAICommon.BotUnifiedResponseMutation do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

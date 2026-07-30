@@ -554,4 +554,6 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BusinessBroadcast 
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

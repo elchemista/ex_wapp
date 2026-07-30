@@ -379,4 +379,6 @@ defmodule WAWebProtobufsWa6.ClientPayload.DNSSource do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

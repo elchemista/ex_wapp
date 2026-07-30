@@ -482,4 +482,6 @@ defmodule WAWebProtobufsE2E.Point do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

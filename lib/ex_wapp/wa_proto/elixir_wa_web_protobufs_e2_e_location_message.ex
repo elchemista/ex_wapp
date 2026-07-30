@@ -987,4 +987,6 @@ defmodule WAWebProtobufsE2E.LocationMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -426,4 +426,6 @@ defmodule WAWebProtobufsE2E.ListMessage.Row do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

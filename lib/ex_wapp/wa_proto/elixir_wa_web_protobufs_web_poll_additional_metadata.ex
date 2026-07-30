@@ -388,4 +388,6 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -357,4 +357,6 @@ defmodule WAWebProtobufsE2E.GroupMention do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

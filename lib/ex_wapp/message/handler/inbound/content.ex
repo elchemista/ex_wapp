@@ -70,13 +70,13 @@ defmodule ExWapp.Message.Handler.Inbound.Content do
   `plaintext` is only used for diagnostics and the protocol passthrough payload,
   so callers that already hold the decoded struct never re-encode it.
   """
-  @spec decode_message(%Message{}, binary(), keyword()) :: MessageContent.t()
+  @spec decode_message(Message.t(), binary(), keyword()) :: MessageContent.t()
   def decode_message(%Message{} = message, plaintext, opts \\ [])
       when is_binary(plaintext) and is_list(opts) do
     decode_decoded_message({:ok, message}, plaintext, opts)
   end
 
-  @spec decode_decoded_message({:ok, %Message{}} | :error, binary(), keyword()) ::
+  @spec decode_decoded_message({:ok, Message.t()} | :error, binary(), keyword()) ::
           MessageContent.t()
   defp decode_decoded_message(decoded, plaintext, opts) do
     sender_key_distribution_count = Keyword.get(opts, :sender_key_distribution_count, 0)
@@ -115,7 +115,7 @@ defmodule ExWapp.Message.Handler.Inbound.Content do
     end
   end
 
-  @spec apply_media_fields({:ok, %Message{}} | :error) :: map()
+  @spec apply_media_fields({:ok, Message.t()} | :error) :: map()
   defp apply_media_fields({:ok, message}),
     do: ContentDecoder.apply_media_from_message(%{}, message)
 

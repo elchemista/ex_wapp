@@ -315,4 +315,6 @@ defmodule WAWebProtobufsAICommon.AIMetadataOperation do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

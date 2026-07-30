@@ -488,4 +488,6 @@ defmodule WAWebProtobufsE2E.ReactionMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

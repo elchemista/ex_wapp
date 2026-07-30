@@ -308,4 +308,6 @@ defmodule WAWebProtobufSyncAction.PrimaryFeature do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

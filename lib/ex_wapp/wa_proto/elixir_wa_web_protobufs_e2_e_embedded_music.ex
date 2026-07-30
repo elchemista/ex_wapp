@@ -1106,4 +1106,6 @@ defmodule WAWebProtobufsE2E.EmbeddedMusic do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

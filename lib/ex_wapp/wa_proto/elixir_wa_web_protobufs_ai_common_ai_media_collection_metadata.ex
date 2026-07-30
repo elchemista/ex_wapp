@@ -363,4 +363,6 @@ defmodule WAWebProtobufsAICommon.AIMediaCollectionMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

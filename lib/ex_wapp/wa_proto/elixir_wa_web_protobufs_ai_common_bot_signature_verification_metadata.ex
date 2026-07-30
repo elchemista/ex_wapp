@@ -324,4 +324,6 @@ defmodule WAWebProtobufsAICommon.BotSignatureVerificationMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

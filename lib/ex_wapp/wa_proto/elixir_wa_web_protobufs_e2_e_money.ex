@@ -424,4 +424,6 @@ defmodule WAWebProtobufsE2E.Money do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -492,4 +492,6 @@ defmodule WACommon.Mention do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

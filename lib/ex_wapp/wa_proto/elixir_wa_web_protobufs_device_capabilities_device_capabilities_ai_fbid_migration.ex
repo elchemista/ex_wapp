@@ -303,4 +303,6 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.AiFbidMigration do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -448,4 +448,6 @@ defmodule WAWebProtobufsE2E.AppStateSyncKeyFingerprint do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

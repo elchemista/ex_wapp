@@ -356,4 +356,6 @@ defmodule WAWebProtobufsServerSync.ExitCode do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

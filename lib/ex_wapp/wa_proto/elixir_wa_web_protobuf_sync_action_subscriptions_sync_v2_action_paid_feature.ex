@@ -487,4 +487,6 @@ defmodule WAWebProtobufSyncAction.SubscriptionsSyncV2Action.PaidFeature do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

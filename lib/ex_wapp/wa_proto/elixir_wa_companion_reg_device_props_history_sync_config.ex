@@ -1741,4 +1741,6 @@ defmodule WACompanionReg.DeviceProps.HistorySyncConfig do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

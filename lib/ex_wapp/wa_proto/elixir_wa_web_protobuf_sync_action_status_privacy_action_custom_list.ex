@@ -553,4 +553,6 @@ defmodule WAWebProtobufSyncAction.StatusPrivacyAction.CustomList do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

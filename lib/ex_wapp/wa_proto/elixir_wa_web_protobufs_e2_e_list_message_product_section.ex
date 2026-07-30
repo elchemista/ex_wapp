@@ -375,4 +375,6 @@ defmodule WAWebProtobufsE2E.ListMessage.ProductSection do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

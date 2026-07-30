@@ -531,4 +531,6 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -454,4 +454,6 @@ defmodule WAWebProtobufsE2E.InteractiveMessage.CarouselMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

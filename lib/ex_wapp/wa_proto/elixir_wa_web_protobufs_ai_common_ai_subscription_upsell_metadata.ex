@@ -317,4 +317,6 @@ defmodule WAWebProtobufsAICommon.AISubscriptionUpsellMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

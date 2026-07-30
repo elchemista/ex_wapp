@@ -299,4 +299,6 @@ defmodule WAWebProtobufSyncAction.ThreadPinAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

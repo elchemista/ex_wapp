@@ -307,4 +307,6 @@ defmodule WAWebProtobufsWeb.StatusMentionMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

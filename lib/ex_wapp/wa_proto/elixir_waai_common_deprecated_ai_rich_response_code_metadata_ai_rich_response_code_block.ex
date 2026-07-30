@@ -392,4 +392,6 @@ defmodule WAAICommonDeprecated.AIRichResponseCodeMetadata.AIRichResponseCodeBloc
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

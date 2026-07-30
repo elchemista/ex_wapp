@@ -2581,4 +2581,6 @@ defmodule WAWebProtobufsWa6.ClientPayload do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

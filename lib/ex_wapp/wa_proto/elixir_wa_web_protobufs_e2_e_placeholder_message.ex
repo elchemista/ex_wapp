@@ -321,4 +321,6 @@ defmodule WAWebProtobufsE2E.PlaceholderMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

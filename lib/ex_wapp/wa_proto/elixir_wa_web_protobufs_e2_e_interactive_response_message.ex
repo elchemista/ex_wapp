@@ -473,4 +473,6 @@ defmodule WAWebProtobufsE2E.InteractiveResponseMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

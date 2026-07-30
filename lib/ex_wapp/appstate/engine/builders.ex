@@ -29,7 +29,7 @@ defmodule ExWapp.AppState.Engine.Builders do
           timestamp: integer() | nil
         }
 
-  @type message_range :: %SyncActionMessageRange{}
+  @type message_range :: SyncActionMessageRange.t()
 
   @doc """
   Builds a contact upsert mutation.

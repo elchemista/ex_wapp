@@ -103,7 +103,7 @@ defmodule ExWapp.Session.Worker.Outbound do
   defp with_send_batch(_state, _reason, fun), do: fun.()
 
   @doc "Sends a constructed WhatsApp protobuf message through the normal outbound pipeline."
-  @spec send_proto_worker(pid(), map(), String.t(), %WAWebProtobufsE2E.Message{}, keyword()) ::
+  @spec send_proto_worker(pid(), map(), String.t(), WAWebProtobufsE2E.Message.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def send_proto_worker(session_pid, state, jid, %Message{} = proto, opts \\ []) do
     chat_text = Keyword.get(opts, :chat_text)
@@ -111,7 +111,7 @@ defmodule ExWapp.Session.Worker.Outbound do
   end
 
   @doc "Sends an internal protocol message directly to the account's primary device."
-  @spec send_peer_proto_worker(pid(), map(), %WAWebProtobufsE2E.Message{}) ::
+  @spec send_peer_proto_worker(pid(), map(), WAWebProtobufsE2E.Message.t()) ::
           {:ok, String.t()} | {:error, term()}
   def send_peer_proto_worker(_session_pid, %{status: status}, _proto)
       when status not in [:connected, :syncing] do
@@ -766,7 +766,7 @@ defmodule ExWapp.Session.Worker.Outbound do
   end
 
   @doc false
-  @spec outbound_proto(outbound_text(), keyword()) :: %Message{}
+  @spec outbound_proto(outbound_text(), keyword()) :: Message.t()
   def outbound_proto(text, opts) do
     case Keyword.get(opts, :proto_message) do
       %Message{} = proto -> proto

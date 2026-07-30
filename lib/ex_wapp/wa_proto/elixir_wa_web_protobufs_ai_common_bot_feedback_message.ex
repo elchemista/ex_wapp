@@ -725,4 +725,6 @@ defmodule WAWebProtobufsAICommon.BotFeedbackMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

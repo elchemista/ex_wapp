@@ -692,4 +692,6 @@ defmodule WAWebProtobufSyncAction.MarketingMessageAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -452,4 +452,6 @@ defmodule WAWebProtobufsAICommon.BotQuotaMetadata.BotFeatureQuotaMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

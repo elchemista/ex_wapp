@@ -300,4 +300,6 @@ defmodule WAWebProtobufsServerSync.SyncdIndex do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

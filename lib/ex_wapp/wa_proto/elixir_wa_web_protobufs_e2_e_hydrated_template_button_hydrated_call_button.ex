@@ -360,4 +360,6 @@ defmodule WAWebProtobufsE2E.HydratedTemplateButton.HydratedCallButton do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

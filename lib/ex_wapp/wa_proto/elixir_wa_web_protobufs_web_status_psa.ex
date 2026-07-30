@@ -373,4 +373,6 @@ defmodule WAWebProtobufsWeb.StatusPSA do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

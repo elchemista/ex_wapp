@@ -546,4 +546,6 @@ defmodule WAWebProtobufsHistorySync.InlineContact do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

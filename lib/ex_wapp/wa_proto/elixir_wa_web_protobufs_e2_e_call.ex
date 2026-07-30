@@ -999,4 +999,6 @@ defmodule WAWebProtobufsE2E.Call do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

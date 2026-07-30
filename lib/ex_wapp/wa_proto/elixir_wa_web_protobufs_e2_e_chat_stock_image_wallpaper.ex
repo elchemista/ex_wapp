@@ -356,4 +356,6 @@ defmodule WAWebProtobufsE2E.ChatStockImageWallpaper do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

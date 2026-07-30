@@ -648,4 +648,6 @@ defmodule WAWebProtobufsWeb.UserReceipt do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

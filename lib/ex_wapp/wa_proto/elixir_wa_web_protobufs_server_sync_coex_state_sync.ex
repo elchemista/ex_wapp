@@ -325,4 +325,6 @@ defmodule WAWebProtobufsServerSync.CoexStateSync do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

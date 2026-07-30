@@ -386,4 +386,6 @@ defmodule WAWebProtobufsE2E.ContextInfo.BusinessInteractionPills.SignedPayload d
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -455,4 +455,6 @@ defmodule WAWebProtobufsAICommon.BotProgressIndicatorMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

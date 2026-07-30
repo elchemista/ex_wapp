@@ -425,4 +425,6 @@ defmodule WAWebProtobufsWa6.ClientPayload.InteropData do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

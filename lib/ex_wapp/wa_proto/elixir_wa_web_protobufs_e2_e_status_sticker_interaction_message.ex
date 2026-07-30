@@ -445,4 +445,6 @@ defmodule WAWebProtobufsE2E.StatusStickerInteractionMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

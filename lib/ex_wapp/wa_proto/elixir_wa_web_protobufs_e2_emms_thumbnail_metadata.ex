@@ -676,4 +676,6 @@ defmodule WAWebProtobufsE2E.MMSThumbnailMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

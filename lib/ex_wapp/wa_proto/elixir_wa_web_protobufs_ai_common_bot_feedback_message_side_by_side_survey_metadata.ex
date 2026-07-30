@@ -845,4 +845,6 @@ defmodule WAWebProtobufsAICommon.BotFeedbackMessage.SideBySideSurveyMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

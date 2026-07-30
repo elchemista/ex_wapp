@@ -357,4 +357,6 @@ defmodule WAWebProtobufsE2E.Chat do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

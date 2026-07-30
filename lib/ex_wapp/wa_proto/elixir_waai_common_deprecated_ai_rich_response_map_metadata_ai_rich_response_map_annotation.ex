@@ -552,4 +552,6 @@ defmodule WAAICommonDeprecated.AIRichResponseMapMetadata.AIRichResponseMapAnnota
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

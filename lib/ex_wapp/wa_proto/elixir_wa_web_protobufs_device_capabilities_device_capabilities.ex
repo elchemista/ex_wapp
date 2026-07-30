@@ -789,4 +789,6 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

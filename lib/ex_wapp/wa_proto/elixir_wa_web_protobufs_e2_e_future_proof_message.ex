@@ -307,4 +307,6 @@ defmodule WAWebProtobufsE2E.FutureProofMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

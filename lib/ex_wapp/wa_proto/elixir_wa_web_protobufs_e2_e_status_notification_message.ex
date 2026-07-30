@@ -459,4 +459,6 @@ defmodule WAWebProtobufsE2E.StatusNotificationMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

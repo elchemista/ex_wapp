@@ -1365,4 +1365,6 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -561,4 +561,6 @@ defmodule WAWebProtobufsE2E.NewsletterFollowerInviteMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

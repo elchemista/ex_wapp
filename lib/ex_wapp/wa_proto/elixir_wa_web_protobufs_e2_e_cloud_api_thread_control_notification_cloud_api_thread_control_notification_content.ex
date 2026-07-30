@@ -372,4 +372,6 @@ defmodule WAWebProtobufsE2E.CloudAPIThreadControlNotification.CloudAPIThreadCont
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

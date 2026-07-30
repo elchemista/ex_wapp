@@ -303,4 +303,6 @@ defmodule WAWebProtobufsE2E.PaymentLinkMetadata.PaymentLinkProvider do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

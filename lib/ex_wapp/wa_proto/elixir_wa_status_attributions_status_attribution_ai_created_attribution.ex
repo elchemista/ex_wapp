@@ -324,4 +324,6 @@ defmodule WAStatusAttributions.StatusAttribution.AiCreatedAttribution do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

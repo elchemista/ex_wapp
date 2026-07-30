@@ -514,4 +514,6 @@ defmodule WAWebProtobufsE2E.ContextInfo.DataSharingContext do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

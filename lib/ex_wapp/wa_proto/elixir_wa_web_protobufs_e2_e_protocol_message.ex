@@ -2428,4 +2428,6 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

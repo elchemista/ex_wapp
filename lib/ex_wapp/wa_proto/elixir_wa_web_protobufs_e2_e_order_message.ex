@@ -1197,4 +1197,6 @@ defmodule WAWebProtobufsE2E.OrderMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

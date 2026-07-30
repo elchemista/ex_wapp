@@ -6213,4 +6213,6 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -1508,4 +1508,6 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

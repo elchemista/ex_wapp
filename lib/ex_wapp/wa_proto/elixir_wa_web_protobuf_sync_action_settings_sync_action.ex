@@ -2356,4 +2356,6 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

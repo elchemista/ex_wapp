@@ -300,4 +300,6 @@ defmodule WAWebProtobufSyncAction.UnarchiveChatsSetting do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

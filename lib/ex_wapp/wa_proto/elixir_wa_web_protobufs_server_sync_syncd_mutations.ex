@@ -312,4 +312,6 @@ defmodule WAWebProtobufsServerSync.SyncdMutations do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

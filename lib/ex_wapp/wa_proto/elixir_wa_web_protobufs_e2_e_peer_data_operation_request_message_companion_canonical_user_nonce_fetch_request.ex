@@ -306,4 +306,6 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.CompanionCanonicalUs
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

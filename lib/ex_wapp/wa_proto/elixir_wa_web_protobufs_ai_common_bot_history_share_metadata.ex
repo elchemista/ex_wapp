@@ -321,4 +321,6 @@ defmodule WAWebProtobufsAICommon.BotHistoryShareMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

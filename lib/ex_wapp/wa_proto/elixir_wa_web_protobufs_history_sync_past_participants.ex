@@ -377,4 +377,6 @@ defmodule WAWebProtobufsHistorySync.PastParticipants do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

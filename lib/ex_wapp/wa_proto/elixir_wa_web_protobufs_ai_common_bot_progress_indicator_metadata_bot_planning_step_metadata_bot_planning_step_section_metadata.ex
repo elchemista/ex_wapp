@@ -461,4 +461,6 @@ defmodule WAWebProtobufsAICommon.BotProgressIndicatorMetadata.BotPlanningStepMet
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

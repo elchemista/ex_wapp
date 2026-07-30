@@ -1633,4 +1633,6 @@ defmodule WAWebProtobufsE2E.StickerPackMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

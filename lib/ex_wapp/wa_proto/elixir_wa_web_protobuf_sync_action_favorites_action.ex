@@ -315,4 +315,6 @@ defmodule WAWebProtobufSyncAction.FavoritesAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

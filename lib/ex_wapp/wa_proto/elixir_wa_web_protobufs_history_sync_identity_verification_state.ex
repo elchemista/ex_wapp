@@ -355,4 +355,6 @@ defmodule WAWebProtobufsHistorySync.IdentityVerificationState do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

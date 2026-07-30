@@ -865,4 +865,6 @@ defmodule WAWebProtobufsE2E.LiveLocationMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

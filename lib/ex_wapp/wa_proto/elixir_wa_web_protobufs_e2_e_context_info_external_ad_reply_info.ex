@@ -2246,4 +2246,6 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

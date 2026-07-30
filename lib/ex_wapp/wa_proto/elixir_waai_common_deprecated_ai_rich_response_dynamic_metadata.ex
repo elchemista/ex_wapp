@@ -509,4 +509,6 @@ defmodule WAAICommonDeprecated.AIRichResponseDynamicMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

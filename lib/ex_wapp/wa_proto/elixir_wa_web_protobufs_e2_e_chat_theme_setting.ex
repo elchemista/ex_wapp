@@ -744,4 +744,6 @@ defmodule WAWebProtobufsE2E.ChatThemeSetting do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

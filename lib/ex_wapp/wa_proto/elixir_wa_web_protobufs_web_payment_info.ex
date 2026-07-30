@@ -1096,4 +1096,6 @@ defmodule WAWebProtobufsWeb.PaymentInfo do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

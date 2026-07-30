@@ -441,4 +441,6 @@ defmodule WAWebProtobufSyncAction.BizAISettingsNudgeAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

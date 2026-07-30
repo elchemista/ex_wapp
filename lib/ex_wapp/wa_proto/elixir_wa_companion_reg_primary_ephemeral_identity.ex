@@ -357,4 +357,6 @@ defmodule WACompanionReg.PrimaryEphemeralIdentity do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -381,4 +381,6 @@ defmodule WAWebProtobufsAICommon.BotPromotionMessageMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

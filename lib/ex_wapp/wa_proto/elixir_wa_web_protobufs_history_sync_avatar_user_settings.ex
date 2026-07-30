@@ -357,4 +357,6 @@ defmodule WAWebProtobufsHistorySync.AvatarUserSettings do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

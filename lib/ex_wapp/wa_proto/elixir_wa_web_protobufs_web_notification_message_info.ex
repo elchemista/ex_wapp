@@ -495,4 +495,6 @@ defmodule WAWebProtobufsWeb.NotificationMessageInfo do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

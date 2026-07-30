@@ -505,4 +505,6 @@ defmodule WAWebProtobufSyncAction.WASARootSecretAction.RootSecretEntry do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

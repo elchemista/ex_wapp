@@ -507,4 +507,6 @@ defmodule WAWebProtobufsWeb.EventResponse do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

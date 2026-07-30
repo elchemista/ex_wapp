@@ -364,4 +364,6 @@ defmodule WAWebProtobufSyncAction.BroadcastListParticipant do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

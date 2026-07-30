@@ -35,11 +35,11 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
   @doc """
   Same as `apply_media_from_plaintext/2` for an already-decoded message.
   """
-  @spec apply_media_from_message(map(), %Message{}) :: map()
+  @spec apply_media_from_message(map(), Message.t()) :: map()
   def apply_media_from_message(message_data, %Message{} = message),
     do: apply_supported_content(message_data, message)
 
-  @spec apply_supported_content(map(), %Message{}) :: map()
+  @spec apply_supported_content(map(), Message.t()) :: map()
   defp apply_supported_content(message_data, message) do
     case extract_supported_content(message, 0) do
       %{kind: :media, type: type, ref: ref, caption: caption} ->
@@ -93,7 +93,7 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
   @doc """
   Same as `classify_decrypted_content/2` for an already-decoded message.
   """
-  @spec classify_message(%Message{}, non_neg_integer()) ::
+  @spec classify_message(Message.t(), non_neg_integer()) ::
           {:protocol | :user_message, binary() | nil}
   def classify_message(_message, sender_key_distribution_count)
       when sender_key_distribution_count > 0 do
@@ -111,17 +111,17 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
   @doc """
   Reports whether a message is a `DeviceSentMessage` wrapper (own-device fanout).
   """
-  @spec device_sent_message?(%Message{} | term()) :: boolean()
+  @spec device_sent_message?(Message.t() | term()) :: boolean()
   def device_sent_message?(%Message{deviceSentMessage: %{}}), do: true
   def device_sent_message?(_message), do: false
 
   @doc """
   Decodes an E2E `Message` payload, returning `:error` on malformed protobuf.
   """
-  @spec decode(binary()) :: {:ok, %Message{}} | :error
+  @spec decode(binary()) :: {:ok, Message.t()} | :error
   def decode(payload) when is_binary(payload), do: decode_message(payload)
 
-  @spec decode_message(binary()) :: {:ok, %Message{}} | :error
+  @spec decode_message(binary()) :: {:ok, Message.t()} | :error
   defp decode_message(payload) do
     case Message.decode(payload) do
       {:ok, message} -> {:ok, message}
@@ -129,7 +129,7 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
     end
   end
 
-  @spec extract_supported_content(%Message{}, non_neg_integer()) :: map() | nil
+  @spec extract_supported_content(Message.t(), non_neg_integer()) :: map() | nil
   defp extract_supported_content(_message, depth) when depth > @max_message_decode_depth,
     do: nil
 
@@ -140,7 +140,7 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
       end)
   end
 
-  @spec extract_supported_content_shallow(%Message{}) :: map() | nil
+  @spec extract_supported_content_shallow(Message.t()) :: map() | nil
   defp extract_supported_content_shallow(message) do
     cond do
       match?(%ImageMessage{}, message.imageMessage) ->
@@ -169,7 +169,7 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
     end
   end
 
-  @spec wrapped_messages(%Message{}) :: [%Message{}]
+  @spec wrapped_messages(Message.t()) :: [Message.t()]
   defp wrapped_messages(message) do
     wrappers = [
       message.deviceSentMessage,
@@ -261,7 +261,7 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
     }
   end
 
-  @spec build_location(%LocationMessage{}) :: map()
+  @spec build_location(LocationMessage.t()) :: map()
   defp build_location(%LocationMessage{} = location) do
     %{
       kind: :location,
@@ -281,7 +281,7 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
     }
   end
 
-  @spec build_contact(%ContactMessage{}) :: map()
+  @spec build_contact(ContactMessage.t()) :: map()
   defp build_contact(%ContactMessage{} = contact) do
     %{
       kind: :contact,
@@ -293,7 +293,7 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
     }
   end
 
-  @spec build_live_location(%LiveLocationMessage{}) :: map()
+  @spec build_live_location(LiveLocationMessage.t()) :: map()
   defp build_live_location(%LiveLocationMessage{} = live) do
     %{
       kind: :location,
@@ -315,7 +315,7 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
     }
   end
 
-  @spec build_event(%EventMessage{}) :: map()
+  @spec build_event(EventMessage.t()) :: map()
   defp build_event(%EventMessage{} = event) do
     location =
       case event.location do
@@ -341,7 +341,7 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
     }
   end
 
-  @spec extract_message_text(%Message{}, non_neg_integer()) :: binary() | nil
+  @spec extract_message_text(Message.t(), non_neg_integer()) :: binary() | nil
   defp extract_message_text(_message, depth) when depth > @max_message_decode_depth, do: nil
 
   defp extract_message_text(message, depth) do
@@ -351,7 +351,7 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
       end)
   end
 
-  @spec extract_message_text_shallow(%Message{}) :: binary() | nil
+  @spec extract_message_text_shallow(Message.t()) :: binary() | nil
   defp extract_message_text_shallow(message) do
     cond do
       valid_text_payload?(message.conversation) ->

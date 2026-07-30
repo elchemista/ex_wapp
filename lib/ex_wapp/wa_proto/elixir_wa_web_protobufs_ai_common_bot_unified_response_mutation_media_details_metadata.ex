@@ -443,4 +443,6 @@ defmodule WAWebProtobufsAICommon.BotUnifiedResponseMutation.MediaDetailsMetadata
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

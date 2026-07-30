@@ -378,4 +378,6 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

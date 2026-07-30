@@ -792,4 +792,6 @@ defmodule WAWebProtobufsWeb.MessageAddOn do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

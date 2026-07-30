@@ -302,4 +302,6 @@ defmodule WAWebProtobufSyncAction.StatusPostOptInNotificationPreferencesAction d
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

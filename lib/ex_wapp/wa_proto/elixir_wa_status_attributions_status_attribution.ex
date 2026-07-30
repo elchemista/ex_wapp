@@ -858,4 +858,6 @@ defmodule WAStatusAttributions.StatusAttribution do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

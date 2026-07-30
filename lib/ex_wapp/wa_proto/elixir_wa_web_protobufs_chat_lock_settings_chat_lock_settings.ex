@@ -370,4 +370,6 @@ defmodule WAWebProtobufsChatLockSettings.ChatLockSettings do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

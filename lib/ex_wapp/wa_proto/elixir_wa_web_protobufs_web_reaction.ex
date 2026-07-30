@@ -547,4 +547,6 @@ defmodule WAWebProtobufsWeb.Reaction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

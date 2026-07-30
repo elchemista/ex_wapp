@@ -559,4 +559,6 @@ defmodule WAWebProtobufsE2E.TemplateButtonReplyMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -443,4 +443,6 @@ defmodule WAWebProtobufsE2E.ContextInfo.StatusAudienceMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

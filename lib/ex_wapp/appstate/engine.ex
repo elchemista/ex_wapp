@@ -71,7 +71,7 @@ defmodule ExWapp.AppState.Engine do
   @type mutation_info :: %{
           required(:index) => [String.t()],
           required(:version) => integer(),
-          required(:value) => %SyncActionValue{},
+          required(:value) => SyncActionValue.t(),
           optional(:operation) => :remove
         }
 
@@ -86,7 +86,7 @@ defmodule ExWapp.AppState.Engine do
           hash: binary()
         }
 
-  @type action_value :: %SyncActionValue{} | nil
+  @type action_value :: SyncActionValue.t() | nil
 
   @type decoded_mutation :: %{
           operation: non_neg_integer(),
@@ -422,7 +422,7 @@ defmodule ExWapp.AppState.Engine do
 
   Matches whatsmeow `Processor.decodeMutations()` in `appstate/decode.go:121-176`.
   """
-  @spec decode_mutations([%SyncdMutation{}], map(), boolean()) ::
+  @spec decode_mutations([SyncdMutation.t()], map(), boolean()) ::
           {:ok, [decoded_mutation()]} | {:error, term()}
   def decode_mutations(mutations, key_store, validate_macs \\ true) do
     mutations
@@ -572,7 +572,7 @@ defmodule ExWapp.AppState.Engine do
   - patch MAC,
   - LTHash state transition.
   """
-  @spec decode_patch(%SyncdPatch{}, String.t(), hash_state(), map(), map(), boolean()) ::
+  @spec decode_patch(SyncdPatch.t(), String.t(), hash_state(), map(), map(), boolean()) ::
           {:ok, [decoded_mutation()], hash_state(), map()} | {:error, term()}
   def decode_patch(
         %SyncdPatch{} = patch,

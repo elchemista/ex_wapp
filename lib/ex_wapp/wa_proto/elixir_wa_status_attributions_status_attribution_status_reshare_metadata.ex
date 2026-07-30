@@ -492,4 +492,6 @@ defmodule WAStatusAttributions.StatusAttribution.StatusReshare.Metadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

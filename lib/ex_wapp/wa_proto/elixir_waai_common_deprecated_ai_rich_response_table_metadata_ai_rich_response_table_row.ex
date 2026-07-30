@@ -367,4 +367,6 @@ defmodule WAAICommonDeprecated.AIRichResponseTableMetadata.AIRichResponseTableRo
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -2343,4 +2343,6 @@ defmodule WAWebProtobufsE2E.ExtendedTextMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

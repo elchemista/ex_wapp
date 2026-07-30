@@ -361,4 +361,6 @@ defmodule WAWebProtobufsE2E.HistoryShareMessageEntry do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

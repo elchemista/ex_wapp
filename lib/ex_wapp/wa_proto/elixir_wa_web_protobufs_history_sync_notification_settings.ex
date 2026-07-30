@@ -613,4 +613,6 @@ defmodule WAWebProtobufsHistorySync.NotificationSettings do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

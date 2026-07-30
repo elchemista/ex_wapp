@@ -676,4 +676,6 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandR
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

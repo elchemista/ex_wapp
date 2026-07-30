@@ -551,4 +551,6 @@ defmodule WAWebProtobufsE2E.ContextInfo.FeatureEligibilities do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -11,7 +11,7 @@ defmodule ExWapp.AppState.Engine.Dispatch do
   alias ExWapp.Log
   alias WAWebProtobufSyncAction.SyncActionValue
 
-  @type action_value :: %SyncActionValue{} | nil
+  @type action_value :: SyncActionValue.t() | nil
   @type patch_info :: %{type: String.t(), mutations: [map()], timestamp: integer() | nil}
 
   @doc """

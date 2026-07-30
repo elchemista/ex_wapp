@@ -753,4 +753,6 @@ defmodule WAWebProtobufsE2E.MessageHistoryBundle do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

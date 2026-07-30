@@ -929,4 +929,6 @@ defmodule WAWebProtobufsE2E.TemplateMessage.HydratedFourRowTemplate do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

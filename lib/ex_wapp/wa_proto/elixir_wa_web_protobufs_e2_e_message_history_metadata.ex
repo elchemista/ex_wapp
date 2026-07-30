@@ -582,4 +582,6 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

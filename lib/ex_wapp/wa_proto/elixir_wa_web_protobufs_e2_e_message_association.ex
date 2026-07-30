@@ -450,4 +450,6 @@ defmodule WAWebProtobufsE2E.MessageAssociation do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

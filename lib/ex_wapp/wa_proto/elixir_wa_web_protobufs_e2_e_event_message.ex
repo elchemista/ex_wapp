@@ -988,4 +988,6 @@ defmodule WAWebProtobufsE2E.EventMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

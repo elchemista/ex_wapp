@@ -556,4 +556,6 @@ defmodule WAWebProtobufsE2E.HydratedTemplateButton do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

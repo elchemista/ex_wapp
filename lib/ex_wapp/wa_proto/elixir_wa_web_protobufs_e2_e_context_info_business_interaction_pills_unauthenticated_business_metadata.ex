@@ -496,4 +496,6 @@ defmodule WAWebProtobufsE2E.ContextInfo.BusinessInteractionPills.Unauthenticated
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

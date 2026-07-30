@@ -300,4 +300,6 @@ defmodule WAWebProtobufsE2E.ContextInfo.PartiallySelectedContent do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

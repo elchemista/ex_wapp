@@ -441,4 +441,6 @@ defmodule WAWebProtobufsAICommon.SessionTransparencyMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -378,4 +378,6 @@ defmodule WAWebProtobufsE2E.CommentMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

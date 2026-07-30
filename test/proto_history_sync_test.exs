@@ -89,18 +89,57 @@ defmodule ExWapp.Proto.HistorySyncTest do
     assert {"70000001111@lid", "15550001111@s.whatsapp.net"} in extracted.lid_mappings
   end
 
-  test "reports download-required when the inline payload is missing" do
+  test "keeps the blob reference when a chunk is delivered as media" do
+    media_key = :binary.copy(<<9>>, 32)
+
     payload =
       %Message{
         protocolMessage: %ProtocolMessage{
-          historySyncNotification: %HistorySyncNotification{syncType: :RECENT}
+          historySyncNotification: %HistorySyncNotification{
+            syncType: :RECENT,
+            chunkOrder: 2,
+            progress: 40,
+            oldestMsgInChunkTimestampSec: 1_699_000_000,
+            mediaKey: media_key,
+            directPath: "/v/t62.7118-24/history-chunk",
+            encHandle: "enc-handle-1",
+            fileSHA256: <<1, 2, 3>>,
+            fileEncSHA256: <<4, 5, 6>>,
+            fileLength: 524_288
+          }
         }
       }
       |> Message.encode!()
       |> IO.iodata_to_binary()
 
-    assert {:error, :history_sync_download_required} =
-             HistorySync.extract_from_message(payload)
+    # Downloading is not implemented, but nothing a downloader needs may be lost.
+    assert {:pending_blob, blob} = HistorySync.extract_from_message(payload)
+
+    assert blob == %{
+             sync_type: :RECENT,
+             chunk_order: 2,
+             progress: 40,
+             oldest_msg_timestamp: 1_699_000_000,
+             media_key: media_key,
+             direct_path: "/v/t62.7118-24/history-chunk",
+             enc_handle: "enc-handle-1",
+             file_sha256: <<1, 2, 3>>,
+             file_enc_sha256: <<4, 5, 6>>,
+             file_length: 524_288
+           }
+  end
+
+  test "parse_history_payload/2 flattens a chunk a downloader would hand it" do
+    history = %HistorySyncProto{
+      syncType: :RECENT,
+      conversations: [%Conversation{ID: "15550003333@s.whatsapp.net", name: "From blob"}]
+    }
+
+    inflated = history |> HistorySyncProto.encode!() |> IO.iodata_to_binary()
+
+    assert {:ok, extracted} = HistorySync.parse_history_payload(inflated, :RECENT)
+    assert extracted.sync_type == :RECENT
+    assert [%{jid: "15550003333@s.whatsapp.net", name: "From blob"}] = extracted.conversations
   end
 
   test "ignores messages that are not history sync notifications" do

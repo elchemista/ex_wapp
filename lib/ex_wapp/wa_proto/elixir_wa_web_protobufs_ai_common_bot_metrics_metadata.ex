@@ -456,4 +456,6 @@ defmodule WAWebProtobufsAICommon.BotMetricsMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -381,4 +381,6 @@ defmodule WAWebProtobufsE2E.ScheduledCallEditMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

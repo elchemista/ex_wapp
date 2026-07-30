@@ -361,4 +361,6 @@ defmodule WAWebProtobufsE2E.InteractiveMessage.NativeFlowMessage.NativeFlowButto
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

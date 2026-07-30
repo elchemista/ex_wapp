@@ -313,4 +313,6 @@ defmodule WAWebProtobufsAICommon.BotPromptSuggestions do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -312,4 +312,6 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.PlaceholderMessageRe
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

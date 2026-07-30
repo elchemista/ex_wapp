@@ -300,4 +300,6 @@ defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadServerInfo do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

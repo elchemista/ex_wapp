@@ -582,4 +582,6 @@ defmodule WAWebProtobufsE2E.ListResponseMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -370,4 +370,6 @@ defmodule WAWebProtobufsAICommon.BotUnifiedResponseMutation.SideBySideMetadata d
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -301,4 +301,6 @@ defmodule WAWebProtobufsE2E.ContextInfo.BusinessMessageForwardInfo do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

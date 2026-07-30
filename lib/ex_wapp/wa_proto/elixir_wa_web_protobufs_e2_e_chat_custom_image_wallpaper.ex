@@ -551,4 +551,6 @@ defmodule WAWebProtobufsE2E.ChatCustomImageWallpaper do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

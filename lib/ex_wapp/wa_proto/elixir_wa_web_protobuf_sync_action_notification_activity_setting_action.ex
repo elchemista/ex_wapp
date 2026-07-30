@@ -333,4 +333,6 @@ defmodule WAWebProtobufSyncAction.NotificationActivitySettingAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

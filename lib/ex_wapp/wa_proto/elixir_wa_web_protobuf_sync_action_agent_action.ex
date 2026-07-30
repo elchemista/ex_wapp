@@ -424,4 +424,6 @@ defmodule WAWebProtobufSyncAction.AgentAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

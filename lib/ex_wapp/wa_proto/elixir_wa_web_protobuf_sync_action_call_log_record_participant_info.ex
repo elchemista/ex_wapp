@@ -376,4 +376,6 @@ defmodule WAWebProtobufSyncAction.CallLogRecord.ParticipantInfo do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

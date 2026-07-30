@@ -511,4 +511,6 @@ defmodule WAWebProtobufsE2E.StatusQuotedMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

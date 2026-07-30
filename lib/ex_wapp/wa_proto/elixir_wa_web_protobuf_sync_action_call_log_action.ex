@@ -308,4 +308,6 @@ defmodule WAWebProtobufSyncAction.CallLogAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -299,4 +299,6 @@ defmodule WAWebProtobufSyncAction.BotWelcomeRequestAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

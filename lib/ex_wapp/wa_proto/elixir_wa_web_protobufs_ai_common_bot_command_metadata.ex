@@ -428,4 +428,6 @@ defmodule WAWebProtobufsAICommon.BotCommandMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

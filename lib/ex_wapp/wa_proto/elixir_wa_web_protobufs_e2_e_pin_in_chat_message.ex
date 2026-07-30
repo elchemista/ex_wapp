@@ -438,4 +438,6 @@ defmodule WAWebProtobufsE2E.PinInChatMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

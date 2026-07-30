@@ -933,4 +933,6 @@ defmodule WAWebProtobufsE2E.InteractiveMessage.Header do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

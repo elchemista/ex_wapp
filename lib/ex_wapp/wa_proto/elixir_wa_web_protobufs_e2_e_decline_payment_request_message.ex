@@ -302,4 +302,6 @@ defmodule WAWebProtobufsE2E.DeclinePaymentRequestMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

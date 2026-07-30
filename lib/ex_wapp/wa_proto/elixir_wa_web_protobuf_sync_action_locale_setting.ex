@@ -300,4 +300,6 @@ defmodule WAWebProtobufSyncAction.LocaleSetting do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

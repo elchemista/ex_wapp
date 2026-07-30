@@ -458,4 +458,6 @@ defmodule WAWebProtobufsE2E.MessageHistoryNotice do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

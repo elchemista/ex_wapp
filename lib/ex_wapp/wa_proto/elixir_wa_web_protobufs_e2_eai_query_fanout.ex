@@ -439,4 +439,6 @@ defmodule WAWebProtobufsE2E.AIQueryFanout do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

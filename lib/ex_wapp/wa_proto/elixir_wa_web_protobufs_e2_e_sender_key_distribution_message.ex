@@ -373,4 +373,6 @@ defmodule WAWebProtobufsE2E.SenderKeyDistributionMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

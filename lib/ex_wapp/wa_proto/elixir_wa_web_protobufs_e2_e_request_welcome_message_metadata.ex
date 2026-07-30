@@ -472,4 +472,6 @@ defmodule WAWebProtobufsE2E.RequestWelcomeMessageMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

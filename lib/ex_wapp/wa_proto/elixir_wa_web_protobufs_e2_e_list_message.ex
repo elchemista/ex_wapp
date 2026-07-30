@@ -774,4 +774,6 @@ defmodule WAWebProtobufsE2E.ListMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

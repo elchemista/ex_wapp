@@ -442,4 +442,6 @@ defmodule WAWebProtobufsE2E.ContextInfo.QuestionReplyQuotedMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

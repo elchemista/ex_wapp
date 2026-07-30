@@ -317,4 +317,6 @@ defmodule WAWebProtobufSyncAction.LabelReorderingAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

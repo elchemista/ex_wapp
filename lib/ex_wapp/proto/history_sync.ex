@@ -9,6 +9,29 @@ defmodule ExWapp.Proto.HistorySync do
 
   Decoding uses the generated `WAWebProtobufsHistorySync` modules; this module
   only flattens the structs into the internal map contract.
+
+  ## Inline chunks versus blob chunks
+
+  WhatsApp delivers the bootstrap chunk inline (`initialHistBootstrapInlinePayload`),
+  and the larger RECENT/FULL chunks as encrypted media the client is expected to
+  download. Only the inline path is implemented: the bootstrap gives roughly the
+  latest message per chat, which is enough for a chat list but not for reading
+  conversation history.
+
+  Blob chunks are **not** silently discarded — `extract_from_message/1` returns
+  `{:pending_blob, blob_ref()}` with everything a download needs, so the gap is a
+  missing consumer rather than lost data. To close it:
+
+  1. teach `ExWapp.Media.Crypto` the `:history` type — HKDF context string
+     `"WhatsApp History Keys"` (whatsmeow `download.go`), and allow it in
+     `validate_ref/1`;
+  2. hand the `blob_ref()` to the existing `ExWapp.Media.HTTP.download/3`, which
+     already resolves `media_conn` from `direct_path` and verifies the HMAC;
+  3. zlib-inflate the plaintext and feed it to `parse_history_payload/2` below —
+     the parsing and flattening already work, they are what the inline path uses.
+
+  Run the download off the inbound message path (a chunk can be megabytes);
+  whatsmeow uses a dedicated worker with an idle timeout for exactly this reason.
   """
 
   alias ExWapp.JID
@@ -49,10 +72,32 @@ defmodule ExWapp.Proto.HistorySync do
           lid_mappings: [{String.t(), String.t()}]
         }
 
+  @typedoc """
+  Everything needed to download and decrypt a history-sync chunk delivered as
+  media instead of inline. Kept verbatim from the notification so a future
+  downloader needs no re-parse.
+  """
+  @type blob_ref :: %{
+          sync_type: atom() | non_neg_integer() | nil,
+          chunk_order: non_neg_integer() | nil,
+          progress: non_neg_integer() | nil,
+          oldest_msg_timestamp: non_neg_integer() | nil,
+          media_key: binary() | nil,
+          direct_path: String.t() | nil,
+          enc_handle: String.t() | nil,
+          file_sha256: binary() | nil,
+          file_enc_sha256: binary() | nil,
+          file_length: non_neg_integer() | nil
+        }
+
   @max_message_unwrap_depth 6
   @jid_like_payload_pattern ~r/^[0-9+:-]+@(?:s\.whatsapp\.net|g\.us|lid|hosted\.lid)$/
 
-  @spec extract_from_message(binary()) :: {:ok, t()} | :not_history_sync | {:error, term()}
+  @spec extract_from_message(binary()) ::
+          {:ok, t()}
+          | {:pending_blob, blob_ref()}
+          | :not_history_sync
+          | {:error, term()}
   def extract_from_message(message_payload) when is_binary(message_payload) do
     case Message.decode(message_payload) do
       {:ok, %Message{protocolMessage: %{historySyncNotification: %{} = notification}}} ->
@@ -71,16 +116,45 @@ defmodule ExWapp.Proto.HistorySync do
   defp extract_from_notification(notification) do
     case notification.initialHistBootstrapInlinePayload do
       payload when is_binary(payload) and payload != "" ->
-        parse_inline_history_payload(payload, notification.syncType)
+        payload
+        |> inflate_history_payload()
+        |> parse_history_payload(notification.syncType)
 
       _ ->
-        {:error, :history_sync_download_required}
+        {:pending_blob, blob_ref(notification)}
     end
   end
 
-  defp parse_inline_history_payload(inline_payload, sync_type_from_notification) do
-    with {:ok, history_payload} <- inflate_history_payload(inline_payload),
-         {:ok, %HistorySync{} = history} <- HistorySync.decode(history_payload) do
+  @spec blob_ref(struct()) :: blob_ref()
+  defp blob_ref(notification) do
+    %{
+      sync_type: notification.syncType,
+      chunk_order: notification.chunkOrder,
+      progress: notification.progress,
+      oldest_msg_timestamp: notification.oldestMsgInChunkTimestampSec,
+      media_key: notification.mediaKey,
+      direct_path: notification.directPath,
+      enc_handle: notification.encHandle,
+      file_sha256: notification.fileSHA256,
+      file_enc_sha256: notification.fileEncSHA256,
+      file_length: notification.fileLength
+    }
+  end
+
+  @doc """
+  Flattens an already-inflated `HistorySync` payload into the internal contract.
+
+  The inline path calls this after inflating the bootstrap payload; a future blob
+  downloader can call it with the decrypted-and-inflated chunk instead.
+  """
+  @spec parse_history_payload({:ok, binary()} | binary(), term()) ::
+          {:ok, t()} | {:error, term()}
+  def parse_history_payload(payload, sync_type_from_notification) when is_binary(payload) do
+    parse_history_payload({:ok, payload}, sync_type_from_notification)
+  end
+
+  def parse_history_payload({:ok, history_payload}, sync_type_from_notification) do
+    with {:ok, %HistorySync{} = history} <- HistorySync.decode(history_payload) do
       conversations =
         history.conversations
         |> Enum.map(&parse_conversation/1)
@@ -187,7 +261,7 @@ defmodule ExWapp.Proto.HistorySync do
 
   defp parse_message_key(_), do: %{remote_jid: nil, from_me: false, id: nil, participant: nil}
 
-  @spec extract_message_text(%Message{} | nil, non_neg_integer()) :: String.t() | nil
+  @spec extract_message_text(Message.t() | nil, non_neg_integer()) :: String.t() | nil
   defp extract_message_text(_message, depth) when depth > @max_message_unwrap_depth, do: nil
 
   defp extract_message_text(%Message{} = message, depth) do

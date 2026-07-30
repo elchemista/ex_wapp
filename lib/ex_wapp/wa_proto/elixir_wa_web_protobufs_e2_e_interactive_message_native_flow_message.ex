@@ -451,4 +451,6 @@ defmodule WAWebProtobufsE2E.InteractiveMessage.NativeFlowMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

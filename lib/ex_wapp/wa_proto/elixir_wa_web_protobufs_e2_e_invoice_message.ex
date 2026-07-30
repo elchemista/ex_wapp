@@ -876,4 +876,6 @@ defmodule WAWebProtobufsE2E.InvoiceMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

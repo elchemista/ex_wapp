@@ -2169,4 +2169,6 @@ defmodule WAWebProtobufsE2E.VideoMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

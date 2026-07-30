@@ -364,4 +364,6 @@ defmodule WAWebProtobufsE2E.PollUpdateMessageMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

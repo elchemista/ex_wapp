@@ -1273,4 +1273,6 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

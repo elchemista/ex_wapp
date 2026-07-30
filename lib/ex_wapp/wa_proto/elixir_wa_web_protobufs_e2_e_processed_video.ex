@@ -753,4 +753,6 @@ defmodule WAWebProtobufsE2E.ProcessedVideo do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

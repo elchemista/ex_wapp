@@ -493,4 +493,6 @@ defmodule WAWebProtobufsE2E.ContactMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

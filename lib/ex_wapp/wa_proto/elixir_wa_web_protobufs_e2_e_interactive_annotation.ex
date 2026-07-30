@@ -821,4 +821,6 @@ defmodule WAWebProtobufsE2E.InteractiveAnnotation do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

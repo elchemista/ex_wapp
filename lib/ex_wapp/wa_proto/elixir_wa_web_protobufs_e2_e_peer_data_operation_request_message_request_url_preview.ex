@@ -360,4 +360,6 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.RequestUrlPreview do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

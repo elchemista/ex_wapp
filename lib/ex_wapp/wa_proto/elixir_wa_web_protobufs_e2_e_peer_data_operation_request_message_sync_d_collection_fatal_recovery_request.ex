@@ -362,4 +362,6 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.SyncDCollectionFatal
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

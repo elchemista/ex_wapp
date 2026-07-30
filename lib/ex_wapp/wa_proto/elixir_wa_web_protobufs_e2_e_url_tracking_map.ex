@@ -321,4 +321,6 @@ defmodule WAWebProtobufsE2E.UrlTrackingMap do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

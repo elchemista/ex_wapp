@@ -370,4 +370,6 @@ defmodule WAWebProtobufsAICommon.BotRenderingMetadata.Keyword do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

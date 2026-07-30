@@ -428,4 +428,6 @@ defmodule WAWebProtobufsE2E.InteractiveResponseMessage.NativeFlowResponseMessage
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -839,4 +839,6 @@ defmodule WAWebProtobufsServerSync.SyncdPatch do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

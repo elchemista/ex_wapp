@@ -299,4 +299,6 @@ defmodule WAWebProtobufSyncAction.LockChatAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -918,4 +918,6 @@ defmodule WAWebProtobufsWa6.ClientPayload.WebInfo.WebdPayload do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

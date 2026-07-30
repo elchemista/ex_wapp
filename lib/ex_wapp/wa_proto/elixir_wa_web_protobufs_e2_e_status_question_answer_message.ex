@@ -365,4 +365,6 @@ defmodule WAWebProtobufsE2E.StatusQuestionAnswerMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -796,4 +796,6 @@ defmodule WAAICommonDeprecated.AIRichResponseLatexMetadata.AIRichResponseLatexEx
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

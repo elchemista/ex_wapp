@@ -300,4 +300,6 @@ defmodule WAWebProtobufsE2E.ButtonsMessage.Button.ButtonText do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

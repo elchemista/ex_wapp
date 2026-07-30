@@ -346,4 +346,6 @@ defmodule WAAICommonDeprecated.AIRichResponseContentItemsMetadata.AIRichResponse
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

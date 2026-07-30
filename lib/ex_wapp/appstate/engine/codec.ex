@@ -25,7 +25,7 @@ defmodule ExWapp.AppState.Engine.Codec do
   @type mutation_info :: %{
           required(:index) => [String.t()],
           required(:version) => integer(),
-          required(:value) => %SyncActionValue{},
+          required(:value) => SyncActionValue.t(),
           optional(:operation) => :remove
         }
 
@@ -40,7 +40,7 @@ defmodule ExWapp.AppState.Engine.Codec do
           hash: binary()
         }
 
-  @type action_value :: %SyncActionValue{} | nil
+  @type action_value :: SyncActionValue.t() | nil
 
   @type decoded_mutation :: %{
           operation: non_neg_integer(),
@@ -51,8 +51,8 @@ defmodule ExWapp.AppState.Engine.Codec do
           value_mac: binary()
         }
 
-  @type syncd_mutation :: %SyncdMutation{}
-  @type syncd_patch :: %SyncdPatch{}
+  @type syncd_mutation :: SyncdMutation.t()
+  @type syncd_patch :: SyncdPatch.t()
 
   @doc """
   Encodes a high-level patch description into a `SyncdPatch` protobuf payload.

@@ -301,4 +301,6 @@ defmodule WAWebProtobufSyncAction.NewsletterSavedInterestsAction do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

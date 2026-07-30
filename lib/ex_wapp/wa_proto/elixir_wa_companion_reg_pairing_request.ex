@@ -428,4 +428,6 @@ defmodule WACompanionReg.PairingRequest do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

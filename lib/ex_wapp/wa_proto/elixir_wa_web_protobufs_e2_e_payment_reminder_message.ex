@@ -836,4 +836,6 @@ defmodule WAWebProtobufsE2E.PaymentReminderMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -127,6 +127,47 @@ defmodule ExWapp.Message.Handler.Inbound.SyncTest do
              Chat.messages(store, chat_jid, limit: 1)
   end
 
+  test "reports an unhandled media-delivered history chunk at :info without touching state" do
+    store = Memory.new(initial_data: %{chats: %{}})
+    state = %{store: store}
+
+    payload =
+      %Message{
+        protocolMessage: %WAWebProtobufsE2E.ProtocolMessage{
+          historySyncNotification: %WAWebProtobufsE2E.HistorySyncNotification{
+            syncType: :RECENT,
+            chunkOrder: 2,
+            mediaKey: :binary.copy(<<9>>, 32),
+            directPath: "/v/history-chunk",
+            fileLength: 524_288
+          }
+        }
+      }
+      |> Message.encode!()
+      |> IO.iodata_to_binary()
+
+    message_data = %{message_content_type: :protocol, protocol_payload: payload}
+
+    log =
+      ExUnit.CaptureLog.capture_log([level: :info], fn ->
+        assert Sync.ingest(
+                 message_data,
+                 self(),
+                 state,
+                 "15550009999@s.whatsapp.net",
+                 "HISTORY_BLOB_1",
+                 true
+               ) == state
+      end)
+
+    # Silently dropping the chunk is the failure mode to guard against: the log
+    # must name the sync type so an incomplete history is diagnosable.
+    assert log =~ "[HISTORY_SYNC]"
+    assert log =~ "blob download not implemented"
+    assert log =~ "sync_type=:RECENT"
+    assert Chat.list(store) == []
+  end
+
   test "ignores a peer-data response that is not a placeholder resend" do
     store = Memory.new(initial_data: %{chats: %{}})
     state = %{store: store}

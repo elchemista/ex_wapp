@@ -641,4 +641,6 @@ defmodule WAWebProtobufsWa6.ClientPayload.WebInfo do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

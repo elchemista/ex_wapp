@@ -368,4 +368,6 @@ defmodule WAWebProtobufSyncAction.CustomPaymentMethodMetadata do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

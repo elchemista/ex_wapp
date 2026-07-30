@@ -502,4 +502,6 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncChunkRetr
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

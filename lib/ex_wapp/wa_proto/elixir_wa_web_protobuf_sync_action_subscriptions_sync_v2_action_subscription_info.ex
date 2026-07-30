@@ -733,4 +733,6 @@ defmodule WAWebProtobufSyncAction.SubscriptionsSyncV2Action.SubscriptionInfo do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

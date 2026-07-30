@@ -374,4 +374,6 @@ defmodule WACompanionReg.ProloguePayload do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

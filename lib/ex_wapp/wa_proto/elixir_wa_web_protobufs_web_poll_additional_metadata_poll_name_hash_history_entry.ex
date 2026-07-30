@@ -360,4 +360,6 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata.PollNameHashHistoryEntry do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

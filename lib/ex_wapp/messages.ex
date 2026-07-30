@@ -136,7 +136,7 @@ defmodule ExWapp.Messages do
   @doc """
   Builds a text message protobuf.
   """
-  @spec build_text_proto(String.t(), send_opts()) :: %Message{}
+  @spec build_text_proto(String.t(), send_opts()) :: Message.t()
   def build_text_proto(text, opts \\ []) do
     mentions = Keyword.get(opts, :mentions, [])
     quoted_id = Keyword.get(opts, :quoted_id)
@@ -160,7 +160,7 @@ defmodule ExWapp.Messages do
   @doc """
   Builds an image message protobuf from uploaded media metadata.
   """
-  @spec build_image_proto(ExWapp.Media.Upload.t(), keyword()) :: %Message{}
+  @spec build_image_proto(ExWapp.Media.Upload.t(), keyword()) :: Message.t()
   def build_image_proto(%ExWapp.Media.Upload{} = upload, opts \\ []) do
     %Message{
       imageMessage: %ImageMessage{
@@ -185,7 +185,7 @@ defmodule ExWapp.Messages do
   @doc """
   Builds an audio message protobuf from uploaded media metadata.
   """
-  @spec build_audio_proto(ExWapp.Media.Upload.t(), keyword()) :: %Message{}
+  @spec build_audio_proto(ExWapp.Media.Upload.t(), keyword()) :: Message.t()
   def build_audio_proto(%ExWapp.Media.Upload{} = upload, opts \\ []) do
     %Message{
       audioMessage: %AudioMessage{
@@ -209,7 +209,7 @@ defmodule ExWapp.Messages do
   @doc """
   Builds a document message protobuf from uploaded media metadata.
   """
-  @spec build_document_proto(ExWapp.Media.Upload.t(), keyword()) :: %Message{}
+  @spec build_document_proto(ExWapp.Media.Upload.t(), keyword()) :: Message.t()
   def build_document_proto(%ExWapp.Media.Upload{} = upload, opts \\ []) do
     %Message{
       documentMessage: %DocumentMessage{
@@ -235,7 +235,7 @@ defmodule ExWapp.Messages do
   @doc """
   Builds a static or live GPS location protobuf.
   """
-  @spec build_location_proto(number(), number(), keyword()) :: %Message{}
+  @spec build_location_proto(number(), number(), keyword()) :: Message.t()
   def build_location_proto(latitude, longitude, opts \\ [])
       when is_number(latitude) and is_number(longitude) do
     %Message{locationMessage: build_location_message(latitude, longitude, opts)}
@@ -244,7 +244,7 @@ defmodule ExWapp.Messages do
   @doc """
   Builds a single WhatsApp contact-card protobuf.
   """
-  @spec build_contact_proto(String.t(), String.t(), keyword()) :: %Message{}
+  @spec build_contact_proto(String.t(), String.t(), keyword()) :: Message.t()
   def build_contact_proto(display_name, vcard, opts \\ [])
       when is_binary(display_name) and is_binary(vcard) do
     %Message{
@@ -263,7 +263,7 @@ defmodule ExWapp.Messages do
   WhatsApp Web also attaches a 32-byte message secret to event messages; it is
   generated automatically unless `:message_secret` is supplied.
   """
-  @spec build_event_proto(String.t(), integer() | DateTime.t(), keyword()) :: %Message{}
+  @spec build_event_proto(String.t(), integer() | DateTime.t(), keyword()) :: Message.t()
   def build_event_proto(name, start_time, opts \\ []) when is_binary(name) do
     %Message{
       messageContextInfo: %MessageContextInfo{messageSecret: event_message_secret(opts)},
@@ -288,7 +288,7 @@ defmodule ExWapp.Messages do
   Builds a protocol message requesting resend of an unavailable placeholder.
   """
   @spec build_placeholder_resend_proto(String.t(), String.t(), String.t(), keyword()) ::
-          %Message{}
+          Message.t()
   def build_placeholder_resend_proto(chat_jid, sender_jid, message_id, opts \\ []) do
     from_me = Keyword.get(opts, :from_me, false) == true
 
@@ -320,7 +320,7 @@ defmodule ExWapp.Messages do
   @doc """
   Builds context info for replies and mentions.
   """
-  @spec build_context_info(keyword()) :: %ContextInfo{} | nil
+  @spec build_context_info(keyword()) :: ContextInfo.t() | nil
   def build_context_info(opts) do
     quoted_id = Keyword.get(opts, :quoted_id)
     quoted_participant = Keyword.get(opts, :quoted_participant)
@@ -520,7 +520,7 @@ defmodule ExWapp.Messages do
     _ -> :ok
   end
 
-  @spec build_location_message(number(), number(), keyword()) :: %LocationMessage{}
+  @spec build_location_message(number(), number(), keyword()) :: LocationMessage.t()
   defp build_location_message(latitude, longitude, opts) do
     %LocationMessage{
       degreesLatitude: latitude * 1.0,
@@ -538,7 +538,7 @@ defmodule ExWapp.Messages do
     }
   end
 
-  @spec event_location(term()) :: %LocationMessage{} | nil
+  @spec event_location(term()) :: LocationMessage.t() | nil
   defp event_location(location) when is_map(location) do
     case location_coordinates(location) do
       {:ok, latitude, longitude} ->

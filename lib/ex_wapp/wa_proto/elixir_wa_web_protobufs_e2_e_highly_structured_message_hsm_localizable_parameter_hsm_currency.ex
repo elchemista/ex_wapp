@@ -359,4 +359,6 @@ defmodule WAWebProtobufsE2E.HighlyStructuredMessage.HSMLocalizableParameter.HSMC
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

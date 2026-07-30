@@ -424,4 +424,6 @@ defmodule WAWebProtobufsHistorySync.WallpaperSettings do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

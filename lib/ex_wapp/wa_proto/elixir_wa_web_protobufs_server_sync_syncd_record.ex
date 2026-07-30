@@ -447,4 +447,6 @@ defmodule WAWebProtobufsServerSync.SyncdRecord do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

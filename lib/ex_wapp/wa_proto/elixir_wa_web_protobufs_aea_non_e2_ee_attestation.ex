@@ -317,4 +317,6 @@ defmodule WAWebProtobufsAea.NonE2EEAttestation do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

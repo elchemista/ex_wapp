@@ -1228,4 +1228,6 @@ defmodule WAWebProtobufsE2E.AudioMessage do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end
