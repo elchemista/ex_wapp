@@ -462,9 +462,6 @@ defmodule ExWapp.Prekeys do
         )
 
         {:error, {:prekey_reservation_flush_failed, reason}}
-
-      other ->
-        {:error, {:prekey_reservation_flush_failed, other}}
     end
   end
 

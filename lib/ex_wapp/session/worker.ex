@@ -80,6 +80,10 @@ defmodule ExWapp.Session.Worker do
 
   alias ExWapp.Session.Outbound.{Command, Content}
 
+  alias ExWapp.AppState.Engine
+  alias ExWapp.Noise.ClientPayload
+  alias ExWapp.Session.Account
+
   alias ExWapp.Session.Worker.{
     NodeHandler,
     Outbound,
@@ -681,7 +685,7 @@ defmodule ExWapp.Session.Worker do
     # which would deadlock if run inside handle_call of the same GenServer.
     case start_send_worker(state, "app_state_mutation", fn ->
            try do
-             ExWapp.AppState.Engine.send_mutation(session_pid, patch_info, state.store)
+             Engine.send_mutation(session_pid, patch_info, state.store)
            rescue
              e -> {:error, {:exception, e}}
            end
@@ -1440,7 +1444,7 @@ defmodule ExWapp.Session.Worker do
       state.opts.noise
       |> Keyword.put_new(
         :client_payload_fun,
-        &ExWapp.Noise.ClientPayload.build(&1, state.runtime_cfg)
+        &ClientPayload.build(&1, state.runtime_cfg)
       )
 
     result =
@@ -1687,7 +1691,7 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp clear_signal_sessions_in_store(signal_sessions, jid, store) do
-    lid_mapping = ExWapp.Session.Account.load_lid_mapping(store)
+    lid_mapping = Account.load_lid_mapping(store)
     SessionStore.delete_sessions_for_user(signal_sessions, jid, lid_mapping)
   end
 

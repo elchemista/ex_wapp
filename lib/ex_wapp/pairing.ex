@@ -5,6 +5,7 @@ defmodule ExWapp.Pairing do
 
   alias ExWapp.{Binary, Log, Signal, Store}
   alias ExWapp.Pairing.ADV
+  alias ExWapp.Signal.Keys
   require Logger
 
   @typedoc """
@@ -219,7 +220,7 @@ defmodule ExWapp.Pairing do
 
       # Last resort: generate new identity (only if no signal state yet)
       _ ->
-        %{public: pub, private: priv} = ExWapp.Signal.Keys.generate_key_pair()
+        %{public: pub, private: priv} = Keys.generate_key_pair()
         identity = %{public: pub, private: priv}
         {Map.put(data, :identity, identity), pub}
     end

@@ -11,6 +11,7 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
   alias ExWapp.{JID, Store}
   alias ExWapp.Message.Handler.Common
   alias ExWapp.Message.Handler.Inbound.Envelope
+  alias ExWapp.Session.RetryCounters
   alias ExWapp.Signal.{SessionStore, WireFormat}
 
   @max_retry_receipt_count 2
@@ -296,7 +297,7 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
     local_next = Map.get(counters, key, 0) + 1
     incoming_next = incoming_retry_count(message_data) + 1
     next = if local_next == 1 and incoming_next > 1, do: incoming_next, else: local_next
-    {next, ExWapp.Session.RetryCounters.put(state, key, next)}
+    {next, RetryCounters.put(state, key, next)}
   end
 
   defp next_retry_count(state, _from, _id, _participant, _message_data), do: {1, state}
@@ -341,8 +342,6 @@ defmodule ExWapp.Message.Handler.Inbound.Receipts do
       Enum.find_value(candidates, &prekey_candidate_fingerprint/1)
     end
   end
-
-  defp missing_prekey_fingerprint(_message_data), do: nil
 
   @spec prekey_candidate_fingerprint(term()) :: binary() | nil
   defp prekey_candidate_fingerprint(%{enc_type: "pkmsg", ciphertext: ciphertext})

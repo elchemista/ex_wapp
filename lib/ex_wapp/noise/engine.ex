@@ -6,6 +6,7 @@ defmodule ExWapp.Noise.Engine do
   alias ExWapp.Log
   alias ExWapp.Noise.Handshake
   alias ExWapp.Noise.HandshakeSecrets
+  alias ExWapp.Signal.Keys
   alias ExWapp.Transport.Frame
   alias WAWebProtobufsWa6.HandshakeMessage
   alias WAWebProtobufsWa6.HandshakeMessage.ClientFinish
@@ -36,7 +37,7 @@ defmodule ExWapp.Noise.Engine do
 
   def init_handshake(payload, static_key, opts) do
     s_kp = ensure_keypair(static_key)
-    e_kp = ExWapp.Signal.Keys.generate_key_pair()
+    e_kp = Keys.generate_key_pair()
 
     wa_header = Keyword.get(opts, :handshake_header, Frame.header())
 
@@ -107,7 +108,7 @@ defmodule ExWapp.Noise.Engine do
   end
 
   defp ensure_keypair(%{priv: priv, pub: pub}), do: %{private: priv, public: pub}
-  defp ensure_keypair(_), do: ExWapp.Signal.Keys.generate_key_pair()
+  defp ensure_keypair(_), do: Keys.generate_key_pair()
 
   defp build_client_hello(ephemeral_public) do
     msg = %HandshakeMessage{

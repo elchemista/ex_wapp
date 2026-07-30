@@ -2,8 +2,8 @@ defmodule ExWapp.Session.Outbound.Content do
   @moduledoc false
 
   alias ExWapp.{Binary, Media, Message, Messages}
-  alias WAWebProtobufsE2E.Message, as: ProtoMessage
   alias ExWapp.Session.Worker.Outbound
+  alias WAWebProtobufsE2E.Message, as: ProtoMessage
 
   @type prepared :: {:ok, ProtoMessage.t(), keyword()} | {:error, term()}
 

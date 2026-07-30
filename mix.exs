@@ -8,6 +8,7 @@ defmodule ExWapp.MixProject do
       elixir: "~> 1.19",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :dev,
+      dialyzer: [ignore_warnings: ".dialyzer_ignore.exs", list_unused_filters: true],
       deps: deps()
     ]
   end

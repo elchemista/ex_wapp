@@ -19,19 +19,22 @@ defmodule ExWapp.Debug do
   @wa_header <<0x57, 0x41, 0x06, 0x03>>
   @noise_pattern "Noise_XX_25519_AESGCM_SHA256\x00\x00\x00\x00"
 
+  alias ExWapp.Config
+  alias ExWapp.Log
+  alias ExWapp.Noise.Handshake
+  alias ExWapp.Signal.Keys
+  alias ExWapp.Transport.TLS
   alias WAWebProtobufsWa6.HandshakeMessage
   alias WAWebProtobufsWa6.HandshakeMessage.ClientHello
-  alias ExWapp.Noise.Handshake
-  alias ExWapp.Transport.TLS
 
   def test_full_handshake do
     Logger.info("=== Full Handshake Test ===")
 
     # Generate key pairs
     # ephemeral
-    e_kp = ExWapp.Signal.Keys.generate_key_pair()
+    e_kp = Keys.generate_key_pair()
     # static (for new device)
-    s_kp = ExWapp.Signal.Keys.generate_key_pair()
+    s_kp = Keys.generate_key_pair()
 
     Logger.info("Ephemeral public key generated (bytes=#{byte_size(e_kp.public)})")
     Logger.info("Static public key loaded (bytes=#{byte_size(s_kp.public)})")
@@ -75,7 +78,7 @@ defmodule ExWapp.Debug do
         end
 
       {:error, reason} ->
-        Logger.error("Failed to connect: #{ExWapp.Log.reason(reason)}")
+        Logger.error("Failed to connect: #{Log.reason(reason)}")
         {:error, reason}
     end
   end
@@ -112,12 +115,12 @@ defmodule ExWapp.Debug do
           process_server_hello(state, server_hello)
 
         {:ok, other} ->
-          Logger.error("Unexpected message: #{ExWapp.Log.term_summary(other)}")
+          Logger.error("Unexpected message: #{Log.term_summary(other)}")
           send(state.parent, {:result, {:error, :unexpected_message}})
           {:close, state}
 
         {:error, reason} ->
-          Logger.error("Failed to decode: #{ExWapp.Log.reason(reason)}")
+          Logger.error("Failed to decode: #{Log.reason(reason)}")
           send(state.parent, {:result, {:error, reason}})
           {:close, state}
       end
@@ -137,7 +140,7 @@ defmodule ExWapp.Debug do
           send(state.parent, {:result, {:ok, plaintext}})
 
         {:error, reason} ->
-          Logger.error("Failed to decrypt: #{ExWapp.Log.reason(reason)}")
+          Logger.error("Failed to decrypt: #{Log.reason(reason)}")
           send(state.parent, {:result, {:error, {:decrypt_failed, reason}}})
       end
 
@@ -145,12 +148,12 @@ defmodule ExWapp.Debug do
     end
 
     def handle_frame(frame, state) do
-      Logger.warning("Unexpected frame: #{ExWapp.Log.term_summary(frame)}")
+      Logger.warning("Unexpected frame: #{Log.term_summary(frame)}")
       {:ok, state}
     end
 
     def handle_disconnect(reason, state) do
-      Logger.info("Disconnected: #{ExWapp.Log.reason(reason)}")
+      Logger.info("Disconnected: #{Log.reason(reason)}")
       send(state.parent, {:result, {:error, {:disconnected, reason}}})
       {:ok, state}
     end
@@ -171,20 +174,20 @@ defmodule ExWapp.Debug do
       s_kp = state.s_kp
 
       # 1. Authenticate server ephemeral
-      noise = ExWapp.Noise.Handshake.authenticate(noise, re)
+      noise = Handshake.authenticate(noise, re)
 
       # 2. Mix DH(e, re)
-      with {:ok, noise} <- ExWapp.Noise.Handshake.mix_shared_secret(noise, e_kp.private, re),
+      with {:ok, noise} <- Handshake.mix_shared_secret(noise, e_kp.private, re),
            # 3. Decrypt server static
-           {:ok, noise, rs} <- ExWapp.Noise.Handshake.decrypt(noise, rs_ct),
+           {:ok, noise, rs} <- Handshake.decrypt(noise, rs_ct),
            # 4. Mix DH(e, rs)
-           {:ok, noise} <- ExWapp.Noise.Handshake.mix_shared_secret(noise, e_kp.private, rs),
+           {:ok, noise} <- Handshake.mix_shared_secret(noise, e_kp.private, rs),
            # 5. Decrypt certificate
-           {:ok, noise, _cert} <- ExWapp.Noise.Handshake.decrypt(noise, cert_ct),
+           {:ok, noise, _cert} <- Handshake.decrypt(noise, cert_ct),
            # 6. Encrypt our static public
-           {noise, s_pub_ct} <- ExWapp.Noise.Handshake.encrypt(noise, s_kp.public),
+           {noise, s_pub_ct} <- Handshake.encrypt(noise, s_kp.public),
            # 7. Mix DH(s, re)
-           {:ok, noise} <- ExWapp.Noise.Handshake.mix_shared_secret(noise, s_kp.private, re) do
+           {:ok, noise} <- Handshake.mix_shared_secret(noise, s_kp.private, re) do
         Logger.info("Decrypted server static key (bytes=#{byte_size(rs)})")
         Logger.info("Encrypted our static: #{byte_size(s_pub_ct)} bytes")
 
@@ -192,7 +195,7 @@ defmodule ExWapp.Debug do
         {:ok, client_payload} = build_real_client_payload()
         Logger.info("ClientPayload size: #{byte_size(client_payload)} bytes")
 
-        {noise, payload_ct} = ExWapp.Noise.Handshake.encrypt(noise, client_payload)
+        {noise, payload_ct} = Handshake.encrypt(noise, client_payload)
 
         # Build client finish
         client_finish = build_client_finish(s_pub_ct, payload_ct)
@@ -202,7 +205,7 @@ defmodule ExWapp.Debug do
         Logger.info("Sending client finish: #{byte_size(frame)} bytes")
 
         # Derive transport keys
-        {write_key, read_key} = ExWapp.Noise.Handshake.derive_transport_keys(noise)
+        {write_key, read_key} = Handshake.derive_transport_keys(noise)
         Logger.info("Transport keys derived")
 
         new_state =
@@ -215,7 +218,7 @@ defmodule ExWapp.Debug do
         {:reply, {:binary, frame}, new_state}
       else
         {:error, reason} ->
-          Logger.error("Handshake processing failed: #{ExWapp.Log.reason(reason)}")
+          Logger.error("Handshake processing failed: #{Log.reason(reason)}")
           send(state.parent, {:result, {:error, reason}})
           {:close, state}
       end
@@ -271,8 +274,8 @@ defmodule ExWapp.Debug do
       alias WAWebProtobufsWa6.ClientPayload.DevicePairingRegistrationData
 
       # Generate signal keys
-      identity = ExWapp.Signal.Keys.generate_key_pair()
-      signed_prekey = ExWapp.Signal.Keys.generate_signed_prekey(identity, 1)
+      identity = Keys.generate_key_pair()
+      signed_prekey = Keys.generate_signed_prekey(identity, 1)
       reg_id = :rand.uniform(65_535)
 
       # Build device props
@@ -319,7 +322,7 @@ defmodule ExWapp.Debug do
         0x00
       >>
 
-      version = ExWapp.Config.default_client_version()
+      version = Config.default_client_version()
 
       build_hash =
         :crypto.hash(:md5, "#{version.primary}.#{version.secondary}.#{version.tertiary}")
@@ -371,7 +374,7 @@ defmodule ExWapp.Debug do
     Logger.info("WA header bytes: #{byte_size(@wa_header)}")
 
     # Generate ephemeral key pair
-    e_kp = ExWapp.Signal.Keys.generate_key_pair()
+    e_kp = Keys.generate_key_pair()
     Logger.info("Ephemeral public key generated (bytes=#{byte_size(e_kp.public)})")
 
     # Build client hello protobuf
@@ -425,7 +428,7 @@ defmodule ExWapp.Debug do
             end
 
           {:ws_error, reason} ->
-            Logger.error("WebSocket error: #{ExWapp.Log.reason(reason)}")
+            Logger.error("WebSocket error: #{Log.reason(reason)}")
             {:error, reason}
         after
           15_000 ->
@@ -435,7 +438,7 @@ defmodule ExWapp.Debug do
         end
 
       {:error, reason} ->
-        Logger.error("Failed to connect: #{ExWapp.Log.reason(reason)}")
+        Logger.error("Failed to connect: #{Log.reason(reason)}")
         {:error, reason}
     end
   end
@@ -487,7 +490,7 @@ defmodule ExWapp.Debug do
           {:ok, server_hello}
 
         {:error, reason} ->
-          Logger.error("Failed to decode ServerHello: #{ExWapp.Log.reason(reason)}")
+          Logger.error("Failed to decode ServerHello: #{Log.reason(reason)}")
           {:error, reason}
       end
     end

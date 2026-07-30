@@ -6,6 +6,7 @@ defmodule ExWapp.Session.Worker.Retry do
   require Logger
 
   alias ExWapp.{Chat, Log}
+  alias ExWapp.Session.RetryCounters
   alias ExWapp.Session.Worker
 
   @type start_worker_fun :: (map(), binary(), (-> any()) ->
@@ -79,7 +80,7 @@ defmodule ExWapp.Session.Worker.Retry do
         counter_key = retry_counter_key(context.counter_scope, jid, message_id)
         state = context.register_worker.(state, worker, mon, jid)
 
-        ExWapp.Session.RetryCounters.put(state, counter_key, attempts + 1)
+        RetryCounters.put(state, counter_key, attempts + 1)
 
       {:error, reason} ->
         Logger.warning(

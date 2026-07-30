@@ -284,9 +284,6 @@ defmodule ExWapp.Session.Worker.ReceiptBuilder do
 
           {:error, reason} ->
             {:error, {:retry_prekey_flush_failed, reason}}
-
-          other ->
-            {:error, {:retry_prekey_flush_failed, other}}
         end
 
       {:error, _reason} = error ->
