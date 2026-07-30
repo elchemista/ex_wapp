@@ -12,12 +12,12 @@ defmodule ExWapp.AppState.Engine.Sync do
   alias ExWapp.AppState.{CollectionLock, Crypto}
   alias ExWapp.AppState.Engine.{Codec, Dispatch, State}
   alias ExWapp.{Binary, Log}
-  alias ExWapp.Proto.SyncAction
 
-  alias ExWapp.Proto.SyncAction.{
+  alias WAWebProtobufsServerSync.{
     ExternalBlobReference,
     SyncdMutations,
-    SyncdPatch
+    SyncdPatch,
+    SyncdSnapshot
   }
 
   alias ExWapp.Store
@@ -686,7 +686,7 @@ defmodule ExWapp.AppState.Engine.Sync do
       %{collection: collection_name, payload: :patch},
       %{payload_bytes: byte_size(patch_binary)},
       fn ->
-        with {:ok, patch} <- SyncAction.decode_syncd_patch(patch_binary),
+        with {:ok, patch} <- SyncdPatch.decode(patch_binary),
              {:ok, patch} <- maybe_resolve_external_patch_mutations(session, patch) do
           Codec.decode_patch(patch, collection_name, state, macs, key_store, true)
         end
@@ -699,32 +699,32 @@ defmodule ExWapp.AppState.Engine.Sync do
   end
 
   defp decode_snapshot_payload(session, snapshot_binary) do
-    case SyncAction.decode_syncd_snapshot(snapshot_binary) do
+    case SyncdSnapshot.decode(snapshot_binary) do
       {:ok, snapshot} ->
         {:ok, snapshot}
 
       {:error, _reason} ->
-        with {:ok, ref} <- SyncAction.decode_external_blob_reference(snapshot_binary),
+        with {:ok, ref} <- ExternalBlobReference.decode(snapshot_binary),
              {:ok, raw_snapshot} <- download_external_blob(session, ref) do
-          SyncAction.decode_syncd_snapshot(raw_snapshot)
+          SyncdSnapshot.decode(raw_snapshot)
         end
     end
   end
 
   defp maybe_resolve_external_patch_mutations(
          _session,
-         %SyncdPatch{external_mutations: nil} = patch
+         %SyncdPatch{externalMutations: nil} = patch
        ) do
     {:ok, patch}
   end
 
   defp maybe_resolve_external_patch_mutations(
          session,
-         %SyncdPatch{external_mutations: %ExternalBlobReference{} = ref} = patch
+         %SyncdPatch{externalMutations: %ExternalBlobReference{} = ref} = patch
        ) do
     with {:ok, raw_mutations} <- download_external_blob(session, ref),
          {:ok, %SyncdMutations{mutations: mutations}} <-
-           SyncAction.decode_syncd_mutations(raw_mutations) do
+           SyncdMutations.decode(raw_mutations) do
       {:ok, %{patch | mutations: mutations}}
     end
   end
@@ -735,10 +735,10 @@ defmodule ExWapp.AppState.Engine.Sync do
 
   defp download_external_blob(session, %ExternalBlobReference{} = ref) do
     timed_app_state(:external_blob, %{payload: :app_state}, %{}, fn ->
-      with {:ok, direct_path} <- validate_external_direct_path(ref.direct_path),
+      with {:ok, direct_path} <- validate_external_direct_path(ref.directPath),
            {:ok, encrypted_payload} <-
-             download_external_blob_payload(session, direct_path, ref.file_enc_sha256) do
-        decrypt_external_blob_payload(ref.media_key, encrypted_payload)
+             download_external_blob_payload(session, direct_path, ref.fileEncSHA256) do
+        decrypt_external_blob_payload(ref.mediaKey, encrypted_payload)
       end
     end)
   end
@@ -999,7 +999,9 @@ defmodule ExWapp.AppState.Engine.Sync do
       :crypto.mac(:hmac, :sha256, mac_key, [iv, ciphertext])
       |> binary_part(0, @media_hmac_length)
 
-    if expected == mac, do: :ok, else: {:error, :invalid_external_blob_mac}
+    if Crypto.secure_compare(expected, mac),
+      do: :ok,
+      else: {:error, :invalid_external_blob_mac}
   end
 
   defp verify_external_blob_mac(_, _, _, _), do: {:error, :invalid_external_blob_mac}

@@ -3,18 +3,23 @@ defmodule ExWapp.AppState.EngineTest do
 
   alias ExWapp.AppState.{CollectionLock, Crypto, Engine, LTHash}
 
-  alias ExWapp.Proto.SyncAction
+  alias WAWebProtobufsServerSync.{
+    KeyId,
+    SyncdIndex,
+    SyncdMutation,
+    SyncdPatch,
+    SyncdRecord,
+    SyncdValue
+  }
 
-  alias ExWapp.Proto.SyncAction.{
+  alias WAWebProtobufSyncAction.{
     ArchiveChatAction,
     ContactAction,
     DeleteChatAction,
     MuteAction,
     PinAction,
     SyncActionData,
-    SyncActionValue,
-    SyncdMutation,
-    SyncdRecord
+    SyncActionValue
   }
 
   defmodule PaginationSession do
@@ -96,15 +101,15 @@ defmodule ExWapp.AppState.EngineTest do
       [mutation] = patch.mutations
       assert mutation.index == ["contact", "1234@s.whatsapp.net"]
       assert mutation.version == 2
-      assert mutation.value.contact_action.full_name == "John Doe"
-      assert mutation.value.contact_action.first_name == "John"
-      assert mutation.value.contact_action.save_on_primary == true
+      assert mutation.value.contactAction.fullName == "John Doe"
+      assert mutation.value.contactAction.firstName == "John"
+      assert mutation.value.contactAction.saveOnPrimaryAddressbook == true
     end
 
     test "defaults first_name to full_name when nil" do
       patch = Engine.build_contact("1234@s.whatsapp.net", "John Doe")
       [mutation] = patch.mutations
-      assert mutation.value.contact_action.first_name == "John Doe"
+      assert mutation.value.contactAction.firstName == "John Doe"
     end
 
     test "normalizes contact jid by stripping + and normalizing domain" do
@@ -237,9 +242,9 @@ defmodule ExWapp.AppState.EngineTest do
 
       [archive, unpin] = patch.mutations
       assert archive.index == ["archive", "1234@s.whatsapp.net"]
-      assert archive.value.archive_chat_action.archived == true
+      assert archive.value.archiveChatAction.archived == true
       assert unpin.index == ["pin_v1", "1234@s.whatsapp.net"]
-      assert unpin.value.pin_action.pinned == false
+      assert unpin.value.pinAction.pinned == false
     end
 
     test "builds unarchive patch without unpin" do
@@ -249,7 +254,7 @@ defmodule ExWapp.AppState.EngineTest do
       assert length(patch.mutations) == 1
 
       [archive] = patch.mutations
-      assert archive.value.archive_chat_action.archived == false
+      assert archive.value.archiveChatAction.archived == false
     end
   end
 
@@ -261,7 +266,7 @@ defmodule ExWapp.AppState.EngineTest do
       [mutation] = patch.mutations
       assert mutation.index == ["pin_v1", "1234@s.whatsapp.net"]
       assert mutation.version == 5
-      assert mutation.value.pin_action.pinned == true
+      assert mutation.value.pinAction.pinned == true
     end
   end
 
@@ -272,8 +277,8 @@ defmodule ExWapp.AppState.EngineTest do
       assert patch.type == "regular_high"
       [mutation] = patch.mutations
       assert mutation.index == ["mute", "1234@s.whatsapp.net"]
-      assert mutation.value.mute_action.muted == true
-      assert mutation.value.mute_action.mute_end_timestamp == -1
+      assert mutation.value.muteAction.muted == true
+      assert mutation.value.muteAction.muteEndTimestamp == -1
     end
 
     test "builds mute with specific end timestamp" do
@@ -281,15 +286,15 @@ defmodule ExWapp.AppState.EngineTest do
       patch = Engine.build_mute("1234@s.whatsapp.net", true, ts)
 
       [mutation] = patch.mutations
-      assert mutation.value.mute_action.mute_end_timestamp == ts
+      assert mutation.value.muteAction.muteEndTimestamp == ts
     end
 
     test "builds unmute patch" do
       patch = Engine.build_mute("1234@s.whatsapp.net", false)
 
       [mutation] = patch.mutations
-      assert mutation.value.mute_action.muted == false
-      assert mutation.value.mute_action.mute_end_timestamp == nil
+      assert mutation.value.muteAction.muted == false
+      assert mutation.value.muteAction.muteEndTimestamp == nil
     end
   end
 
@@ -311,7 +316,7 @@ defmodule ExWapp.AppState.EngineTest do
       assert patch.type == "regular_low"
       [mutation] = patch.mutations
       assert mutation.index == ["markChatAsRead", "1234@s.whatsapp.net"]
-      assert mutation.value.mark_chat_as_read_action.read == true
+      assert mutation.value.markChatAsReadAction.read == true
     end
   end
 
@@ -357,18 +362,18 @@ defmodule ExWapp.AppState.EngineTest do
         Engine.encode_patch(patch_info, key_id, key_data, hash_state)
 
       # Decode the protobuf back
-      {:ok, decoded_patch} = SyncAction.decode_syncd_patch(encoded)
+      {:ok, decoded_patch} = SyncdPatch.decode(encoded)
 
       assert decoded_patch.version == nil
       assert length(decoded_patch.mutations) == 1
-      assert is_binary(decoded_patch.snapshot_mac)
-      assert is_binary(decoded_patch.patch_mac)
+      assert is_binary(decoded_patch.snapshotMAC)
+      assert is_binary(decoded_patch.patchMAC)
 
       [mutation] = decoded_patch.mutations
-      assert mutation.operation == 0
-      assert is_binary(mutation.record.index)
-      assert is_binary(mutation.record.value)
-      assert mutation.record.key_id == key_id
+      assert mutation.operation == :SET
+      assert is_binary(mutation.record.index.blob)
+      assert is_binary(mutation.record.value.blob)
+      assert mutation.record.keyID."ID" == key_id
 
       # Decrypt the mutation
       key_store = %{
@@ -380,7 +385,7 @@ defmodule ExWapp.AppState.EngineTest do
       assert length(decoded_mutations) == 1
       [dm] = decoded_mutations
       assert dm.index == ["pin_v1", "test@s.whatsapp.net"]
-      assert dm.action.pin_action.pinned == true
+      assert dm.action.pinAction.pinned == true
     end
 
     test "multiple mutations in a single patch" do
@@ -398,7 +403,7 @@ defmodule ExWapp.AppState.EngineTest do
       # archive + unpin = 2 mutations
       assert map_size(new_mutation_macs) == 2
 
-      {:ok, decoded_patch} = SyncAction.decode_syncd_patch(encoded)
+      {:ok, decoded_patch} = SyncdPatch.decode(encoded)
       assert length(decoded_patch.mutations) == 2
     end
   end
@@ -417,14 +422,14 @@ defmodule ExWapp.AppState.EngineTest do
       action_data = %SyncActionData{
         index: index_json,
         value: %SyncActionValue{
-          mute_action: %MuteAction{muted: true, mute_end_timestamp: -1},
+          muteAction: %MuteAction{muted: true, muteEndTimestamp: -1},
           timestamp: System.system_time(:millisecond)
         },
         padding: <<>>,
         version: 2
       }
 
-      content = SyncAction.encode_sync_action_data(action_data)
+      content = action_data |> SyncActionData.encode!() |> IO.iodata_to_binary()
       {iv, ciphertext} = Crypto.encrypt_cbc(content, keys.value_encryption)
       encrypted_content = iv <> ciphertext
 
@@ -434,11 +439,11 @@ defmodule ExWapp.AppState.EngineTest do
       index_mac = Crypto.compute_index_mac(index_json, keys.index)
 
       mutation = %SyncdMutation{
-        operation: 0,
+        operation: :SET,
         record: %SyncdRecord{
-          index: index_mac,
-          value: encrypted_content <> value_mac,
-          key_id: key_id
+          index: %SyncdIndex{blob: index_mac},
+          value: %SyncdValue{blob: encrypted_content <> value_mac},
+          keyID: %KeyId{ID: key_id}
         }
       }
 
@@ -449,7 +454,7 @@ defmodule ExWapp.AppState.EngineTest do
       assert {:ok, [decoded]} = Engine.decode_mutations([mutation], key_store, true)
       assert decoded.index == ["mute", "test@s.whatsapp.net"]
       assert decoded.operation == 0
-      assert decoded.action.mute_action.muted == true
+      assert decoded.action.muteAction.muted == true
     end
 
     test "returns error for mismatching content MAC" do
@@ -458,12 +463,13 @@ defmodule ExWapp.AppState.EngineTest do
       keys = Crypto.expand_keys(key_data)
 
       content =
-        SyncAction.encode_sync_action_data(%SyncActionData{
+        SyncActionData.encode!(%SyncActionData{
           index: "[]",
           value: %SyncActionValue{},
           padding: <<>>,
           version: 1
         })
+        |> IO.iodata_to_binary()
 
       {iv, ciphertext} = Crypto.encrypt_cbc(content, keys.value_encryption)
       encrypted_content = iv <> ciphertext
@@ -473,11 +479,11 @@ defmodule ExWapp.AppState.EngineTest do
       index_mac = Crypto.compute_index_mac("[]", keys.index)
 
       mutation = %SyncdMutation{
-        operation: 0,
+        operation: :SET,
         record: %SyncdRecord{
-          index: index_mac,
-          value: encrypted_content <> bad_mac,
-          key_id: key_id
+          index: %SyncdIndex{blob: index_mac},
+          value: %SyncdValue{blob: encrypted_content <> bad_mac},
+          keyID: %KeyId{ID: key_id}
         }
       }
 
@@ -497,14 +503,15 @@ defmodule ExWapp.AppState.EngineTest do
       index_json = Jason.encode!(["contact", "test@s.whatsapp.net"])
 
       content =
-        SyncAction.encode_sync_action_data(%SyncActionData{
+        SyncActionData.encode!(%SyncActionData{
           index: index_json,
           value: %SyncActionValue{
-            contact_action: %ContactAction{full_name: "Test", first_name: "Test"}
+            contactAction: %ContactAction{fullName: "Test", firstName: "Test"}
           },
           padding: <<>>,
           version: 2
         })
+        |> IO.iodata_to_binary()
 
       {iv, ciphertext} = Crypto.encrypt_cbc(content, keys.value_encryption)
       encrypted_content = iv <> ciphertext
@@ -513,11 +520,11 @@ defmodule ExWapp.AppState.EngineTest do
       fake_mac = :crypto.strong_rand_bytes(32)
 
       mutation = %SyncdMutation{
-        operation: 0,
+        operation: :SET,
         record: %SyncdRecord{
-          index: :crypto.strong_rand_bytes(32),
-          value: encrypted_content <> fake_mac,
-          key_id: key_id
+          index: %SyncdIndex{blob: :crypto.strong_rand_bytes(32)},
+          value: %SyncdValue{blob: encrypted_content <> fake_mac},
+          keyID: %KeyId{ID: key_id}
         }
       }
 
@@ -527,7 +534,7 @@ defmodule ExWapp.AppState.EngineTest do
 
       assert {:ok, [decoded]} = Engine.decode_mutations([mutation], key_store, false)
       assert decoded.index == ["contact", "test@s.whatsapp.net"]
-      assert decoded.action.contact_action.full_name == "Test"
+      assert decoded.action.contactAction.fullName == "Test"
     end
   end
 
@@ -555,7 +562,7 @@ defmodule ExWapp.AppState.EngineTest do
 
     test "dispatches contact action", %{store: store} do
       action = %SyncActionValue{
-        contact_action: %ContactAction{full_name: "Bob Smith", first_name: "Bob"}
+        contactAction: %ContactAction{fullName: "Bob Smith", firstName: "Bob"}
       }
 
       assert :ok = Engine.dispatch_mutation(store, ["contact", "1234@s.whatsapp.net"], action)
@@ -586,7 +593,7 @@ defmodule ExWapp.AppState.EngineTest do
 
     test "dispatches archive action", %{store: store} do
       action = %SyncActionValue{
-        archive_chat_action: %ArchiveChatAction{archived: true}
+        archiveChatAction: %ArchiveChatAction{archived: true}
       }
 
       assert :ok = Engine.dispatch_mutation(store, ["archive", "1234@s.whatsapp.net"], action)
@@ -597,7 +604,7 @@ defmodule ExWapp.AppState.EngineTest do
 
     test "dispatches pin action", %{store: store} do
       action = %SyncActionValue{
-        pin_action: %PinAction{pinned: true}
+        pinAction: %PinAction{pinned: true}
       }
 
       assert :ok = Engine.dispatch_mutation(store, ["pin_v1", "1234@s.whatsapp.net"], action)
@@ -608,7 +615,7 @@ defmodule ExWapp.AppState.EngineTest do
 
     test "dispatches mute action", %{store: store} do
       action = %SyncActionValue{
-        mute_action: %MuteAction{muted: true, mute_end_timestamp: -1}
+        muteAction: %MuteAction{muted: true, muteEndTimestamp: -1}
       }
 
       assert :ok = Engine.dispatch_mutation(store, ["mute", "1234@s.whatsapp.net"], action)
@@ -622,7 +629,7 @@ defmodule ExWapp.AppState.EngineTest do
       ExWapp.Chat.get_or_create(store, "1234@s.whatsapp.net")
 
       action = %SyncActionValue{
-        delete_chat_action: %DeleteChatAction{}
+        deleteChatAction: %DeleteChatAction{}
       }
 
       Engine.dispatch_mutation(store, ["deleteChat", "1234@s.whatsapp.net"], action)
@@ -634,7 +641,7 @@ defmodule ExWapp.AppState.EngineTest do
       ExWapp.Chat.get_or_create(store, "1234@s.whatsapp.net")
 
       action = %SyncActionValue{
-        delete_chat_action: %DeleteChatAction{}
+        deleteChatAction: %DeleteChatAction{}
       }
 
       Engine.dispatch_mutation(store, ["deleteChat", "1234@s.whatsapp.net", "1"], action)

@@ -345,6 +345,24 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.Platform do
         def encode("BLUE_VR") do
           36
         end
+      ),
+      (
+        def encode(:AR_WRIST) do
+          37
+        end
+
+        def encode("AR_WRIST") do
+          37
+        end
+      ),
+      (
+        def encode(:WAIL) do
+          38
+        end
+
+        def encode("WAIL") do
+          38
+        end
       )
     ]
 
@@ -380,6 +398,9 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.Platform do
       end,
       def decode(7) do
         :PYTHON_CLIENT
+      end,
+      def decode(38) do
+        :WAIL
       end,
       def decode(31) do
         :VRDEVICE
@@ -431,6 +452,9 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.Platform do
       end,
       def decode(24) do
         :MACOS
+      end,
+      def decode(37) do
+        :AR_WRIST
       end,
       def decode(14) do
         :WEB
@@ -510,7 +534,9 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.Platform do
         {33, :IPAD},
         {34, :TEST},
         {35, :SMART_GLASSES},
-        {36, :BLUE_VR}
+        {36, :BLUE_VR},
+        {37, :AR_WRIST},
+        {38, :WAIL}
       ]
     end
 
@@ -626,6 +652,12 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.Platform do
           true
         end,
         def has_constant?(:BLUE_VR) do
+          true
+        end,
+        def has_constant?(:AR_WRIST) do
+          true
+        end,
+        def has_constant?(:WAIL) do
           true
         end
       ]

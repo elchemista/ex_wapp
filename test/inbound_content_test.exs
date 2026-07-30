@@ -4,14 +4,15 @@ defmodule ExWapp.Message.Handler.Inbound.ContentTest do
   alias ExWapp.Media.Upload
   alias ExWapp.Message.Handler.Inbound.Content
   alias ExWapp.Messages
-  alias ExWapp.Proto.Message
+  alias WAWebProtobufsE2E.Message
   alias ExWapp.Signal.SessionStore
 
   test "decodes decrypted text while preserving envelope fields" do
-    {:ok, plaintext} =
+    plaintext =
       "hello from inbound"
       |> Messages.build_text_proto()
-      |> Message.encode()
+      |> Message.encode!()
+      |> IO.iodata_to_binary()
 
     message_data = %{
       encrypted: true,
@@ -40,11 +41,41 @@ defmodule ExWapp.Message.Handler.Inbound.ContentTest do
     refute decoded.from_me
   end
 
+  test "marks own-device fanout wrapped in DeviceSentMessage as from_me" do
+    inner = Messages.build_text_proto("sent from my phone")
+
+    plaintext =
+      %Message{
+        deviceSentMessage: %WAWebProtobufsE2E.DeviceSentMessage{
+          destinationJID: "15550002222@s.whatsapp.net",
+          message: inner
+        }
+      }
+      |> Message.encode!()
+      |> IO.iodata_to_binary()
+
+    decoded =
+      Content.decode_decrypted(%{
+        message_data: %{encrypted: true, enc_type: "msg", id: "own-fanout-1"},
+        plaintext: plaintext,
+        updated_sessions: SessionStore.new(),
+        sender_jid: "15550001111@s.whatsapp.net",
+        payload: %{enc_type: "msg"},
+        sender_key_distribution_count: 0,
+        enc_type: "msg"
+      })
+
+    assert decoded.from_me
+    assert decoded.message_content_type == :user_message
+    assert decoded.text == "sent from my phone"
+  end
+
   test "keeps sender-key distribution plaintext as protocol content" do
-    {:ok, plaintext} =
+    plaintext =
       "distribution"
       |> Messages.build_text_proto()
-      |> Message.encode()
+      |> Message.encode!()
+      |> IO.iodata_to_binary()
 
     decoded =
       Content.decode_decrypted(%{
@@ -89,7 +120,7 @@ defmodule ExWapp.Message.Handler.Inbound.ContentTest do
     ]
 
     Enum.each(cases, fn {proto, expected_kind, expected_media_type} ->
-      {:ok, plaintext} = Message.encode(proto)
+      plaintext = IO.iodata_to_binary(Message.encode!(proto))
 
       decoded =
         Content.decode_decrypted(%{

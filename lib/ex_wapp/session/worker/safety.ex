@@ -7,6 +7,7 @@ defmodule ExWapp.Session.Worker.Safety do
   """
 
   alias ExWapp.Config
+  alias ExWapp.Session.Worker
 
   @window_ms 3_600_000
 
@@ -27,7 +28,7 @@ defmodule ExWapp.Session.Worker.Safety do
     }
   end
 
-  @spec check_send_allowed(map()) :: {:ok, map()} | {:error, term(), map()}
+  @spec check_send_allowed(Worker.t()) :: {:ok, Worker.t()} | {:error, term(), Worker.t()}
   def check_send_allowed(state) when is_map(state) do
     safety_cfg = Config.get(state.runtime_cfg, [:safety], %{})
 
@@ -55,7 +56,7 @@ defmodule ExWapp.Session.Worker.Safety do
 
   def check_send_allowed(state), do: {:ok, state}
 
-  @spec record_signal(map(), atom()) :: map()
+  @spec record_signal(Worker.t(), atom()) :: Worker.t()
   def record_signal(state, signal) when is_map(state) and is_atom(signal) do
     safety_cfg = Config.get(state.runtime_cfg, [:safety], %{})
 
@@ -84,7 +85,7 @@ defmodule ExWapp.Session.Worker.Safety do
 
   def record_signal(state, _signal), do: state
 
-  @spec status(map()) :: map()
+  @spec status(Worker.t()) :: map()
   def status(state) when is_map(state) do
     safety = Map.get(state, :safety) || new()
 

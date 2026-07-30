@@ -363,8 +363,8 @@ defmodule ExWapp.Chat do
   @doc "Update muted state from app state sync dispatch."
   @spec update_muted(target(), String.t(), map()) :: :ok
   def update_muted(target, jid, mute_action) when is_map(mute_action) do
-    muted = Map.get(mute_action, :muted, false)
-    mute_end = Map.get(mute_action, :mute_end_timestamp)
+    muted = Map.get(mute_action, :muted) || false
+    mute_end = Map.get(mute_action, :muteEndTimestamp)
 
     muted_until =
       cond do
@@ -379,8 +379,8 @@ defmodule ExWapp.Chat do
   @doc "Mark chat as read/unread from app state sync dispatch."
   @spec mark_read_from_sync(target(), String.t(), map()) :: :ok
   def mark_read_from_sync(target, jid, action_value) when is_map(action_value) do
-    mark_read_action = Map.get(action_value, :mark_chat_as_read_action)
-    read = is_map(mark_read_action) and Map.get(mark_read_action, :read, false)
+    mark_read_action = Map.get(action_value, :markChatAsReadAction)
+    read = is_map(mark_read_action) and (Map.get(mark_read_action, :read) || false)
 
     if read do
       mark_read(target, jid)

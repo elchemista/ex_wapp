@@ -1,9 +1,13 @@
 defmodule ExWapp.Message.Handler.Wire.Fields do
   @moduledoc """
-  Pure protobuf wire-field primitives used by inbound decoders.
+  Pure protobuf wire-field primitives, independent of the generated protos.
 
   This module knows wire types, varints, fixed-width numbers, and
   length-delimited fields. It has no knowledge of WhatsApp message kinds.
+
+  Production decoding now goes through the generated `WAWebProtobufs*` modules;
+  these primitives remain as the second, independent reader that the wire-format
+  tests use to pin the exact bytes we put on (and read off) the wire.
   """
 
   @type wire_field :: {non_neg_integer(), 0 | 1 | 2 | 5, term()}

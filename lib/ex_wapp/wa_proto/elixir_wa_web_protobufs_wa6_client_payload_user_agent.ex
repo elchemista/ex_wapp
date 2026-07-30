@@ -17,6 +17,7 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent do
             deviceExpID: nil,
             deviceType: nil,
             deviceModelType: nil,
+            distributionChannel: nil,
             __uf__: []
 
   (
@@ -49,6 +50,7 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent do
         |> encode_deviceExpID(msg)
         |> encode_deviceType(msg)
         |> encode_deviceModelType(msg)
+        |> encode_distributionChannel(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -263,6 +265,27 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent do
             reraise Protox.EncodingError.new(:deviceModelType, "invalid field value"),
                     __STACKTRACE__
         end
+      end,
+      defp encode_distributionChannel(acc, msg) do
+        try do
+          case msg.distributionChannel do
+            nil ->
+              acc
+
+            _ ->
+              [
+                acc,
+                "\x88\x01",
+                msg.distributionChannel
+                |> WAWebProtobufsWa6.ClientPayload.UserAgent.DistributionChannel.encode()
+                |> Protox.Encode.encode_enum()
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:distributionChannel, "invalid field value"),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -417,6 +440,15 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[deviceModelType: Protox.Decode.validate_string!(delimited)], rest}
 
+            {17, _, bytes} ->
+              {value, rest} =
+                Protox.Decode.parse_enum(
+                  bytes,
+                  WAWebProtobufsWa6.ClientPayload.UserAgent.DistributionChannel
+                )
+
+              {[distributionChannel: value], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -501,7 +533,10 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent do
         15 =>
           {:deviceType, {:scalar, :PHONE},
            {:enum, WAWebProtobufsWa6.ClientPayload.UserAgent.DeviceType}},
-        16 => {:deviceModelType, {:scalar, ""}, :string}
+        16 => {:deviceModelType, {:scalar, ""}, :string},
+        17 =>
+          {:distributionChannel, {:scalar, :APPSTORE},
+           {:enum, WAWebProtobufsWa6.ClientPayload.UserAgent.DistributionChannel}}
       }
     end
 
@@ -519,6 +554,9 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent do
         deviceModelType: {16, {:scalar, ""}, :string},
         deviceType:
           {15, {:scalar, :PHONE}, {:enum, WAWebProtobufsWa6.ClientPayload.UserAgent.DeviceType}},
+        distributionChannel:
+          {17, {:scalar, :APPSTORE},
+           {:enum, WAWebProtobufsWa6.ClientPayload.UserAgent.DistributionChannel}},
         localeCountryIso31661Alpha2: {12, {:scalar, ""}, :string},
         localeLanguageIso6391: {11, {:scalar, ""}, :string},
         manufacturer: {6, {:scalar, ""}, :string},
@@ -683,6 +721,15 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent do
           name: :deviceModelType,
           tag: 16,
           type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "distributionChannel",
+          kind: {:scalar, :APPSTORE},
+          label: :optional,
+          name: :distributionChannel,
+          tag: 17,
+          type: {:enum, WAWebProtobufsWa6.ClientPayload.UserAgent.DistributionChannel}
         }
       ]
     end
@@ -1153,6 +1200,35 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent do
 
         []
       ),
+      (
+        def field_def(:distributionChannel) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "distributionChannel",
+             kind: {:scalar, :APPSTORE},
+             label: :optional,
+             name: :distributionChannel,
+             tag: 17,
+             type: {:enum, WAWebProtobufsWa6.ClientPayload.UserAgent.DistributionChannel}
+           }}
+        end
+
+        def field_def("distributionChannel") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "distributionChannel",
+             kind: {:scalar, :APPSTORE},
+             label: :optional,
+             name: :distributionChannel,
+             tag: 17,
+             type: {:enum, WAWebProtobufsWa6.ClientPayload.UserAgent.DistributionChannel}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -1240,6 +1316,9 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent do
     def default(:deviceModelType) do
       {:ok, ""}
     end,
+    def default(:distributionChannel) do
+      {:ok, :APPSTORE}
+    end,
     def default(_) do
       {:error, :no_such_field}
     end
@@ -1286,4 +1365,6 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

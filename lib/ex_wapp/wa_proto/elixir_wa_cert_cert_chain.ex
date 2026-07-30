@@ -377,4 +377,6 @@ defmodule WACert.CertChain do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

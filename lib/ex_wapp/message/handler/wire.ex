@@ -2,14 +2,13 @@ defmodule ExWapp.Message.Handler.Wire do
   @moduledoc """
   Compatibility façade for inbound XML-envelope and protobuf wire helpers.
 
-  XML envelope extraction remains here. Generic protobuf primitives live in
-  `Wire.Fields`; supported WhatsApp content decoding lives in
-  `Wire.ContentDecoder`.
+  XML envelope extraction remains here; supported WhatsApp content decoding
+  lives in `Wire.ContentDecoder`, which works on the generated protos.
   """
 
   alias ExWapp.Binary.Node
   alias ExWapp.Message.Handler.Common
-  alias ExWapp.Message.Handler.Wire.{ContentDecoder, Fields}
+  alias ExWapp.Message.Handler.Wire.ContentDecoder
 
   @typep enc_candidate :: %{
            enc_type: binary(),
@@ -38,55 +37,6 @@ defmodule ExWapp.Message.Handler.Wire do
   def apply_media_from_plaintext(message_data, plaintext) do
     ContentDecoder.apply_media_from_plaintext(message_data, plaintext)
   end
-
-  @doc false
-  @spec classify_decrypted_content(binary(), non_neg_integer()) ::
-          {:protocol | :user_message, binary() | nil}
-  def classify_decrypted_content(payload, sender_key_distribution_count) do
-    ContentDecoder.classify_decrypted_content(payload, sender_key_distribution_count)
-  end
-
-  @doc false
-  @spec decode_wire_fields_safe(binary()) :: {:ok, [Fields.wire_field()]} | {:error, term()}
-  def decode_wire_fields_safe(binary), do: Fields.decode_safe(binary)
-
-  @doc false
-  @spec find_first_ld_field([Fields.wire_field()], non_neg_integer()) :: binary() | nil
-  def find_first_ld_field(fields, field_num), do: Fields.first_length_delimited(fields, field_num)
-
-  @doc false
-  @spec find_all_ld_fields([Fields.wire_field()], non_neg_integer()) :: [binary()]
-  def find_all_ld_fields(fields, field_num), do: Fields.all_length_delimited(fields, field_num)
-
-  @doc false
-  @spec find_first_varint_field([Fields.wire_field()], non_neg_integer()) :: integer() | nil
-  def find_first_varint_field(fields, field_num), do: Fields.first_varint(fields, field_num)
-
-  @doc false
-  @spec find_length_delimited_field(binary(), non_neg_integer()) ::
-          {:ok, binary()} | {:error, term()}
-  def find_length_delimited_field(binary, field_num),
-    do: Fields.find_length_delimited(binary, field_num)
-
-  @doc false
-  @spec field_bytes(binary(), non_neg_integer()) :: binary() | nil
-  def field_bytes(payload, field), do: Fields.bytes(payload, field)
-
-  @doc false
-  @spec field_varint(binary(), non_neg_integer()) :: integer() | nil
-  def field_varint(payload, field), do: Fields.varint(payload, field)
-
-  @doc false
-  @spec field_bool(binary(), non_neg_integer()) :: boolean() | nil
-  def field_bool(payload, field), do: Fields.bool(payload, field)
-
-  @doc false
-  @spec field_double(binary(), non_neg_integer()) :: float() | nil
-  def field_double(payload, field), do: Fields.double(payload, field)
-
-  @doc false
-  @spec field_float(binary(), non_neg_integer()) :: float() | nil
-  def field_float(payload, field), do: Fields.float(payload, field)
 
   @spec extract_list_message_content(term(), [enc_candidate()]) :: map()
   defp extract_list_message_content(

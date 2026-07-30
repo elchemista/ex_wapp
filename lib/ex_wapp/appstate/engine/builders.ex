@@ -7,7 +7,7 @@ defmodule ExWapp.AppState.Engine.Builders do
   maps into protobuf payloads and cryptographic MACs.
   """
 
-  alias ExWapp.Proto.SyncAction.{
+  alias WAWebProtobufSyncAction.{
     ArchiveChatAction,
     ClearChatAction,
     ContactAction,
@@ -29,7 +29,7 @@ defmodule ExWapp.AppState.Engine.Builders do
           timestamp: integer() | nil
         }
 
-  @type message_range :: %SyncActionMessageRange{}
+  @type message_range :: SyncActionMessageRange.t()
 
   @doc """
   Builds a contact upsert mutation.
@@ -45,10 +45,10 @@ defmodule ExWapp.AppState.Engine.Builders do
           index: ["contact", normalized_jid],
           version: 2,
           value: %SyncActionValue{
-            contact_action: %ContactAction{
-              full_name: full_name,
-              first_name: first_name || full_name,
-              save_on_primary: true
+            contactAction: %ContactAction{
+              fullName: full_name,
+              firstName: first_name || full_name,
+              saveOnPrimaryAddressbook: true
             }
           }
         }
@@ -90,9 +90,9 @@ defmodule ExWapp.AppState.Engine.Builders do
       index: ["archive", jid],
       version: 3,
       value: %SyncActionValue{
-        archive_chat_action: %ArchiveChatAction{
+        archiveChatAction: %ArchiveChatAction{
           archived: archived,
-          message_range: build_message_range(last_msg_ts)
+          messageRange: build_message_range(last_msg_ts)
         }
       }
     }
@@ -103,7 +103,7 @@ defmodule ExWapp.AppState.Engine.Builders do
           index: ["pin_v1", jid],
           version: 5,
           value: %SyncActionValue{
-            pin_action: %PinAction{pinned: false}
+            pinAction: %PinAction{pinned: false}
           }
         }
 
@@ -127,7 +127,7 @@ defmodule ExWapp.AppState.Engine.Builders do
           index: ["pin_v1", jid],
           version: 5,
           value: %SyncActionValue{
-            pin_action: %PinAction{pinned: pinned}
+            pinAction: %PinAction{pinned: pinned}
           }
         }
       ],
@@ -154,9 +154,9 @@ defmodule ExWapp.AppState.Engine.Builders do
           index: ["mute", jid],
           version: 2,
           value: %SyncActionValue{
-            mute_action: %MuteAction{
+            muteAction: %MuteAction{
               muted: muted,
-              mute_end_timestamp: mute_end
+              muteEndTimestamp: mute_end
             }
           }
         }
@@ -177,8 +177,8 @@ defmodule ExWapp.AppState.Engine.Builders do
           index: ["deleteChat", jid, "0"],
           version: 6,
           value: %SyncActionValue{
-            delete_chat_action: %DeleteChatAction{
-              message_range: build_message_range(last_msg_ts)
+            deleteChatAction: %DeleteChatAction{
+              messageRange: build_message_range(last_msg_ts)
             }
           }
         }
@@ -199,9 +199,9 @@ defmodule ExWapp.AppState.Engine.Builders do
           index: ["markChatAsRead", jid],
           version: 3,
           value: %SyncActionValue{
-            mark_chat_as_read_action: %MarkChatAsReadAction{
+            markChatAsReadAction: %MarkChatAsReadAction{
               read: read,
-              message_range: build_message_range(last_msg_ts)
+              messageRange: build_message_range(last_msg_ts)
             }
           }
         }
@@ -224,8 +224,8 @@ defmodule ExWapp.AppState.Engine.Builders do
           index: ["clearChat", jid, "1", "0"],
           version: 6,
           value: %SyncActionValue{
-            clear_chat_action: %ClearChatAction{
-              message_range: build_message_range(last_msg_ts)
+            clearChatAction: %ClearChatAction{
+              messageRange: build_message_range(last_msg_ts)
             }
           }
         }
@@ -236,11 +236,11 @@ defmodule ExWapp.AppState.Engine.Builders do
 
   @spec build_message_range(integer() | nil) :: message_range()
   defp build_message_range(nil) do
-    %SyncActionMessageRange{last_message_timestamp: System.system_time(:second)}
+    %SyncActionMessageRange{lastMessageTimestamp: System.system_time(:second)}
   end
 
   defp build_message_range(timestamp) when is_integer(timestamp) do
-    %SyncActionMessageRange{last_message_timestamp: timestamp}
+    %SyncActionMessageRange{lastMessageTimestamp: timestamp}
   end
 
   @spec normalize_contact_jid(term()) :: String.t()

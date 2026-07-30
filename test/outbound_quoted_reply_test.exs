@@ -2,8 +2,8 @@ defmodule ExWapp.OutboundQuotedReplyTest do
   use ExUnit.Case, async: true
 
   alias ExWapp.Message
-  alias ExWapp.Proto.{ContextInfo, ExtendedTextMessage}
-  alias ExWapp.Proto.Message, as: ProtoMessage
+  alias WAWebProtobufsE2E.{ContextInfo, ExtendedTextMessage}
+  alias WAWebProtobufsE2E.Message, as: ProtoMessage
   alias ExWapp.Session
   alias ExWapp.Session.Worker.Outbound
 

@@ -11,8 +11,8 @@ defmodule ExWapp.Session.Outbound.Direct do
   require Logger
 
   alias ExWapp.{Binary, Config, Log, Messages}
-  alias ExWapp.Proto.Message
   alias ExWapp.Signal.{Encryption, SessionStore}
+  alias WAWebProtobufsE2E.{DeviceSentMessage, Message}
 
   alias ExWapp.Session.{
     Account,
@@ -158,7 +158,8 @@ defmodule ExWapp.Session.Outbound.Direct do
   def build_payloads(%Message{} = proto, jid, opts)
       when is_binary(jid) and is_list(opts) do
     case Message.encode(proto) do
-      {:ok, payload} ->
+      {:ok, iodata} ->
+        payload = IO.iodata_to_binary(iodata)
         recipient_payload = Encryption.pad_message(payload)
         own_device_destination = Keyword.get(opts, :own_device_destination_jid, jid)
 
@@ -428,14 +429,16 @@ defmodule ExWapp.Session.Outbound.Direct do
           {:ok, binary()} | {:error, term()}
   defp build_own_devices_payload(proto_message, destination_jid, phash) do
     wrapped = %Message{
-      deviceSentMessage: %ExWapp.Proto.DeviceSentMessage{
-        destinationJid: strip_device(destination_jid),
+      deviceSentMessage: %DeviceSentMessage{
+        destinationJID: strip_device(destination_jid),
         message: proto_message,
         phash: phash
       }
     }
 
-    Message.encode(wrapped)
+    with {:ok, iodata} <- Message.encode(wrapped) do
+      {:ok, IO.iodata_to_binary(iodata)}
+    end
   end
 
   @spec log_resolution(map(), String.t(), term()) :: :ok

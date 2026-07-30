@@ -66,6 +66,24 @@ defmodule WAWebProtobufsWa6.ClientPayload.DNSSource.DNSResolutionMethod do
         def encode("MNS") do
           5
         end
+      ),
+      (
+        def encode(:MNS_SECONDARY) do
+          6
+        end
+
+        def encode("MNS_SECONDARY") do
+          6
+        end
+      ),
+      (
+        def encode(:SOCKS_PROXY) do
+          7
+        end
+
+        def encode("SOCKS_PROXY") do
+          7
+        end
       )
     ]
 
@@ -92,6 +110,12 @@ defmodule WAWebProtobufsWa6.ClientPayload.DNSSource.DNSResolutionMethod do
       end,
       def decode(5) do
         :MNS
+      end,
+      def decode(6) do
+        :MNS_SECONDARY
+      end,
+      def decode(7) do
+        :SOCKS_PROXY
       end
     ]
 
@@ -101,7 +125,16 @@ defmodule WAWebProtobufsWa6.ClientPayload.DNSSource.DNSResolutionMethod do
 
     @spec constants() :: [{integer(), atom()}]
     def constants() do
-      [{0, :SYSTEM}, {1, :GOOGLE}, {2, :HARDCODED}, {3, :OVERRIDE}, {4, :FALLBACK}, {5, :MNS}]
+      [
+        {0, :SYSTEM},
+        {1, :GOOGLE},
+        {2, :HARDCODED},
+        {3, :OVERRIDE},
+        {4, :FALLBACK},
+        {5, :MNS},
+        {6, :MNS_SECONDARY},
+        {7, :SOCKS_PROXY}
+      ]
     end
 
     @spec has_constant?(any()) :: boolean()
@@ -123,6 +156,12 @@ defmodule WAWebProtobufsWa6.ClientPayload.DNSSource.DNSResolutionMethod do
           true
         end,
         def has_constant?(:MNS) do
+          true
+        end,
+        def has_constant?(:MNS_SECONDARY) do
+          true
+        end,
+        def has_constant?(:SOCKS_PROXY) do
           true
         end
       ]

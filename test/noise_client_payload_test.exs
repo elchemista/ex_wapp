@@ -5,12 +5,18 @@ defmodule ExWapp.Noise.ClientPayloadTest do
   alias ExWapp.Config
   alias ExWapp.Noise
   alias ExWapp.Noise.ClientPayload, as: NoiseClientPayload
-  alias ExWapp.Proto.CompanionReg.DeviceProps
+  alias WACompanionReg.DeviceProps
   alias ExWapp.Store
   alias WAWebProtobufsWa6.ClientPayload, as: ClientPayloadProto
   alias WAWebProtobufsWa6.ClientPayload.DevicePairingRegistrationData
 
-  @version_hash :crypto.hash(:md5, "2.3000.1041871181")
+  # Derived from the configured default so this test tracks version bumps
+  # instead of failing on them; what it protects is hash = md5 of the exact
+  # dotted version string the payload reports.
+  @version_hash (
+                  v = ExWapp.Config.default_client_version()
+                  :crypto.hash(:md5, "#{v.primary}.#{v.secondary}.#{v.tertiary}")
+                )
   @firefox_device_props <<
     0x0A,
     0x05,
@@ -79,20 +85,23 @@ defmodule ExWapp.Noise.ClientPayloadTest do
 
       assert %DeviceProps{} = device_props = DeviceProps.decode!(pairing.deviceProps)
       assert device_props.os == configured.os
-      assert device_props.platform_type == configured.platform_type
-      assert device_props.require_full_sync == configured.require_full_sync
+
+      assert device_props.platformType ==
+               DeviceProps.PlatformType.decode(configured.platform_type)
+
+      assert device_props.requireFullSync == configured.require_full_sync
 
       # `platform_type: 0` is the UNKNOWN enum, which makes WhatsApp render `os`
       # verbatim as the device label in the user's linked-devices list. Shipping
       # that by default put a library name on every paired device.
-      refute device_props.platform_type == 0
+      refute device_props.platformType == :UNKNOWN
       assert device_props.version.primary == 0
       assert device_props.version.secondary == 1
       assert device_props.version.tertiary == 0
-      assert device_props.history_sync_config.storage_quota_mb == 10_240
-      assert device_props.history_sync_config.inline_initial_payload_in_e2ee_msg == true
-      assert device_props.history_sync_config.support_message_association == true
-      assert device_props.history_sync_config.support_group_history == false
+      assert device_props.historySyncConfig.storageQuotaMb == 10_240
+      assert device_props.historySyncConfig.inlineInitialPayloadInE2EeMsg == true
+      assert device_props.historySyncConfig.supportMessageAssociation == true
+      assert device_props.historySyncConfig.supportGroupHistory == false
 
       assert %{registration_id: reg_id} = data[:signal]
       assert reg_id in 1..65_535
@@ -157,7 +166,7 @@ defmodule ExWapp.Noise.ClientPayloadTest do
       assert %DeviceProps{} =
                device_props = DeviceProps.decode!(decoded.devicePairingData.deviceProps)
 
-      assert device_props.platform_type == 16
+      assert device_props.platformType == :ANDROID_PHONE
     end
 
     test "builds a native Android login payload without WebInfo" do
@@ -196,7 +205,7 @@ defmodule ExWapp.Noise.ClientPayloadTest do
                device_props = DeviceProps.decode!(decoded.devicePairingData.deviceProps)
 
       assert device_props.os == "Linux"
-      assert device_props.platform_type == 2
+      assert device_props.platformType == :FIREFOX
     end
 
     test "supports structured pairing device props overrides" do
@@ -228,12 +237,12 @@ defmodule ExWapp.Noise.ClientPayloadTest do
                device_props = DeviceProps.decode!(decoded.devicePairingData.deviceProps)
 
       assert device_props.os == "Mac OS"
-      assert device_props.platform_type == 1
+      assert device_props.platformType == :CHROME
       assert device_props.version.primary == 10
       assert device_props.version.secondary == 15
       assert device_props.version.tertiary == 7
-      assert device_props.history_sync_config.storage_quota_mb == 2048
-      assert device_props.history_sync_config.support_group_history == true
+      assert device_props.historySyncConfig.storageQuotaMb == 2048
+      assert device_props.historySyncConfig.supportGroupHistory == true
     end
 
     test "normalizes client_info for login payloads" do

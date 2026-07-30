@@ -542,4 +542,6 @@ defmodule WACert.CertChain.NoiseCertificate.Details do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

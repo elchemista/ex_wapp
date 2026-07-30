@@ -10,8 +10,9 @@ defmodule ExWapp.Session.Worker.Outbound do
   require Logger
 
   alias ExWapp.{Binary, Chat, Config, JID, Log, Messages, Store, Telemetry}
-  alias ExWapp.Proto.Message
+  alias ExWapp.Session.Worker
   alias ExWapp.Signal.SessionStore
+  alias WAWebProtobufsE2E.Message
 
   alias ExWapp.Session.{
     Account,
@@ -30,7 +31,7 @@ defmodule ExWapp.Session.Worker.Outbound do
     Prekeys
   }
 
-  @typep worker_state :: map()
+  @typep worker_state :: Worker.t()
   @typep outbound_text :: iodata() | nil
   @doc "Sends text or an optional prebuilt protobuf payload through the session pipeline."
   @spec send_text_worker(pid(), map(), String.t(), outbound_text(), keyword()) ::
@@ -103,7 +104,7 @@ defmodule ExWapp.Session.Worker.Outbound do
   defp with_send_batch(_state, _reason, fun), do: fun.()
 
   @doc "Sends a constructed WhatsApp protobuf message through the normal outbound pipeline."
-  @spec send_proto_worker(pid(), map(), String.t(), ExWapp.Proto.Message.t(), keyword()) ::
+  @spec send_proto_worker(pid(), map(), String.t(), WAWebProtobufsE2E.Message.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def send_proto_worker(session_pid, state, jid, %Message{} = proto, opts \\ []) do
     chat_text = Keyword.get(opts, :chat_text)
@@ -111,7 +112,7 @@ defmodule ExWapp.Session.Worker.Outbound do
   end
 
   @doc "Sends an internal protocol message directly to the account's primary device."
-  @spec send_peer_proto_worker(pid(), map(), ExWapp.Proto.Message.t()) ::
+  @spec send_peer_proto_worker(pid(), map(), WAWebProtobufsE2E.Message.t()) ::
           {:ok, String.t()} | {:error, term()}
   def send_peer_proto_worker(_session_pid, %{status: status}, _proto)
       when status not in [:connected, :syncing] do
@@ -328,7 +329,8 @@ defmodule ExWapp.Session.Worker.Outbound do
              group_info.addressing_mode
            ),
          proto <- outbound_proto(text, opts),
-         {:ok, payload} <- Message.encode(proto),
+         {:ok, iodata} <- Message.encode(proto),
+         payload = IO.iodata_to_binary(iodata),
          {:ok, distribution_payload, skmsg_payload} <-
            Group.build_sender_key_payloads(store, group_jid, payload),
          distribution_target_specs <-

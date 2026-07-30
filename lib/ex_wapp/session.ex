@@ -6,6 +6,7 @@ defmodule ExWapp.Session do
   """
 
   alias ExWapp.Message
+  alias ExWapp.Session.AppStateCommands
   alias ExWapp.Session.Options
   alias ExWapp.Session.Worker
 
@@ -213,19 +214,19 @@ defmodule ExWapp.Session do
   defdelegate send_app_state(server, patch_info), to: Worker
 
   @spec archive_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
-  defdelegate archive_chat(server, jid), to: Worker
+  defdelegate archive_chat(server, jid), to: AppStateCommands
 
   @spec unarchive_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
-  defdelegate unarchive_chat(server, jid), to: Worker
+  defdelegate unarchive_chat(server, jid), to: AppStateCommands
 
   @spec delete_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
-  defdelegate delete_chat(server, jid), to: Worker
+  defdelegate delete_chat(server, jid), to: AppStateCommands
 
   @spec create_contact(GenServer.server(), String.t(), String.t()) :: :ok | {:error, term()}
-  defdelegate create_contact(server, jid, name), to: Worker
+  defdelegate create_contact(server, jid, name), to: AppStateCommands
 
   @spec delete_contact(GenServer.server(), String.t()) :: :ok | {:error, term()}
-  defdelegate delete_contact(server, jid), to: Worker
+  defdelegate delete_contact(server, jid), to: AppStateCommands
 
   @doc """
   Refreshes contact-related app-state data from the server.

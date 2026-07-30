@@ -33,6 +33,10 @@ defmodule WAWebProtobufsWa6.ClientPayload do
             accountType: nil,
             connectionSequenceInfo: nil,
             paaLink: nil,
+            preacksCount: nil,
+            processingQueueSize: nil,
+            pairedPeripherals: [],
+            testIsolationID: nil,
             __uf__: []
 
   (
@@ -81,6 +85,10 @@ defmodule WAWebProtobufsWa6.ClientPayload do
         |> encode_accountType(msg)
         |> encode_connectionSequenceInfo(msg)
         |> encode_paaLink(msg)
+        |> encode_preacksCount(msg)
+        |> encode_processingQueueSize(msg)
+        |> encode_pairedPeripherals(msg)
+        |> encode_testIsolationID(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -508,6 +516,61 @@ defmodule WAWebProtobufsWa6.ClientPayload do
           ArgumentError ->
             reraise Protox.EncodingError.new(:paaLink, "invalid field value"), __STACKTRACE__
         end
+      end,
+      defp encode_preacksCount(acc, msg) do
+        try do
+          case msg.preacksCount do
+            nil -> acc
+            _ -> [acc, "\xE8\x02", Protox.Encode.encode_int32(msg.preacksCount)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:preacksCount, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_processingQueueSize(acc, msg) do
+        try do
+          case msg.processingQueueSize do
+            nil -> acc
+            _ -> [acc, "\xF0\x02", Protox.Encode.encode_int32(msg.processingQueueSize)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:processingQueueSize, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_pairedPeripherals(acc, msg) do
+        try do
+          case msg.pairedPeripherals do
+            [] ->
+              acc
+
+            values ->
+              [
+                acc,
+                Enum.reduce(values, [], fn value, acc ->
+                  [acc, "\xFA\x02", Protox.Encode.encode_string(value)]
+                end)
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:pairedPeripherals, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_testIsolationID(acc, msg) do
+        try do
+          case msg.testIsolationID do
+            nil -> acc
+            _ -> [acc, "\x82\x03", Protox.Encode.encode_bytes(msg.testIsolationID)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:testIsolationID, "invalid field value"),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -758,6 +821,28 @@ defmodule WAWebProtobufsWa6.ClientPayload do
               {value, rest} = Protox.Decode.parse_bool(bytes)
               {[paaLink: value], rest}
 
+            {45, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_int32(bytes)
+              {[preacksCount: value], rest}
+
+            {46, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_int32(bytes)
+              {[processingQueueSize: value], rest}
+
+            {47, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 pairedPeripherals:
+                   msg.pairedPeripherals ++ [Protox.Decode.validate_string!(delimited)]
+               ], rest}
+
+            {48, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[testIsolationID: delimited], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -863,7 +948,11 @@ defmodule WAWebProtobufsWa6.ClientPayload do
           {:accountType, {:scalar, :DEFAULT},
            {:enum, WAWebProtobufsWa6.ClientPayload.AccountType}},
         43 => {:connectionSequenceInfo, {:scalar, 0}, :sfixed32},
-        44 => {:paaLink, {:scalar, false}, :bool}
+        44 => {:paaLink, {:scalar, false}, :bool},
+        45 => {:preacksCount, {:scalar, 0}, :int32},
+        46 => {:processingQueueSize, {:scalar, 0}, :int32},
+        47 => {:pairedPeripherals, :unpacked, :string},
+        48 => {:testIsolationID, {:scalar, ""}, :bytes}
       }
     end
 
@@ -901,13 +990,17 @@ defmodule WAWebProtobufsWa6.ClientPayload do
         oc: {23, {:scalar, false}, :bool},
         paaLink: {44, {:scalar, false}, :bool},
         paddingBytes: {34, {:scalar, ""}, :bytes},
+        pairedPeripherals: {47, :unpacked, :string},
         passive: {3, {:scalar, false}, :bool},
+        preacksCount: {45, {:scalar, 0}, :int32},
+        processingQueueSize: {46, {:scalar, 0}, :int32},
         product: {20, {:scalar, :WHATSAPP}, {:enum, WAWebProtobufsWa6.ClientPayload.Product}},
         pull: {33, {:scalar, false}, :bool},
         pushName: {7, {:scalar, ""}, :string},
         sessionID: {9, {:scalar, 0}, :sfixed32},
         shards: {14, :unpacked, :int32},
         shortConnect: {10, {:scalar, false}, :bool},
+        testIsolationID: {48, {:scalar, ""}, :bytes},
         trafficAnonymization:
           {40, {:scalar, :OFF}, {:enum, WAWebProtobufsWa6.ClientPayload.TrafficAnonymization}},
         userAgent: {5, {:scalar, nil}, {:message, WAWebProtobufsWa6.ClientPayload.UserAgent}},
@@ -1209,6 +1302,42 @@ defmodule WAWebProtobufsWa6.ClientPayload do
           name: :paaLink,
           tag: 44,
           type: :bool
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "preacksCount",
+          kind: {:scalar, 0},
+          label: :optional,
+          name: :preacksCount,
+          tag: 45,
+          type: :int32
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "processingQueueSize",
+          kind: {:scalar, 0},
+          label: :optional,
+          name: :processingQueueSize,
+          tag: 46,
+          type: :int32
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "pairedPeripherals",
+          kind: :unpacked,
+          label: :repeated,
+          name: :pairedPeripherals,
+          tag: 47,
+          type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "testIsolationID",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :testIsolationID,
+          tag: 48,
+          type: :bytes
         }
       ]
     end
@@ -2143,6 +2272,122 @@ defmodule WAWebProtobufsWa6.ClientPayload do
 
         []
       ),
+      (
+        def field_def(:preacksCount) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "preacksCount",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :preacksCount,
+             tag: 45,
+             type: :int32
+           }}
+        end
+
+        def field_def("preacksCount") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "preacksCount",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :preacksCount,
+             tag: 45,
+             type: :int32
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:processingQueueSize) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "processingQueueSize",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :processingQueueSize,
+             tag: 46,
+             type: :int32
+           }}
+        end
+
+        def field_def("processingQueueSize") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "processingQueueSize",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :processingQueueSize,
+             tag: 46,
+             type: :int32
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:pairedPeripherals) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "pairedPeripherals",
+             kind: :unpacked,
+             label: :repeated,
+             name: :pairedPeripherals,
+             tag: 47,
+             type: :string
+           }}
+        end
+
+        def field_def("pairedPeripherals") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "pairedPeripherals",
+             kind: :unpacked,
+             label: :repeated,
+             name: :pairedPeripherals,
+             tag: 47,
+             type: :string
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:testIsolationID) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "testIsolationID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :testIsolationID,
+             tag: 48,
+             type: :bytes
+           }}
+        end
+
+        def field_def("testIsolationID") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "testIsolationID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :testIsolationID,
+             tag: 48,
+             type: :bytes
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -2278,6 +2523,18 @@ defmodule WAWebProtobufsWa6.ClientPayload do
     def default(:paaLink) do
       {:ok, false}
     end,
+    def default(:preacksCount) do
+      {:ok, 0}
+    end,
+    def default(:processingQueueSize) do
+      {:ok, 0}
+    end,
+    def default(:pairedPeripherals) do
+      {:error, :no_default_value}
+    end,
+    def default(:testIsolationID) do
+      {:ok, ""}
+    end,
     def default(_) do
       {:error, :no_such_field}
     end
@@ -2324,4 +2581,6 @@ defmodule WAWebProtobufsWa6.ClientPayload do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

@@ -9,10 +9,10 @@ defmodule ExWapp.Noise.ClientPayload do
   require Logger
 
   alias ExWapp.{Config, Log, MapPath, Noise}
-  alias ExWapp.Proto.CompanionReg.AppVersion, as: CompanionAppVersion
-  alias ExWapp.Proto.CompanionReg.DeviceProps, as: CompanionDeviceProps
-  alias ExWapp.Proto.CompanionReg.HistorySyncConfig
   alias ExWapp.Signal
+  alias WACompanionReg.DeviceProps, as: CompanionDeviceProps
+  alias WACompanionReg.DeviceProps.AppVersion, as: CompanionAppVersion
+  alias WACompanionReg.DeviceProps.HistorySyncConfig
   alias ExWapp.Store
   alias WAWebProtobufsWa6.ClientPayload
   alias WAWebProtobufsWa6.ClientPayload.DevicePairingRegistrationData
@@ -310,9 +310,9 @@ defmodule ExWapp.Noise.ClientPayload do
     %CompanionDeviceProps{
       os: Map.get(device_props, :os, "whatsmeow"),
       version: build_device_props_version(device_props),
-      platform_type: pairing_platform_type(device_props, runtime_cfg),
-      require_full_sync: Map.get(device_props, :require_full_sync, false),
-      history_sync_config: build_history_sync_config(device_props)
+      platformType: pairing_platform_type(device_props, runtime_cfg),
+      requireFullSync: Map.get(device_props, :require_full_sync, false),
+      historySyncConfig: build_history_sync_config(device_props)
     }
     |> CompanionDeviceProps.encode!()
     |> IO.iodata_to_binary()
@@ -346,20 +346,18 @@ defmodule ExWapp.Noise.ClientPayload do
     config = Map.get(device_props, :history_sync_config, %{})
 
     %HistorySyncConfig{
-      storage_quota_mb: Map.get(config, :storage_quota_mb, 10_240),
-      inline_initial_payload_in_e2ee_msg:
-        Map.get(config, :inline_initial_payload_in_e2ee_msg, true),
-      support_call_log_history: Map.get(config, :support_call_log_history, false),
-      support_bot_user_agent_chat_history:
-        Map.get(config, :support_bot_user_agent_chat_history, true),
-      support_cag_reactions_and_polls: Map.get(config, :support_cag_reactions_and_polls, true),
-      support_biz_hosted_msg: Map.get(config, :support_biz_hosted_msg, true),
-      support_recent_sync_chunk_message_count_tuning:
+      storageQuotaMb: Map.get(config, :storage_quota_mb, 10_240),
+      inlineInitialPayloadInE2EeMsg: Map.get(config, :inline_initial_payload_in_e2ee_msg, true),
+      supportCallLogHistory: Map.get(config, :support_call_log_history, false),
+      supportBotUserAgentChatHistory: Map.get(config, :support_bot_user_agent_chat_history, true),
+      supportCagReactionsAndPolls: Map.get(config, :support_cag_reactions_and_polls, true),
+      supportBizHostedMsg: Map.get(config, :support_biz_hosted_msg, true),
+      supportRecentSyncChunkMessageCountTuning:
         Map.get(config, :support_recent_sync_chunk_message_count_tuning, true),
-      support_hosted_group_msg: Map.get(config, :support_hosted_group_msg, true),
-      support_fbid_bot_chat_history: Map.get(config, :support_fbid_bot_chat_history, true),
-      support_message_association: Map.get(config, :support_message_association, true),
-      support_group_history: Map.get(config, :support_group_history, false)
+      supportHostedGroupMsg: Map.get(config, :support_hosted_group_msg, true),
+      supportFbidBotChatHistory: Map.get(config, :support_fbid_bot_chat_history, true),
+      supportMessageAssociation: Map.get(config, :support_message_association, true),
+      supportGroupHistory: Map.get(config, :support_group_history, false)
     }
   end
 end

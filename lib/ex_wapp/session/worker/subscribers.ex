@@ -6,8 +6,9 @@ defmodule ExWapp.Session.Worker.Subscribers do
   require Logger
 
   alias ExWapp.Log
+  alias ExWapp.Session.Worker
 
-  @spec notify_qr(map(), term(), (-> any())) :: :ok
+  @spec notify_qr(Worker.t(), term(), (-> any())) :: :ok
   def notify_qr(state, event, emit_telemetry_fun) when is_function(emit_telemetry_fun, 0) do
     emit_telemetry_fun.()
 
@@ -16,7 +17,7 @@ defmodule ExWapp.Session.Worker.Subscribers do
     end)
   end
 
-  @spec remove_qr_subscriber(map(), reference()) :: map()
+  @spec remove_qr_subscriber(Worker.t(), reference()) :: Worker.t()
   def remove_qr_subscriber(state, ref) do
     case Map.pop(state.qr_subscribers, ref) do
       {nil, _} ->
@@ -29,7 +30,7 @@ defmodule ExWapp.Session.Worker.Subscribers do
     end
   end
 
-  @spec cleanup_dead_subscriber(map(), reference()) :: map()
+  @spec cleanup_dead_subscriber(Worker.t(), reference()) :: Worker.t()
   def cleanup_dead_subscriber(state, dead_mon) do
     new_qr =
       state.qr_subscribers
@@ -44,7 +45,7 @@ defmodule ExWapp.Session.Worker.Subscribers do
     %{state | qr_subscribers: new_qr, message_subscribers: new_msg}
   end
 
-  @spec notify_message_subscribers(map(), String.t(), map()) :: :ok
+  @spec notify_message_subscribers(Worker.t(), String.t(), map()) :: :ok
   def notify_message_subscribers(state, jid, message) do
     Logger.info(
       "[ExWapp.Subscribers] notify_message_subscribers jid=#{Log.reference(jid)} session=#{Log.reference(Map.get(state, :session_id))} direct_subscribers=#{map_size(Map.get(state, :message_subscribers, %{}))} message_id=#{Log.reference(Map.get(message, :id) || Map.get(message, "id"))}"
@@ -192,7 +193,7 @@ defmodule ExWapp.Session.Worker.Subscribers do
     _ -> :ok
   end
 
-  @spec remove_message_subscriber(map(), reference()) :: map()
+  @spec remove_message_subscriber(Worker.t(), reference()) :: Worker.t()
   def remove_message_subscriber(state, ref) do
     case Map.pop(state.message_subscribers, ref) do
       {nil, _} ->

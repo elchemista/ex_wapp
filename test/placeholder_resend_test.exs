@@ -6,7 +6,7 @@ defmodule ExWapp.PlaceholderResendTest do
   alias ExWapp.Message.Handler.Inbound.Receipts
   alias ExWapp.MessageHandler
   alias ExWapp.Messages
-  alias ExWapp.Proto.Message
+  alias WAWebProtobufsE2E.Message
   alias ExWapp.Signal.{Keys, SessionStore}
   alias ExWapp.Store.Memory
 
@@ -18,7 +18,7 @@ defmodule ExWapp.PlaceholderResendTest do
         "MSG_PLACEHOLDER_1"
       )
 
-    payload = Message.encode!(proto)
+    payload = IO.iodata_to_binary(Message.encode!(proto))
 
     assert {:ok, [{12, 2, protocol_message}]} = decode_fields(payload)
     assert {:ok, protocol_fields} = decode_fields(protocol_message)
@@ -49,7 +49,7 @@ defmodule ExWapp.PlaceholderResendTest do
         from_me: true
       )
 
-    payload = Message.encode!(proto)
+    payload = IO.iodata_to_binary(Message.encode!(proto))
 
     assert {:ok, [{12, 2, protocol_message}]} = decode_fields(payload)
     assert {:ok, protocol_fields} = decode_fields(protocol_message)

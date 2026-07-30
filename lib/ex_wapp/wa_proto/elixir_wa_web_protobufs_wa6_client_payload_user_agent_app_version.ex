@@ -541,4 +541,6 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.AppVersion do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

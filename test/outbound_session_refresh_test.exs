@@ -120,7 +120,7 @@ defmodule ExWapp.OutboundSessionRefreshTest do
     state = outbound_state(store, conn, signal_sessions)
 
     for mediatype <- ~w(image ptt document vcard) do
-      proto = %ExWapp.Proto.Message{conversation: "#{mediatype} payload"}
+      proto = %WAWebProtobufsE2E.Message{conversation: "#{mediatype} payload"}
 
       assert {:ok, _message_id} =
                Outbound.send_proto_worker(session_pid, state, recipient_jid, proto,
@@ -159,7 +159,7 @@ defmodule ExWapp.OutboundSessionRefreshTest do
       })
 
     state = outbound_state(store, conn, signal_sessions)
-    proto = %ExWapp.Proto.Message{conversation: "event payload"}
+    proto = %WAWebProtobufsE2E.Message{conversation: "event payload"}
     meta = %Binary.Node{tag: "meta", attrs: %{"event_type" => "creation"}, content: nil}
 
     assert {:ok, _message_id} =

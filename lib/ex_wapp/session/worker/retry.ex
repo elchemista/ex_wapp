@@ -6,6 +6,7 @@ defmodule ExWapp.Session.Worker.Retry do
   require Logger
 
   alias ExWapp.{Chat, Log}
+  alias ExWapp.Session.Worker
 
   @type start_worker_fun :: (map(), binary(), (-> any()) ->
                                {:ok, pid(), reference()} | {:error, term()})
@@ -22,7 +23,7 @@ defmodule ExWapp.Session.Worker.Retry do
            retry_meta: map()
          }
 
-  @spec maybe_retry_outgoing_message(map(), String.t(), String.t(), keyword()) :: map()
+  @spec maybe_retry_outgoing_message(Worker.t(), String.t(), String.t(), keyword()) :: Worker.t()
   def maybe_retry_outgoing_message(state, jid, message_id, opts) when is_map(state) do
     normalize_jid = Keyword.fetch!(opts, :normalize_jid)
     normalized_jid = normalize_jid.(jid)
@@ -40,7 +41,7 @@ defmodule ExWapp.Session.Worker.Retry do
     do_retry(state, normalized_jid, message_id, context)
   end
 
-  @spec do_retry(map(), String.t(), String.t(), retry_context()) :: map()
+  @spec do_retry(Worker.t(), String.t(), String.t(), retry_context()) :: Worker.t()
   defp do_retry(state, jid, message_id, context) do
     case find_outgoing_message(state.store, jid, message_id, context.outgoing_payloads) do
       {:ok, retry_jid, text} ->

@@ -43,9 +43,10 @@ defmodule ExWapp.WhatsmeowParityTest do
 
     sender_jid = "15550001111@s.whatsapp.net"
 
-    {:ok, first_payload} =
+    first_payload =
       ExWapp.Messages.build_text_proto("hello from parity test", [])
-      |> ExWapp.Proto.Message.encode()
+      |> WAWebProtobufsE2E.Message.encode!()
+      |> IO.iodata_to_binary()
 
     {:ok, first_ciphertext, :prekey, alice_sessions} =
       SessionStore.encrypt_message(
@@ -87,9 +88,10 @@ defmodule ExWapp.WhatsmeowParityTest do
     assert first_message.text == "hello from parity test"
     assert SessionStore.has_session?(state_after_first.signal_sessions, sender_jid)
 
-    {:ok, second_payload} =
+    second_payload =
       ExWapp.Messages.build_text_proto("second message", [])
-      |> ExWapp.Proto.Message.encode()
+      |> WAWebProtobufsE2E.Message.encode!()
+      |> IO.iodata_to_binary()
 
     {:ok, second_ciphertext, :prekey, _alice_sessions_2} =
       SessionStore.encrypt_message(
@@ -200,9 +202,10 @@ defmodule ExWapp.WhatsmeowParityTest do
 
     sender_jid = "15550001111@s.whatsapp.net"
 
-    {:ok, payload} =
+    payload =
       ExWapp.Messages.build_text_proto("second enc candidate works", [])
-      |> ExWapp.Proto.Message.encode()
+      |> WAWebProtobufsE2E.Message.encode!()
+      |> IO.iodata_to_binary()
 
     {:ok, valid_ciphertext, :prekey, _alice_sessions} =
       SessionStore.encrypt_message(

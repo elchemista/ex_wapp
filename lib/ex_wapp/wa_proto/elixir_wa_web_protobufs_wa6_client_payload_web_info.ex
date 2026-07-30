@@ -1,7 +1,13 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsWa6.ClientPayload.WebInfo do
   @moduledoc false
-  defstruct refToken: nil, version: nil, webdPayload: nil, webSubPlatform: nil, __uf__: []
+  defstruct refToken: nil,
+            version: nil,
+            webdPayload: nil,
+            webSubPlatform: nil,
+            browser: nil,
+            browserVersion: nil,
+            __uf__: []
 
   (
     (
@@ -21,6 +27,8 @@ defmodule WAWebProtobufsWa6.ClientPayload.WebInfo do
         |> encode_version(msg)
         |> encode_webdPayload(msg)
         |> encode_webSubPlatform(msg)
+        |> encode_browser(msg)
+        |> encode_browserVersion(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -79,6 +87,29 @@ defmodule WAWebProtobufsWa6.ClientPayload.WebInfo do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:webSubPlatform, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_browser(acc, msg) do
+        try do
+          case msg.browser do
+            nil -> acc
+            _ -> [acc, "*", Protox.Encode.encode_string(msg.browser)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:browser, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_browserVersion(acc, msg) do
+        try do
+          case msg.browserVersion do
+            nil -> acc
+            _ -> [acc, "2", Protox.Encode.encode_string(msg.browserVersion)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:browserVersion, "invalid field value"),
                     __STACKTRACE__
         end
       end
@@ -167,6 +198,16 @@ defmodule WAWebProtobufsWa6.ClientPayload.WebInfo do
 
               {[webSubPlatform: value], rest}
 
+            {5, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[browser: Protox.Decode.validate_string!(delimited)], rest}
+
+            {6, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[browserVersion: Protox.Decode.validate_string!(delimited)], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -235,7 +276,9 @@ defmodule WAWebProtobufsWa6.ClientPayload.WebInfo do
            {:message, WAWebProtobufsWa6.ClientPayload.WebInfo.WebdPayload}},
         4 =>
           {:webSubPlatform, {:scalar, :WEB_BROWSER},
-           {:enum, WAWebProtobufsWa6.ClientPayload.WebInfo.WebSubPlatform}}
+           {:enum, WAWebProtobufsWa6.ClientPayload.WebInfo.WebSubPlatform}},
+        5 => {:browser, {:scalar, ""}, :string},
+        6 => {:browserVersion, {:scalar, ""}, :string}
       }
     end
 
@@ -245,6 +288,8 @@ defmodule WAWebProtobufsWa6.ClientPayload.WebInfo do
           }
     def defs_by_name() do
       %{
+        browser: {5, {:scalar, ""}, :string},
+        browserVersion: {6, {:scalar, ""}, :string},
         refToken: {1, {:scalar, ""}, :string},
         version: {2, {:scalar, ""}, :string},
         webSubPlatform:
@@ -295,6 +340,24 @@ defmodule WAWebProtobufsWa6.ClientPayload.WebInfo do
           name: :webSubPlatform,
           tag: 4,
           type: {:enum, WAWebProtobufsWa6.ClientPayload.WebInfo.WebSubPlatform}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "browser",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :browser,
+          tag: 5,
+          type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "browserVersion",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :browserVersion,
+          tag: 6,
+          type: :string
         }
       ]
     end
@@ -417,6 +480,64 @@ defmodule WAWebProtobufsWa6.ClientPayload.WebInfo do
 
         []
       ),
+      (
+        def field_def(:browser) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "browser",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :browser,
+             tag: 5,
+             type: :string
+           }}
+        end
+
+        def field_def("browser") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "browser",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :browser,
+             tag: 5,
+             type: :string
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:browserVersion) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "browserVersion",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :browserVersion,
+             tag: 6,
+             type: :string
+           }}
+        end
+
+        def field_def("browserVersion") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "browserVersion",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :browserVersion,
+             tag: 6,
+             type: :string
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -468,6 +589,12 @@ defmodule WAWebProtobufsWa6.ClientPayload.WebInfo do
     def default(:webSubPlatform) do
       {:ok, :WEB_BROWSER}
     end,
+    def default(:browser) do
+      {:ok, ""}
+    end,
+    def default(:browserVersion) do
+      {:ok, ""}
+    end,
     def default(_) do
       {:error, :no_such_field}
     end
@@ -514,4 +641,6 @@ defmodule WAWebProtobufsWa6.ClientPayload.WebInfo do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end

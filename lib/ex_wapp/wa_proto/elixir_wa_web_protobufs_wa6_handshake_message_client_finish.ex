@@ -1,7 +1,12 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsWa6.HandshakeMessage.ClientFinish do
   @moduledoc false
-  defstruct static: nil, payload: nil, __uf__: []
+  defstruct static: nil,
+            payload: nil,
+            extendedCiphertext: nil,
+            paddedBytes: nil,
+            simulateXxkemFs: nil,
+            __uf__: []
 
   (
     (
@@ -16,7 +21,13 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ClientFinish do
 
       @spec encode!(struct) :: iodata | no_return
       def encode!(msg) do
-        [] |> encode_static(msg) |> encode_payload(msg) |> encode_unknown_fields(msg)
+        []
+        |> encode_static(msg)
+        |> encode_payload(msg)
+        |> encode_extendedCiphertext(msg)
+        |> encode_paddedBytes(msg)
+        |> encode_simulateXxkemFs(msg)
+        |> encode_unknown_fields(msg)
       end
     )
 
@@ -43,6 +54,41 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ClientFinish do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:payload, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_extendedCiphertext(acc, msg) do
+        try do
+          case msg.extendedCiphertext do
+            nil -> acc
+            _ -> [acc, "\x1A", Protox.Encode.encode_bytes(msg.extendedCiphertext)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:extendedCiphertext, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_paddedBytes(acc, msg) do
+        try do
+          case msg.paddedBytes do
+            nil -> acc
+            _ -> [acc, "\"", Protox.Encode.encode_bytes(msg.paddedBytes)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:paddedBytes, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_simulateXxkemFs(acc, msg) do
+        try do
+          case msg.simulateXxkemFs do
+            nil -> acc
+            _ -> [acc, "(", Protox.Encode.encode_bool(msg.simulateXxkemFs)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:simulateXxkemFs, "invalid field value"),
+                    __STACKTRACE__
         end
       end
     ]
@@ -109,6 +155,20 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ClientFinish do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[payload: delimited], rest}
 
+            {3, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[extendedCiphertext: delimited], rest}
+
+            {4, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[paddedBytes: delimited], rest}
+
+            {5, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_bool(bytes)
+              {[simulateXxkemFs: value], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -169,7 +229,13 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ClientFinish do
             required(non_neg_integer) => {atom, Protox.Types.kind(), Protox.Types.type()}
           }
     def defs() do
-      %{1 => {:static, {:scalar, ""}, :bytes}, 2 => {:payload, {:scalar, ""}, :bytes}}
+      %{
+        1 => {:static, {:scalar, ""}, :bytes},
+        2 => {:payload, {:scalar, ""}, :bytes},
+        3 => {:extendedCiphertext, {:scalar, ""}, :bytes},
+        4 => {:paddedBytes, {:scalar, ""}, :bytes},
+        5 => {:simulateXxkemFs, {:scalar, false}, :bool}
+      }
     end
 
     @deprecated "Use fields_defs()/0 instead"
@@ -177,7 +243,13 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ClientFinish do
             required(atom) => {non_neg_integer, Protox.Types.kind(), Protox.Types.type()}
           }
     def defs_by_name() do
-      %{payload: {2, {:scalar, ""}, :bytes}, static: {1, {:scalar, ""}, :bytes}}
+      %{
+        extendedCiphertext: {3, {:scalar, ""}, :bytes},
+        paddedBytes: {4, {:scalar, ""}, :bytes},
+        payload: {2, {:scalar, ""}, :bytes},
+        simulateXxkemFs: {5, {:scalar, false}, :bool},
+        static: {1, {:scalar, ""}, :bytes}
+      }
     end
   )
 
@@ -202,6 +274,33 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ClientFinish do
           name: :payload,
           tag: 2,
           type: :bytes
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "extendedCiphertext",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :extendedCiphertext,
+          tag: 3,
+          type: :bytes
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "paddedBytes",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :paddedBytes,
+          tag: 4,
+          type: :bytes
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "simulateXxkemFs",
+          kind: {:scalar, false},
+          label: :optional,
+          name: :simulateXxkemFs,
+          tag: 5,
+          type: :bool
         }
       ]
     end
@@ -266,6 +365,93 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ClientFinish do
 
         []
       ),
+      (
+        def field_def(:extendedCiphertext) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "extendedCiphertext",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :extendedCiphertext,
+             tag: 3,
+             type: :bytes
+           }}
+        end
+
+        def field_def("extendedCiphertext") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "extendedCiphertext",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :extendedCiphertext,
+             tag: 3,
+             type: :bytes
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:paddedBytes) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "paddedBytes",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :paddedBytes,
+             tag: 4,
+             type: :bytes
+           }}
+        end
+
+        def field_def("paddedBytes") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "paddedBytes",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :paddedBytes,
+             tag: 4,
+             type: :bytes
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:simulateXxkemFs) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "simulateXxkemFs",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :simulateXxkemFs,
+             tag: 5,
+             type: :bool
+           }}
+        end
+
+        def field_def("simulateXxkemFs") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "simulateXxkemFs",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :simulateXxkemFs,
+             tag: 5,
+             type: :bool
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -310,6 +496,15 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ClientFinish do
     end,
     def default(:payload) do
       {:ok, ""}
+    end,
+    def default(:extendedCiphertext) do
+      {:ok, ""}
+    end,
+    def default(:paddedBytes) do
+      {:ok, ""}
+    end,
+    def default(:simulateXxkemFs) do
+      {:ok, false}
     end,
     def default(_) do
       {:error, :no_such_field}
@@ -357,4 +552,6 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.ClientFinish do
       end
     end
   )
+
+  @type t :: %__MODULE__{}
 end
