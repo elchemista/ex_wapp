@@ -136,8 +136,8 @@ defmodule ExWapp.ContactTest do
   describe "merge_from_sync/3" do
     test "merges contact action data", %{store: store} do
       Contact.merge_from_sync(store, "1234@s.whatsapp.net", %{
-        full_name: "Synced Name",
-        first_name: "Synced"
+        fullName: "Synced Name",
+        firstName: "Synced"
       })
 
       result = Contact.get(store, "1234@s.whatsapp.net")
@@ -153,7 +153,7 @@ defmodule ExWapp.ContactTest do
       })
 
       Contact.merge_from_sync(store, "1234@s.whatsapp.net", %{
-        full_name: "New Name"
+        fullName: "New Name"
       })
 
       result = Contact.get(store, "1234@s.whatsapp.net")

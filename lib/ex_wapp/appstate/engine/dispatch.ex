@@ -9,7 +9,7 @@ defmodule ExWapp.AppState.Engine.Dispatch do
 
   require Logger
   alias ExWapp.Log
-  alias ExWapp.Proto.SyncAction.SyncActionValue
+  alias WAWebProtobufSyncAction.SyncActionValue
 
   @type action_value :: %SyncActionValue{} | nil
   @type patch_info :: %{type: String.t(), mutations: [map()], timestamp: integer() | nil}
@@ -93,7 +93,7 @@ defmodule ExWapp.AppState.Engine.Dispatch do
     do: ExWapp.Contact.delete(store, jid)
 
   defp dispatch_contact_mutation(store, _operation, jid, action_value) do
-    case get_action_field(action_value, :contact_action) do
+    case get_action_field(action_value, :contactAction) do
       nil -> :ignored
       contact_action -> ExWapp.Contact.merge_from_sync(store, jid, contact_action)
     end
@@ -102,7 +102,7 @@ defmodule ExWapp.AppState.Engine.Dispatch do
   defp dispatch_archive_mutation(_store, 1, _jid, _action_value), do: :ignored
 
   defp dispatch_archive_mutation(store, _operation, jid, action_value) do
-    case get_action_field(action_value, :archive_chat_action) do
+    case get_action_field(action_value, :archiveChatAction) do
       nil ->
         :ignored
 
@@ -114,7 +114,7 @@ defmodule ExWapp.AppState.Engine.Dispatch do
   defp dispatch_pin_mutation(_store, 1, _jid, _action_value), do: :ignored
 
   defp dispatch_pin_mutation(store, _operation, jid, action_value) do
-    case get_action_field(action_value, :pin_action) do
+    case get_action_field(action_value, :pinAction) do
       nil -> :ignored
       pin_action -> ExWapp.Chat.update_pinned(store, jid, Map.get(pin_action, :pinned, false))
     end
@@ -123,7 +123,7 @@ defmodule ExWapp.AppState.Engine.Dispatch do
   defp dispatch_mute_mutation(_store, 1, _jid, _action_value), do: :ignored
 
   defp dispatch_mute_mutation(store, _operation, jid, action_value) do
-    case get_action_field(action_value, :mute_action) do
+    case get_action_field(action_value, :muteAction) do
       nil -> :ignored
       mute_action -> ExWapp.Chat.update_muted(store, jid, mute_action)
     end

@@ -1,16 +1,20 @@
 defmodule ExWapp.Proto.HistorySync do
   @moduledoc """
-  Minimal parser for WhatsApp history sync payloads embedded in protocol messages.
+  Extracts WhatsApp history sync payloads embedded in protocol messages.
 
   Mirrors the flow used in reference clients:
   - `Message.protocolMessage.historySyncNotification`
   - `initialHistBootstrapInlinePayload` (zlib-compressed)
   - `HistorySync.conversations`
+
+  Decoding uses the generated `WAWebProtobufsHistorySync` modules; this module
+  only flattens the structs into the internal map contract.
   """
 
-  import Bitwise
-
   alias ExWapp.JID
+  alias WAWebProtobufsE2E.Message
+  alias WAWebProtobufsHistorySync.{Conversation, HistorySync, PhoneNumberToLIDMapping}
+  alias WAWebProtobufsWeb.WebMessageInfo
 
   @type conversation_message :: %{
           id: String.t() | nil,
@@ -40,55 +44,50 @@ defmodule ExWapp.Proto.HistorySync do
         }
 
   @type t :: %{
-          sync_type: non_neg_integer() | nil,
+          sync_type: atom() | non_neg_integer() | nil,
           conversations: [conversation()],
           lid_mappings: [{String.t(), String.t()}]
         }
 
-  @max_message_text_decode_depth 6
+  @max_message_unwrap_depth 6
   @jid_like_payload_pattern ~r/^[0-9+:-]+@(?:s\.whatsapp\.net|g\.us|lid|hosted\.lid)$/
 
   @spec extract_from_message(binary()) :: {:ok, t()} | :not_history_sync | {:error, term()}
   def extract_from_message(message_payload) when is_binary(message_payload) do
-    with {:ok, message_fields} <- decode_wire_fields(message_payload),
-         protocol_message when is_binary(protocol_message) <-
-           first_length_delimited_field(message_fields, 12),
-         {:ok, protocol_fields} <- decode_wire_fields(protocol_message),
-         history_notification when is_binary(history_notification) <-
-           first_length_delimited_field(protocol_fields, 6),
-         {:ok, notification_fields} <- decode_wire_fields(history_notification) do
-      sync_type_from_notification = first_varint_field(notification_fields, 6)
+    case Message.decode(message_payload) do
+      {:ok, %Message{protocolMessage: %{historySyncNotification: %{} = notification}}} ->
+        extract_from_notification(notification)
 
-      case first_length_delimited_field(notification_fields, 11) do
-        nil ->
-          {:error, :history_sync_download_required}
-
-        inline_payload ->
-          parse_inline_history_payload(inline_payload, sync_type_from_notification)
-      end
-    else
-      nil ->
+      {:ok, _message} ->
         :not_history_sync
 
-      {:error, _reason} = error ->
-        error
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
   def extract_from_message(_), do: :not_history_sync
 
+  defp extract_from_notification(notification) do
+    case notification.initialHistBootstrapInlinePayload do
+      payload when is_binary(payload) and payload != "" ->
+        parse_inline_history_payload(payload, notification.syncType)
+
+      _ ->
+        {:error, :history_sync_download_required}
+    end
+  end
+
   defp parse_inline_history_payload(inline_payload, sync_type_from_notification) do
     with {:ok, history_payload} <- inflate_history_payload(inline_payload),
-         {:ok, history_fields} <- decode_wire_fields(history_payload) do
+         {:ok, %HistorySync{} = history} <- HistorySync.decode(history_payload) do
       conversations =
-        history_fields
-        |> all_length_delimited_fields(2)
+        history.conversations
         |> Enum.map(&parse_conversation/1)
         |> Enum.reject(&is_nil/1)
 
       explicit_mappings =
-        history_fields
-        |> all_length_delimited_fields(15)
+        history.phoneNumberToLidMappings
         |> Enum.map(&parse_phone_number_lid_mapping/1)
         |> Enum.reject(&is_nil/1)
 
@@ -99,39 +98,43 @@ defmodule ExWapp.Proto.HistorySync do
 
       {:ok,
        %{
-         sync_type: first_varint_field(history_fields, 1) || sync_type_from_notification,
+         sync_type: history.syncType || sync_type_from_notification,
          conversations: conversations,
          lid_mappings: Enum.uniq(explicit_mappings ++ conversation_mappings)
        }}
     end
   end
 
-  defp parse_conversation(conversation_payload) when is_binary(conversation_payload) do
-    with {:ok, fields} <- decode_wire_fields(conversation_payload),
-         jid_raw when is_binary(jid_raw) <- first_length_delimited_field(fields, 1),
-         jid when is_binary(jid) <- normalize_non_empty_jid(jid_raw) do
-      %{
-        jid: jid,
-        name:
-          first_non_empty([
-            normalize_optional_text(first_length_delimited_field(fields, 38)),
-            normalize_optional_text(first_length_delimited_field(fields, 13)),
-            normalize_optional_text(first_length_delimited_field(fields, 43))
-          ]),
-        unread_count: first_non_neg_integer_field(fields, [6]),
-        last_message_timestamp: first_non_neg_integer_field(fields, [5, 12]),
-        pinned: parse_optional_boolean(first_varint_field(fields, 24)),
-        archived: parse_optional_boolean(first_varint_field(fields, 16)),
-        muted_until: first_non_neg_integer_field(fields, [25]),
-        is_group: JID.group?(jid),
-        pn_jid: normalize_optional_jid(first_length_delimited_field(fields, 39)),
-        lid_jid: normalize_optional_jid(first_length_delimited_field(fields, 42)),
-        tc_token: first_length_delimited_field(fields, 21),
-        tc_token_timestamp: first_varint_field(fields, 22),
-        tc_token_sender_timestamp: first_varint_field(fields, 28),
-        messages: parse_conversation_messages(fields)
-      }
-    else
+  defp parse_conversation(%Conversation{} = conversation) do
+    case normalize_non_empty_jid(conversation."ID") do
+      jid when is_binary(jid) ->
+        %{
+          jid: jid,
+          name:
+            first_non_empty([
+              normalize_optional_text(conversation.displayName),
+              normalize_optional_text(conversation.name),
+              normalize_optional_text(conversation.username)
+            ]),
+          unread_count: non_neg_or_nil(conversation.unreadCount),
+          last_message_timestamp:
+            non_neg_or_nil(conversation.lastMsgTimestamp) ||
+              non_neg_or_nil(conversation.conversationTimestamp),
+          pinned: parse_optional_boolean(conversation.pinned),
+          archived: conversation.archived,
+          muted_until: non_neg_or_nil(conversation.muteEndTime),
+          is_group: JID.group?(jid),
+          pn_jid: normalize_optional_jid(conversation.pnJID),
+          lid_jid: normalize_optional_jid(conversation.lidJID),
+          tc_token: conversation.tcToken,
+          tc_token_timestamp: conversation.tcTokenTimestamp,
+          tc_token_sender_timestamp: conversation.tcTokenSenderTimestamp,
+          messages:
+            conversation.messages
+            |> Enum.map(&parse_history_sync_message/1)
+            |> Enum.reject(&is_nil/1)
+        }
+
       _ ->
         nil
     end
@@ -139,155 +142,89 @@ defmodule ExWapp.Proto.HistorySync do
 
   defp parse_conversation(_), do: nil
 
-  defp parse_conversation_messages(fields) when is_list(fields) do
-    fields
-    |> all_length_delimited_fields(2)
-    |> Enum.map(&parse_history_sync_message/1)
-    |> Enum.reject(&is_nil/1)
-  end
-
-  defp parse_history_sync_message(payload) when is_binary(payload) do
-    with {:ok, fields} <- decode_wire_fields(payload),
-         web_message when is_binary(web_message) <- first_length_delimited_field(fields, 1),
-         parsed when is_map(parsed) <- parse_web_message_info(web_message) do
-      Map.put(parsed, :order_id, first_varint_field(fields, 2))
-    else
+  defp parse_history_sync_message(%{message: %WebMessageInfo{} = web_message} = history_msg) do
+    case parse_web_message_info(web_message) do
+      parsed when is_map(parsed) -> Map.put(parsed, :order_id, history_msg.msgOrderID)
       _ -> nil
     end
   end
 
   defp parse_history_sync_message(_), do: nil
 
-  defp parse_web_message_info(payload) when is_binary(payload) do
-    case decode_wire_fields(payload) do
-      {:ok, fields} ->
-        key = parse_message_key(first_length_delimited_field(fields, 1))
+  defp parse_web_message_info(%WebMessageInfo{} = web_message) do
+    key = parse_message_key(web_message.key)
+    timestamp = non_neg_or_nil(web_message.messageTimestamp)
+    text = extract_message_text(web_message.message, 0)
 
-        timestamp =
-          case first_varint_field(fields, 3) do
-            value when is_integer(value) and value >= 0 -> value
-            _ -> nil
-          end
+    participant =
+      first_non_empty([
+        normalize_optional_jid(web_message.participant),
+        key.participant
+      ])
 
-        text = extract_web_message_text(first_length_delimited_field(fields, 2))
-
-        participant =
-          first_non_empty([
-            normalize_optional_jid(first_length_delimited_field(fields, 9)),
-            Map.get(key, :participant)
-          ])
-
-        id = Map.get(key, :id)
-
-        if is_binary(id) or is_integer(timestamp) or is_binary(text) do
-          %{
-            id: id,
-            from_me: Map.get(key, :from_me, false),
-            timestamp: timestamp,
-            text: text,
-            participant: participant,
-            remote_jid: Map.get(key, :remote_jid)
-          }
-        else
-          nil
-        end
-
-      _ ->
-        nil
+    if is_binary(key.id) or is_integer(timestamp) or is_binary(text) do
+      %{
+        id: key.id,
+        from_me: key.from_me,
+        timestamp: timestamp,
+        text: text,
+        participant: participant,
+        remote_jid: key.remote_jid
+      }
+    else
+      nil
     end
   end
 
-  defp parse_message_key(payload) when is_binary(payload) do
-    case decode_wire_fields(payload) do
-      {:ok, fields} ->
-        %{
-          remote_jid: normalize_optional_jid(first_length_delimited_field(fields, 1)),
-          from_me: parse_optional_boolean(first_varint_field(fields, 2)) || false,
-          id: normalize_optional_text(first_length_delimited_field(fields, 3)),
-          participant: normalize_optional_jid(first_length_delimited_field(fields, 4))
-        }
-
-      _ ->
-        %{remote_jid: nil, from_me: false, id: nil, participant: nil}
-    end
+  defp parse_message_key(%{} = key) do
+    %{
+      remote_jid: normalize_optional_jid(key.remoteJID),
+      from_me: key.fromMe == true,
+      id: normalize_optional_text(key."ID"),
+      participant: normalize_optional_jid(key.participant)
+    }
   end
 
   defp parse_message_key(_), do: %{remote_jid: nil, from_me: false, id: nil, participant: nil}
 
-  defp extract_web_message_text(payload) when is_binary(payload) do
-    case decode_message_text_recursive(payload, 0) do
-      {:ok, text} -> text
-      :error -> nil
+  @spec extract_message_text(Message.t() | nil, non_neg_integer()) :: String.t() | nil
+  defp extract_message_text(_message, depth) when depth > @max_message_unwrap_depth, do: nil
+
+  defp extract_message_text(%Message{} = message, depth) do
+    extract_message_text_shallow(message) ||
+      Enum.find_value(wrapped_messages(message), fn wrapped ->
+        extract_message_text(wrapped, depth + 1)
+      end)
+  end
+
+  defp extract_message_text(_message, _depth), do: nil
+
+  defp extract_message_text_shallow(message) do
+    cond do
+      valid_text_payload?(message.conversation) ->
+        message.conversation
+
+      is_map(message.extendedTextMessage) and
+          valid_text_payload?(message.extendedTextMessage.text) ->
+        message.extendedTextMessage.text
+
+      true ->
+        nil
     end
   end
 
-  defp extract_web_message_text(_), do: nil
+  defp wrapped_messages(message) do
+    wrappers = [
+      message.deviceSentMessage,
+      message.viewOnceMessage,
+      message.ephemeralMessage,
+      message.documentWithCaptionMessage,
+      message.viewOnceMessageV2,
+      message.viewOnceMessageV2Extension,
+      message.lottieStickerMessage
+    ]
 
-  defp decode_message_text_recursive(_payload, depth) when depth > @max_message_text_decode_depth,
-    do: :error
-
-  defp decode_message_text_recursive(payload, depth) when is_binary(payload) do
-    case decode_message_text_shallow(payload) do
-      {:ok, text} ->
-        {:ok, text}
-
-      :error ->
-        decode_nested_message_text(payload, depth)
-    end
-  end
-
-  defp decode_message_text_recursive(_payload, _depth), do: :error
-
-  defp decode_nested_message_text(payload, depth) do
-    case collect_length_delimited_fields(payload) do
-      {:ok, nested_values} ->
-        Enum.reduce_while(nested_values, :error, fn nested, _acc ->
-          reduce_nested_text(nested, depth)
-        end)
-
-      {:error, _reason} ->
-        :error
-    end
-  end
-
-  defp reduce_nested_text(nested_payload, depth) do
-    case decode_message_text_recursive(nested_payload, depth + 1) do
-      {:ok, text} -> {:halt, {:ok, text}}
-      :error -> {:cont, :error}
-    end
-  end
-
-  defp decode_message_text_shallow(payload) when is_binary(payload) do
-    with {:ok, fields} <- decode_wire_fields(payload),
-         conversation when is_binary(conversation) <- first_length_delimited_field(fields, 1),
-         true <- valid_text_payload?(conversation) do
-      {:ok, conversation}
-    else
-      _ ->
-        with {:ok, fields} <- decode_wire_fields(payload),
-             extended when is_binary(extended) <- first_length_delimited_field(fields, 6),
-             {:ok, extended_fields} <- decode_wire_fields(extended),
-             text when is_binary(text) <- first_length_delimited_field(extended_fields, 1),
-             true <- valid_text_payload?(text) do
-          {:ok, text}
-        else
-          _ -> :error
-        end
-    end
-  end
-
-  defp collect_length_delimited_fields(payload) when is_binary(payload) do
-    with {:ok, fields} <- decode_wire_fields(payload) do
-      values =
-        fields
-        |> Enum.reduce([], fn
-          {_field_num, 2, value}, acc when is_binary(value) -> [value | acc]
-          _, acc -> acc
-        end)
-        |> Enum.reverse()
-
-      {:ok, values}
-    end
+    for %{message: %Message{} = wrapped} <- wrappers, do: wrapped
   end
 
   defp valid_text_payload?(value) when is_binary(value) do
@@ -297,16 +234,14 @@ defmodule ExWapp.Proto.HistorySync do
       not Regex.match?(@jid_like_payload_pattern, trimmed)
   end
 
-  defp parse_phone_number_lid_mapping(mapping_payload) when is_binary(mapping_payload) do
-    with {:ok, fields} <- decode_wire_fields(mapping_payload),
-         pn_raw when is_binary(pn_raw) <- first_length_delimited_field(fields, 1),
-         lid_raw when is_binary(lid_raw) <- first_length_delimited_field(fields, 2),
-         pn when is_binary(pn) <- normalize_non_empty_jid(pn_raw),
-         lid when is_binary(lid) <- normalize_non_empty_jid(lid_raw) do
+  defp valid_text_payload?(_value), do: false
+
+  defp parse_phone_number_lid_mapping(%PhoneNumberToLIDMapping{} = mapping) do
+    with pn when is_binary(pn) <- normalize_non_empty_jid(mapping.pnJID),
+         lid when is_binary(lid) <- normalize_non_empty_jid(mapping.lidJID) do
       {lid, pn}
     else
-      _ ->
-        nil
+      _ -> nil
     end
   end
 
@@ -344,42 +279,12 @@ defmodule ExWapp.Proto.HistorySync do
 
   defp pn_jid?(_), do: false
 
-  defp first_length_delimited_field(fields, field_num)
-       when is_list(fields) and is_integer(field_num) do
-    Enum.find_value(fields, fn
-      {^field_num, 2, value} when is_binary(value) -> value
-      _ -> nil
-    end)
-  end
-
-  defp all_length_delimited_fields(fields, field_num)
-       when is_list(fields) and is_integer(field_num) do
-    fields
-    |> Enum.reduce([], fn
-      {^field_num, 2, value}, acc when is_binary(value) -> [value | acc]
-      _, acc -> acc
-    end)
-    |> Enum.reverse()
-  end
-
-  defp first_varint_field(fields, field_num) when is_list(fields) and is_integer(field_num) do
-    Enum.find_value(fields, fn
-      {^field_num, 0, value} when is_integer(value) -> value
-      _ -> nil
-    end)
-  end
-
-  defp first_non_neg_integer_field(fields, candidate_field_nums)
-       when is_list(fields) and is_list(candidate_field_nums) do
-    Enum.reduce_while(candidate_field_nums, nil, fn field_num, _acc ->
-      case first_varint_field(fields, field_num) do
-        value when is_integer(value) and value >= 0 -> {:halt, value}
-        _ -> {:cont, nil}
-      end
-    end)
-  end
+  defp non_neg_or_nil(value) when is_integer(value) and value >= 0, do: value
+  defp non_neg_or_nil(_), do: nil
 
   defp parse_optional_boolean(nil), do: nil
+  defp parse_optional_boolean(false), do: false
+  defp parse_optional_boolean(true), do: true
   defp parse_optional_boolean(0), do: false
   defp parse_optional_boolean(value) when is_integer(value) and value > 0, do: true
   defp parse_optional_boolean(_), do: nil
@@ -398,12 +303,7 @@ defmodule ExWapp.Proto.HistorySync do
 
   defp normalize_optional_text(_), do: nil
 
-  defp normalize_optional_jid(value) do
-    case normalize_jid(value) do
-      "" -> nil
-      jid -> jid
-    end
-  end
+  defp normalize_optional_jid(value), do: normalize_non_empty_jid(value)
 
   defp normalize_non_empty_jid(value) do
     case normalize_jid(value) do
@@ -439,68 +339,8 @@ defmodule ExWapp.Proto.HistorySync do
       _ ->
         # In some edge cases this payload may already be plain protobuf bytes.
         {:ok, payload}
-    end
-  end
-
-  defp decode_wire_fields(binary), do: decode_wire_fields(binary, [])
-  defp decode_wire_fields(<<>>, acc), do: {:ok, Enum.reverse(acc)}
-
-  defp decode_wire_fields(binary, acc) when is_binary(binary) do
-    with {:ok, tag, rest} <- decode_varint(binary),
-         wire_type <- band(tag, 0x07),
-         field_num <- bsr(tag, 3) do
-      decode_wire_field(wire_type, rest, field_num, acc)
-    end
-  end
-
-  defp decode_wire_field(0, rest, field_num, acc) do
-    with {:ok, value, tail} <- decode_varint(rest) do
-      decode_wire_fields(tail, [{field_num, 0, value} | acc])
-    end
-  end
-
-  defp decode_wire_field(1, rest, field_num, acc) do
-    if byte_size(rest) >= 8 do
-      <<_skip::binary-size(8), tail::binary>> = rest
-      decode_wire_fields(tail, [{field_num, 1, :fixed64} | acc])
-    else
-      {:error, :invalid_fixed64}
-    end
-  end
-
-  defp decode_wire_field(2, rest, field_num, acc) do
-    with {:ok, len, tail} <- decode_varint(rest),
-         true <- byte_size(tail) >= len do
-      <<value::binary-size(^len), next::binary>> = tail
-      decode_wire_fields(next, [{field_num, 2, value} | acc])
-    else
-      false -> {:error, :invalid_length_delimited_field}
-    end
-  end
-
-  defp decode_wire_field(5, rest, field_num, acc) do
-    if byte_size(rest) >= 4 do
-      <<_skip::binary-size(4), tail::binary>> = rest
-      decode_wire_fields(tail, [{field_num, 5, :fixed32} | acc])
-    else
-      {:error, :invalid_fixed32}
-    end
-  end
-
-  defp decode_wire_field(wire_type, _rest, _field_num, _acc),
-    do: {:error, {:unsupported_wire_type, wire_type}}
-
-  defp decode_varint(binary), do: decode_varint(binary, 0, 0)
-  defp decode_varint(_, _, shift) when shift > 63, do: {:error, :invalid_varint}
-  defp decode_varint(<<>>, _, _), do: {:error, :invalid_varint}
-
-  defp decode_varint(<<byte, rest::binary>>, acc, shift) do
-    value = bor(acc, bsl(band(byte, 0x7F), shift))
-
-    if band(byte, 0x80) == 0 do
-      {:ok, value, rest}
-    else
-      decode_varint(rest, value, shift + 7)
+    catch
+      _, _ -> {:ok, payload}
     end
   end
 end

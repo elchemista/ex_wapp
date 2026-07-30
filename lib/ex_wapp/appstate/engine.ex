@@ -12,24 +12,31 @@ defmodule ExWapp.AppState.Engine do
   require Logger
 
   alias ExWapp.AppState.{CollectionLock, Crypto, LTHash}
-  alias ExWapp.Proto.SyncAction
 
-  alias ExWapp.Proto.SyncAction.{
-    SyncdPatch,
+  alias WAWebProtobufsServerSync.{
+    ExternalBlobReference,
+    KeyId,
+    SyncdIndex,
     SyncdMutation,
     SyncdMutations,
+    SyncdPatch,
     SyncdRecord,
-    SyncActionData,
-    SyncActionValue,
-    ContactAction,
-    MuteAction,
-    PinAction,
+    SyncdSnapshot,
+    SyncdValue,
+    SyncdVersion
+  }
+
+  alias WAWebProtobufSyncAction.{
     ArchiveChatAction,
+    ClearChatAction,
+    ContactAction,
     DeleteChatAction,
     MarkChatAsReadAction,
-    ClearChatAction,
+    MuteAction,
+    PinAction,
+    SyncActionData,
     SyncActionMessageRange,
-    ExternalBlobReference
+    SyncActionValue
   }
 
   alias ExWapp.{Binary, Log, Store}
@@ -104,10 +111,10 @@ defmodule ExWapp.AppState.Engine do
           index: ["contact", normalized_jid],
           version: 2,
           value: %SyncActionValue{
-            contact_action: %ContactAction{
-              full_name: full_name,
-              first_name: first_name || full_name,
-              save_on_primary: true
+            contactAction: %ContactAction{
+              fullName: full_name,
+              firstName: first_name || full_name,
+              saveOnPrimaryAddressbook: true
             }
           }
         }
@@ -142,9 +149,9 @@ defmodule ExWapp.AppState.Engine do
       index: ["archive", jid],
       version: 3,
       value: %SyncActionValue{
-        archive_chat_action: %ArchiveChatAction{
+        archiveChatAction: %ArchiveChatAction{
           archived: archived,
-          message_range: build_message_range(last_msg_ts)
+          messageRange: build_message_range(last_msg_ts)
         }
       }
     }
@@ -156,7 +163,7 @@ defmodule ExWapp.AppState.Engine do
           index: ["pin_v1", jid],
           version: 5,
           value: %SyncActionValue{
-            pin_action: %PinAction{pinned: false}
+            pinAction: %PinAction{pinned: false}
           }
         }
 
@@ -178,7 +185,7 @@ defmodule ExWapp.AppState.Engine do
           index: ["pin_v1", jid],
           version: 5,
           value: %SyncActionValue{
-            pin_action: %PinAction{pinned: pinned}
+            pinAction: %PinAction{pinned: pinned}
           }
         }
       ],
@@ -203,9 +210,9 @@ defmodule ExWapp.AppState.Engine do
           index: ["mute", jid],
           version: 2,
           value: %SyncActionValue{
-            mute_action: %MuteAction{
+            muteAction: %MuteAction{
               muted: muted,
-              mute_end_timestamp: mute_end
+              muteEndTimestamp: mute_end
             }
           }
         }
@@ -225,8 +232,8 @@ defmodule ExWapp.AppState.Engine do
           index: ["deleteChat", jid, "0"],
           version: 6,
           value: %SyncActionValue{
-            delete_chat_action: %DeleteChatAction{
-              message_range: build_message_range(last_msg_ts)
+            deleteChatAction: %DeleteChatAction{
+              messageRange: build_message_range(last_msg_ts)
             }
           }
         }
@@ -245,9 +252,9 @@ defmodule ExWapp.AppState.Engine do
           index: ["markChatAsRead", jid],
           version: 3,
           value: %SyncActionValue{
-            mark_chat_as_read_action: %MarkChatAsReadAction{
+            markChatAsReadAction: %MarkChatAsReadAction{
               read: read,
-              message_range: build_message_range(last_msg_ts)
+              messageRange: build_message_range(last_msg_ts)
             }
           }
         }
@@ -267,8 +274,8 @@ defmodule ExWapp.AppState.Engine do
           index: ["clearChat", jid, "1", "0"],
           version: 6,
           value: %SyncActionValue{
-            clear_chat_action: %ClearChatAction{
-              message_range: build_message_range(last_msg_ts)
+            clearChatAction: %ClearChatAction{
+              messageRange: build_message_range(last_msg_ts)
             }
           }
         }
@@ -331,12 +338,14 @@ defmodule ExWapp.AppState.Engine do
     index_json = Jason.encode!(mut.index)
 
     content =
-      SyncAction.encode_sync_action_data(%SyncActionData{
+      %SyncActionData{
         index: index_json,
         value: value,
         padding: <<>>,
         version: mut.version
-      })
+      }
+      |> SyncActionData.encode!()
+      |> IO.iodata_to_binary()
 
     {iv, ciphertext} = Crypto.encrypt_cbc(content, keys.value_encryption)
     encrypted = iv <> ciphertext
@@ -354,11 +363,11 @@ defmodule ExWapp.AppState.Engine do
         else: Map.delete(mmacs, index_hex)
 
     mutation = %SyncdMutation{
-      operation: operation,
+      operation: operation_enum(operation),
       record: %SyncdRecord{
-        index: index_mac,
-        value: encrypted <> value_mac,
-        key_id: key_id
+        index: %SyncdIndex{blob: index_mac},
+        value: %SyncdValue{blob: encrypted <> value_mac},
+        keyID: %KeyId{ID: key_id}
       }
     }
 
@@ -398,11 +407,12 @@ defmodule ExWapp.AppState.Engine do
     %SyncdPatch{
       # WhatsApp web clients omit patch.version on outgoing mutations.
       mutations: mutations,
-      snapshot_mac: snapshot_mac,
-      patch_mac: patch_mac,
-      key_id: key_id
+      snapshotMAC: snapshot_mac,
+      patchMAC: patch_mac,
+      keyID: %KeyId{ID: key_id}
     }
-    |> SyncAction.encode_syncd_patch()
+    |> SyncdPatch.encode!()
+    |> IO.iodata_to_binary()
   end
 
   # Decoding app-state mutations
@@ -430,12 +440,14 @@ defmodule ExWapp.AppState.Engine do
 
   defp decode_single_mutation(%SyncdMutation{} = mutation, key_store, validate_macs) do
     record = mutation.record
+    operation = operation_int(mutation.operation)
+    index_mac = record_index_blob(record)
 
     with {:ok, keys, key_id} <- resolve_mutation_keys(record, key_store),
-         {:ok, encrypted_content, value_mac} <- split_record_value(record.value),
+         {:ok, encrypted_content, value_mac} <- split_record_value(record_value_blob(record)),
          :ok <-
            verify_content_mac(
-             mutation.operation,
+             operation,
              encrypted_content,
              key_id,
              keys,
@@ -444,13 +456,32 @@ defmodule ExWapp.AppState.Engine do
            ),
          {:ok, plaintext} <- decrypt_content(encrypted_content, keys),
          {:ok, sync_data} <- decode_action_data(plaintext),
-         :ok <- verify_index_mac(sync_data.index, record.index, keys, validate_macs) do
-      {:ok, build_decoded_mutation(mutation, sync_data, record.index, value_mac)}
+         :ok <- verify_index_mac(sync_data.index, index_mac, keys, validate_macs) do
+      {:ok, build_decoded_mutation(operation, sync_data, index_mac, value_mac)}
     end
   end
 
+  defp operation_enum(1), do: :REMOVE
+  defp operation_enum(_operation), do: :SET
+
+  defp operation_int(:REMOVE), do: 1
+  defp operation_int(operation) when is_integer(operation), do: operation
+  defp operation_int(_operation), do: 0
+
+  defp record_index_blob(%SyncdRecord{index: %SyncdIndex{blob: blob}}), do: blob
+  defp record_index_blob(_record), do: nil
+
+  defp record_value_blob(%SyncdRecord{value: %SyncdValue{blob: blob}}), do: blob
+  defp record_value_blob(_record), do: nil
+
+  defp record_key_id(%SyncdRecord{keyID: %KeyId{ID: key_id}}), do: key_id
+  defp record_key_id(_record), do: nil
+
+  defp key_id_binary(%KeyId{ID: key_id}) when is_binary(key_id), do: key_id
+  defp key_id_binary(_key_id), do: nil
+
   defp resolve_mutation_keys(record, key_store) do
-    key_id = record.key_id
+    key_id = record_key_id(record)
 
     key_id_hex =
       if is_binary(key_id),
@@ -497,7 +528,7 @@ defmodule ExWapp.AppState.Engine do
   end
 
   defp decode_action_data(plaintext) do
-    case SyncAction.decode_sync_action_data(plaintext) do
+    case SyncActionData.decode(plaintext) do
       {:ok, _data} = ok -> ok
       {:error, reason} -> {:error, {:decode_sync_action_data_failed, reason}}
     end
@@ -515,7 +546,7 @@ defmodule ExWapp.AppState.Engine do
 
   defp verify_index_mac(_index_blob, _index_mac, _keys, _validate), do: :ok
 
-  defp build_decoded_mutation(mutation, sync_data, index_mac, value_mac) do
+  defp build_decoded_mutation(operation, sync_data, index_mac, value_mac) do
     index =
       case Jason.decode(sync_data.index || "[]") do
         {:ok, parsed} when is_list(parsed) -> parsed
@@ -523,7 +554,7 @@ defmodule ExWapp.AppState.Engine do
       end
 
     %{
-      operation: mutation.operation,
+      operation: operation,
       action: sync_data.value,
       version: sync_data.version,
       index: index,
@@ -993,7 +1024,7 @@ defmodule ExWapp.AppState.Engine do
     do: ExWapp.Contact.delete(store, jid)
 
   defp dispatch_contact_mutation(store, _operation, jid, action_value) do
-    case get_action_field(action_value, :contact_action) do
+    case get_action_field(action_value, :contactAction) do
       nil -> :ignored
       contact_action -> ExWapp.Contact.merge_from_sync(store, jid, contact_action)
     end
@@ -1002,7 +1033,7 @@ defmodule ExWapp.AppState.Engine do
   defp dispatch_archive_mutation(_store, 1, _jid, _action_value), do: :ignored
 
   defp dispatch_archive_mutation(store, _operation, jid, action_value) do
-    case get_action_field(action_value, :archive_chat_action) do
+    case get_action_field(action_value, :archiveChatAction) do
       nil ->
         :ignored
 
@@ -1014,7 +1045,7 @@ defmodule ExWapp.AppState.Engine do
   defp dispatch_pin_mutation(_store, 1, _jid, _action_value), do: :ignored
 
   defp dispatch_pin_mutation(store, _operation, jid, action_value) do
-    case get_action_field(action_value, :pin_action) do
+    case get_action_field(action_value, :pinAction) do
       nil -> :ignored
       pin_action -> ExWapp.Chat.update_pinned(store, jid, Map.get(pin_action, :pinned, false))
     end
@@ -1023,7 +1054,7 @@ defmodule ExWapp.AppState.Engine do
   defp dispatch_mute_mutation(_store, 1, _jid, _action_value), do: :ignored
 
   defp dispatch_mute_mutation(store, _operation, jid, action_value) do
-    case get_action_field(action_value, :mute_action) do
+    case get_action_field(action_value, :muteAction) do
       nil -> :ignored
       mute_action -> ExWapp.Chat.update_muted(store, jid, mute_action)
     end
@@ -1417,7 +1448,7 @@ defmodule ExWapp.AppState.Engine do
       %{collection: collection_name, payload: :patch},
       %{payload_bytes: byte_size(patch_binary)},
       fn ->
-        with {:ok, patch} <- SyncAction.decode_syncd_patch(patch_binary),
+        with {:ok, patch} <- SyncdPatch.decode(patch_binary),
              {:ok, patch} <- maybe_resolve_external_patch_mutations(session, patch),
              {:ok, decoded, new_state, new_macs} <-
                decode_patch(patch, collection_name, state, macs, key_store, true) do
@@ -1432,14 +1463,14 @@ defmodule ExWapp.AppState.Engine do
   end
 
   defp decode_snapshot_payload(session, snapshot_binary) do
-    case SyncAction.decode_syncd_snapshot(snapshot_binary) do
+    case SyncdSnapshot.decode(snapshot_binary) do
       {:ok, snapshot} ->
         {:ok, snapshot}
 
       {:error, _reason} ->
-        with {:ok, ref} <- SyncAction.decode_external_blob_reference(snapshot_binary),
+        with {:ok, ref} <- ExternalBlobReference.decode(snapshot_binary),
              {:ok, raw_snapshot} <- download_external_blob(session, ref),
-             {:ok, snapshot} <- SyncAction.decode_syncd_snapshot(raw_snapshot) do
+             {:ok, snapshot} <- SyncdSnapshot.decode(raw_snapshot) do
           {:ok, snapshot}
         end
     end
@@ -1447,18 +1478,18 @@ defmodule ExWapp.AppState.Engine do
 
   defp maybe_resolve_external_patch_mutations(
          _session,
-         %SyncdPatch{external_mutations: nil} = patch
+         %SyncdPatch{externalMutations: nil} = patch
        ) do
     {:ok, patch}
   end
 
   defp maybe_resolve_external_patch_mutations(
          session,
-         %SyncdPatch{external_mutations: %ExternalBlobReference{} = ref} = patch
+         %SyncdPatch{externalMutations: %ExternalBlobReference{} = ref} = patch
        ) do
     with {:ok, raw_mutations} <- download_external_blob(session, ref),
          {:ok, %SyncdMutations{mutations: mutations}} <-
-           SyncAction.decode_syncd_mutations(raw_mutations) do
+           SyncdMutations.decode(raw_mutations) do
       {:ok, %{patch | mutations: mutations}}
     end
   end
@@ -1469,10 +1500,10 @@ defmodule ExWapp.AppState.Engine do
 
   defp download_external_blob(session, %ExternalBlobReference{} = ref) do
     timed_app_state(:external_blob, %{payload: :app_state}, %{}, fn ->
-      with {:ok, direct_path} <- validate_external_direct_path(ref.direct_path),
+      with {:ok, direct_path} <- validate_external_direct_path(ref.directPath),
            {:ok, encrypted_payload} <-
-             download_external_blob_payload(session, direct_path, ref.file_enc_sha256) do
-        decrypt_external_blob_payload(ref.media_key, encrypted_payload)
+             download_external_blob_payload(session, direct_path, ref.fileEncSHA256) do
+        decrypt_external_blob_payload(ref.mediaKey, encrypted_payload)
       end
     end)
   end
@@ -1762,21 +1793,23 @@ defmodule ExWapp.AppState.Engine do
   end
 
   defp build_snapshot_mutations(snapshot) do
-    snapshot_key_id = snapshot.key_id
+    snapshot_key_id = snapshot.keyID
 
     mutations =
       Enum.map(snapshot.records, fn record ->
         record =
-          if is_binary(record.key_id), do: record, else: %{record | key_id: snapshot_key_id}
+          if is_binary(record_key_id(record)),
+            do: record,
+            else: %{record | keyID: snapshot_key_id}
 
-        %SyncdMutation{operation: 0, record: record}
+        %SyncdMutation{operation: :SET, record: record}
       end)
 
     {:ok, mutations}
   end
 
   defp get_snapshot_key_data(snapshot, key_store) do
-    key_id = snapshot.key_id || snapshot_key_id_from_records(snapshot.records)
+    key_id = key_id_binary(snapshot.keyID) || snapshot_key_id_from_records(snapshot.records)
 
     if is_binary(key_id) do
       key_id_hex = Base.encode16(key_id, case: :lower)
@@ -1787,17 +1820,20 @@ defmodule ExWapp.AppState.Engine do
   end
 
   defp snapshot_key_id_from_records(records) do
-    Enum.find_value(records, fn
-      %{key_id: key_id} when is_binary(key_id) -> key_id
-      _ -> nil
-    end)
+    Enum.find_value(records, &record_key_id/1)
   end
+
+  defp normalize_patch_version(%SyncdVersion{version: version}),
+    do: normalize_patch_version(version)
 
   defp normalize_patch_version(version) when is_integer(version) and version >= 0 do
     {:ok, version}
   end
 
   defp normalize_patch_version(_version), do: {:error, :invalid_patch_version}
+
+  defp normalize_patch_version(%SyncdVersion{version: version}, current_version),
+    do: normalize_patch_version(version, current_version)
 
   defp normalize_patch_version(version, _current_version)
        when is_integer(version) and version >= 0 do
@@ -1811,7 +1847,8 @@ defmodule ExWapp.AppState.Engine do
 
   defp normalize_patch_version(_version, _current_version), do: {:error, :invalid_patch_version}
 
-  defp get_patch_key_data(%SyncdPatch{key_id: key_id}, key_store) when is_binary(key_id) do
+  defp get_patch_key_data(%SyncdPatch{keyID: %KeyId{ID: key_id}}, key_store)
+       when is_binary(key_id) do
     key_id_hex = Base.encode16(key_id, case: :lower)
     get_key_data(key_store, key_id_hex)
   end
@@ -1839,19 +1876,19 @@ defmodule ExWapp.AppState.Engine do
 
   defp validate_snapshot_mac(_patch, false, _h, _v, _c, _k), do: :ok
 
-  defp validate_snapshot_mac(%{snapshot_mac: nil}, true, _h, _v, _c, _k),
+  defp validate_snapshot_mac(%{snapshotMAC: nil}, true, _h, _v, _c, _k),
     do: {:error, :invalid_snapshot_mac}
 
   defp validate_snapshot_mac(patch, true, hash, version, collection, keys) do
     expected =
       Crypto.compute_snapshot_mac(hash, version, collection, keys.snapshot_mac)
 
-    compare_mac(expected, patch.snapshot_mac, :mismatching_snapshot_mac)
+    compare_mac(expected, patch.snapshotMAC, :mismatching_snapshot_mac)
   end
 
   defp validate_patch_mac(_p, false, _v, _c, _m, _k), do: :ok
 
-  defp validate_patch_mac(%{snapshot_mac: s, patch_mac: p}, true, _v, _c, _m, _k)
+  defp validate_patch_mac(%{snapshotMAC: s, patchMAC: p}, true, _v, _c, _m, _k)
        when not is_binary(s) or not is_binary(p),
        do: {:error, :invalid_patch_mac}
 
@@ -1860,14 +1897,14 @@ defmodule ExWapp.AppState.Engine do
 
     expected =
       Crypto.compute_patch_mac(
-        patch.snapshot_mac,
+        patch.snapshotMAC,
         value_macs,
         version,
         collection,
         keys.patch_mac
       )
 
-    compare_mac(expected, patch.patch_mac, :mismatching_patch_mac)
+    compare_mac(expected, patch.patchMAC, :mismatching_patch_mac)
   end
 
   defp validate_snapshot_hash(mac, mac_key, hash, version, collection) do
@@ -1941,13 +1978,13 @@ defmodule ExWapp.AppState.Engine do
 
   defp build_message_range(nil) do
     %SyncActionMessageRange{
-      last_message_timestamp: System.system_time(:second)
+      lastMessageTimestamp: System.system_time(:second)
     }
   end
 
   defp build_message_range(timestamp) when is_integer(timestamp) do
     %SyncActionMessageRange{
-      last_message_timestamp: timestamp
+      lastMessageTimestamp: timestamp
     }
   end
 

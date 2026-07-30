@@ -24,9 +24,12 @@ OUT_DIR="lib/ex_wapp/wa_proto"
 
 # Every proto set the project generates. waE2E transitively pulls in
 # waCommon, waAdv, waCompanionReg, waMmsRetry, waStatusAttributions and
-# waAICommon*; waCert and waWa6 are standalone.
+# waAICommon*; waHistorySync pulls in waSyncAction, waWeb and
+# waChatLockSettings; waCert and waWa6 are standalone.
 ENTRYPOINTS=(
   "$UPSTREAM_DIR/proto/waE2E/WAWebProtobufsE2E.proto"
+  "$UPSTREAM_DIR/proto/waHistorySync/WAWebProtobufsHistorySync.proto"
+  "$UPSTREAM_DIR/proto/waSyncAction/WAWebProtobufSyncAction.proto"
   "$UPSTREAM_DIR/proto/waCert/WACert.proto"
   "$UPSTREAM_DIR/proto/waWa6/WAWebProtobufsWa6.proto"
 )
@@ -76,7 +79,7 @@ mix test test/wa_proto_e2e_parity_test.exs test/messages_domain_edge_test.exs \
   test/proto_message_media_test.exs test/whatsmeow_parity_test.exs
 
 step "Done"
-if git diff --quiet -- "$OUT_DIR"; then
+if [[ -z "$(git status --porcelain -- "$OUT_DIR")" ]]; then
   echo "wa_proto is already up to date — no changes."
 else
   git diff --stat -- "$OUT_DIR" | tail -3

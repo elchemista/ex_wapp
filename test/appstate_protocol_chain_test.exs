@@ -4,7 +4,7 @@ defmodule ExWapp.AppState.ProtocolChainTest do
   alias ExWapp.AppState.{Engine, LTHash}
   alias ExWapp.AppState.Engine.Codec
   alias ExWapp.Binary.Node
-  alias ExWapp.Proto.SyncAction
+  alias WAWebProtobufsServerSync.SyncdPatch
   alias ExWapp.Store
 
   setup do
@@ -30,8 +30,8 @@ defmodule ExWapp.AppState.ProtocolChainTest do
     {:ok, second_binary, encoded_state_2, encoded_macs_2} =
       Engine.encode_patch(second, ctx.key_id, ctx.key_data, encoded_state_1, encoded_macs_1)
 
-    {:ok, first_patch} = SyncAction.decode_syncd_patch(first_binary)
-    {:ok, second_patch} = SyncAction.decode_syncd_patch(second_binary)
+    {:ok, first_patch} = SyncdPatch.decode(first_binary)
+    {:ok, second_patch} = SyncdPatch.decode(second_binary)
 
     assert {:ok, [first_decoded], decoded_state_1, decoded_macs_1} =
              Engine.decode_patch(
@@ -42,7 +42,7 @@ defmodule ExWapp.AppState.ProtocolChainTest do
                ctx.key_store
              )
 
-    assert first_decoded.action.pin_action.pinned == true
+    assert first_decoded.action.pinAction.pinned == true
     assert decoded_state_1 == encoded_state_1
     assert decoded_macs_1 == encoded_macs_1
 
@@ -55,7 +55,7 @@ defmodule ExWapp.AppState.ProtocolChainTest do
                ctx.key_store
              )
 
-    assert second_decoded.action.pin_action.pinned == false
+    assert second_decoded.action.pinAction.pinned == false
     assert decoded_state_2 == encoded_state_2
     assert decoded_macs_2 == encoded_macs_2
     assert decoded_state_2.version == 2
@@ -74,8 +74,8 @@ defmodule ExWapp.AppState.ProtocolChainTest do
     assert encoded_final_state.hash == LTHash.new()
     assert encoded_final_macs == %{}
 
-    {:ok, set_patch} = SyncAction.decode_syncd_patch(set_binary)
-    {:ok, remove_patch} = SyncAction.decode_syncd_patch(remove_binary)
+    {:ok, set_patch} = SyncdPatch.decode(set_binary)
+    {:ok, remove_patch} = SyncdPatch.decode(remove_binary)
 
     {:ok, _set, decoded_state_1, decoded_macs_1} =
       Engine.decode_patch(
@@ -109,27 +109,27 @@ defmodule ExWapp.AppState.ProtocolChainTest do
         %{}
       )
 
-    {:ok, patch} = SyncAction.decode_syncd_patch(encoded)
+    {:ok, patch} = SyncdPatch.decode(encoded)
 
     assert {:error, :mismatching_snapshot_mac} =
              patch
-             |> Map.put(:snapshot_mac, flip_first(patch.snapshot_mac))
+             |> Map.put(:snapshotMAC, flip_first(patch.snapshotMAC))
              |> decode_patch(ctx, "regular_low")
 
     assert {:error, :mismatching_patch_mac} =
              patch
-             |> Map.put(:patch_mac, flip_first(patch.patch_mac))
+             |> Map.put(:patchMAC, flip_first(patch.patchMAC))
              |> decode_patch(ctx, "regular_low")
 
     [mutation] = patch.mutations
-    bad_value = put_in(mutation.record.value, flip_first(mutation.record.value))
+    bad_value = put_in(mutation.record.value.blob, flip_first(mutation.record.value.blob))
 
     assert {:error, :mismatching_content_mac} =
              patch
              |> Map.put(:mutations, [bad_value])
              |> decode_patch(ctx, "regular_low")
 
-    bad_index = put_in(mutation.record.index, flip_first(mutation.record.index))
+    bad_index = put_in(mutation.record.index.blob, flip_first(mutation.record.index.blob))
 
     assert {:error, :mismatching_index_mac} =
              patch
@@ -147,7 +147,7 @@ defmodule ExWapp.AppState.ProtocolChainTest do
         %{}
       )
 
-    {:ok, patch} = SyncAction.decode_syncd_patch(encoded)
+    {:ok, patch} = SyncdPatch.decode(encoded)
     key_hex = Base.encode16(ctx.key_id, case: :lower)
 
     assert {:error, {:key_not_found, ^key_hex}} =
@@ -164,12 +164,13 @@ defmodule ExWapp.AppState.ProtocolChainTest do
     {:ok, second_binary, _state_2, _macs_2} =
       Engine.encode_patch(second, ctx.key_id, ctx.key_data, state_1, macs_1)
 
-    {:ok, second_patch} = SyncAction.decode_syncd_patch(second_binary)
+    {:ok, second_patch} = SyncdPatch.decode(second_binary)
 
     corrupt_second =
       second_patch
-      |> Map.put(:patch_mac, flip_first(second_patch.patch_mac))
-      |> SyncAction.encode_syncd_patch()
+      |> Map.put(:patchMAC, flip_first(second_patch.patchMAC))
+      |> SyncdPatch.encode!()
+      |> IO.iodata_to_binary()
 
     store =
       Store.Memory.new(
@@ -200,7 +201,7 @@ defmodule ExWapp.AppState.ProtocolChainTest do
     assert {:ok, encoded, encoded_state, encoded_macs} =
              Codec.encode_patch(patch_info, ctx.key_id, ctx.key_data, ctx.initial_state, %{})
 
-    assert {:ok, patch} = SyncAction.decode_syncd_patch(encoded)
+    assert {:ok, patch} = SyncdPatch.decode(encoded)
 
     assert {:ok, [decoded], ^encoded_state, ^encoded_macs} =
              Codec.decode_patch(
@@ -211,7 +212,7 @@ defmodule ExWapp.AppState.ProtocolChainTest do
                ctx.key_store
              )
 
-    assert decoded.action.pin_action.pinned == true
+    assert decoded.action.pinAction.pinned == true
   end
 
   defp decode_patch(patch, ctx, collection) do

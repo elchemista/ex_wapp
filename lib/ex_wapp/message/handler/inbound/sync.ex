@@ -14,8 +14,15 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
   alias ExWapp.Message.Handler.Common
   alias ExWapp.Message.Handler.Inbound.{Content, Projection}
   alias ExWapp.Message.Handler.Wire.Fields
-  alias ExWapp.Proto.{HistorySync, SyncAction}
+  alias ExWapp.Proto.HistorySync
   alias ExWapp.Session.JIDUtils
+
+  alias WAWebProtobufsE2E.{
+    AppStateSyncKey,
+    AppStateSyncKeyData,
+    AppStateSyncKeyId,
+    Message
+  }
 
   @doc """
   Applies every supported inbound protocol-sync payload to session state.
@@ -155,19 +162,16 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
 
   defp maybe_ingest_app_state_keys(_message_data, _session, state, _own_sender?), do: state
 
-  @spec extract_app_state_keys(binary()) :: {:ok, [map()]} | :not_app_state_key_share
+  @spec extract_app_state_keys(binary()) ::
+          {:ok, [AppStateSyncKey.t()]} | :not_app_state_key_share
   defp extract_app_state_keys(payload) when is_binary(payload) do
-    with {:ok, message_fields} <- Fields.decode_safe(payload),
-         protocol_message when is_binary(protocol_message) <-
-           Fields.first_length_delimited(message_fields, 12),
-         {:ok, protocol_fields} <- Fields.decode_safe(protocol_message),
-         key_share_bytes when is_binary(key_share_bytes) <-
-           Fields.first_length_delimited(protocol_fields, 7),
-         {:ok, key_share} <- SyncAction.decode_app_state_sync_key_share(key_share_bytes),
-         true <- key_share.keys != [] do
-      {:ok, key_share.keys}
-    else
-      _ -> :not_app_state_key_share
+    case Message.decode(payload) do
+      {:ok, %Message{protocolMessage: %{appStateSyncKeyShare: %{keys: keys}}}}
+      when is_list(keys) and keys != [] ->
+        {:ok, keys}
+
+      _ ->
+        :not_app_state_key_share
     end
   end
 
@@ -407,22 +411,23 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
 
   @spec extract_app_state_key_data(map()) ::
           {:ok, binary(), binary(), term(), term()} | :error
-  defp extract_app_state_key_data(key) when is_map(key) do
-    key_id = Map.get(key, :key_id)
-    key_data = Map.get(key, :key_data)
-
-    case {key_id, key_data} do
-      {key_id, %{key_data: key_data_bin} = key_data_map}
-      when is_binary(key_id) and is_binary(key_data_bin) ->
-        {:ok, key_id, key_data_bin, Map.get(key_data_map, :timestamp),
-         Map.get(key_data_map, :fingerprint)}
-
-      _ ->
-        :error
-    end
+  defp extract_app_state_key_data(%AppStateSyncKey{
+         keyID: %AppStateSyncKeyId{keyID: key_id},
+         keyData: %AppStateSyncKeyData{keyData: key_data_bin} = key_data
+       })
+       when is_binary(key_id) and is_binary(key_data_bin) do
+    {:ok, key_id, key_data_bin, key_data.timestamp, encode_key_fingerprint(key_data.fingerprint)}
   end
 
   defp extract_app_state_key_data(_key), do: :error
+
+  # The fingerprint is stored but never read back as a struct; keep the
+  # persisted shape as the raw protobuf bytes it always was.
+  @spec encode_key_fingerprint(struct() | nil) :: binary() | nil
+  defp encode_key_fingerprint(%_{} = fingerprint),
+    do: fingerprint.__struct__.encode!(fingerprint) |> IO.iodata_to_binary()
+
+  defp encode_key_fingerprint(_fingerprint), do: nil
 
   @spec maybe_trigger_initial_app_state_sync(term()) :: :ok
   defp maybe_trigger_initial_app_state_sync(session) do

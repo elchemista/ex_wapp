@@ -3,7 +3,6 @@ defmodule ExWapp.Store.CodecTest do
 
   alias ExWapp.{Chat, Contact, JID}
   alias ExWapp.Store.Codec
-  alias ExWapp.Proto.SyncAction
 
   test "roundtrips nested store data with structs, tuples, atoms, and binaries" do
     payload = %{
@@ -48,9 +47,9 @@ defmodule ExWapp.Store.CodecTest do
         accountSignature: <<9, 10>>,
         deviceSignature: <<11, 12>>
       },
-      sync: %SyncAction.ContactAction{
-        full_name: "Alice Example",
-        first_name: "Alice"
+      sync: %WAWebProtobufSyncAction.ContactAction{
+        fullName: "Alice Example",
+        firstName: "Alice"
       }
     }
 

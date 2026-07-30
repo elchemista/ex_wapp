@@ -116,9 +116,9 @@ defmodule ExWapp.Contact do
       updated =
         contacts
         |> existing_contact(normalized)
-        |> maybe_set(:full_name, Map.get(contact_action, :full_name))
-        |> maybe_set(:first_name, Map.get(contact_action, :first_name))
-        |> maybe_set(:lid, Map.get(contact_action, :lid_jid))
+        |> maybe_set(:full_name, Map.get(contact_action, :fullName))
+        |> maybe_set(:first_name, Map.get(contact_action, :firstName))
+        |> maybe_set(:lid, Map.get(contact_action, :lidJID))
         |> maybe_set(:username, Map.get(contact_action, :username))
         |> Map.put(:phone_number, extract_phone(normalized))
 
