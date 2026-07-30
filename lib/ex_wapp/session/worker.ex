@@ -93,6 +93,7 @@ defmodule ExWapp.Session.Worker do
     Retry,
     Safety,
     SendHealth,
+    SignalSessions,
     Subscribers
   }
 
@@ -428,7 +429,7 @@ defmodule ExWapp.Session.Worker do
       send_worker_sup: send_worker_sup,
       session_id: session_id,
       pairing: Pairing.new(store),
-      signal_sessions: load_persisted_signal_sessions(store),
+      signal_sessions: SignalSessions.load(store),
       rate_limiter: RateLimiter.new(),
       quota: Quota.new(runtime_cfg),
       safety: Safety.new()
@@ -737,8 +738,8 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_call({:update_signal_sessions, sessions}, _from, state) do
-    sessions = normalize_persisted_signal_sessions(sessions)
-    persist_signal_sessions_store(state.store, sessions)
+    sessions = SignalSessions.normalize(sessions)
+    SignalSessions.persist(state.store, sessions)
     {:reply, :ok, %{state | signal_sessions: sessions}}
   end
 
@@ -1164,10 +1165,10 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_info({:signal_sessions_updated, sessions}, state) do
-    sessions = normalize_persisted_signal_sessions(sessions)
+    sessions = SignalSessions.normalize(sessions)
     session_count = sessions |> SessionStore.list_sessions() |> length()
     Logger.debug("[SEND] Async signal session update received (sessions=#{session_count})")
-    persist_signal_sessions_store(state.store, sessions)
+    SignalSessions.persist(state.store, sessions)
     {:noreply, %{state | signal_sessions: sessions}}
   end
 
@@ -1200,7 +1201,7 @@ defmodule ExWapp.Session.Worker do
   def handle_info({:refresh_identity_session, _jid}, state), do: {:noreply, state}
 
   def handle_info({:identity_prekey_bundle, jid, {:ok, bundle}}, state) do
-    {:noreply, install_refreshed_identity_session(state, jid, bundle)}
+    {:noreply, SignalSessions.install_refreshed_identity(state, jid, bundle)}
   end
 
   def handle_info({:identity_prekey_bundle, jid, {:error, reason}}, state) do
@@ -1644,57 +1645,6 @@ defmodule ExWapp.Session.Worker do
   # buys back the case where the alternative is an unbounded run of rejected
   # sends. Deployments that restore the store from an external snapshot can turn
   # `reset_sessions_on_connect` on and pay that cost for every peer instead.
-  defp refresh_signal_sessions_on_connect(%{signal_sessions: nil} = state), do: state
-
-  defp refresh_signal_sessions_on_connect(state) do
-    runtime_cfg = Map.get(state, :runtime_cfg) || %{}
-
-    reset? = Config.get(runtime_cfg, [:signal, :reset_sessions_on_connect], false)
-
-    {sessions, dropped} =
-      if reset? do
-        drop_all_signal_sessions(state.signal_sessions)
-      else
-        SessionStore.evict_one_way_sessions(
-          state.signal_sessions,
-          Config.get(runtime_cfg, [:signal, :evict_one_way_sessions_after_ms], :timer.hours(1))
-        )
-      end
-
-    if dropped == [] do
-      state
-    else
-      scope = if reset?, do: "every", else: "one-way"
-
-      Logger.warning(
-        "[SESSION] Dropped #{length(dropped)} #{scope} Signal session(s) at connect; " <>
-          "the next send to those peers negotiates a fresh one"
-      )
-
-      persist_signal_sessions_store(state.store, sessions)
-      %{state | signal_sessions: sessions}
-    end
-  end
-
-  defp drop_all_signal_sessions(signal_sessions) do
-    jids = SessionStore.list_sessions(signal_sessions)
-    {Enum.reduce(jids, signal_sessions, &SessionStore.delete_session(&2, &1)), jids}
-  end
-
-  defp clear_signal_sessions_for_jid_in_memory(%{signal_sessions: nil} = state, _jid), do: state
-
-  defp clear_signal_sessions_for_jid_in_memory(state, jid) do
-    %{
-      state
-      | signal_sessions: clear_signal_sessions_in_store(state.signal_sessions, jid, state.store)
-    }
-  end
-
-  defp clear_signal_sessions_in_store(signal_sessions, jid, store) do
-    lid_mapping = Account.load_lid_mapping(store)
-    SessionStore.delete_sessions_for_user(signal_sessions, jid, lid_mapping)
-  end
-
   defp do_health_check(%{conn: nil} = state), do: state
 
   defp do_health_check(%{conn: conn} = state) when is_pid(conn) do
@@ -1805,7 +1755,7 @@ defmodule ExWapp.Session.Worker do
           connected_at: DateTime.utc_now(),
           post_auth_phase: :complete
       }
-      |> refresh_signal_sessions_on_connect()
+      |> SignalSessions.refresh_on_connect()
 
     Subscribers.broadcast_lifecycle(
       state.session_id,
@@ -1883,7 +1833,7 @@ defmodule ExWapp.Session.Worker do
         outgoing_payloads: Map.get(state, :outgoing_retry_payloads, %{}),
         retry_meta: retry_meta,
         send_fun: fn normalized_jid, text ->
-          retry_state = clear_signal_sessions_for_jid_in_memory(state, normalized_jid)
+          retry_state = SignalSessions.clear_for_jid(state, normalized_jid)
 
           retry_opts =
             [
@@ -2278,91 +2228,6 @@ defmodule ExWapp.Session.Worker do
     do: Subscribers.remove_message_subscriber(state, ref)
 
   # Session state helpers
-
-  defp load_persisted_signal_sessions(store) do
-    store
-    |> Store.load_signal_sessions()
-    |> normalize_persisted_signal_sessions()
-  rescue
-    error ->
-      Logger.warning("[SESSION] Failed to load persisted signal sessions: #{Log.reason(error)}")
-      nil
-  end
-
-  defp normalize_persisted_signal_sessions(nil), do: SessionStore.new_ets()
-  defp normalize_persisted_signal_sessions(%SessionStore.Ref{} = persisted), do: persisted
-
-  defp normalize_persisted_signal_sessions(%{sessions: sessions} = persisted)
-       when is_map(sessions) do
-    normalized =
-      SessionStore.new()
-      |> Map.merge(persisted)
-      |> Map.put(:pending_prekeys, Map.get(persisted, :pending_prekeys, %{}))
-      |> Map.put(:session_touched_at_ms, Map.get(persisted, :session_touched_at_ms, %{}))
-
-    SessionStore.new_ets(normalized)
-  end
-
-  defp normalize_persisted_signal_sessions(_), do: SessionStore.new_ets()
-
-  defp persist_signal_sessions_store(nil, _sessions), do: :ok
-
-  defp persist_signal_sessions_store(store, sessions) do
-    if SessionStore.store?(sessions) do
-      case Store.persist_signal_sessions(store, sessions) do
-        :ok ->
-          flush_store(store)
-          :ok
-
-        {:error, reason} ->
-          Logger.warning("[SESSION] Failed to persist signal sessions: #{Log.reason(reason)}")
-          :ok
-      end
-    else
-      :ok
-    end
-  rescue
-    error ->
-      Logger.warning("[SESSION] Failed to persist signal sessions: #{Log.reason(error)}")
-      :ok
-  end
-
-  defp install_refreshed_identity_session(state, jid, bundle) do
-    data = Store.load!(state.store)
-    local_identity = get_in(data, [:signal, :identity_key])
-    local_registration_id = get_in(data, [:signal, :registration_id]) || 0
-
-    with true <- SessionStore.store?(state.signal_sessions),
-         %{private: private, public: public} = identity <- local_identity,
-         true <- is_binary(private) and is_binary(public),
-         target_jid when is_binary(target_jid) <- Map.get(bundle, :jid) || jid,
-         {:ok, _session, _base_key, sessions} <-
-           SessionStore.get_or_create_session(
-             state.signal_sessions,
-             target_jid,
-             identity,
-             bundle,
-             local_registration_id,
-             force: true
-           ) do
-      persist_signal_sessions_store(state.store, sessions)
-      %{state | signal_sessions: sessions}
-    else
-      reason ->
-        Logger.warning(
-          "[IDENTITY] Invalid refreshed bundle for #{Log.reference(jid)}: #{Log.reason(reason)}"
-        )
-
-        state
-    end
-  rescue
-    error ->
-      Logger.warning(
-        "[IDENTITY] Failed installing refreshed bundle for #{Log.reference(jid)}: #{Log.reason(error)}"
-      )
-
-      state
-  end
 
   defp message_media_ref(%{media: %Media.Ref{} = ref}), do: ref
 
