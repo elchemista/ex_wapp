@@ -60,8 +60,7 @@ defmodule ExWapp.Session.Worker do
     Pairing,
     Quota,
     RateLimiter,
-    Store,
-    Telemetry
+    Store
   }
 
   alias ExWapp.Pairing.LinkCode
@@ -85,6 +84,7 @@ defmodule ExWapp.Session.Worker do
   alias ExWapp.Session.Account
 
   alias ExWapp.Session.Worker.{
+    Events,
     NodeHandler,
     Outbound,
     OutboundConfirmation,
@@ -435,7 +435,7 @@ defmodule ExWapp.Session.Worker do
       safety: Safety.new()
     }
 
-    emit_telemetry(:init, %{session_id: session_id}, state)
+    Events.emit_telemetry(:init, %{session_id: session_id}, state)
 
     if options.auto_connect do
       send(self(), :connect)
@@ -478,7 +478,7 @@ defmodule ExWapp.Session.Worker do
         OutboundQueue.enqueue_node(outbound_queue, node)
 
         Subscribers.notify_qr(state, {:pairing_code, code}, fn ->
-          emit_telemetry(
+          Events.emit_telemetry(
             :qr,
             %{subscriber_count: map_size(state.qr_subscribers)},
             state,
@@ -866,7 +866,7 @@ defmodule ExWapp.Session.Worker do
 
   def handle_info({:reconnect, attempt}, state) do
     Logger.debug("Reconnection attempt #{attempt}")
-    emit_telemetry(:reconnect, %{attempt: attempt}, state)
+    Events.emit_telemetry(:reconnect, %{attempt: attempt}, state)
     {:noreply, do_connect(%{state | reconnect_attempts: attempt})}
   end
 
@@ -927,7 +927,7 @@ defmodule ExWapp.Session.Worker do
   catch
     kind, reason ->
       Logger.error("Error handling connection event: #{kind} #{Log.reason(reason)}")
-      new_state = update_stats(state, :errors)
+      new_state = Events.update_stats(state, :errors)
       {:noreply, new_state}
   end
 
@@ -1004,7 +1004,7 @@ defmodule ExWapp.Session.Worker do
       "[WORKER] New message from=#{Log.reference(jid)} id=#{Log.reference(Map.get(message, :id))} session=#{Log.reference(state.session_id)}"
     )
 
-    emit_telemetry(
+    Events.emit_telemetry(
       :message_received,
       %{message_count: 1},
       state,
@@ -1142,8 +1142,8 @@ defmodule ExWapp.Session.Worker do
 
   def handle_info({:outbound_error, _item, reason}, state) do
     Logger.warning("[SESSION] outbound queue error: #{Log.reason(reason)}")
-    emit_telemetry(:error, %{reason: reason, phase: :outbound}, state)
-    state = update_stats(state, :errors)
+    Events.emit_telemetry(:error, %{reason: reason, phase: :outbound}, state)
+    state = Events.update_stats(state, :errors)
     state = SendHealth.increment_outbound_queue_errors(state, reason)
 
     case maybe_apply_send_error_guard(state, {:outbound_queue_error, reason}) do
@@ -1321,11 +1321,11 @@ defmodule ExWapp.Session.Worker do
   @impl true
   def terminate(reason, state) do
     Logger.debug("Session terminating: #{Log.reason(reason)}")
-    emit_telemetry(:terminate, %{reason: reason}, state)
+    Events.emit_telemetry(:terminate, %{reason: reason}, state)
 
     Subscribers.broadcast_lifecycle(
       state.session_id,
-      {:ex_wapp_session, :terminated, reason, lifecycle_event_meta(state)}
+      {:ex_wapp_session, :terminated, reason, Events.lifecycle_event_meta(state)}
     )
 
     if state.session_id do
@@ -1398,7 +1398,7 @@ defmodule ExWapp.Session.Worker do
   defp do_connect(%__MODULE__{} = state) do
     Logger.debug("[SESSION] do_connect starting connection...")
     Logger.debug("[SESSION] store_adapter=#{inspect(state.store.__struct__)}")
-    emit_telemetry(:connect, %{attempt: state.reconnect_attempts}, state)
+    Events.emit_telemetry(:connect, %{attempt: state.reconnect_attempts}, state)
 
     case safe_start_connection(state) do
       {:ok, conn_pid} ->
@@ -1417,22 +1417,23 @@ defmodule ExWapp.Session.Worker do
       {:error, reason} ->
         Logger.debug("[SESSION] ✗ Connection FAILED: #{Log.reason(reason)}")
         Logger.error("Failed to start connection: #{Log.reason(reason)}")
-        emit_telemetry(:error, %{reason: reason, phase: :connect}, state)
+        Events.emit_telemetry(:error, %{reason: reason, phase: :connect}, state)
 
         if vext_managed_runtime?(state) do
           disconnect_reason = {:connect_failed, reason}
 
           Subscribers.broadcast_lifecycle(
             state.session_id,
-            {:ex_wapp_session, :disconnected, disconnect_reason, lifecycle_event_meta(state)}
+            {:ex_wapp_session, :disconnected, disconnect_reason,
+             Events.lifecycle_event_meta(state)}
           )
 
           state
-          |> update_stats(:errors)
+          |> Events.update_stats(:errors)
           |> Map.put(:status, :disconnected)
           |> Map.put(:last_disconnect_reason, disconnect_reason)
         else
-          notify_qr(state, {:error, reason})
+          Events.notify_qr(state, {:error, reason})
           schedule_reconnect(state, reason)
         end
     end
@@ -1502,11 +1503,11 @@ defmodule ExWapp.Session.Worker do
       :exit, _ -> :ok
     end
 
-    emit_telemetry(:disconnected, %{reason: reason}, state)
+    Events.emit_telemetry(:disconnected, %{reason: reason}, state)
 
     Subscribers.broadcast_lifecycle(
       state.session_id,
-      {:ex_wapp_session, :disconnected, reason, lifecycle_event_meta(state)}
+      {:ex_wapp_session, :disconnected, reason, Events.lifecycle_event_meta(state)}
     )
 
     %{
@@ -1548,19 +1549,19 @@ defmodule ExWapp.Session.Worker do
         passive_iq_id: nil,
         digest_iq_id: nil
       })
-      |> update_stats(:reconnects)
+      |> Events.update_stats(:reconnects)
 
-    emit_telemetry(:disconnected, %{reason: reason}, next_state)
+    Events.emit_telemetry(:disconnected, %{reason: reason}, next_state)
 
     Subscribers.broadcast_lifecycle(
       next_state.session_id,
-      {:ex_wapp_session, :disconnected, reason, lifecycle_event_meta(next_state)}
+      {:ex_wapp_session, :disconnected, reason, Events.lifecycle_event_meta(next_state)}
     )
 
     if vext_managed_runtime?(next_state) do
       next_state
     else
-      notify_qr(next_state, {:error, {:disconnected, reason}})
+      Events.notify_qr(next_state, {:error, {:disconnected, reason}})
       schedule_reconnect(next_state, reason)
     end
   end
@@ -1605,7 +1606,7 @@ defmodule ExWapp.Session.Worker do
             "[SESSION] Session invalid (401), not reconnecting. Clear session to re-pair."
           )
 
-          notify_qr(state, {:error, :session_invalid})
+          Events.notify_qr(state, {:error, :session_invalid})
           %{state | status: :idle}
 
         {:reconnect, attempt, delay} ->
@@ -1616,7 +1617,7 @@ defmodule ExWapp.Session.Worker do
 
         :give_up ->
           Logger.error("Reconnect disabled or max reconnect attempts reached, giving up")
-          notify_qr(state, {:error, :max_reconnect_attempts})
+          Events.notify_qr(state, {:error, :max_reconnect_attempts})
           %{state | status: :idle}
       end
     end
@@ -1726,7 +1727,7 @@ defmodule ExWapp.Session.Worker do
 
     Subscribers.broadcast_lifecycle(
       state.session_id,
-      {:ex_wapp_session, :transport_ready, lifecycle_event_meta(state)}
+      {:ex_wapp_session, :transport_ready, Events.lifecycle_event_meta(state)}
     )
 
     state
@@ -1735,14 +1736,14 @@ defmodule ExWapp.Session.Worker do
   defp handle_connection_event({:auth, :success_received}, state) do
     Subscribers.broadcast_lifecycle(
       state.session_id,
-      {:ex_wapp_session, :connected, lifecycle_event_meta(state)}
+      {:ex_wapp_session, :connected, Events.lifecycle_event_meta(state)}
     )
 
     state
   end
 
   defp handle_connection_event({:auth, :ready}, state) do
-    emit_telemetry(:connected, %{}, state)
+    Events.emit_telemetry(:connected, %{}, state)
 
     initial_sync? =
       AppStateSync.initial_enabled?(state) and AppStateSync.keys_available?(state.store)
@@ -1760,7 +1761,7 @@ defmodule ExWapp.Session.Worker do
     Subscribers.broadcast_lifecycle(
       state.session_id,
       {:ex_wapp_session, :post_auth_ready,
-       lifecycle_event_meta(state, %{initial_sync_pending?: initial_sync?})}
+       Events.lifecycle_event_meta(state, %{initial_sync_pending?: initial_sync?})}
     )
 
     AppStateSync.schedule_initial(state, self())
@@ -1781,14 +1782,14 @@ defmodule ExWapp.Session.Worker do
 
   defp handle_connection_event({:error, reason}, state) do
     Logger.warning("Connection error: #{Log.reason(reason)}")
-    emit_telemetry(:error, %{reason: reason}, state)
-    state = update_stats(state, :errors)
+    Events.emit_telemetry(:error, %{reason: reason}, state)
+    state = Events.update_stats(state, :errors)
 
     if vext_managed_runtime?(state) do
       Subscribers.broadcast_error(state.session_id, reason)
       state
     else
-      notify_qr(state, {:error, reason})
+      Events.notify_qr(state, {:error, reason})
       state
     end
   end
@@ -2066,7 +2067,7 @@ defmodule ExWapp.Session.Worker do
           new_state =
             policy_state
             |> register_send_worker(worker, mon, message.to, from)
-            |> update_stats(:messages_sent)
+            |> Events.update_stats(:messages_sent)
 
           {:ok, new_state}
 
@@ -2197,27 +2198,14 @@ defmodule ExWapp.Session.Worker do
 
   # QR subscriber delivery
 
-  defp notify_qr(state, {:error, _} = event) do
-    Subscribers.notify_qr(state, event, fn ->
-      emit_telemetry(
-        :qr,
-        %{subscriber_count: map_size(state.qr_subscribers)},
-        state,
-        %{event: :error}
-      )
-    end)
-  end
-
   defp remove_qr_subscriber(state, ref), do: Subscribers.remove_qr_subscriber(state, ref)
 
   defp cleanup_dead_subscriber(state, dead_mon),
     do: Subscribers.cleanup_dead_subscriber(state, dead_mon)
 
-  defp vext_managed_runtime?(%{runtime_cfg: runtime_cfg}) when is_map(runtime_cfg) do
+  defp vext_managed_runtime?(%{runtime_cfg: runtime_cfg}) do
     Config.get(runtime_cfg, [:ownership, :vext_managed], false)
   end
-
-  defp vext_managed_runtime?(_state), do: false
 
   # Message subscriber delivery
 
@@ -2349,18 +2337,6 @@ defmodule ExWapp.Session.Worker do
   end
 
   defp maybe_set_conn(_outbound_queue, _state), do: :ok
-
-  defp lifecycle_event_meta(state, extra \\ %{}) do
-    extra
-    |> Map.new()
-    |> Map.merge(%{
-      runtime_ref: self(),
-      session_id: state.session_id,
-      status: state.status,
-      transport_ready?: state.transport_ready?,
-      post_auth_phase: state.post_auth_phase
-    })
-  end
 
   defp start_contact_sync_worker(state, from) do
     session_pid = self()
@@ -2548,7 +2524,10 @@ defmodule ExWapp.Session.Worker do
       {:ok, state}
     else
       {:error, reason, policy_state} ->
-        emit_telemetry(:error, %{reason: reason, phase: :send_policy}, policy_state, %{jid: jid})
+        Events.emit_telemetry(:error, %{reason: reason, phase: :send_policy}, policy_state, %{
+          jid: jid
+        })
+
         emit_policy_telemetry(reason, jid, policy_state)
         {:error, reason, policy_state}
     end
@@ -2762,49 +2741,11 @@ defmodule ExWapp.Session.Worker do
     |> Enum.sum()
   end
 
-  defp update_stats(state, key) do
-    update_in(state.stats[key], &((&1 || 0) + 1))
-  end
-
   defp calculate_uptime(%{connected_at: nil}), do: 0
 
   defp calculate_uptime(%{connected_at: connected_at}) do
     DateTime.diff(DateTime.utc_now(), connected_at, :second)
   end
-
-  defp emit_telemetry(event, measurements, state, extra_metadata \\ %{}) do
-    maybe_broadcast_pubsub_error(event, measurements, extra_metadata, state)
-
-    metadata = %{
-      status: state.status,
-      reconnect_attempts: state.reconnect_attempts,
-      session_id: state.session_id
-    }
-
-    Telemetry.execute(
-      event,
-      Map.merge(%{system_time: System.system_time()}, measurements),
-      Map.merge(metadata, extra_metadata)
-    )
-  rescue
-    # Don't crash if telemetry fails
-    _ -> :ok
-  end
-
-  defp maybe_broadcast_pubsub_error(:error, measurements, extra_metadata, state) do
-    reason =
-      case {Map.get(measurements, :phase), Map.get(measurements, :reason)} do
-        {phase, reason} when not is_nil(phase) and not is_nil(reason) -> {phase, reason}
-        {_, reason} when not is_nil(reason) -> reason
-        _ -> {:error_event, measurements, extra_metadata}
-      end
-
-    Subscribers.broadcast_error(state.session_id, reason)
-  rescue
-    _ -> :ok
-  end
-
-  defp maybe_broadcast_pubsub_error(_event, _measurements, _extra_metadata, _state), do: :ok
 
   # ── Initial sync gate ──────────────────────────────────────────────────────
   # While the initial app-state sync runs the session is :syncing, which blocks
