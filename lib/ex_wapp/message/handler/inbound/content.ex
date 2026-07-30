@@ -12,15 +12,18 @@ defmodule ExWapp.Message.Handler.Inbound.Content do
   alias ExWapp.{Log, Media.Ref}
   alias ExWapp.Message.Content, as: MessageContent
   alias ExWapp.Message.Handler.Inbound.Decryptor
-  alias ExWapp.Message.Handler.Wire.{ContentDecoder, Fields}
+  alias ExWapp.Message.Handler.Wire.ContentDecoder
+  alias WAWebProtobufsE2E.Message
 
   @doc """
   Classifies decrypted plaintext and merges canonical plus legacy fields.
   """
   @spec decode_decrypted(Decryptor.success()) :: map()
   def decode_decrypted(decrypt_result) do
+    decoded = ContentDecoder.decode(decrypt_result.plaintext)
+
     canonical =
-      decode_plaintext(decrypt_result.plaintext,
+      decode_decoded_message(decoded, decrypt_result.plaintext,
         sender_key_distribution_count: decrypt_result.sender_key_distribution_count,
         enc_type: Map.get(decrypt_result.payload, :enc_type, decrypt_result.enc_type),
         sender_jid: decrypt_result.sender_jid
@@ -28,11 +31,17 @@ defmodule ExWapp.Message.Handler.Inbound.Content do
 
     log_decrypted_message(canonical, decrypt_result)
 
+    from_me =
+      case decoded do
+        {:ok, message} -> ContentDecoder.device_sent_message?(message)
+        :error -> false
+      end
+
     decrypt_result.message_data
     |> Map.merge(MessageContent.to_legacy(canonical))
     |> Map.put(:content, canonical)
     |> Map.put(:decrypt_status, :ok)
-    |> Map.put(:from_me, device_sent_message_payload?(decrypt_result.plaintext))
+    |> Map.put(:from_me, from_me)
   end
 
   @doc """
@@ -52,12 +61,36 @@ defmodule ExWapp.Message.Handler.Inbound.Content do
   """
   @spec decode_plaintext(binary(), keyword()) :: MessageContent.t()
   def decode_plaintext(plaintext, opts \\ []) when is_binary(plaintext) and is_list(opts) do
+    plaintext |> ContentDecoder.decode() |> decode_decoded_message(plaintext, opts)
+  end
+
+  @doc """
+  Decodes an already-parsed E2E message to canonical inbound content.
+
+  `plaintext` is only used for diagnostics and the protocol passthrough payload,
+  so callers that already hold the decoded struct never re-encode it.
+  """
+  @spec decode_message(Message.t(), binary(), keyword()) :: MessageContent.t()
+  def decode_message(%Message{} = message, plaintext, opts \\ [])
+      when is_binary(plaintext) and is_list(opts) do
+    decode_decoded_message({:ok, message}, plaintext, opts)
+  end
+
+  @spec decode_decoded_message({:ok, Message.t()} | :error, binary(), keyword()) ::
+          MessageContent.t()
+  defp decode_decoded_message(decoded, plaintext, opts) do
     sender_key_distribution_count = Keyword.get(opts, :sender_key_distribution_count, 0)
     enc_type = Keyword.get(opts, :enc_type, "msg")
     sender_jid = Keyword.get(opts, :sender_jid, "")
 
     {content_type, decoded_text} =
-      ContentDecoder.classify_decrypted_content(plaintext, sender_key_distribution_count)
+      case decoded do
+        {:ok, message} ->
+          ContentDecoder.classify_message(message, sender_key_distribution_count)
+
+        :error ->
+          {:user_message, nil}
+      end
 
     fallback_text = decoded_text || "(encrypted: #{enc_type})"
 
@@ -76,11 +109,17 @@ defmodule ExWapp.Message.Handler.Inbound.Content do
         )
 
       :user_message ->
-        %{}
-        |> ContentDecoder.apply_media_from_plaintext(plaintext)
+        decoded
+        |> apply_media_fields()
         |> canonical_user_content(decoded_text, fallback_text, diagnostics)
     end
   end
+
+  @spec apply_media_fields({:ok, Message.t()} | :error) :: map()
+  defp apply_media_fields({:ok, message}),
+    do: ContentDecoder.apply_media_from_message(%{}, message)
+
+  defp apply_media_fields(:error), do: %{}
 
   @spec canonical_user_content(map(), binary() | nil, binary(), map()) :: MessageContent.t()
   defp canonical_user_content(
@@ -174,10 +213,5 @@ defmodule ExWapp.Message.Handler.Inbound.Content do
     Logger.debug(
       "[DECRYPT] Success! sender=#{Log.reference(decrypt_result.sender_jid)} enc_type=#{Map.get(decrypt_result.payload, :enc_type)} plaintext_size=#{byte_size(decrypt_result.plaintext)}"
     )
-  end
-
-  @spec device_sent_message_payload?(binary()) :: boolean()
-  defp device_sent_message_payload?(payload) do
-    match?({:ok, _wrapped}, Fields.find_length_delimited(payload, 31))
   end
 end

@@ -127,6 +127,44 @@ defmodule ExWapp.Message.Handler.Inbound.SyncTest do
              Chat.messages(store, chat_jid, limit: 1)
   end
 
+  test "ignores a peer-data response that is not a placeholder resend" do
+    store = Memory.new(initial_data: %{chats: %{}})
+    state = %{store: store}
+
+    web_message_info =
+      length_delimited(1, length_delimited(1, "15550002222@s.whatsapp.net")) <>
+        length_delimited(
+          2,
+          Messages.build_text_proto("should not be ingested", [])
+          |> Message.encode!()
+          |> IO.iodata_to_binary()
+        )
+
+    # HISTORY_SYNC_ON_DEMAND instead of PLACEHOLDER_MESSAGE_RESEND
+    peer_response =
+      varint_field(1, 3) <>
+        length_delimited(2, "REQUEST_1") <>
+        length_delimited(3, length_delimited(4, length_delimited(1, web_message_info)))
+
+    message_data = %{
+      message_content_type: :protocol,
+      protocol_payload:
+        length_delimited(12, varint_field(2, 17) <> length_delimited(17, peer_response))
+    }
+
+    assert Sync.ingest(
+             message_data,
+             self(),
+             state,
+             "15550009999@s.whatsapp.net",
+             "PEER_RESPONSE_1",
+             true
+           ) == state
+
+    refute_receive {:new_message, _chat_jid, _message}
+    assert Chat.messages(store, "15550002222@s.whatsapp.net", limit: 1) == []
+  end
+
   defp app_state_key_share_message(key_id, key_data) do
     key_id_message = length_delimited(1, key_id)
     key_data_message = length_delimited(1, key_data)

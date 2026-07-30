@@ -27,10 +27,17 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
   @spec apply_media_from_plaintext(map(), binary()) :: map()
   def apply_media_from_plaintext(message_data, plaintext) when is_binary(plaintext) do
     case decode_message(plaintext) do
-      {:ok, message} -> apply_supported_content(message_data, message)
+      {:ok, message} -> apply_media_from_message(message_data, message)
       :error -> message_data
     end
   end
+
+  @doc """
+  Same as `apply_media_from_plaintext/2` for an already-decoded message.
+  """
+  @spec apply_media_from_message(map(), Message.t()) :: map()
+  def apply_media_from_message(message_data, %Message{} = message),
+    do: apply_supported_content(message_data, message)
 
   @spec apply_supported_content(map(), Message.t()) :: map()
   defp apply_supported_content(message_data, message) do
@@ -78,16 +85,41 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
   def classify_decrypted_content(payload, _sender_key_distribution_count)
       when is_binary(payload) do
     case decode_message(payload) do
-      {:ok, %Message{protocolMessage: protocol} = _message} when not is_nil(protocol) ->
-        {:protocol, nil}
-
-      {:ok, message} ->
-        {:user_message, extract_message_text(message, 0)}
-
-      :error ->
-        {:user_message, nil}
+      {:ok, message} -> classify_message(message, 0)
+      :error -> {:user_message, nil}
     end
   end
+
+  @doc """
+  Same as `classify_decrypted_content/2` for an already-decoded message.
+  """
+  @spec classify_message(Message.t(), non_neg_integer()) ::
+          {:protocol | :user_message, binary() | nil}
+  def classify_message(_message, sender_key_distribution_count)
+      when sender_key_distribution_count > 0 do
+    {:protocol, nil}
+  end
+
+  def classify_message(%Message{protocolMessage: protocol}, _count) when not is_nil(protocol) do
+    {:protocol, nil}
+  end
+
+  def classify_message(%Message{} = message, _count) do
+    {:user_message, extract_message_text(message, 0)}
+  end
+
+  @doc """
+  Reports whether a message is a `DeviceSentMessage` wrapper (own-device fanout).
+  """
+  @spec device_sent_message?(Message.t() | term()) :: boolean()
+  def device_sent_message?(%Message{deviceSentMessage: %{}}), do: true
+  def device_sent_message?(_message), do: false
+
+  @doc """
+  Decodes an E2E `Message` payload, returning `:error` on malformed protobuf.
+  """
+  @spec decode(binary()) :: {:ok, Message.t()} | :error
+  def decode(payload) when is_binary(payload), do: decode_message(payload)
 
   @spec decode_message(binary()) :: {:ok, Message.t()} | :error
   defp decode_message(payload) do

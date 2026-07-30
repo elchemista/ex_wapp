@@ -13,9 +13,9 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
   alias ExWapp.Message.Content, as: MessageContent
   alias ExWapp.Message.Handler.Common
   alias ExWapp.Message.Handler.Inbound.{Content, Projection}
-  alias ExWapp.Message.Handler.Wire.Fields
   alias ExWapp.Proto.HistorySync
   alias ExWapp.Session.JIDUtils
+  alias WACommon.MessageKey
 
   alias WAWebProtobufsE2E.{
     AppStateSyncKey,
@@ -23,6 +23,8 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
     AppStateSyncKeyId,
     Message
   }
+
+  alias WAWebProtobufsWeb.WebMessageInfo
 
   @doc """
   Applies every supported inbound protocol-sync payload to session state.
@@ -219,93 +221,76 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
           | :not_placeholder_resend_response
           | {:error, term()}
   defp extract_placeholder_resend_response(message_payload) do
-    with {:ok, message_fields} <- Fields.decode_safe(message_payload),
-         protocol_message when is_binary(protocol_message) <-
-           Fields.first_length_delimited(message_fields, 12),
-         {:ok, protocol_fields} <- Fields.decode_safe(protocol_message),
-         17 <- Fields.first_varint(protocol_fields, 2),
-         peer_response when is_binary(peer_response) <-
-           Fields.first_length_delimited(protocol_fields, 17),
-         {:ok, response_fields} <- Fields.decode_safe(peer_response),
-         4 <- Fields.first_varint(response_fields, 1) do
-      request_id = Fields.first_length_delimited(response_fields, 2) || ""
+    case Message.decode(message_payload) do
+      {:ok,
+       %Message{
+         protocolMessage: %{
+           peerDataOperationRequestResponseMessage:
+             %{peerDataOperationRequestType: :PLACEHOLDER_MESSAGE_RESEND} = response
+         }
+       }} ->
+        messages =
+          response.peerDataOperationResult
+          |> Enum.flat_map(&extract_placeholder_result_messages/1)
 
-      messages =
-        response_fields
-        |> Fields.all_length_delimited(3)
-        |> Enum.flat_map(&extract_placeholder_result_messages/1)
+        {:ok, %{request_id: response.stanzaID || "", messages: messages}}
 
-      {:ok, %{request_id: request_id, messages: messages}}
-    else
-      nil -> :not_placeholder_resend_response
-      value when is_integer(value) -> :not_placeholder_resend_response
-      {:error, reason} -> {:error, reason}
+      {:ok, _message} ->
+        :not_placeholder_resend_response
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  @spec extract_placeholder_result_messages(binary()) :: [map()]
-  defp extract_placeholder_result_messages(result_payload) do
-    with {:ok, result_fields} <- Fields.decode_safe(result_payload),
-         placeholder_response when is_binary(placeholder_response) <-
-           Fields.first_length_delimited(result_fields, 4),
-         {:ok, placeholder_fields} <- Fields.decode_safe(placeholder_response),
-         web_message_info when is_binary(web_message_info) <-
-           Fields.first_length_delimited(placeholder_fields, 1),
-         {:ok, recovered} <- decode_recovered_web_message_info(web_message_info) do
-      [recovered]
-    else
-      _ -> []
+  @spec extract_placeholder_result_messages(term()) :: [map()]
+  defp extract_placeholder_result_messages(%{
+         placeholderMessageResendResponse: %{webMessageInfoBytes: bytes}
+       })
+       when is_binary(bytes) do
+    case decode_recovered_web_message_info(bytes) do
+      {:ok, recovered} -> [recovered]
+      {:error, _reason} -> []
     end
   end
+
+  defp extract_placeholder_result_messages(_result), do: []
 
   @spec decode_recovered_web_message_info(binary()) :: {:ok, map()} | {:error, atom()}
   defp decode_recovered_web_message_info(web_message_info) do
-    with {:ok, fields} <- Fields.decode_safe(web_message_info),
-         key_payload when is_binary(key_payload) <- Fields.first_length_delimited(fields, 1),
-         message_payload when is_binary(message_payload) <-
-           Fields.first_length_delimited(fields, 2),
-         {:ok, key} <- decode_message_key_payload(key_payload) do
-      timestamp = Fields.first_varint(fields, 3)
-      participant = Fields.first_length_delimited(fields, 5) || Map.get(key, :participant)
-      push_name = Fields.first_length_delimited(fields, 19)
+    case WebMessageInfo.decode(web_message_info) do
+      {:ok, %WebMessageInfo{key: %MessageKey{} = key, message: %Message{} = message} = info} ->
+        {:ok,
+         %{
+           key: %{
+             remote_jid: key.remoteJID || "",
+             from_me: key.fromMe == true,
+             id: key."ID" || "",
+             participant: key.participant
+           },
+           message: message,
+           message_payload: web_message_info,
+           timestamp: info.messageTimestamp,
+           participant: info.participant || key.participant,
+           push_name: info.pushName
+         }}
 
-      {:ok,
-       %{
-         key: key,
-         message_payload: message_payload,
-         timestamp: timestamp,
-         participant: participant,
-         push_name: push_name
-       }}
-    else
-      _ -> {:error, :invalid_web_message_info}
-    end
-  end
-
-  @spec decode_message_key_payload(binary()) :: {:ok, map()} | {:error, term()}
-  defp decode_message_key_payload(key_payload) do
-    with {:ok, fields} <- Fields.decode_safe(key_payload) do
-      {:ok,
-       %{
-         remote_jid: Fields.first_length_delimited(fields, 1) || "",
-         from_me: Fields.first_varint(fields, 2) == 1,
-         id: Fields.first_length_delimited(fields, 3) || "",
-         participant: Fields.first_length_delimited(fields, 4)
-       }}
+      _ ->
+        {:error, :invalid_web_message_info}
     end
   end
 
   @spec ingest_recovered_placeholder_message(map(), term(), term()) :: :ok | :skip
   defp ingest_recovered_placeholder_message(
-         %{key: %{remote_jid: chat_jid, id: id} = key, message_payload: payload} = recovered,
+         %{key: %{remote_jid: chat_jid, id: id} = key, message: message} = recovered,
          target,
          session
        )
        when is_binary(chat_jid) and chat_jid != "" and is_binary(id) and id != "" do
     canonical =
-      Content.decode_plaintext(payload,
+      Content.decode_message(message, Map.fetch!(recovered, :message_payload),
         enc_type: "placeholder_resend",
-        sender_jid: Map.get(recovered, :participant, "")
+        sender_jid: Map.get(recovered, :participant) || ""
       )
 
     if canonical.kind == :protocol do
