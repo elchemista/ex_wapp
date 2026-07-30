@@ -999,7 +999,9 @@ defmodule ExWapp.AppState.Engine.Sync do
       :crypto.mac(:hmac, :sha256, mac_key, [iv, ciphertext])
       |> binary_part(0, @media_hmac_length)
 
-    if expected == mac, do: :ok, else: {:error, :invalid_external_blob_mac}
+    if Crypto.secure_compare(expected, mac),
+      do: :ok,
+      else: {:error, :invalid_external_blob_mac}
   end
 
   defp verify_external_blob_mac(_, _, _, _), do: {:error, :invalid_external_blob_mac}
