@@ -2,12 +2,22 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
   @moduledoc """
   Pure decoder for supported WhatsApp message content.
 
-  It understands message protobuf field assignments and wrapper messages, but
-  does not parse XML envelopes, decrypt Signal payloads, persist state, or
-  publish events.
+  It decodes the E2E `Message` protobuf and maps supported content (text,
+  media, location, contact, event) to the internal contract, but does not
+  parse XML envelopes, decrypt Signal payloads, persist state, or publish
+  events.
   """
 
-  alias ExWapp.Message.Handler.Wire.Fields
+  alias WAWebProtobufsE2E.{
+    AudioMessage,
+    ContactMessage,
+    DocumentMessage,
+    EventMessage,
+    ImageMessage,
+    LiveLocationMessage,
+    LocationMessage,
+    Message
+  }
 
   @max_message_decode_depth 6
 
@@ -16,7 +26,15 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
   """
   @spec apply_media_from_plaintext(map(), binary()) :: map()
   def apply_media_from_plaintext(message_data, plaintext) when is_binary(plaintext) do
-    case extract_supported_content(plaintext) do
+    case decode_message(plaintext) do
+      {:ok, message} -> apply_supported_content(message_data, message)
+      :error -> message_data
+    end
+  end
+
+  @spec apply_supported_content(map(), Message.t()) :: map()
+  defp apply_supported_content(message_data, message) do
+    case extract_supported_content(message, 0) do
       %{kind: :media, type: type, ref: ref, caption: caption} ->
         message_data
         |> Map.put(:media, ref)
@@ -59,218 +77,205 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
 
   def classify_decrypted_content(payload, _sender_key_distribution_count)
       when is_binary(payload) do
-    case Fields.find_length_delimited(payload, 12) do
-      {:ok, _protocol_msg} ->
+    case decode_message(payload) do
+      {:ok, %Message{protocolMessage: protocol} = _message} when not is_nil(protocol) ->
         {:protocol, nil}
 
-      _ ->
-        case decode_message_text_recursive(payload, 0) do
-          {:ok, text} -> {:user_message, text}
-          :error -> {:user_message, nil}
-        end
+      {:ok, message} ->
+        {:user_message, extract_message_text(message, 0)}
+
+      :error ->
+        {:user_message, nil}
     end
   end
 
-  @spec extract_supported_content(binary()) :: map() | nil
-  defp extract_supported_content(message_payload),
-    do: extract_supported_content_recursive(message_payload, 0)
-
-  @spec extract_supported_content_recursive(binary(), non_neg_integer()) :: map() | nil
-  defp extract_supported_content_recursive(_message_payload, depth)
-       when depth > @max_message_decode_depth,
-       do: nil
-
-  defp extract_supported_content_recursive(message_payload, depth) do
-    extract_supported_content_shallow(message_payload) ||
-      extract_wrapped_supported_content(message_payload, depth)
+  @spec decode_message(binary()) :: {:ok, Message.t()} | :error
+  defp decode_message(payload) do
+    case Message.decode(payload) do
+      {:ok, message} -> {:ok, message}
+      {:error, _reason} -> :error
+    end
   end
 
-  @spec extract_supported_content_shallow(binary()) :: map() | nil
-  defp extract_supported_content_shallow(message_payload) do
+  @spec extract_supported_content(Message.t(), non_neg_integer()) :: map() | nil
+  defp extract_supported_content(_message, depth) when depth > @max_message_decode_depth,
+    do: nil
+
+  defp extract_supported_content(message, depth) do
+    extract_supported_content_shallow(message) ||
+      Enum.find_value(wrapped_messages(message), fn wrapped ->
+        extract_supported_content(wrapped, depth + 1)
+      end)
+  end
+
+  @spec extract_supported_content_shallow(Message.t()) :: map() | nil
+  defp extract_supported_content_shallow(message) do
     cond do
-      match?({:ok, _}, Fields.find_length_delimited(message_payload, 3)) ->
-        {:ok, payload} = Fields.find_length_delimited(message_payload, 3)
-        build_media_ref(:image, payload)
+      match?(%ImageMessage{}, message.imageMessage) ->
+        build_media_ref(:image, message.imageMessage)
 
-      match?({:ok, _}, Fields.find_length_delimited(message_payload, 7)) ->
-        {:ok, payload} = Fields.find_length_delimited(message_payload, 7)
-        build_media_ref(:document, payload)
+      match?(%DocumentMessage{}, message.documentMessage) ->
+        build_media_ref(:document, message.documentMessage)
 
-      match?({:ok, _}, Fields.find_length_delimited(message_payload, 8)) ->
-        {:ok, payload} = Fields.find_length_delimited(message_payload, 8)
-        build_media_ref(:audio, payload)
+      match?(%AudioMessage{}, message.audioMessage) ->
+        build_media_ref(:audio, message.audioMessage)
 
-      match?({:ok, _}, Fields.find_length_delimited(message_payload, 75)) ->
-        {:ok, payload} = Fields.find_length_delimited(message_payload, 75)
-        build_event(payload)
+      match?(%EventMessage{}, message.eventMessage) ->
+        build_event(message.eventMessage)
 
-      match?({:ok, _}, Fields.find_length_delimited(message_payload, 5)) ->
-        {:ok, payload} = Fields.find_length_delimited(message_payload, 5)
-        build_location(payload)
+      match?(%LocationMessage{}, message.locationMessage) ->
+        build_location(message.locationMessage)
 
-      match?({:ok, _}, Fields.find_length_delimited(message_payload, 18)) ->
-        {:ok, payload} = Fields.find_length_delimited(message_payload, 18)
-        build_live_location(payload)
+      match?(%LiveLocationMessage{}, message.liveLocationMessage) ->
+        build_live_location(message.liveLocationMessage)
 
-      match?({:ok, _}, Fields.find_length_delimited(message_payload, 4)) ->
-        {:ok, payload} = Fields.find_length_delimited(message_payload, 4)
-        build_contact(payload)
+      match?(%ContactMessage{}, message.contactMessage) ->
+        build_contact(message.contactMessage)
 
       true ->
         nil
     end
   end
 
-  @spec extract_wrapped_supported_content(binary(), non_neg_integer()) :: map() | nil
-  defp extract_wrapped_supported_content(message_payload, depth) do
-    wrapper_fields = [31, 37, 40, 53, 55, 59, 74]
+  @spec wrapped_messages(Message.t()) :: [Message.t()]
+  defp wrapped_messages(message) do
+    wrappers = [
+      message.deviceSentMessage,
+      message.viewOnceMessage,
+      message.ephemeralMessage,
+      message.documentWithCaptionMessage,
+      message.viewOnceMessageV2,
+      message.viewOnceMessageV2Extension,
+      message.lottieStickerMessage
+    ]
 
-    Enum.find_value(
-      wrapper_fields,
-      &extract_wrapped_supported_content(message_payload, depth, &1)
-    )
+    for %{message: %Message{} = wrapped} <- wrappers, do: wrapped
   end
 
-  @spec extract_wrapped_supported_content(binary(), non_neg_integer(), non_neg_integer()) ::
-          map() | nil
-  defp extract_wrapped_supported_content(message_payload, depth, field) do
-    with {:ok, wrapper} <- Fields.find_length_delimited(message_payload, field),
-         {:ok, nested_message} <-
-           Fields.find_length_delimited(wrapper, nested_message_field(field)) do
-      extract_supported_content_recursive(nested_message, depth + 1)
-    else
-      _ -> nil
-    end
-  end
-
-  @spec nested_message_field(non_neg_integer()) :: pos_integer()
-  defp nested_message_field(31), do: 2
-  defp nested_message_field(_field), do: 1
-
-  @spec build_media_ref(:image | :audio | :document, binary()) :: map()
-  defp build_media_ref(:image, payload) do
+  @spec build_media_ref(:image | :audio | :document, struct()) :: map()
+  defp build_media_ref(:image, %ImageMessage{} = image) do
     %{
       kind: :media,
       type: :image,
-      caption: Fields.bytes(payload, 3),
+      caption: image.caption,
       ref: %ExWapp.Media.Ref{
         type: :image,
-        url: Fields.bytes(payload, 1),
-        mimetype: Fields.bytes(payload, 2),
-        file_sha256: Fields.bytes(payload, 4),
-        file_length: Fields.varint(payload, 5),
-        media_key: Fields.bytes(payload, 8),
-        file_enc_sha256: Fields.bytes(payload, 9),
-        direct_path: Fields.bytes(payload, 11),
-        media_key_timestamp: Fields.varint(payload, 12),
+        url: image."URL",
+        mimetype: image.mimetype,
+        file_sha256: image.fileSHA256,
+        file_length: image.fileLength,
+        media_key: image.mediaKey,
+        file_enc_sha256: image.fileEncSHA256,
+        direct_path: image.directPath,
+        media_key_timestamp: image.mediaKeyTimestamp,
         metadata: %{
-          height: Fields.varint(payload, 6),
-          width: Fields.varint(payload, 7),
-          media_key_timestamp: Fields.varint(payload, 12),
-          thumbnail: Fields.bytes(payload, 16)
+          height: image.height,
+          width: image.width,
+          media_key_timestamp: image.mediaKeyTimestamp,
+          thumbnail: image."JPEGThumbnail"
         }
       }
     }
   end
 
-  defp build_media_ref(:audio, payload) do
+  defp build_media_ref(:audio, %AudioMessage{} = audio) do
     %{
       kind: :media,
       type: :audio,
       caption: nil,
       ref: %ExWapp.Media.Ref{
         type: :audio,
-        url: Fields.bytes(payload, 1),
-        mimetype: Fields.bytes(payload, 2),
-        file_sha256: Fields.bytes(payload, 3),
-        file_length: Fields.varint(payload, 4),
-        media_key: Fields.bytes(payload, 7),
-        file_enc_sha256: Fields.bytes(payload, 8),
-        direct_path: Fields.bytes(payload, 9),
-        media_key_timestamp: Fields.varint(payload, 10),
+        url: audio."URL",
+        mimetype: audio.mimetype,
+        file_sha256: audio.fileSHA256,
+        file_length: audio.fileLength,
+        media_key: audio.mediaKey,
+        file_enc_sha256: audio.fileEncSHA256,
+        direct_path: audio.directPath,
+        media_key_timestamp: audio.mediaKeyTimestamp,
         metadata: %{
-          seconds: Fields.varint(payload, 5),
-          ptt: Fields.bool(payload, 6),
-          media_key_timestamp: Fields.varint(payload, 10),
-          waveform: Fields.bytes(payload, 19)
+          seconds: audio.seconds,
+          ptt: audio."PTT",
+          media_key_timestamp: audio.mediaKeyTimestamp,
+          waveform: audio.waveform
         }
       }
     }
   end
 
-  defp build_media_ref(:document, payload) do
+  defp build_media_ref(:document, %DocumentMessage{} = document) do
     %{
       kind: :media,
       type: :document,
-      caption: Fields.bytes(payload, 20),
+      caption: document.caption,
       ref: %ExWapp.Media.Ref{
         type: :document,
-        url: Fields.bytes(payload, 1),
-        mimetype: Fields.bytes(payload, 2),
-        file_sha256: Fields.bytes(payload, 4),
-        file_length: Fields.varint(payload, 5),
-        media_key: Fields.bytes(payload, 7),
-        file_enc_sha256: Fields.bytes(payload, 9),
-        direct_path: Fields.bytes(payload, 10),
-        media_key_timestamp: Fields.varint(payload, 11),
+        url: document."URL",
+        mimetype: document.mimetype,
+        file_sha256: document.fileSHA256,
+        file_length: document.fileLength,
+        media_key: document.mediaKey,
+        file_enc_sha256: document.fileEncSHA256,
+        direct_path: document.directPath,
+        media_key_timestamp: document.mediaKeyTimestamp,
         metadata: %{
-          title: Fields.bytes(payload, 3),
-          page_count: Fields.varint(payload, 6),
-          file_name: Fields.bytes(payload, 8),
-          contact_vcard: Fields.bool(payload, 12),
-          thumbnail: Fields.bytes(payload, 16)
+          title: document.title,
+          page_count: document.pageCount,
+          file_name: document.fileName,
+          contact_vcard: document.contactVcard,
+          thumbnail: document."JPEGThumbnail"
         }
       }
     }
   end
 
-  @spec build_location(binary()) :: map()
-  defp build_location(payload) do
+  @spec build_location(LocationMessage.t()) :: map()
+  defp build_location(%LocationMessage{} = location) do
     %{
       kind: :location,
       value: %{
-        latitude: Fields.double(payload, 1),
-        longitude: Fields.double(payload, 2),
-        name: Fields.bytes(payload, 3),
-        address: Fields.bytes(payload, 4),
-        url: Fields.bytes(payload, 5),
-        is_live: Fields.bool(payload, 6),
-        accuracy: Fields.varint(payload, 7),
-        speed: Fields.float(payload, 8),
-        bearing: Fields.varint(payload, 9),
-        comment: Fields.bytes(payload, 11),
-        jpeg_thumbnail: Fields.bytes(payload, 16)
+        latitude: location.degreesLatitude,
+        longitude: location.degreesLongitude,
+        name: location.name,
+        address: location.address,
+        url: location."URL",
+        is_live: location.isLive,
+        accuracy: location.accuracyInMeters,
+        speed: location.speedInMps,
+        bearing: location.degreesClockwiseFromMagneticNorth,
+        comment: location.comment,
+        jpeg_thumbnail: location."JPEGThumbnail"
       }
     }
   end
 
-  @spec build_contact(binary()) :: map()
-  defp build_contact(payload) do
+  @spec build_contact(ContactMessage.t()) :: map()
+  defp build_contact(%ContactMessage{} = contact) do
     %{
       kind: :contact,
       value: %{
-        display_name: Fields.bytes(payload, 1),
-        vcard: Fields.bytes(payload, 16),
-        is_self_contact: Fields.bool(payload, 18)
+        display_name: contact.displayName,
+        vcard: contact.vcard,
+        is_self_contact: contact.isSelfContact
       }
     }
   end
 
-  @spec build_live_location(binary()) :: map()
-  defp build_live_location(payload) do
+  @spec build_live_location(LiveLocationMessage.t()) :: map()
+  defp build_live_location(%LiveLocationMessage{} = live) do
     %{
       kind: :location,
       value: %{
-        latitude: Fields.double(payload, 1),
-        longitude: Fields.double(payload, 2),
+        latitude: live.degreesLatitude,
+        longitude: live.degreesLongitude,
         is_live: true,
-        accuracy: Fields.varint(payload, 3),
-        speed: Fields.float(payload, 4),
-        bearing: Fields.varint(payload, 5),
-        comment: Fields.bytes(payload, 6),
-        sequence_number: Fields.varint(payload, 7),
-        time_offset: Fields.varint(payload, 8),
-        jpeg_thumbnail: Fields.bytes(payload, 16),
+        accuracy: live.accuracyInMeters,
+        speed: live.speedInMps,
+        bearing: live.degreesClockwiseFromMagneticNorth,
+        comment: live.caption,
+        sequence_number: live.sequenceNumber,
+        time_offset: live.timeOffset,
+        jpeg_thumbnail: live."JPEGThumbnail",
         name: nil,
         address: nil,
         url: nil
@@ -278,84 +283,60 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
     }
   end
 
-  @spec build_event(binary()) :: map()
-  defp build_event(payload) do
+  @spec build_event(EventMessage.t()) :: map()
+  defp build_event(%EventMessage{} = event) do
     location =
-      case Fields.find_length_delimited(payload, 5) do
-        {:ok, location_payload} -> build_location(location_payload).value
+      case event.location do
+        %LocationMessage{} = event_location -> build_location(event_location).value
         _ -> nil
       end
 
     %{
       kind: :event,
       value: %{
-        canceled: Fields.bool(payload, 2),
-        name: Fields.bytes(payload, 3),
-        description: Fields.bytes(payload, 4),
+        canceled: event.isCanceled,
+        name: event.name,
+        description: event.description,
         location: location,
-        join_link: Fields.bytes(payload, 6),
-        start_time: Fields.varint(payload, 7),
-        end_time: Fields.varint(payload, 8),
-        extra_guests_allowed: Fields.bool(payload, 9),
-        scheduled_call: Fields.bool(payload, 10),
-        has_reminder: Fields.bool(payload, 11),
-        reminder_offset_seconds: Fields.varint(payload, 12)
+        join_link: event.joinLink,
+        start_time: event.startTime,
+        end_time: event.endTime,
+        extra_guests_allowed: event.extraGuestsAllowed,
+        scheduled_call: event.isScheduleCall,
+        has_reminder: event.hasReminder,
+        reminder_offset_seconds: event.reminderOffsetSec
       }
     }
   end
 
-  @spec decode_message_text_recursive(binary(), non_neg_integer()) ::
-          {:ok, binary()} | :error
-  defp decode_message_text_recursive(_payload, depth) when depth > @max_message_decode_depth,
-    do: :error
+  @spec extract_message_text(Message.t(), non_neg_integer()) :: binary() | nil
+  defp extract_message_text(_message, depth) when depth > @max_message_decode_depth, do: nil
 
-  defp decode_message_text_recursive(payload, depth) do
-    case decode_message_text_shallow(payload) do
-      {:ok, text} -> {:ok, text}
-      :error -> decode_nested_message_text(payload, depth)
+  defp extract_message_text(message, depth) do
+    extract_message_text_shallow(message) ||
+      Enum.find_value(wrapped_messages(message), fn wrapped ->
+        extract_message_text(wrapped, depth + 1)
+      end)
+  end
+
+  @spec extract_message_text_shallow(Message.t()) :: binary() | nil
+  defp extract_message_text_shallow(message) do
+    cond do
+      valid_text_payload?(message.conversation) ->
+        message.conversation
+
+      is_map(message.extendedTextMessage) and
+          valid_text_payload?(message.extendedTextMessage.text) ->
+        message.extendedTextMessage.text
+
+      true ->
+        nil
     end
   end
 
-  @spec decode_nested_message_text(binary(), non_neg_integer()) ::
-          {:ok, binary()} | :error
-  defp decode_nested_message_text(payload, depth) do
-    case Fields.collect_length_delimited_values(payload) do
-      {:ok, nested_values} ->
-        Enum.reduce_while(nested_values, :error, fn nested, _acc ->
-          reduce_nested_message_text(nested, depth)
-        end)
+  @spec valid_text_payload?(binary() | nil) :: boolean()
+  defp valid_text_payload?(value) when is_binary(value),
+    do: value != "" and String.valid?(value)
 
-      {:error, _reason} ->
-        :error
-    end
-  end
-
-  @spec reduce_nested_message_text(binary(), non_neg_integer()) ::
-          {:halt, {:ok, binary()}} | {:cont, :error}
-  defp reduce_nested_message_text(nested, depth) do
-    case decode_message_text_recursive(nested, depth + 1) do
-      {:ok, text} -> {:halt, {:ok, text}}
-      :error -> {:cont, :error}
-    end
-  end
-
-  @spec decode_message_text_shallow(binary()) :: {:ok, binary()} | :error
-  defp decode_message_text_shallow(payload) do
-    with {:ok, conversation} <- Fields.find_length_delimited(payload, 1),
-         true <- valid_text_payload?(conversation) do
-      {:ok, conversation}
-    else
-      _ ->
-        with {:ok, extended} <- Fields.find_length_delimited(payload, 6),
-             {:ok, text} <- Fields.find_length_delimited(extended, 1),
-             true <- valid_text_payload?(text) do
-          {:ok, text}
-        else
-          _ -> :error
-        end
-    end
-  end
-
-  @spec valid_text_payload?(binary()) :: boolean()
-  defp valid_text_payload?(value) when is_binary(value), do: value != "" and String.valid?(value)
+  defp valid_text_payload?(_value), do: false
 end
