@@ -305,61 +305,6 @@ defmodule ExWapp.Session.Worker do
     GenServer.call(server, {:app_state_mutation, patch_info}, @explicit_app_state_sync_timeout)
   end
 
-  @doc "Archive a chat (server-synced)."
-  @spec archive_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
-  def archive_chat(server, jid) do
-    patch = ExWapp.AppState.Engine.build_archive(jid, true)
-
-    case send_app_state(server, patch) do
-      {:ok, _, _} -> :ok
-      error -> error
-    end
-  end
-
-  @doc "Unarchive a chat (server-synced)."
-  @spec unarchive_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
-  def unarchive_chat(server, jid) do
-    patch = ExWapp.AppState.Engine.build_archive(jid, false)
-
-    case send_app_state(server, patch) do
-      {:ok, _, _} -> :ok
-      error -> error
-    end
-  end
-
-  @doc "Delete a chat (server-synced)."
-  @spec delete_chat(GenServer.server(), String.t()) :: :ok | {:error, term()}
-  def delete_chat(server, jid) do
-    patch = ExWapp.AppState.Engine.build_delete_chat(jid)
-
-    case send_app_state(server, patch) do
-      {:ok, _, _} -> :ok
-      error -> error
-    end
-  end
-
-  @doc "Create or update a contact (server-synced)."
-  @spec create_contact(GenServer.server(), String.t(), String.t()) :: :ok | {:error, term()}
-  def create_contact(server, jid, name) do
-    patch = ExWapp.AppState.Engine.build_contact(jid, name)
-
-    case send_app_state(server, patch) do
-      {:ok, _, _} -> :ok
-      error -> error
-    end
-  end
-
-  @doc "Delete a contact (server-synced)."
-  @spec delete_contact(GenServer.server(), String.t()) :: :ok | {:error, term()}
-  def delete_contact(server, jid) do
-    patch = ExWapp.AppState.Engine.build_delete_contact(jid)
-
-    case send_app_state(server, patch) do
-      {:ok, _, _} -> :ok
-      error -> error
-    end
-  end
-
   @doc "Fetch and apply the contact app-state collection (`critical_unblock_low`)."
   @spec sync_contacts(GenServer.server()) :: :ok | {:error, term()}
   def sync_contacts(server),
