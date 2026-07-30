@@ -5,7 +5,7 @@ defmodule ExWapp.Session.Outbound.Content do
   alias WAWebProtobufsE2E.Message, as: ProtoMessage
   alias ExWapp.Session.Worker.Outbound
 
-  @type prepared :: {:ok, ProtoMessage.t(), keyword()} | {:error, term()}
+  @type prepared :: {:ok, %ProtoMessage{}, keyword()} | {:error, term()}
 
   @doc false
   @spec send(pid(), map(), Message.t()) :: {:ok, String.t()} | {:error, term()}
@@ -202,7 +202,7 @@ defmodule ExWapp.Session.Outbound.Content do
     end
   end
 
-  @spec build_media_proto(Media.media_type(), Media.Upload.t(), keyword()) :: ProtoMessage.t()
+  @spec build_media_proto(Media.media_type(), Media.Upload.t(), keyword()) :: %ProtoMessage{}
   defp build_media_proto(:image, upload, opts), do: Messages.build_image_proto(upload, opts)
   defp build_media_proto(:audio, upload, opts), do: Messages.build_audio_proto(upload, opts)
   defp build_media_proto(:document, upload, opts), do: Messages.build_document_proto(upload, opts)

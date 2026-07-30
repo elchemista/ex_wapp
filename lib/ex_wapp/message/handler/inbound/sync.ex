@@ -165,7 +165,7 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
   defp maybe_ingest_app_state_keys(_message_data, _session, state, _own_sender?), do: state
 
   @spec extract_app_state_keys(binary()) ::
-          {:ok, [AppStateSyncKey.t()]} | :not_app_state_key_share
+          {:ok, [%AppStateSyncKey{}]} | :not_app_state_key_share
   defp extract_app_state_keys(payload) when is_binary(payload) do
     case Message.decode(payload) do
       {:ok, %Message{protocolMessage: %{appStateSyncKeyShare: %{keys: keys}}}}

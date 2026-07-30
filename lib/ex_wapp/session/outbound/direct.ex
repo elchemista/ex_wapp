@@ -153,7 +153,7 @@ defmodule ExWapp.Session.Outbound.Direct do
   @doc """
   Builds padded recipient and own-device payloads for a direct send.
   """
-  @spec build_payloads(Message.t(), String.t(), keyword()) ::
+  @spec build_payloads(%Message{}, String.t(), keyword()) ::
           {:ok, payloads()} | {:error, {:proto_encode, term()}}
   def build_payloads(%Message{} = proto, jid, opts)
       when is_binary(jid) and is_list(opts) do
@@ -410,7 +410,7 @@ defmodule ExWapp.Session.Outbound.Direct do
 
   defp current_device_target?(_jid, _own_device_id), do: false
 
-  @spec build_own_payload_or_fallback(Message.t(), String.t(), binary()) :: binary()
+  @spec build_own_payload_or_fallback(%Message{}, String.t(), binary()) :: binary()
   defp build_own_payload_or_fallback(proto, own_device_destination, recipient_payload) do
     case build_own_devices_payload(proto, own_device_destination, nil) do
       {:ok, own_payload} ->
@@ -425,7 +425,7 @@ defmodule ExWapp.Session.Outbound.Direct do
     end
   end
 
-  @spec build_own_devices_payload(Message.t(), String.t(), String.t() | nil) ::
+  @spec build_own_devices_payload(%Message{}, String.t(), String.t() | nil) ::
           {:ok, binary()} | {:error, term()}
   defp build_own_devices_payload(proto_message, destination_jid, phash) do
     wrapped = %Message{

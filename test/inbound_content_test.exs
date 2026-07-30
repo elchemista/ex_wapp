@@ -41,6 +41,35 @@ defmodule ExWapp.Message.Handler.Inbound.ContentTest do
     refute decoded.from_me
   end
 
+  test "marks own-device fanout wrapped in DeviceSentMessage as from_me" do
+    inner = Messages.build_text_proto("sent from my phone")
+
+    plaintext =
+      %Message{
+        deviceSentMessage: %WAWebProtobufsE2E.DeviceSentMessage{
+          destinationJID: "15550002222@s.whatsapp.net",
+          message: inner
+        }
+      }
+      |> Message.encode!()
+      |> IO.iodata_to_binary()
+
+    decoded =
+      Content.decode_decrypted(%{
+        message_data: %{encrypted: true, enc_type: "msg", id: "own-fanout-1"},
+        plaintext: plaintext,
+        updated_sessions: SessionStore.new(),
+        sender_jid: "15550001111@s.whatsapp.net",
+        payload: %{enc_type: "msg"},
+        sender_key_distribution_count: 0,
+        enc_type: "msg"
+      })
+
+    assert decoded.from_me
+    assert decoded.message_content_type == :user_message
+    assert decoded.text == "sent from my phone"
+  end
+
   test "keeps sender-key distribution plaintext as protocol content" do
     plaintext =
       "distribution"

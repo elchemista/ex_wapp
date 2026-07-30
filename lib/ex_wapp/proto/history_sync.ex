@@ -187,7 +187,7 @@ defmodule ExWapp.Proto.HistorySync do
 
   defp parse_message_key(_), do: %{remote_jid: nil, from_me: false, id: nil, participant: nil}
 
-  @spec extract_message_text(Message.t() | nil, non_neg_integer()) :: String.t() | nil
+  @spec extract_message_text(%Message{} | nil, non_neg_integer()) :: String.t() | nil
   defp extract_message_text(_message, depth) when depth > @max_message_unwrap_depth, do: nil
 
   defp extract_message_text(%Message{} = message, depth) do
