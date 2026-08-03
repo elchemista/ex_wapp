@@ -152,6 +152,7 @@ path that handles:
 - Signal sessions, prekeys, device fanout, and group sender keys
 - binary node encode/decode
 - inbound message decode, storage, and subscriber delivery
+- outbound delivery confirmation and automatic session repair on rejected sends
 - logs and telemetry under `[:ex_wapp, :session, ...]`
 
 Incoming messages can be consumed directly:
@@ -204,6 +205,46 @@ runtime-neutral client facade, use `ExWapp.Session`.
   `policy_status/1`, `health_status/1`
 - server-synced operations: `archive_chat/2`, `unarchive_chat/2`,
   `delete_chat/2`, `create_contact/3`, `delete_contact/2`, `sync_contacts/1`
+
+## Delivery Confirmation
+
+`send_message/3` returns once the encrypted stanza reaches the socket, which is
+not the same as WhatsApp accepting it: the server acks what it accepts and stays
+silent for what it drops. To separate the outcomes, use
+`ExWapp.send_message_await/4`:
+
+```elixir
+case ExWapp.send_message_await(session, jid, "hello", 15_000) do
+  {:ok, message_id} -> :accepted
+  {:error, {:rejected, %ExWapp.Error.Ack{} = ack}} -> {:refused, ack}
+  {:error, :ack_timeout} -> :unknown  # not proof of non-delivery
+end
+```
+
+Ack error codes are classified by `ExWapp.Error.Ack`, so a caller can tell a
+retriable blip from a policy refusal; unknown codes are treated as
+non-retriable. Non-blocking callers can subscribe to
+`"ex_wapp:delivery:<session_id>"` on `ExWapp.PubSub` and correlate on the
+message ID.
+
+A rejection blaming the Signal session (ack error 463) is repaired before it is
+reported: the session process drops the peer's sessions and resends the retained
+payload under a fresh one, reusing the message ID so the peer still
+deduplicates. The repair budget is two attempts with
+`send.session_repair_backoff_ms` between them, so an awaited send can take
+several round trips before a session rejection is final.
+
+Related runtime signals and options:
+
+- `{:ex_wapp_session, :key_material_advertised, meta}` is published on the
+  session topic after an accepted prekey upload and after a retry receipt mints
+  a key, so a host that archives the session store knows when its copy is behind.
+- `prekeys: [id_allocator: fun]` lets a host with durable, non-rolling-back
+  storage supply prekey IDs; by default the session keeps a local monotonic
+  ceiling so a store restored from an older snapshot cannot reissue an ID the
+  server still serves.
+- `signal: [reset_sessions_on_connect: true]` distrusts all Signal sessions at
+  connect, for hosts that restore their store from external snapshots.
 
 ## Transport Adapter
 
@@ -374,6 +415,12 @@ ExWapp keeps the store behaviour first-class. Built-in stores include:
 
 - `ExWapp.Store.Memory`
 - `ExWapp.Store.Ets`
+
+`ExWapp.Store.Ets` accepts `max_messages_per_chat` to bound how much message
+history it retains per chat, dropping the oldest beyond the limit. The default
+stays unbounded: how much history is worth keeping is the host's call, and a
+bound has to stay above what the library reads back for send repair, redelivery
+tracking, and media retries — all of which look at recent traffic.
 
 Create custom stores by implementing `ExWapp.Store`.
 
@@ -577,7 +624,10 @@ After authentication, the built-in session automatically runs app-state sync
 and consumes supported inline history-sync payloads delivered by WhatsApp.
 Contacts, chat metadata, and history messages found in those payloads are
 merged into the configured store. History notifications that require a
-separate blob download are currently detected and logged but are not imported.
+separate blob download are not yet imported, but they are no longer dropped
+silently: the skip is logged at `:info` with the sync type, and
+`ExWapp.Proto.HistorySync` returns a `{:pending_blob, blob_ref}` carrying
+everything a future downloader needs (media key, direct path, hashes, length).
 `ExWapp.sync_contacts/1` is an explicit contact refresh; it
 is not a command to download an account's complete message history.
 
@@ -613,8 +663,9 @@ keeps local-history iteration separate from remote history synchronization:
 - history notifications requiring a separate blob download still need protocol
   support before they can enter the local message store
 
-The built-in store has no automatic message-count cap. After a database
-transaction succeeds, a wrapper may explicitly delete only the imported IDs:
+The built-in store keeps message history unbounded unless the host passes
+`max_messages_per_chat` to `ExWapp.Store.Ets`. After a database transaction
+succeeds, a wrapper may also explicitly delete only the imported IDs:
 
 ```elixir
 {:ok, history} = ExWapp.all_messages(client, jid)
@@ -719,16 +770,33 @@ Built-in transport/runtime:
   high-level message sending
 - `ExWapp.Client.Transport.WebSocket`: deprecated compatibility name for the
   raw diagnostic adapter
-- `ExWapp.Session.Worker`: main GenServer implementation
+- `ExWapp.Session.Worker`: the session GenServer. It owns the process, the
+  state, and what each message means; the work each decision triggers lives in
+  the `Worker.*` modules below, all still running in the session process
+- `ExWapp.Session.Worker.Connection`: transport open/teardown, connection
+  events, reconnect scheduling, and health checks
+- `ExWapp.Session.Worker.Events`: telemetry, lifecycle event metadata, QR
+  notifications, and stats updates
 - `ExWapp.Session.Worker.Outbound`: thin coordinator for send, persistence,
   retry, and telemetry effects
+- `ExWapp.Session.Worker.SendRecovery`: recoveries for sends that did not
+  land — retained payloads, session repair after a rejection, and
+  placeholder resend requests to the primary device
+- `ExWapp.Session.Worker.SendHealth`: outbound send counters, rolling
+  per-minute windows, and the error-guard thresholds
+- `ExWapp.Session.Worker.SignalSessions`: mirroring in-memory Signal sessions
+  to the store, pruning one-way sessions, and rebuilding after identity changes
+- `ExWapp.Session.Worker.Inbound`, `NodeHandler`, `PostAuth`, `Retry`,
+  `Safety`, `Resilience`, `OutboundConfirmation`, `ReceiptBuilder`,
+  `Subscribers`: the remaining per-concern worker modules
 - `ExWapp.Session.Outbound.Direct`, `Group`, `DeviceDiscovery`, `Prekeys`,
   and `Fanout`: focused outbound planning and resolution helpers
 - `ExWapp.Session.Outbound.IQRequests`: USync, prekey, and group-info IQ
   request/receive/timeout boundary
 - `ExWapp.Session.Outbound.Encryptor`: per-device Signal encryption, PN/LID
   aliases, and encrypted fanout coverage
-- `ExWapp.Session.Worker.Inbound`: incoming message/event helpers
+- `ExWapp.Session.AppStateCommands`: chat/contact commands that build app-state
+  patches outside the session actor
 - `ExWapp.Session.InboundRouter`, `ExWapp.Session.IQ`, `ExWapp.Session.MessageNode`,
   `ExWapp.Session.Targets`: focused helpers used by the worker
 
@@ -753,6 +821,22 @@ Protocol internals:
   `ExWapp.Signal.SenderKey`, `ExWapp.Signal.WireFormat`: Signal/Session/SenderKey logic
 - `ExWapp.Pairing`, `ExWapp.Pairing.ADV`: QR registration and ADV payload handling
 - `ExWapp.Binary`, `ExWapp.Transport.Frame`, `ExWapp.Transport.WebSocket`: binary node and frame encoding
+- `ExWapp.PrivacyToken`: tctoken storage, expiry buckets, and newest-wins merges
+- `ExWapp.Error.Ack`: classification of server ack error codes into retriable
+  and non-retriable refusals
+
+Generated protobuf modules:
+
+- `lib/ex_wapp/wa_proto/` holds the protox-generated modules for WhatsApp's
+  official protobuf schemas (`WAWebProtobufsE2E`, `WACommon`, `WACompanionReg`,
+  `WAWebProtobufsHistorySync`, `WAWebProtobufSyncAction`, `WAAdv`, `WACert`,
+  and their dependencies). E2E message encode/decode, pairing DeviceProps,
+  history sync, and app-state actions all go through these structs; there are
+  no hand-rolled protobuf encoders left.
+- Never edit `wa_proto/` by hand: `scripts/update_wa_protos.sh` pulls
+  whatsmeow's proto snapshot and regenerates everything (with stale-file
+  cleanup, `@type t` injection, formatting, and wire-format tests), so protocol
+  updates are a pull-regenerate-test loop. `SKIP_FETCH=1` regenerates offline.
 
 Server-synced app state:
 

@@ -1,7 +1,7 @@
 # WhatsApp Multi-Device Protocol Spec for ExWapp
 
 > Derived from whatsmeow (Go), Baileys (TypeScript), whatsapp-rust, and reconciled
-> with ExWapp implementation/history and production logs through Jul 24, 2026.
+> with ExWapp implementation/history and production logs through Jul 31, 2026.
 > When reference behavior and current ExWapp behavior differ, this document calls it out.
 
 ---
@@ -123,7 +123,9 @@ USync responses may include LID data. Store these mappings immediately:
 - **Batch**: Multiple `<user>` nodes in a single IQ (efficient)
 - **Default fetch policy**: fetch only for devices without existing sessions (check PN + mapped signal JID)
 - **ExWapp exceptions**:
-  - self-chat: clear sessions first so fresh prekeys are fetched
+  - self-chat: the direct send path reuses existing own-device sessions
+    (`:reuse_self_chat_sessions`); clearing first is kept only for the repair
+    paths that genuinely need a fresh session
   - group own-target sync: own targets may be force-refreshed defensively
 
 > whatsmeow `send.go:1279-1290`: Checks `existingSessions` map, only fetches for devices returning `false`.
@@ -140,8 +142,12 @@ If session migration hasn't run → encryption MUST use PN JID (where the sessio
 
 Uploading local one-time prekeys is a two-phase operation:
 
-1. Atomically generate/reserve the private and public halves in the store and
-   advance `next_prekey_id`.
+1. Atomically generate/reserve the private and public halves in the store,
+   advance `next_prekey_id`, and **flush the store**. The upload is refused if
+   the flush fails: an adapter that persists asynchronously must never put
+   public halves in front of the server while their private halves are only in
+   memory. A thinner pool on the server recovers on the next connect; an id
+   space two devices disagree about never does.
 2. Only then build and enqueue the upload IQ.
 3. On an IQ `result`, mark the reserved IDs as `uploaded: true`.
 4. On timeout, disconnect, or IQ error, keep `uploaded: false` key material and
@@ -149,6 +155,29 @@ Uploading local one-time prekeys is a two-phase operation:
 
 Transient request tracking may be reset on reconnect; private key material
 must never depend on receiving the upload result.
+
+### 3.5 Prekey ID Ceiling (Never Reissue a Served ID)
+
+WhatsApp keeps serving a one-time prekey this device advertised even after the
+local store loses it. Reissuing that ID with different key material locks the
+holder out permanently: every inbound `pkmsg` naming it fails with
+`prekey_not_found`, and every outbound message to the same peer comes back 463.
+
+ExWapp keeps `:max_advertised_prekey_id` in the signal state — a ceiling that
+never travels backwards. It is raised by every upload, every retry-receipt key,
+and every inbound `pkmsg` naming an id this store cannot produce (the server
+telling us what it still serves). New ids are minted above it, so a store
+restored from an older snapshot cannot reissue a live id.
+
+- Hosts with durable state that cannot roll back can supply
+  `prekeys: [id_allocator: fn local_floor, count -> {:ok, first_id} end]`.
+- `{:ex_wapp_session, :key_material_advertised, meta}` is published after an
+  accepted prekey upload and after a retry receipt mints a key, so a host that
+  archives the session file knows the moment its archive is behind.
+- Decrypt failures caused by lost key material get the key bundle on the
+  **first** retry receipt rather than the second: a byte-identical resend
+  against unproducible key material fails identically, so only a fresh bundle
+  moves the peer onto a session this device can open.
 
 ---
 
@@ -219,7 +248,9 @@ MAC is first 8 bytes of HMAC-SHA256 with:
 3. **Discover devices**: USync query with recipient + own sender identity (when different) → `recipient_devices`, `own_devices`, `all_usync_devices`
 4. **Store LID mappings** from USync response
 5. **Exclude current device from encryption targets** (self-chat requires filtering recipient path too)
-6. **Self-chat special case**: compare user parts only; clear existing sessions for targets so first send is fresh `pkmsg`
+6. **Self-chat special case**: compare user parts only; the direct send path
+   reuses existing own-device sessions so the conversation advances instead of
+   opening a fresh `pkmsg` per send
 7. **Determine prekey needs**: for each target, check session presence under both wire JID and mapped signal JID
 8. **Fetch prekeys** for missing targets (batch first, individual retry for missing bundles), always using wire PN JIDs in IQ
 9. **Create sessions** from bundles with forced rebuild (`force: true`), aliasing wire/signal JID keys
@@ -270,7 +301,10 @@ When sender == recipient:
 - ALL devices get DSM-wrapped payload (there are no "recipient" devices, only "own" devices)
 - Current device is still excluded
 - Self-chat detection: compare **user parts only** (not full JID with server), because own JID may appear as both PN and LID
-- ExWapp defensive rule: clear existing sessions for self-chat targets before prekey fetch to avoid stale-ratchet `msg` failures
+- ExWapp rule: the direct send path **reuses** existing self-chat sessions
+  (`:reuse_self_chat_sessions`). Clearing every own-device session per send made
+  linked devices see a stream of `pkmsg` openings for a conversation that never
+  advanced; clearing is kept only for repair paths that need a fresh session
 
 ---
 
@@ -366,6 +400,13 @@ ExWapp uses the same ID pattern as whatsmeow/Baileys/whatsapp-rust:
 | `<participants>` | Always (contains `<to>` nodes) |
 | `<device-identity>` | When ANY participant gets `pkmsg` (prekey message) |
 | `<tctoken>` | When privacy token available for recipient (DM only) |
+
+Privacy-token rules (`ExWapp.PrivacyToken`): WhatsApp accepts the current
+7-day bucket plus the previous three, so expired tokens are dropped rather than
+attached. Tokens are ingested from notifications and from history-sync
+`tcToken` fields, keyed under both addressing families (PN and LID), and merges
+are newest-wins. Direct message nodes do not carry a `peer_recipient_pn`
+attribute.
 
 ### 7.5 Group Message
 
@@ -479,6 +520,12 @@ before deleting the one-time prekey. Retain a small bounded set of prior
 sessions, keyed by the incoming initiator base key, so delayed stanzas can be
 routed to the ratchet that actually consumed them.
 
+When a **retained** session decrypts a peer message, promote it back to current
+and demote the session it replaces into the slot it vacated. Keeping the stale
+session current means every reply is encrypted against a session the peer moved
+off — the server answers with 463 while the peer keeps re-initiating, and the
+mismatch never heals.
+
 ---
 
 ## 10. Receipt and ACK Handling
@@ -493,6 +540,26 @@ For outbound sends, server returns ACK:
 
 An ACK containing a three-digit `error` attribute is a failed send and the
 numeric code must remain visible in sanitized logs.
+
+The server acks what it accepts and stays silent for what it drops, so the
+socket write is not delivery. ExWapp broadcasts the verdict on
+`"ex_wapp:delivery:<session_id>"` and exposes `ExWapp.send_message_await/4`,
+separating accepted / rejected / no-answer. `ExWapp.Error.Ack` classifies the
+error codes so callers can tell a retriable blip from a policy refusal; unknown
+codes are non-retriable.
+
+`error="463"` means the peer could not decrypt what this session encrypted;
+resending the same bytes reproduces it exactly. The rejection goes back to the
+session process, which drops the peer's sessions and re-encrypts the retained
+payload under a fresh one, **reusing the message ID** so the peer still
+deduplicates. The budget is two attempts with `send.session_repair_backoff_ms`
+between them (in live captures, a repair refused once went through seconds
+later). The delivery event is withheld until the repaired attempt is answered;
+every path where the repair cannot run reports the rejection itself.
+
+If an ack returns under a different addressing family than the chat is keyed by
+(e.g. a LID send acked against the peer's phone JID), fall back to an ID-wide
+status update — otherwise the message stays `:pending` forever.
 
 ### 10.2 Immediate ACK for an Inbound Stanza
 
@@ -636,6 +703,7 @@ Groups use SenderKey encryption (one encrypt, multiple recipients):
 |------|---------|--------|
 | 401 | Unauthorized / device removed | Stop, delete store, re-pair |
 | 403 | Forbidden (blocked, deleted account) | Stop sending to this JID |
+| 463 | Peer could not decrypt (broken Signal session) | Do NOT resend the same bytes. Drop the peer's sessions and re-encrypt under a fresh one, same message ID (see 10.1) |
 | 500 | Server error | Retry after backoff |
 
 ### 13.2 phash Mismatch
@@ -676,15 +744,18 @@ These MUST ALL hold for messages to be delivered successfully:
 - [ ] Prekey IQ uses wire PN JIDs (never mapped LID JIDs)
 - [ ] Only fetch for devices without existing sessions (check both PN and LID)
 - [ ] Missing bundles from batch response are retried individually
-- [ ] Generated upload keys and `next_prekey_id` are persisted before IQ send
+- [ ] Generated upload keys and `next_prekey_id` are persisted AND flushed before IQ send
 - [ ] Unacknowledged upload batches survive reconnect and reuse the same IDs
+- [ ] New prekey IDs are minted above `:max_advertised_prekey_id` (never reissue a served ID)
 
 ### Session Management
 - [ ] Session aliasing/migration between wire and signal JIDs is deterministic
 - [ ] Encryption uses whichever JID keyspace actually has session state (no blind remap)
-- [ ] Self-chat clears stale sessions before prekey bootstrap
+- [ ] Direct self-chat sends reuse existing own-device sessions; only repair paths clear them
 - [ ] Fresh inbound session is persisted before its one-time prekey is deleted
 - [ ] Retained sessions carry the initiator base key for deterministic replay routing
+- [ ] A retained session that decrypts a peer message is promoted back to current
+- [ ] Ack error 463 triggers session repair (fresh session, same message ID), not a byte-identical resend
 
 ### Encryption
 - [ ] Recipient devices get plain message protobuf
@@ -715,7 +786,7 @@ These MUST ALL hold for messages to be delivered successfully:
 
 ## 15. Reference Implementation Locations
 
-### whatsmeow (Go) — `/tmp/whatsmeow/`
+### whatsmeow (Go) — `tmp/whatsmeow_upstream/` (git clone in this repo)
 | Function | File | Lines | Purpose |
 |----------|------|-------|---------|
 | `sendDM` | send.go | 836-881 | DM entry point |
@@ -773,7 +844,9 @@ For troubleshooting message delivery, ensure logs show:
 
 For a single outbound message, bytes are built in this order:
 
-1. Build WA protobuf payload (`ExWapp.Proto.Message.encode/1`)
+1. Build the WA protobuf payload as a `WAWebProtobufsE2E.Message` struct
+   (generated by protox from the official schema) and encode it; the protox
+   iodata output is flattened at the boundary
 2. Build DSM payload for own-device copies when DM (`deviceSentMessage`, field 31)
 3. Pad payload (`ExWapp.Signal.Encryption.pad_message/1`)
 4. Encrypt with Signal session:
@@ -820,12 +893,28 @@ For a single outbound message, bytes are built in this order:
 
 ## 18. Protobuf Fields Required for Correct Send/Decode
 
-### 18.1 `Message` (`ExWapp.Proto.Message`)
+All protobuf encode/decode goes through the protox-generated modules in
+`lib/ex_wapp/wa_proto/` (regenerated by `scripts/update_wa_protos.sh` from
+whatsmeow's proto snapshot — never hand-edit them). The hand-rolled
+`ExWapp.Proto.{Message, ExtendedTextMessage, ContextInfo, DeviceSentMessage,
+ProtocolMessage, MessageKey, CompanionReg, SyncAction}` encoders are gone;
+byte parity with them was pinned by test before the swap. The field numbers
+below stay documented because the wire-format tests still pin the exact bytes
+a phone parses.
+
+### 18.1 `Message` (`WAWebProtobufsE2E.Message`)
 
 - Field `1` => `conversation` (simple text)
 - Field `6` => `extendedTextMessage`
 - Field `12` => `protocolMessage`
 - Field `31` => `deviceSentMessage` (wire tag bytes `0xFA 0x01`)
+
+Known field-number traps caught by the generated schema:
+
+- `ContextInfo.isForwarded` is field `22`, not 18 (18 is `conversionSource`,
+  a string — the hand encoder wrote the flag there and no client ever saw it)
+- `WebMessageInfo.participant` is field `5`, not 9 (the hand history-sync
+  parser read the wrong field)
 
 ### 18.2 `DeviceSentMessage`
 
@@ -842,19 +931,22 @@ For a single outbound message, bytes are built in this order:
 
 ---
 
-## 19. Runtime Validation Status (Feb 12, 2026)
+## 19. Runtime Validation Status (Jul 31, 2026)
 
-- Refactor + protocol fixes from `history.md` are applied in code paths under:
-  - `lib/ex_wapp/session/outbound.ex`
-  - `lib/ex_wapp/session/iq.ex`
-  - `lib/ex_wapp/session/message_node.ex`
-  - `lib/ex_wapp/session/account.ex`
-  - `lib/ex_wapp/message_handler.ex`
-- Automated tests cover core send/decode invariants (message ID, DSM tag/fields, phash format, padding, sender-key paths).
-- Final truth still requires fresh live-device validation after pairing:
-  - DM send to other user
-  - Self-chat send to own number
-  - Group send with sender-key distribution
+- The send path lives in `lib/ex_wapp/session/outbound/` (direct, group,
+  device_discovery, prekeys, encryptor, fanout, iq_requests) coordinated by
+  `lib/ex_wapp/session/worker/outbound.ex`; inbound in
+  `lib/ex_wapp/message/handler/inbound/`; the session process itself in
+  `lib/ex_wapp/session/worker.ex` plus its per-concern `worker/` modules
+  (connection, events, send_health, send_recovery, signal_sessions, ...).
+- 750 automated tests cover send/decode invariants (message ID, DSM
+  tag/fields, phash format, padding, sender-key paths), delivery confirmation
+  and session repair, prekey ID integrity, send-health thresholds, and
+  round-trips against the generated official protos (with golden byte vectors).
+- Live-device validation has been run from production captures: DM send and
+  receive, self-chat, delivery acks (including 463 repair), and prekey
+  desync recovery all have log-driven fixes and tests behind them. Group
+  sender-key distribution remains the least-exercised live path.
 
 ---
 
@@ -862,7 +954,7 @@ For a single outbound message, bytes are built in this order:
 
 1. **Wire JID vs encryption identity split**
    - whatsmeow `encryptMessageForDeviceAndWrap` (`wireIdentity` + `encryptionIdentity`)
-   - ExWapp `session/outbound.ex` aliasing + session-aware resolution
+   - ExWapp `session/outbound/encryptor.ex` aliasing + session-aware resolution
 2. **USync first, prekey second**
    - `usync` for device discovery
    - `encrypt` prekey IQ only for concrete wire JIDs
