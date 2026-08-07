@@ -4,7 +4,7 @@ defmodule ExWapp.CallStanzaTest do
   alias ExWapp.Binary.Node
   alias ExWapp.Call
   alias ExWapp.MessageHandler
-  alias ExWapp.Session.Worker.Subscribers
+  alias ExWapp.Session.Worker
   alias ExWapp.Store
 
   @caller "15550002222@s.whatsapp.net"
@@ -190,14 +190,17 @@ defmodule ExWapp.CallStanzaTest do
     assert {:ok, %Call{status: :missed, is_incoming: true}} = Call.get(state.store, "CALL1")
   end
 
-  test "broadcast_call publishes on the per-session and global topics" do
-    :ok = Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:calls:broadcast-test")
+  test "a handler call event is published by the worker on both topics" do
+    :ok = Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:calls:call-stanza-test")
     :ok = Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:calls")
 
-    call = %Call{id: "CALL9", status: :missed}
-    assert :ok = Subscribers.broadcast_call("broadcast-test", call)
+    state = Map.merge(new_state(), %{status: :connected, reconnect_attempts: 0})
+    assert {:ok, ^state} = handle(call_node("offer", call_id: "CALL9"), state)
+    assert_receive {:call_event, %Call{id: "CALL9"} = call}
+
+    assert {:noreply, ^state} = Worker.handle_info({:call_event, call}, state)
 
     assert_receive {:ex_wapp_call, %Call{id: "CALL9"}}
-    assert_receive {"broadcast-test", {:ex_wapp_call, %Call{id: "CALL9"}}}
+    assert_receive {"call-stanza-test", {:ex_wapp_call, %Call{id: "CALL9"}}}
   end
 end

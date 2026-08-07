@@ -366,10 +366,11 @@ defmodule ExWapp do
   def list_calls(session, opts), do: Call.list(session, opts)
 
   @doc """
-  Builds a lazy stream over the locally stored call log, oldest first.
+  Builds a deferred stream over the locally stored call log, oldest first.
 
-  Reads one record at a time so a wrapper can export the log without holding
-  it all in memory. Accepts the same options as `ExWapp.Call.list/2`.
+  The bounded retained log is loaded and sorted when enumeration starts, so
+  creating the stream itself performs no store read. Accepts the same options
+  as `ExWapp.Call.list/2`.
   """
   @spec stream_calls(GenServer.server(), keyword()) :: Enumerable.t()
   def stream_calls(session, opts \\ []), do: Call.stream(session, opts)

@@ -2,6 +2,7 @@ defmodule ExWapp.AppState.EngineTest do
   use ExUnit.Case, async: true
 
   alias ExWapp.AppState.{CollectionLock, Crypto, Engine, LTHash}
+  alias ExWapp.Session.AppStateSync
 
   alias WAWebProtobufsServerSync.{
     KeyId,
@@ -856,6 +857,78 @@ defmodule ExWapp.AppState.EngineTest do
 
       assert {:error, {:app_state_pagination_stalled, ^collection, 0, 0}} =
                Engine.fetch_collection(session, store, collection)
+    end
+
+    test "runtime call-log retention reaches paginated app-state dispatch" do
+      store = ExWapp.Store.new(ExWapp.Store.Memory)
+      collection = "regular"
+      key_id = :crypto.strong_rand_bytes(16)
+      key_data = :crypto.strong_rand_bytes(32)
+      key_hex = Base.encode16(key_id, case: :lower)
+
+      :ok =
+        ExWapp.Store.put(store, :app_state_keys, %{
+          key_hex => %{data: key_data, timestamp: 1}
+        })
+
+      {encoded_patches, _state, _macs} =
+        Enum.reduce(1..3, {[], %{version: 0, hash: LTHash.new()}, %{}}, fn index,
+                                                                           {patches, state, macs} ->
+          patch_info = %{
+            type: collection,
+            timestamp: nil,
+            mutations: [
+              %{
+                index: ["call_log", "1234@s.whatsapp.net"],
+                version: 1,
+                value: %SyncActionValue{
+                  callLogAction: %CallLogAction{
+                    callLogRecord: %CallLogRecord{
+                      callID: "SYNCCALL#{index}",
+                      callResult: :MISSED,
+                      isIncoming: true,
+                      startTime: index,
+                      callCreatorJID: "1234@s.whatsapp.net"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+
+          {:ok, encoded, new_state, new_macs} =
+            Engine.encode_patch(patch_info, key_id, key_data, state, macs)
+
+          {[encoded | patches], new_state, new_macs}
+        end)
+
+      responses =
+        encoded_patches
+        |> Enum.reverse()
+        |> Enum.with_index()
+        |> Enum.map(fn {patch, index} -> collection_response(collection, patch, index < 2) end)
+
+      {:ok, session} = PaginationSession.start_link(self(), responses)
+      {:ok, task_supervisor} = Task.Supervisor.start_link()
+
+      assert {:ok, task} =
+               AppStateSync.refresh(
+                 task_supervisor,
+                 session,
+                 store,
+                 [collection],
+                 :notification,
+                 nil,
+                 %{calls: %{max_records: 2}}
+               )
+
+      monitor = Process.monitor(task)
+      assert_receive {:DOWN, ^monitor, :process, ^task, :normal}
+
+      assert ["SYNCCALL3", "SYNCCALL2"] =
+               store
+               |> ExWapp.Call.list(order: :newest_first)
+               |> Enum.map(& &1.id)
     end
   end
 

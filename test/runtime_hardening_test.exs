@@ -68,6 +68,17 @@ defmodule ExWapp.RuntimeHardeningTest do
     assert get_in(overridden_cfg, [:app_state, :initial_sync_enabled]) == false
   end
 
+  test "config validates call-log retention" do
+    assert get_in(Config.defaults(), [:calls, :max_records]) == 500
+
+    assert {:ok, configured} = Config.resolve(runtime: [calls: [max_records: 25]])
+    assert get_in(configured, [:calls, :max_records]) == 25
+
+    assert {:error,
+            {:invalid_runtime_config, [:calls, :max_records], 0, :expected_positive_integer}} =
+             Config.resolve(runtime: [calls: [max_records: 0]])
+  end
+
   test "config resolve preserves empty list values" do
     assert {:ok, cfg} = Config.resolve(runtime: [canary: [recipients: []]])
     assert get_in(cfg, [:canary, :recipients]) == []

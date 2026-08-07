@@ -4,7 +4,7 @@ defmodule ExWapp.Session.AppStateSync do
   require Logger
 
   alias ExWapp.AppState.Engine
-  alias ExWapp.{Config, Log, Store}
+  alias ExWapp.{Call, Config, Log, Store}
   alias ExWapp.Session.Worker.Subscribers
 
   @type source :: :initial | :notification
@@ -47,16 +47,24 @@ defmodule ExWapp.Session.AppStateSync do
     _, _ -> false
   end
 
-  @spec refresh(pid() | nil, pid(), term(), [term()], source(), term()) ::
+  @spec refresh(pid() | nil, pid(), term(), [term()], source(), term(), map()) ::
           {:ok, pid()} | {:error, term()}
-  def refresh(task_supervisor, session_pid, store, collection_names, source, session_id \\ nil) do
+  def refresh(
+        task_supervisor,
+        session_pid,
+        store,
+        collection_names,
+        source,
+        session_id \\ nil,
+        runtime_cfg \\ %{}
+      ) do
     names =
       collection_names
       |> Enum.filter(&is_binary/1)
       |> Enum.uniq()
 
     task = fn ->
-      result = safe_run_refresh(session_pid, store, names, source, session_id)
+      result = safe_run_refresh(session_pid, store, names, source, session_id, runtime_cfg)
 
       if source == :initial do
         send(session_pid, {:initial_sync_finished, self(), result})
@@ -107,10 +115,10 @@ defmodule ExWapp.Session.AppStateSync do
   defp start_refresh_task(_task_supervisor, _task),
     do: {:error, :task_supervisor_unavailable}
 
-  @spec safe_run_refresh(pid(), term(), [String.t()], source(), term()) ::
+  @spec safe_run_refresh(pid(), term(), [String.t()], source(), term(), map()) ::
           :completed | :failed | :ok
-  defp safe_run_refresh(session_pid, store, names, source, session_id) do
-    run_refresh(session_pid, store, names, source, session_id)
+  defp safe_run_refresh(session_pid, store, names, source, session_id, runtime_cfg) do
+    run_refresh(session_pid, store, names, source, session_id, runtime_cfg)
   rescue
     exception ->
       reason = {:exception, exception.__struct__}
@@ -146,9 +154,9 @@ defmodule ExWapp.Session.AppStateSync do
        ),
        do: :ok
 
-  @spec run_refresh(pid(), term(), [String.t()], source(), term()) ::
+  @spec run_refresh(pid(), term(), [String.t()], source(), term(), map()) ::
           :completed | :failed | :ok
-  defp run_refresh(session_pid, store, names, :initial, session_id) do
+  defp run_refresh(session_pid, store, names, :initial, session_id, runtime_cfg) do
     Subscribers.broadcast_lifecycle(
       session_id,
       {:ex_wapp_session, :initial_sync, :started,
@@ -161,7 +169,7 @@ defmodule ExWapp.Session.AppStateSync do
     {success_count, failures} =
       names
       |> Enum.with_index(1)
-      |> Enum.reduce({0, []}, fn {collection_name, index}, {successes, failures} ->
+      |> Enum.reduce({0, []}, fn {collection_name, index}, counts ->
         refresh_collection(
           session_pid,
           store,
@@ -169,8 +177,8 @@ defmodule ExWapp.Session.AppStateSync do
           collection_name,
           index,
           total_count,
-          successes,
-          failures
+          counts,
+          runtime_cfg
         )
       end)
 
@@ -189,9 +197,9 @@ defmodule ExWapp.Session.AppStateSync do
     sync_outcome(failures, flush_result)
   end
 
-  defp run_refresh(session_pid, store, names, _source, _session_id) do
+  defp run_refresh(session_pid, store, names, _source, _session_id, runtime_cfg) do
     Enum.each(names, fn collection_name ->
-      _ = fetch_collection(session_pid, store, collection_name)
+      _ = fetch_collection(session_pid, store, collection_name, runtime_cfg)
     end)
   end
 
@@ -202,8 +210,8 @@ defmodule ExWapp.Session.AppStateSync do
           String.t(),
           pos_integer(),
           non_neg_integer(),
-          non_neg_integer(),
-          [map()]
+          {non_neg_integer(), [map()]},
+          map()
         ) :: {non_neg_integer(), [map()]}
   defp refresh_collection(
          session_pid,
@@ -212,8 +220,8 @@ defmodule ExWapp.Session.AppStateSync do
          collection_name,
          index,
          total_count,
-         successes,
-         failures
+         {successes, failures},
+         runtime_cfg
        ) do
     started_at = System.monotonic_time(:millisecond)
 
@@ -224,7 +232,7 @@ defmodule ExWapp.Session.AppStateSync do
       status: :started
     })
 
-    case fetch_collection(session_pid, store, collection_name) do
+    case fetch_collection(session_pid, store, collection_name, runtime_cfg) do
       :ok ->
         duration_ms = elapsed_ms(started_at)
 
@@ -324,9 +332,14 @@ defmodule ExWapp.Session.AppStateSync do
 
   defp finish_store_batch(_store, _reason), do: :ok
 
-  @spec fetch_collection(pid(), term(), String.t()) :: :ok | {:error, term()}
-  defp fetch_collection(session_pid, store, collection_name) do
-    case Engine.fetch_collection(session_pid, store, collection_name) do
+  @spec fetch_collection(pid(), term(), String.t(), map()) :: :ok | {:error, term()}
+  defp fetch_collection(session_pid, store, collection_name, runtime_cfg) do
+    case Engine.fetch_collection(
+           session_pid,
+           store,
+           collection_name,
+           Call.retention_options(runtime_cfg)
+         ) do
       :ok ->
         :ok
 

@@ -67,9 +67,14 @@ defmodule ExWapp.AppState.Engine do
 
   # Server round-trips.
   defdelegate send_mutation(session, patch_info, store), to: Sync
+  defdelegate send_mutation(session, patch_info, store, opts), to: Sync
   defdelegate fetch_collection(session, store, collection_name), to: Sync
+  defdelegate fetch_collection(session, store, collection_name, opts), to: Sync
   defdelegate apply_collection_response(store, collection_name, response), to: Sync
   defdelegate apply_collection_response(store, collection_name, response, session), to: Sync
+
+  defdelegate apply_collection_response(store, collection_name, response, session, opts),
+    to: Sync
 
   # Local persistence of collection state.
   defdelegate all_collections(), to: State
@@ -83,5 +88,7 @@ defmodule ExWapp.AppState.Engine do
   # Applying decoded mutations locally.
   defdelegate dispatch_mutation(store, index, action_value), to: Dispatch
   defdelegate dispatch_mutation(store, operation, index, action_value), to: Dispatch
+  defdelegate dispatch_mutation(store, operation, index, action_value, opts), to: Dispatch
   defdelegate apply_outgoing_patch(store, patch_info), to: Dispatch
+  defdelegate apply_outgoing_patch(store, patch_info, opts), to: Dispatch
 end

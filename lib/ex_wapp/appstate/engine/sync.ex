@@ -42,9 +42,15 @@ defmodule ExWapp.AppState.Engine.Sync do
   @spec send_mutation(GenServer.server(), patch_info(), struct()) ::
           {:ok, hash_state(), map()} | {:error, term()}
   def send_mutation(session, patch_info, store) do
+    send_mutation(session, patch_info, store, [])
+  end
+
+  @spec send_mutation(GenServer.server(), patch_info(), struct(), keyword()) ::
+          {:ok, hash_state(), map()} | {:error, term()}
+  def send_mutation(session, patch_info, store, opts) when is_list(opts) do
     CollectionLock.with_lock(store, patch_info.type, fn ->
-      with :ok <- fetch_collection_unlocked(session, store, patch_info.type) do
-        do_send_mutation(session, patch_info, store, true)
+      with :ok <- fetch_collection_unlocked(session, store, patch_info.type, opts) do
+        do_send_mutation(session, patch_info, store, true, opts)
       end
     end)
   end
@@ -54,8 +60,14 @@ defmodule ExWapp.AppState.Engine.Sync do
   """
   @spec fetch_collection(GenServer.server(), struct(), String.t()) :: :ok | {:error, term()}
   def fetch_collection(session, store, collection_name) do
+    fetch_collection(session, store, collection_name, [])
+  end
+
+  @spec fetch_collection(GenServer.server(), struct(), String.t(), keyword()) ::
+          :ok | {:error, term()}
+  def fetch_collection(session, store, collection_name, opts) when is_list(opts) do
     CollectionLock.with_lock(store, collection_name, fn ->
-      fetch_collection_unlocked(session, store, collection_name)
+      fetch_collection_unlocked(session, store, collection_name, opts)
     end)
   end
 
@@ -66,17 +78,17 @@ defmodule ExWapp.AppState.Engine.Sync do
     :mismatching_index_mac
   ]
 
-  defp fetch_collection_unlocked(session, store, collection_name) do
+  defp fetch_collection_unlocked(session, store, collection_name, opts) do
     Store.batch(store, {:app_state_collection, collection_name}, fn ->
-      case do_fetch_collection(session, store, collection_name, true) do
+      case do_fetch_collection(session, store, collection_name, true, opts) do
         :ok ->
           :ok
 
         {:error, :snapshot_not_supported} ->
-          do_fetch_collection(session, store, collection_name, false)
+          do_fetch_collection(session, store, collection_name, false, opts)
 
         {:error, {:apply_snapshot_failed, _reason}} ->
-          do_fetch_collection(session, store, collection_name, false)
+          do_fetch_collection(session, store, collection_name, false, opts)
 
         {:error, {:apply_patch_failed, reason}} when reason in @mac_divergence_reasons ->
           # The local hash chain no longer matches the server's, and a normal
@@ -90,7 +102,7 @@ defmodule ExWapp.AppState.Engine.Sync do
           )
 
           :ok = State.reset_collection_state(store, collection_name)
-          do_fetch_collection(session, store, collection_name, true)
+          do_fetch_collection(session, store, collection_name, true, opts)
 
         {:error, _reason} = error ->
           error
@@ -104,7 +116,7 @@ defmodule ExWapp.AppState.Engine.Sync do
   @spec apply_collection_response(struct(), String.t(), Binary.Node.t()) ::
           {:ok, non_neg_integer()} | {:error, term()}
   def apply_collection_response(store, collection_name, response) do
-    apply_collection_response(store, collection_name, response, nil)
+    apply_collection_response(store, collection_name, response, nil, [])
   end
 
   @doc """
@@ -114,6 +126,23 @@ defmodule ExWapp.AppState.Engine.Sync do
   @spec apply_collection_response(struct(), String.t(), Binary.Node.t(), pid() | nil) ::
           {:ok, non_neg_integer()} | {:error, term()}
   def apply_collection_response(store, collection_name, response, session) do
+    apply_collection_response(store, collection_name, response, session, [])
+  end
+
+  @doc """
+  Applies a collection response using feature-specific persistence options.
+
+  The `:max_records` option is forwarded to call-log mutations.
+  """
+  @spec apply_collection_response(
+          struct(),
+          String.t(),
+          Binary.Node.t(),
+          pid() | nil,
+          keyword()
+        ) :: {:ok, non_neg_integer()} | {:error, term()}
+  def apply_collection_response(store, collection_name, response, session, opts)
+      when is_list(opts) do
     with {:ok, collection_data} <- extract_collection_data(response, collection_name),
          {:ok, hash_state, mutation_macs} <- State.get_collection_state(store, collection_name),
          key_store <- store_key_data(store),
@@ -125,7 +154,8 @@ defmodule ExWapp.AppState.Engine.Sync do
              collection_data.snapshot,
              key_store,
              hash_state,
-             mutation_macs
+             mutation_macs,
+             opts
            ) do
       case apply_patches(
              store,
@@ -134,7 +164,8 @@ defmodule ExWapp.AppState.Engine.Sync do
              collection_data.patches,
              key_store,
              hash_state,
-             mutation_macs
+             mutation_macs,
+             opts
            ) do
         {:ok, hash_state, mutation_macs, patch_count} ->
           State.persist_collection_state(store, collection_name, hash_state, mutation_macs)
@@ -155,7 +186,7 @@ defmodule ExWapp.AppState.Engine.Sync do
     end
   end
 
-  defp do_send_mutation(session, patch_info, store, allow_retry) do
+  defp do_send_mutation(session, patch_info, store, allow_retry, opts) do
     with {:ok, key_id, key_data} <- Codec.latest_app_state_key(store),
          {:ok, hash_state, mutation_macs} <-
            State.get_collection_state(store, patch_info.type),
@@ -205,9 +236,9 @@ defmodule ExWapp.AppState.Engine.Sync do
             patch_info,
             response,
             collection_name,
-            new_hash_state,
-            new_mutation_macs,
-            allow_retry
+            {new_hash_state, new_mutation_macs},
+            allow_retry,
+            opts
           )
 
         {:error, reason} ->
@@ -222,15 +253,15 @@ defmodule ExWapp.AppState.Engine.Sync do
          patch_info,
          response,
          collection_name,
-         new_hash_state,
-         new_mutation_macs,
-         allow_retry
+         {new_hash_state, new_mutation_macs},
+         allow_retry,
+         opts
        ) do
     case validate_mutation_response(response, collection_name) do
       :ok ->
         State.persist_collection_state(store, collection_name, new_hash_state, new_mutation_macs)
-        Dispatch.apply_outgoing_patch(store, patch_info)
-        refresh_collection_after_mutation(session, store, collection_name)
+        Dispatch.apply_outgoing_patch(store, patch_info, opts)
+        refresh_collection_after_mutation(session, store, collection_name, opts)
         {:ok, new_hash_state, new_mutation_macs}
 
       {:error, {:conflict, _code}} when allow_retry ->
@@ -238,17 +269,17 @@ defmodule ExWapp.AppState.Engine.Sync do
           "[APP_STATE] Conflict while sending patch for #{collection_name}, applying conflict response and retrying once"
         )
 
-        _ = apply_collection_response(store, collection_name, response, session)
-        do_send_mutation(session, patch_info, store, false)
+        _ = apply_collection_response(store, collection_name, response, session, opts)
+        do_send_mutation(session, patch_info, store, false, opts)
 
       {:error, reason} ->
         {:error, {:app_state_update_failed, reason}}
     end
   end
 
-  defp refresh_collection_after_mutation(session, store, collection_name) do
+  defp refresh_collection_after_mutation(session, store, collection_name, opts) do
     spawn(fn ->
-      case fetch_collection(session, store, collection_name) do
+      case fetch_collection(session, store, collection_name, opts) do
         :ok ->
           :ok
 
@@ -297,8 +328,8 @@ defmodule ExWapp.AppState.Engine.Sync do
 
   defp collection_error_code(_), do: nil
 
-  defp do_fetch_collection(session, store, collection_name, want_snapshot) do
-    do_fetch_collection_page(session, store, collection_name, want_snapshot, 0)
+  defp do_fetch_collection(session, store, collection_name, want_snapshot, opts) do
+    do_fetch_collection_page(session, store, collection_name, want_snapshot, 0, opts)
   end
 
   defp do_fetch_collection_page(
@@ -306,26 +337,29 @@ defmodule ExWapp.AppState.Engine.Sync do
          _store,
          collection_name,
          _want_snapshot,
-         page
+         page,
+         _opts
        )
        when page >= @max_collection_pages do
     {:error, {:app_state_pagination_limit, collection_name, @max_collection_pages}}
   end
 
-  defp do_fetch_collection_page(session, store, collection_name, want_snapshot, page) do
+  defp do_fetch_collection_page(session, store, collection_name, want_snapshot, page, opts) do
     with {:ok, hash_state, _macs} <- State.get_collection_state(store, collection_name),
          snapshot? <- want_snapshot and hash_state.version == 0,
          {:ok, response} <-
            send_collection_fetch_iq(session, collection_name, hash_state.version, snapshot?),
          {:ok, collection_data} <- extract_collection_data(response, collection_name),
-         {:ok, _count} <- apply_collection_response(store, collection_name, response, session) do
+         {:ok, _count} <-
+           apply_collection_response(store, collection_name, response, session, opts) do
       continue_collection_pagination(
         session,
         store,
         collection_name,
         collection_data.has_more_patches,
         hash_state.version,
-        page
+        page,
+        opts
       )
     end
   end
@@ -336,7 +370,8 @@ defmodule ExWapp.AppState.Engine.Sync do
          _collection_name,
          false,
          _previous_version,
-         _page
+         _page,
+         _opts
        ),
        do: :ok
 
@@ -346,11 +381,12 @@ defmodule ExWapp.AppState.Engine.Sync do
          collection_name,
          true,
          previous_version,
-         page
+         page,
+         opts
        ) do
     with {:ok, %{version: version}, _macs} <- State.get_collection_state(store, collection_name),
          :ok <- ensure_pagination_progress(collection_name, previous_version, version) do
-      do_fetch_collection_page(session, store, collection_name, false, page + 1)
+      do_fetch_collection_page(session, store, collection_name, false, page + 1, opts)
     end
   end
 
@@ -530,12 +566,22 @@ defmodule ExWapp.AppState.Engine.Sync do
          nil,
          _key_store,
          hash_state,
-         mutation_macs
+         mutation_macs,
+         _opts
        ) do
     {:ok, hash_state, mutation_macs, 0}
   end
 
-  defp maybe_apply_snapshot(store, session, collection_name, snapshot_binary, key_store, _hs, _mm) do
+  defp maybe_apply_snapshot(
+         store,
+         session,
+         collection_name,
+         snapshot_binary,
+         key_store,
+         _hash_state,
+         _mutation_macs,
+         opts
+       ) do
     result =
       timed_app_state(
         :decode,
@@ -554,7 +600,7 @@ defmodule ExWapp.AppState.Engine.Sync do
 
     case result do
       {:ok, decoded, version, hash, macs} ->
-        dispatch_decoded_mutations(store, decoded, collection_name)
+        dispatch_decoded_mutations(store, decoded, collection_name, opts)
         {:ok, %{version: version, hash: hash}, macs, length(decoded)}
 
       {:error, reason}
@@ -604,29 +650,42 @@ defmodule ExWapp.AppState.Engine.Sync do
     error
   end
 
-  defp dispatch_decoded_mutations(store, decoded_mutations, collection_name) do
+  defp dispatch_decoded_mutations(store, decoded_mutations, collection_name, opts) do
     dispatch_decoded_mutation_batches(
       store,
       [decoded_mutations],
       length(decoded_mutations),
-      collection_name
+      collection_name,
+      opts
     )
   end
 
-  defp dispatch_decoded_mutation_batches(store, decoded_batches, mutation_count, collection_name) do
+  defp dispatch_decoded_mutation_batches(
+         store,
+         decoded_batches,
+         mutation_count,
+         collection_name,
+         opts
+       ) do
     timed_app_state(
       :dispatch,
       %{collection: collection_name},
       %{mutation_count: mutation_count},
       fn ->
-        Enum.each(decoded_batches, &dispatch_decoded_mutation_batch(store, &1))
+        Enum.each(decoded_batches, &dispatch_decoded_mutation_batch(store, &1, opts))
       end
     )
   end
 
-  defp dispatch_decoded_mutation_batch(store, decoded_mutations) do
+  defp dispatch_decoded_mutation_batch(store, decoded_mutations, opts) do
     Enum.each(decoded_mutations, fn mutation ->
-      Dispatch.dispatch_mutation(store, mutation.operation, mutation.index, mutation.action)
+      Dispatch.dispatch_mutation(
+        store,
+        mutation.operation,
+        mutation.index,
+        mutation.action,
+        opts
+      )
     end)
   end
 
@@ -637,7 +696,8 @@ defmodule ExWapp.AppState.Engine.Sync do
          patches,
          key_store,
          hash_state,
-         mutation_macs
+         mutation_macs,
+         opts
        )
        when is_list(patches) do
     result =
@@ -670,7 +730,8 @@ defmodule ExWapp.AppState.Engine.Sync do
           store,
           Enum.reverse(decoded_batches),
           decoded_count,
-          collection_name
+          collection_name,
+          opts
         )
 
         {:ok, new_state, new_macs, decoded_count}

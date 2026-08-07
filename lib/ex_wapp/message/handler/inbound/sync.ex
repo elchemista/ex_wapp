@@ -9,7 +9,7 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
   require Logger
 
   alias ExWapp.AppState.Engine
-  alias ExWapp.{Call, Chat, Config, Log, PrivacyToken, Store}
+  alias ExWapp.{Call, Chat, Log, PrivacyToken, Store}
   alias ExWapp.Message.Content, as: MessageContent
   alias ExWapp.Message.Handler.Common
   alias ExWapp.Message.Handler.Inbound.{Content, Projection}
@@ -466,7 +466,7 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
   defp ingest_history_call_log(_target, [], _state), do: 0
 
   defp ingest_history_call_log(target, records, state) when is_list(records) do
-    opts = history_call_log_opts(state)
+    opts = Call.retention_options(Map.get(state, :runtime_cfg, %{}))
 
     Enum.reduce(records, 0, fn record, count ->
       case Call.upsert(target, record, opts) do
@@ -477,13 +477,6 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
   end
 
   defp ingest_history_call_log(_target, _records, _state), do: 0
-
-  defp history_call_log_opts(state) do
-    case Config.get(Map.get(state, :runtime_cfg, %{}), [:calls, :max_records]) do
-      max when is_integer(max) and max > 0 -> [max_records: max]
-      _unset -> []
-    end
-  end
 
   @spec history_sync_chat_messages([map()], binary()) :: [map()]
   defp history_sync_chat_messages(history_messages, jid)

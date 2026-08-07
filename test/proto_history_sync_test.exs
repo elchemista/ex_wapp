@@ -1,13 +1,15 @@
 defmodule ExWapp.Proto.HistorySyncTest do
   use ExUnit.Case, async: true
 
+  alias ExWapp.{Call, Store}
+  alias ExWapp.Message.Handler.Inbound.Sync
   alias ExWapp.Proto.HistorySync
   alias WACommon.MessageKey
   alias WAWebProtobufsE2E.{HistorySyncNotification, Message, ProtocolMessage}
-  alias WAWebProtobufsHistorySync.PhoneNumberToLIDMapping
   alias WAWebProtobufsHistorySync.Conversation
   alias WAWebProtobufsHistorySync.HistorySync, as: HistorySyncProto
   alias WAWebProtobufsHistorySync.HistorySyncMsg
+  alias WAWebProtobufsHistorySync.PhoneNumberToLIDMapping
   alias WAWebProtobufsWeb.WebMessageInfo
 
   test "extracts conversations, messages, and lid mappings from an inline payload" do
@@ -90,7 +92,7 @@ defmodule ExWapp.Proto.HistorySyncTest do
     assert extracted.call_log_records == []
   end
 
-  test "extracts call log records from an inline payload" do
+  test "extracts and persists call log records from an inline payload" do
     history = %HistorySyncProto{
       syncType: :RECENT,
       callLogRecords: [
@@ -133,6 +135,27 @@ defmodule ExWapp.Proto.HistorySyncTest do
     assert record.start_time == 1_754_000_000
     assert record.chat_jid == "15550002222@s.whatsapp.net"
     assert record.source == :history_sync
+
+    store = Store.new(Store.Memory)
+    state = %{store: store, runtime_cfg: %{calls: %{max_records: 10}}}
+
+    assert ^state =
+             Sync.ingest(
+               %{message_content_type: :protocol, protocol_payload: payload},
+               self(),
+               state,
+               "15550001111@s.whatsapp.net",
+               "history-sync-1",
+               true
+             )
+
+    assert {:ok,
+            %Call{
+              id: "HISTCALL1",
+              status: :missed,
+              is_video: true,
+              source: :history_sync
+            }} = Call.get(store, "HISTCALL1")
   end
 
   test "keeps the blob reference when a chunk is delivered as media" do

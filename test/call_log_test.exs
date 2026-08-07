@@ -7,6 +7,18 @@ defmodule ExWapp.CallLogTest do
   @peer "15550002222@s.whatsapp.net"
   @group "120363999999999999@g.us"
 
+  defmodule CountingStore do
+    defstruct [:calls, :test_pid]
+
+    def load(%__MODULE__{calls: calls}), do: {:ok, %{call_log: calls}}
+    def persist(%__MODULE__{}, _data), do: :ok
+
+    def get(%__MODULE__{calls: calls, test_pid: test_pid}, :call_log, _default) do
+      send(test_pid, :call_log_read)
+      calls
+    end
+  end
+
   defp new_store, do: Store.new(Store.Memory)
 
   defp call(attrs) do
@@ -57,6 +69,53 @@ defmodule ExWapp.CallLogTest do
       {:ok, merged} = Call.upsert(store, call(id: "CALL1", status: :ringing))
 
       assert merged.status == :missed
+    end
+
+    test "a late offer cannot regress an ongoing call to ringing" do
+      store = new_store()
+      {:ok, _ongoing} = Call.upsert(store, call(id: "CALL1", status: :ongoing))
+      {:ok, merged} = Call.upsert(store, call(id: "CALL1", status: :ringing))
+
+      assert merged.status == :ongoing
+    end
+
+    test "a late live outcome cannot overwrite an authoritative synced record" do
+      store = new_store()
+
+      assert :ok =
+               Call.merge_from_sync(
+                 store,
+                 %CallLogRecord{
+                   callID: "CALL1",
+                   callResult: :CONNECTED,
+                   isIncoming: true,
+                   isVideo: false,
+                   duration: 45,
+                   startTime: 100
+                 },
+                 source: :history_sync
+               )
+
+      {:ok, merged} =
+        Call.upsert(
+          store,
+          call(
+            id: "CALL1",
+            status: :missed,
+            is_video: true,
+            ended_at: 200,
+            end_reason: "timeout"
+          )
+        )
+
+      assert %Call{
+               status: :connected,
+               duration: 45,
+               is_video: false,
+               source: :history_sync,
+               ended_at: 200,
+               end_reason: "timeout"
+             } = merged
     end
 
     test "derives duration from accept and terminate timestamps" do
@@ -126,9 +185,45 @@ defmodule ExWapp.CallLogTest do
       assert ["CALL2", "CALL1"] = store |> Call.list(until: 250) |> Enum.map(& &1.id)
     end
 
-    test "streams lazily oldest first", %{store: store} do
+    test "streams oldest first", %{store: store} do
       assert ["CALL1", "CALL2"] = store |> Call.stream() |> Enum.take(2) |> Enum.map(& &1.id)
     end
+
+    test "defers the bounded snapshot read until enumeration", %{store: store} do
+      calls = Store.get(store, :call_log, %{})
+      counting_store = %CountingStore{calls: calls, test_pid: self()}
+
+      stream = Call.stream(counting_store)
+      refute_receive :call_log_read
+
+      assert [%Call{id: "CALL1"}] = Enum.take(stream, 1)
+      assert_receive :call_log_read
+    end
+  end
+
+  test "persists call records across an ETS store restart" do
+    directory = Path.join(System.tmp_dir!(), "ex_wapp_call_log_tests")
+    :ok = File.mkdir_p(directory)
+    path = Path.join(directory, "call_log_#{System.unique_integer([:positive])}.etf")
+
+    on_exit(fn ->
+      File.rm(path)
+      File.rm(path <> ".tmp")
+    end)
+
+    store = Store.Ets.new(path: path)
+
+    assert {:ok, %Call{id: "PERSISTED"}} =
+             Call.upsert(
+               store,
+               call(id: "PERSISTED", chat_jid: @peer, status: :missed, start_time: 100)
+             )
+
+    assert :ok = Store.close(store)
+
+    reloaded = Store.Ets.new(path: path)
+    assert {:ok, %Call{id: "PERSISTED", status: :missed}} = Call.get(reloaded, "PERSISTED")
+    assert :ok = Store.close(reloaded)
   end
 
   describe "from_call_log_record/2" do

@@ -25,7 +25,6 @@ defmodule ExWapp.Message.Handler.Call do
 
   alias ExWapp.Binary.Node
   alias ExWapp.Call, as: CallRecord
-  alias ExWapp.Config
   alias ExWapp.Log
   alias ExWapp.Message.Handler.Common
   alias ExWapp.Message.Handler.Inbound.Envelope
@@ -155,7 +154,11 @@ defmodule ExWapp.Message.Handler.Call do
   end
 
   defp persist_call(target, call, state) do
-    case CallRecord.upsert(target, call, call_log_opts(state)) do
+    case CallRecord.upsert(
+           target,
+           call,
+           CallRecord.retention_options(Map.get(state, :runtime_cfg, %{}))
+         ) do
       {:ok, stored} ->
         stored
 
@@ -165,13 +168,6 @@ defmodule ExWapp.Message.Handler.Call do
         )
 
         call
-    end
-  end
-
-  defp call_log_opts(state) do
-    case Config.get(Map.get(state, :runtime_cfg, %{}), [:calls, :max_records]) do
-      max when is_integer(max) and max > 0 -> [max_records: max]
-      _unset -> []
     end
   end
 

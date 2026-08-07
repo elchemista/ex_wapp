@@ -722,7 +722,7 @@ calls = ExWapp.list_calls(session, limit: 20)
 # Missed incoming calls since a unix timestamp
 missed = ExWapp.list_calls(session, status: :missed, since: 1_754_000_000)
 
-# Lazy, oldest-first traversal for exporting without loading everything
+# Deferred, oldest-first traversal; the bounded snapshot loads on enumeration
 ExWapp.stream_calls(session)
 |> Stream.each(&MyApp.CallRepo.upsert/1)
 |> Stream.run()

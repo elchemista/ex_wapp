@@ -26,14 +26,14 @@ defmodule ExWapp.Call do
       # Only missed incoming calls since a unix timestamp
       missed = ExWapp.Call.list(session, status: :missed, since: 1_754_000_000)
 
-      # Lazy chronological traversal without materializing the whole log
+      # Deferred chronological traversal over the bounded retained log
       ExWapp.Call.stream(session) |> Enum.each(&IO.inspect/1)
 
       # Timestamps are unix seconds
       DateTime.from_unix!(call.start_time)
   """
 
-  alias ExWapp.{JID, Store}
+  alias ExWapp.{Config, JID, Store}
   alias WAWebProtobufSyncAction.CallLogRecord
 
   @type target :: pid() | struct()
@@ -105,6 +105,8 @@ defmodule ExWapp.Call do
   @store_key :call_log
   @default_max_records 500
   @transient_statuses [:ringing, :ongoing]
+  @source_priorities %{nil => 0, live: 1, app_state: 2, history_sync: 2}
+  @transient_status_priorities %{ringing: 1, ongoing: 2}
 
   @call_result_statuses %{
     CONNECTED: :connected,
@@ -128,6 +130,15 @@ defmodule ExWapp.Call do
   """
   @spec default_max_records() :: pos_integer()
   def default_max_records, do: @default_max_records
+
+  @doc false
+  @spec retention_options(map()) :: keyword()
+  def retention_options(runtime_cfg) do
+    case Config.get(runtime_cfg, [:calls, :max_records]) do
+      max when is_integer(max) and max > 0 -> [max_records: max]
+      _unset -> []
+    end
+  end
 
   @doc """
   Lists stored calls, newest first by default.
@@ -158,10 +169,12 @@ defmodule ExWapp.Call do
   end
 
   @doc """
-  Builds a lazy stream over stored calls.
+  Builds a deferred stream over stored calls.
 
   Defaults to oldest first with no limit so a wrapper can export the log in
-  chronological order. Accepts the same options as `list/2`.
+  chronological order. The retained call-log snapshot is loaded and sorted on
+  first enumeration, not when the stream is created; it is bounded by
+  `config.calls.max_records`. Accepts the same options as `list/2`.
   """
   @spec stream(target(), keyword()) :: Enumerable.t()
   def stream(target, opts \\ []) do
@@ -217,11 +230,13 @@ defmodule ExWapp.Call do
   @doc """
   Inserts or merges one call record by ID and prunes the log to the bound.
 
-  Field-level merge: incoming non-nil fields win, except that a transient
-  status (`:ringing`/`:ongoing`) never overwrites a final outcome — a late or
-  replayed stanza cannot downgrade a call the log already settled. When both
-  `accepted_at` and `ended_at` are known and `duration` is not, the duration
-  is derived from their difference.
+  Field-level merge: incoming non-nil fields from an equally or more
+  authoritative source win. App-state and history-sync records are
+  authoritative over live signalling; a later live stanza may fill a missing
+  field but cannot replace a synchronized value or outcome. Transient status
+  progression is monotonic (`:ringing` then `:ongoing`) and never overwrites a
+  final outcome. When both `accepted_at` and `ended_at` are known and
+  `duration` is not, the duration is derived from their difference.
 
   ## Options
 
@@ -374,14 +389,27 @@ defmodule ExWapp.Call do
   defp merge_call(nil, %__MODULE__{} = incoming), do: finalize_call(incoming)
 
   defp merge_call(%__MODULE__{} = existing, %__MODULE__{} = incoming) do
+    incoming_can_override? =
+      source_priority(incoming.source) >= source_priority(existing.source)
+
     incoming
     |> Map.from_struct()
-    |> Map.delete(:status)
+    |> Map.drop([:source, :status])
     |> Enum.reduce(existing, fn {field, value}, acc ->
-      if mergeable_value?(field, value), do: Map.put(acc, field, value), else: acc
+      if merge_field?(field, value, Map.get(acc, field), incoming_can_override?) do
+        Map.put(acc, field, value)
+      else
+        acc
+      end
     end)
-    |> merge_status(existing.status, incoming.status)
+    |> merge_status(existing.status, incoming.status, incoming_can_override?)
+    |> merge_source(existing.source, incoming.source)
     |> finalize_call()
+  end
+
+  defp merge_field?(field, value, existing_value, incoming_can_override?) do
+    mergeable_value?(field, value) and
+      (incoming_can_override? or missing_value?(field, existing_value))
   end
 
   defp mergeable_value?(_field, nil), do: false
@@ -389,18 +417,48 @@ defmodule ExWapp.Call do
   defp mergeable_value?(:is_group, value), do: value == true
   defp mergeable_value?(_field, _value), do: true
 
-  defp merge_status(call, old_status, new_status) do
-    cond do
-      new_status == nil ->
-        %{call | status: old_status}
+  defp missing_value?(_field, nil), do: true
+  defp missing_value?(:participants, []), do: true
+  defp missing_value?(:is_group, false), do: true
+  defp missing_value?(_field, _value), do: false
 
-      final_status?(old_status) and new_status in @transient_statuses ->
-        %{call | status: old_status}
+  defp merge_status(call, old_status, new_status, incoming_can_override?) do
+    %{call | status: merged_status(old_status, new_status, incoming_can_override?)}
+  end
 
-      true ->
-        %{call | status: new_status}
+  defp merged_status(old_status, nil, _incoming_can_override?), do: old_status
+
+  defp merged_status(old_status, _new_status, false) when old_status != nil,
+    do: old_status
+
+  defp merged_status(old_status, new_status, _incoming_can_override?) do
+    if status_regression?(old_status, new_status), do: old_status, else: new_status
+  end
+
+  defp status_regression?(old_status, new_status) do
+    (final_status?(old_status) and new_status in @transient_statuses) or
+      transient_status_regression?(old_status, new_status)
+  end
+
+  defp transient_status_regression?(old_status, new_status)
+       when old_status in @transient_statuses and new_status in @transient_statuses do
+    transient_status_priority(new_status) < transient_status_priority(old_status)
+  end
+
+  defp transient_status_regression?(_old_status, _new_status), do: false
+
+  defp merge_source(call, old_source, new_source) do
+    if source_priority(new_source) >= source_priority(old_source) and new_source != nil do
+      %{call | source: new_source}
+    else
+      %{call | source: old_source}
     end
   end
+
+  defp source_priority(source), do: Map.get(@source_priorities, source, 0)
+
+  defp transient_status_priority(status),
+    do: Map.get(@transient_status_priorities, status, 0)
 
   defp final_status?(status), do: status != nil and status not in @transient_statuses
 
