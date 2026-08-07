@@ -11,7 +11,7 @@ defmodule ExWapp.Client.Transport do
   Signal sessions, device fanout, sender keys, retry, and synchronized state.
   """
 
-  alias ExWapp.{Chat, Client, Contact, Media, Message}
+  alias ExWapp.{Call, Chat, Client, Contact, Media, Message}
 
   @callback connect(Client.t()) :: {:ok, Client.t()} | {:error, term()}
   @callback pair(Client.t()) :: {:ok, Client.t(), term()} | {:error, term()}
@@ -36,6 +36,8 @@ defmodule ExWapp.Client.Transport do
   @callback list_chats(Client.t()) :: {:ok, [Chat.chat()]} | {:error, term()}
   @callback list_groups(Client.t()) :: {:ok, [Chat.chat()]} | {:error, term()}
   @callback get_chat(Client.t(), String.t()) :: {:ok, Chat.chat()} | {:error, term()}
+  @callback list_calls(Client.t(), keyword()) :: {:ok, [Call.t()]} | {:error, term()}
+  @callback get_call(Client.t(), String.t()) :: {:ok, Call.t()} | {:error, term()}
   @callback get_messages(Client.t(), String.t(), keyword()) ::
               {:ok, [Chat.message()]} | {:error, term()}
   @callback stream_messages(Client.t(), String.t(), keyword()) ::
@@ -57,6 +59,8 @@ defmodule ExWapp.Client.Transport do
                       list_chats: 1,
                       list_groups: 1,
                       get_chat: 2,
+                      list_calls: 2,
+                      get_call: 2,
                       get_messages: 3,
                       stream_messages: 3,
                       delete_messages: 3,

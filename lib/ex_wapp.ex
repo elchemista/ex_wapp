@@ -107,7 +107,7 @@ defmodule ExWapp do
   """
 
   alias ExWapp.AppState.Engine
-  alias ExWapp.{Chat, Client, Error, Event, Messages, Session}
+  alias ExWapp.{Call, Chat, Client, Error, Event, Messages, Session}
 
   @doc """
   Creates a high-level, runtime-neutral client.
@@ -337,6 +337,51 @@ defmodule ExWapp do
           {:ok, [Chat.chat()]} | {:error, Error.t(), Client.t()} | [Chat.chat()]
   def list_groups(%Client{} = client), do: Client.API.list_groups(client)
   def list_groups(session), do: Chat.list_groups(session)
+
+  @doc """
+  Lists the locally stored call log, newest first.
+
+  The log is fed by live `<call>` stanzas (who called, ringing/answered/missed,
+  video or voice) and by the `CallLogRecord` entries the phone syncs via
+  app-state, which add the authoritative outcome and duration. Timestamps are
+  unix seconds; durations are seconds. See `ExWapp.Call.list/2` for all
+  options.
+
+  ## Example
+
+      # 20 most recent calls
+      calls = ExWapp.list_calls(session, limit: 20)
+
+      # Missed calls only, since a unix timestamp
+      missed = ExWapp.list_calls(session, status: :missed, since: 1_754_000_000)
+
+      Enum.each(calls, fn call ->
+        IO.puts("\#{call.chat_jid} \#{call.status} \#{call.duration || 0}s")
+      end)
+  """
+  @spec list_calls(Client.t() | GenServer.server(), keyword()) ::
+          {:ok, [Call.t()]} | {:error, Error.t(), Client.t()} | [Call.t()]
+  def list_calls(client_or_session, opts \\ [])
+  def list_calls(%Client{} = client, opts), do: Client.API.list_calls(client, opts)
+  def list_calls(session, opts), do: Call.list(session, opts)
+
+  @doc """
+  Builds a deferred stream over the locally stored call log, oldest first.
+
+  The bounded retained log is loaded and sorted when enumeration starts, so
+  creating the stream itself performs no store read. Accepts the same options
+  as `ExWapp.Call.list/2`.
+  """
+  @spec stream_calls(GenServer.server(), keyword()) :: Enumerable.t()
+  def stream_calls(session, opts \\ []), do: Call.stream(session, opts)
+
+  @doc """
+  Gets one stored call log entry by call ID.
+  """
+  @spec get_call(Client.t() | GenServer.server(), String.t()) ::
+          {:ok, Call.t()} | {:error, :not_found} | {:error, Error.t(), Client.t()}
+  def get_call(%Client{} = client, call_id), do: Client.API.get_call(client, call_id)
+  def get_call(session, call_id), do: Call.get(session, call_id)
 
   @doc """
   Gets a specific chat by JID.
@@ -818,6 +863,8 @@ defmodule ExWapp do
   ## Messages received
 
   - `{:ex_wapp_message, jid, message}` - incoming WhatsApp message
+  - `{:ex_wapp_call, call}` - call state change (`%ExWapp.Call{}`: ringing,
+    answered, missed, ...)
   - `{:ex_wapp_session, :connected}` - session connected
   - `{:ex_wapp_session, :error, reason}` - session-level error event
   - `{:ex_wapp_session, :disconnected, reason}` - session disconnected
@@ -847,12 +894,14 @@ defmodule ExWapp do
   def subscribe(session) when is_pid(session) do
     session_id = Session.get_session_id(session) || session
     Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:messages:#{session_id}")
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:calls:#{session_id}")
     Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
     Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:health:#{session_id}")
   end
 
   def subscribe(session_id) do
     Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:messages:#{session_id}")
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:calls:#{session_id}")
     Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
     Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:health:#{session_id}")
   end
@@ -867,12 +916,14 @@ defmodule ExWapp do
   def unsubscribe(session) when is_pid(session) do
     session_id = Session.get_session_id(session) || session
     Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:messages:#{session_id}")
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:calls:#{session_id}")
     Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
     Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:health:#{session_id}")
   end
 
   def unsubscribe(session_id) do
     Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:messages:#{session_id}")
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:calls:#{session_id}")
     Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:session:#{session_id}")
     Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:health:#{session_id}")
   end
@@ -885,12 +936,14 @@ defmodule ExWapp do
   ## Messages received
 
   - `{:ex_wapp_message, session_id, jid, message}` - message from any session
+  - `{session_id, {:ex_wapp_call, call}}` - call state change from any session
   - `{session_id, {:ex_wapp_session, event, ...}}` - lifecycle from any session
   - `{session_id, {:ex_wapp_health, type, metadata}}` - health events from any session
   """
   @spec subscribe_all() :: :ok | {:error, term()}
   def subscribe_all do
     Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:messages")
+    Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:calls")
     Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:session")
     Phoenix.PubSub.subscribe(ExWapp.PubSub, "ex_wapp:health")
   end
@@ -901,6 +954,7 @@ defmodule ExWapp do
   @spec unsubscribe_all() :: :ok
   def unsubscribe_all do
     Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:messages")
+    Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:calls")
     Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:session")
     Phoenix.PubSub.unsubscribe(ExWapp.PubSub, "ex_wapp:health")
   end

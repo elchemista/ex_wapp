@@ -58,6 +58,18 @@ defmodule ExWapp.ClientApiTest do
     def get_chat(_client, jid), do: {:ok, %ExWapp.Chat{jid: jid}}
 
     @impl true
+    def list_calls(client, opts) do
+      send(client.metadata.test_pid, {:adapter_list_calls, opts})
+      {:ok, [%ExWapp.Call{id: "CALL1", status: :missed}]}
+    end
+
+    @impl true
+    def get_call(client, call_id) do
+      send(client.metadata.test_pid, {:adapter_get_call, call_id})
+      {:ok, %ExWapp.Call{id: call_id, status: :connected}}
+    end
+
+    @impl true
     def get_messages(client, jid, opts) do
       send(client.metadata.test_pid, {:adapter_get_messages, jid, opts})
       {:ok, [stored_message()]}
@@ -213,6 +225,20 @@ defmodule ExWapp.ClientApiTest do
 
     assert {:ok, _client} = ExWapp.delete_messages(client, jid, ["m1"])
     assert_receive {:adapter_delete_messages, ^jid, ["m1"]}
+  end
+
+  test "call-log APIs delegate through the high-level transport" do
+    client = new_client()
+
+    assert {:ok, [%ExWapp.Call{id: "CALL1", status: :missed}]} =
+             ExWapp.list_calls(client, status: :missed, limit: 10)
+
+    assert_receive {:adapter_list_calls, [status: :missed, limit: 10]}
+
+    assert {:ok, %ExWapp.Call{id: "CALL2", status: :connected}} =
+             ExWapp.get_call(client, "CALL2")
+
+    assert_receive {:adapter_get_call, "CALL2"}
   end
 
   test "send_image/4 and send_audio/4 build high-level media messages" do

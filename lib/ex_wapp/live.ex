@@ -189,6 +189,12 @@ defmodule ExWapp.Live do
   def list_groups(session) when is_pid(session), do: ExWapp.list_groups(session)
 
   @doc """
+  Returns the locally stored call log for this session, newest first.
+  """
+  @spec list_calls(pid(), keyword()) :: [ExWapp.Call.t()]
+  def list_calls(session, opts \\ []) when is_pid(session), do: ExWapp.list_calls(session, opts)
+
+  @doc """
   Returns stored messages for a specific chat JID.
   """
   @spec get_messages(pid(), String.t(), keyword()) :: [ExWapp.Chat.message()]

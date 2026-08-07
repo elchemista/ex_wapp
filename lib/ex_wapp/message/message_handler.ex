@@ -8,11 +8,8 @@ defmodule ExWapp.MessageHandler do
   handler.
   """
 
-  require Logger
-
   alias ExWapp.Binary.Node
-  alias ExWapp.Log
-  alias ExWapp.Message.Handler.{Inbound, Notification, Receipt, Status}
+  alias ExWapp.Message.Handler.{Call, Inbound, Notification, Receipt, Status}
 
   @type handler_result :: {:ok, map()} | {:ok, map(), [term()]} | {:error, term()}
 
@@ -32,10 +29,8 @@ defmodule ExWapp.MessageHandler do
   def handle_node(%Node{tag: "ack"} = node, session, state),
     do: Receipt.handle_ack(node, session, state)
 
-  def handle_node(%Node{tag: "call"} = node, _session, state) do
-    Logger.debug("Ignoring call node: #{inspect(Log.attrs(node.attrs))}")
-    {:ok, state}
-  end
+  def handle_node(%Node{tag: "call"} = node, session, state),
+    do: Call.handle_call_node(node, session, state)
 
   def handle_node(%Node{tag: "presence"} = node, _session, state),
     do: Status.handle_presence(node, state)

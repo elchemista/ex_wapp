@@ -76,6 +76,7 @@ defmodule ExWapp.Session.Worker do
 
   alias ExWapp.{
     Binary,
+    Call,
     Config,
     Log,
     Media,
@@ -707,7 +708,12 @@ defmodule ExWapp.Session.Worker do
     # which would deadlock if run inside handle_call of the same GenServer.
     case SendRecovery.start_send_worker(state, "app_state_mutation", fn ->
            try do
-             Engine.send_mutation(session_pid, patch_info, state.store)
+             Engine.send_mutation(
+               session_pid,
+               patch_info,
+               state.store,
+               Call.retention_options(state.runtime_cfg)
+             )
            rescue
              e -> {:error, {:exception, e}}
            end
@@ -1041,6 +1047,23 @@ defmodule ExWapp.Session.Worker do
     {:noreply, state}
   end
 
+  # Call state change parsed from an inbound <call> stanza - notify subscribers
+  def handle_info({:call_event, %ExWapp.Call{} = call}, state) do
+    Logger.info(
+      "[WORKER] Call event id=#{Log.reference(call.id)} status=#{inspect(call.status)} jid=#{Log.reference(call.chat_jid)} session=#{Log.reference(state.session_id)}"
+    )
+
+    Events.emit_telemetry(
+      :call_event,
+      %{event_count: 1},
+      state,
+      %{call_id: call.id, status: call.status, jid: call.chat_jid}
+    )
+
+    Subscribers.broadcast_call(state.session_id, call)
+    {:noreply, state}
+  end
+
   def handle_info(
         {:request_placeholder_resend, chat_jid, sender_jid, message_id, metadata},
         state
@@ -1073,7 +1096,9 @@ defmodule ExWapp.Session.Worker do
       self(),
       state.store,
       collection_names,
-      :notification
+      :notification,
+      nil,
+      state.runtime_cfg
     )
 
     {:noreply, state}
@@ -1112,7 +1137,8 @@ defmodule ExWapp.Session.Worker do
                state.store,
                collection_names,
                :initial,
-               state.session_id
+               state.session_id,
+               state.runtime_cfg
              ) do
           {:ok, task_pid} ->
             task_ref = Process.monitor(task_pid)
@@ -1616,7 +1642,9 @@ defmodule ExWapp.Session.Worker do
     case SendRecovery.start_send_worker(
            state,
            "app_state_sync_contacts",
-           fn -> fetch_contacts_collection(session_pid, state.store) end
+           fn ->
+             fetch_contacts_collection(session_pid, state.store, state.runtime_cfg)
+           end
          ) do
       {:ok, worker, mon} ->
         {:noreply,
@@ -1627,8 +1655,13 @@ defmodule ExWapp.Session.Worker do
     end
   end
 
-  defp fetch_contacts_collection(session_pid, store) do
-    Engine.fetch_collection(session_pid, store, "critical_unblock_low")
+  defp fetch_contacts_collection(session_pid, store, runtime_cfg) do
+    Engine.fetch_collection(
+      session_pid,
+      store,
+      "critical_unblock_low",
+      Call.retention_options(runtime_cfg)
+    )
   rescue
     error -> {:error, {:exception, error}}
   end

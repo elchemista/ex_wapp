@@ -708,6 +708,58 @@ local state, not a remote resynchronization. Continue consuming
 `ExWapp.Session.message_stream/1` or high-level inbound events for new
 messages after the snapshot.
 
+## Call Log
+
+The session keeps a local register of calls: who called, when, how the call
+ended (missed, rejected, answered, cancelled), voice or video, and how long it
+lasted. Receiving this metadata does not involve any VoIP code — the client
+never answers or places calls.
+
+```elixir
+# 20 most recent calls, newest first (works with a client or a session)
+calls = ExWapp.list_calls(session, limit: 20)
+
+# Missed incoming calls since a unix timestamp
+missed = ExWapp.list_calls(session, status: :missed, since: 1_754_000_000)
+
+# Deferred, oldest-first traversal; the bounded snapshot loads on enumeration
+ExWapp.stream_calls(session)
+|> Stream.each(&MyApp.CallRepo.upsert/1)
+|> Stream.run()
+
+{:ok, call} = ExWapp.get_call(session, call_id)
+
+call.chat_jid     # peer or group JID
+call.status       # :ringing | :ongoing | :connected | :missed | :rejected | ...
+call.is_video     # true | false | nil (unknown)
+call.start_time   # unix seconds — DateTime.from_unix!(call.start_time)
+call.duration     # seconds, nil when unknown
+```
+
+Live changes are also published on PubSub: `ExWapp.subscribe/1` now delivers
+`{:ex_wapp_call, %ExWapp.Call{}}` for every state change (ringing, answered,
+ended), so an incoming call can be surfaced the moment it starts ringing.
+
+The log is fed from three sources, merged by call ID:
+
+- **Live `<call>` stanzas** — real-time signalling while connected. An
+  unanswered `terminate` becomes `:missed` (or `:cancelled` for your own
+  outgoing calls); an accept followed by terminate becomes `:connected` with
+  the duration derived from the two timestamps.
+- **App-state `call_log` mutations** — after each call, the phone syncs an
+  authoritative `CallLogRecord` (result, exact duration, video flag) through
+  the regular app-state collection; it enriches the live record in place.
+- **History sync `callLogRecords`** — backlog entries delivered at pairing.
+  The phone only includes them when the companion registers with
+  `support_call_log_history: true` (config under
+  `protocol.pairing_device_props.history_sync_config`; changing it requires
+  re-pairing, and records in blob-delivered chunks additionally depend on the
+  blob download gap described above).
+
+Retention is bounded by `calls.max_records` (default 500); oldest records are
+dropped first. `ExWapp.Call` exposes the full query API (`list/2` filters by
+`:status`, `:jid`, `:since`/`:until`, paginates with `:limit`/`:offset`).
+
 ## How It Works
 
 At a high level, the built-in session flow looks like this:
@@ -761,6 +813,7 @@ Core public entry points:
 - `ExWapp.Media`: user-facing media helpers
 - `ExWapp.Contact`: public contact struct and repository facade
 - `ExWapp.Chat`: public chat/message store API
+- `ExWapp.Call`: public call-log struct and query API
 - `ExWapp.Event`, `ExWapp.Events`, `ExWapp.Telemetry`: events and observability
 
 Built-in transport/runtime:

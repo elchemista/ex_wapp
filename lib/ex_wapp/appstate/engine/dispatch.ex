@@ -21,7 +21,25 @@ defmodule ExWapp.AppState.Engine.Dispatch do
           :ok | :ignored
   def dispatch_mutation(store, operation, index, action_value)
       when is_integer(operation) and is_list(index) do
-    dispatch_index_mutation(store, operation, index, action_value)
+    dispatch_mutation(store, operation, index, action_value, [])
+  end
+
+  @doc """
+  Dispatches one decoded mutation with feature-specific persistence options.
+
+  The `:max_records` option controls call-log retention when the mutation
+  carries a `CallLogRecord`; other mutation types ignore it.
+  """
+  @spec dispatch_mutation(
+          struct(),
+          non_neg_integer(),
+          [String.t()],
+          action_value(),
+          keyword()
+        ) :: :ok | :ignored
+  def dispatch_mutation(store, operation, index, action_value, opts)
+      when is_integer(operation) and is_list(index) and is_list(opts) do
+    dispatch_index_mutation(store, operation, index, action_value, opts)
   rescue
     error ->
       Logger.warning(
@@ -44,33 +62,38 @@ defmodule ExWapp.AppState.Engine.Dispatch do
   """
   @spec apply_outgoing_patch(struct(), patch_info()) :: :ok
   def apply_outgoing_patch(store, patch_info) when is_map(patch_info) do
+    apply_outgoing_patch(store, patch_info, [])
+  end
+
+  @spec apply_outgoing_patch(struct(), patch_info(), keyword()) :: :ok
+  def apply_outgoing_patch(store, patch_info, opts) when is_map(patch_info) and is_list(opts) do
     patch_info
     |> Map.get(:mutations, [])
     |> Enum.each(fn mutation ->
       operation = if Map.get(mutation, :operation) == :remove, do: 1, else: 0
-      dispatch_mutation(store, operation, mutation.index, mutation.value)
+      dispatch_mutation(store, operation, mutation.index, mutation.value, opts)
     end)
 
     :ok
   end
 
-  defp dispatch_index_mutation(store, operation, ["contact", jid], action_value) do
+  defp dispatch_index_mutation(store, operation, ["contact", jid], action_value, _opts) do
     dispatch_contact_mutation(store, operation, jid, action_value)
   end
 
-  defp dispatch_index_mutation(store, operation, ["archive", jid], action_value) do
+  defp dispatch_index_mutation(store, operation, ["archive", jid], action_value, _opts) do
     dispatch_archive_mutation(store, operation, jid, action_value)
   end
 
-  defp dispatch_index_mutation(store, operation, ["pin_v1", jid], action_value) do
+  defp dispatch_index_mutation(store, operation, ["pin_v1", jid], action_value, _opts) do
     dispatch_pin_mutation(store, operation, jid, action_value)
   end
 
-  defp dispatch_index_mutation(store, operation, ["mute", jid], action_value) do
+  defp dispatch_index_mutation(store, operation, ["mute", jid], action_value, _opts) do
     dispatch_mute_mutation(store, operation, jid, action_value)
   end
 
-  defp dispatch_index_mutation(store, operation, ["deleteChat", jid], _action_value) do
+  defp dispatch_index_mutation(store, operation, ["deleteChat", jid], _action_value, _opts) do
     dispatch_delete_chat_mutation(store, operation, jid)
   end
 
@@ -78,16 +101,37 @@ defmodule ExWapp.AppState.Engine.Dispatch do
          store,
          operation,
          ["deleteChat", jid, _delete_media],
-         _action_value
+         _action_value,
+         _opts
        ) do
     dispatch_delete_chat_mutation(store, operation, jid)
   end
 
-  defp dispatch_index_mutation(store, operation, ["markChatAsRead", jid], action_value) do
+  defp dispatch_index_mutation(
+         store,
+         operation,
+         ["markChatAsRead", jid],
+         action_value,
+         _opts
+       ) do
     dispatch_mark_read_mutation(store, operation, jid, action_value)
   end
 
-  defp dispatch_index_mutation(_store, _operation, _index, _action_value), do: :ignored
+  defp dispatch_index_mutation(store, operation, ["call_log" | _rest], action_value, opts) do
+    dispatch_call_log_mutation(store, operation, action_value, opts)
+  end
+
+  defp dispatch_index_mutation(
+         store,
+         operation,
+         ["delete_individual_call_log" | rest],
+         action_value,
+         _opts
+       ) do
+    dispatch_delete_call_log_mutation(store, operation, rest, action_value)
+  end
+
+  defp dispatch_index_mutation(_store, _operation, _index, _action_value, _opts), do: :ignored
 
   defp dispatch_contact_mutation(store, 1, jid, _action_value),
     do: ExWapp.Contact.delete(store, jid)
@@ -130,6 +174,48 @@ defmodule ExWapp.AppState.Engine.Dispatch do
   end
 
   defp dispatch_delete_chat_mutation(store, _operation, jid), do: ExWapp.Chat.delete(store, jid)
+
+  # A remove operation carries no action payload and no call ID in the index,
+  # so there is nothing to apply locally.
+  defp dispatch_call_log_mutation(_store, 1, _action_value, _opts), do: :ignored
+
+  defp dispatch_call_log_mutation(store, _operation, action_value, opts) do
+    case get_action_field(action_value, :callLogAction) do
+      %{callLogRecord: %{} = record} ->
+        ExWapp.Call.merge_from_sync(store, record, Keyword.take(opts, [:max_records]))
+
+      _ ->
+        :ignored
+    end
+  end
+
+  defp dispatch_delete_call_log_mutation(_store, 1, _rest, _action_value), do: :ignored
+
+  defp dispatch_delete_call_log_mutation(store, _operation, rest, action_value) do
+    case get_action_field(action_value, :deleteIndividualCallLog) do
+      %{peerJID: peer} = action when is_binary(peer) and peer != "" ->
+        delete_peer_call_log(store, peer, delete_call_log_direction(action))
+
+      _ ->
+        delete_call_log_from_index(store, rest)
+    end
+  end
+
+  defp delete_call_log_direction(%{isIncoming: incoming}) when is_boolean(incoming), do: incoming
+  defp delete_call_log_direction(_action), do: nil
+
+  defp delete_call_log_from_index(store, [peer | _rest]) when is_binary(peer) and peer != "",
+    do: delete_peer_call_log(store, peer, nil)
+
+  defp delete_call_log_from_index(_store, _rest), do: :ignored
+
+  defp delete_peer_call_log(store, peer, direction) do
+    case ExWapp.Call.delete_by_peer(store, peer, direction) do
+      :ok -> :ok
+      _error -> :ignored
+    end
+  end
+
   defp dispatch_mark_read_mutation(_store, 1, _jid, _action_value), do: :ignored
 
   defp dispatch_mark_read_mutation(store, _operation, jid, action_value) do

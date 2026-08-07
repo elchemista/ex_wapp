@@ -167,6 +167,12 @@ defmodule ExWapp.Client.Transport.Session do
   def get_chat(%Client{} = client, jid), do: ExWapp.Chat.get(client.store, jid)
 
   @impl true
+  def list_calls(%Client{} = client, opts), do: {:ok, ExWapp.Call.list(client.store, opts)}
+
+  @impl true
+  def get_call(%Client{} = client, call_id), do: ExWapp.Call.get(client.store, call_id)
+
+  @impl true
   def get_messages(%Client{} = client, jid, opts),
     do: {:ok, ExWapp.Chat.messages(client.store, jid, opts)}
 

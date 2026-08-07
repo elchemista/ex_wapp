@@ -2,6 +2,7 @@ defmodule ExWapp.AppState.EngineTest do
   use ExUnit.Case, async: true
 
   alias ExWapp.AppState.{CollectionLock, Crypto, Engine, LTHash}
+  alias ExWapp.Session.AppStateSync
 
   alias WAWebProtobufsServerSync.{
     KeyId,
@@ -14,8 +15,11 @@ defmodule ExWapp.AppState.EngineTest do
 
   alias WAWebProtobufSyncAction.{
     ArchiveChatAction,
+    CallLogAction,
+    CallLogRecord,
     ContactAction,
     DeleteChatAction,
+    DeleteIndividualCallLogAction,
     MuteAction,
     PinAction,
     SyncActionData,
@@ -624,6 +628,69 @@ defmodule ExWapp.AppState.EngineTest do
       assert chat.muted_until == -1
     end
 
+    test "dispatches call log action into the call log", %{store: store} do
+      action = %SyncActionValue{
+        callLogAction: %CallLogAction{
+          callLogRecord: %CallLogRecord{
+            callID: "SYNCCALL1",
+            callResult: :MISSED,
+            isIncoming: true,
+            startTime: 1_754_000_000,
+            duration: 0,
+            callCreatorJID: "1234@s.whatsapp.net"
+          }
+        }
+      }
+
+      assert :ok = Engine.dispatch_mutation(store, ["call_log", "1234@s.whatsapp.net"], action)
+
+      assert {:ok, call} = ExWapp.Call.get(store, "SYNCCALL1")
+      assert call.status == :missed
+      assert call.is_incoming == true
+      assert call.chat_jid == "1234@s.whatsapp.net"
+      assert call.source == :app_state
+    end
+
+    test "ignores call log actions without a record", %{store: store} do
+      assert :ignored =
+               Engine.dispatch_mutation(
+                 store,
+                 ["call_log", "1234@s.whatsapp.net"],
+                 %SyncActionValue{}
+               )
+    end
+
+    test "dispatches delete individual call log action", %{store: store} do
+      action = %SyncActionValue{
+        callLogAction: %CallLogAction{
+          callLogRecord: %CallLogRecord{
+            callID: "SYNCCALL2",
+            callResult: :CONNECTED,
+            isIncoming: true,
+            callCreatorJID: "1234@s.whatsapp.net"
+          }
+        }
+      }
+
+      assert :ok = Engine.dispatch_mutation(store, ["call_log", "1234@s.whatsapp.net"], action)
+
+      delete_action = %SyncActionValue{
+        deleteIndividualCallLog: %DeleteIndividualCallLogAction{
+          peerJID: "1234@s.whatsapp.net",
+          isIncoming: true
+        }
+      }
+
+      assert :ok =
+               Engine.dispatch_mutation(
+                 store,
+                 ["delete_individual_call_log", "1234@s.whatsapp.net"],
+                 delete_action
+               )
+
+      assert {:error, :not_found} = ExWapp.Call.get(store, "SYNCCALL2")
+    end
+
     test "dispatches delete chat action", %{store: store} do
       # Create a chat first
       ExWapp.Chat.get_or_create(store, "1234@s.whatsapp.net")
@@ -790,6 +857,78 @@ defmodule ExWapp.AppState.EngineTest do
 
       assert {:error, {:app_state_pagination_stalled, ^collection, 0, 0}} =
                Engine.fetch_collection(session, store, collection)
+    end
+
+    test "runtime call-log retention reaches paginated app-state dispatch" do
+      store = ExWapp.Store.new(ExWapp.Store.Memory)
+      collection = "regular"
+      key_id = :crypto.strong_rand_bytes(16)
+      key_data = :crypto.strong_rand_bytes(32)
+      key_hex = Base.encode16(key_id, case: :lower)
+
+      :ok =
+        ExWapp.Store.put(store, :app_state_keys, %{
+          key_hex => %{data: key_data, timestamp: 1}
+        })
+
+      {encoded_patches, _state, _macs} =
+        Enum.reduce(1..3, {[], %{version: 0, hash: LTHash.new()}, %{}}, fn index,
+                                                                           {patches, state, macs} ->
+          patch_info = %{
+            type: collection,
+            timestamp: nil,
+            mutations: [
+              %{
+                index: ["call_log", "1234@s.whatsapp.net"],
+                version: 1,
+                value: %SyncActionValue{
+                  callLogAction: %CallLogAction{
+                    callLogRecord: %CallLogRecord{
+                      callID: "SYNCCALL#{index}",
+                      callResult: :MISSED,
+                      isIncoming: true,
+                      startTime: index,
+                      callCreatorJID: "1234@s.whatsapp.net"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+
+          {:ok, encoded, new_state, new_macs} =
+            Engine.encode_patch(patch_info, key_id, key_data, state, macs)
+
+          {[encoded | patches], new_state, new_macs}
+        end)
+
+      responses =
+        encoded_patches
+        |> Enum.reverse()
+        |> Enum.with_index()
+        |> Enum.map(fn {patch, index} -> collection_response(collection, patch, index < 2) end)
+
+      {:ok, session} = PaginationSession.start_link(self(), responses)
+      {:ok, task_supervisor} = Task.Supervisor.start_link()
+
+      assert {:ok, task} =
+               AppStateSync.refresh(
+                 task_supervisor,
+                 session,
+                 store,
+                 [collection],
+                 :notification,
+                 nil,
+                 %{calls: %{max_records: 2}}
+               )
+
+      monitor = Process.monitor(task)
+      assert_receive {:DOWN, ^monitor, :process, ^task, :normal}
+
+      assert ["SYNCCALL3", "SYNCCALL2"] =
+               store
+               |> ExWapp.Call.list(order: :newest_first)
+               |> Enum.map(& &1.id)
     end
   end
 
