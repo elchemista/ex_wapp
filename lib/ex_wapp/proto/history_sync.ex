@@ -34,7 +34,7 @@ defmodule ExWapp.Proto.HistorySync do
   whatsmeow uses a dedicated worker with an idle timeout for exactly this reason.
   """
 
-  alias ExWapp.JID
+  alias ExWapp.{Call, JID}
   alias WAWebProtobufsE2E.Message
   alias WAWebProtobufsHistorySync.{Conversation, HistorySync, PhoneNumberToLIDMapping}
   alias WAWebProtobufsWeb.WebMessageInfo
@@ -69,7 +69,8 @@ defmodule ExWapp.Proto.HistorySync do
   @type t :: %{
           sync_type: atom() | non_neg_integer() | nil,
           conversations: [conversation()],
-          lid_mappings: [{String.t(), String.t()}]
+          lid_mappings: [{String.t(), String.t()}],
+          call_log_records: [Call.t()]
         }
 
   @typedoc """
@@ -170,11 +171,17 @@ defmodule ExWapp.Proto.HistorySync do
         |> Enum.map(&conversation_mapping/1)
         |> Enum.reject(&is_nil/1)
 
+      call_log_records =
+        history.callLogRecords
+        |> Enum.map(&Call.from_call_log_record(&1, source: :history_sync))
+        |> Enum.reject(&is_nil/1)
+
       {:ok,
        %{
          sync_type: history.syncType || sync_type_from_notification,
          conversations: conversations,
-         lid_mappings: Enum.uniq(explicit_mappings ++ conversation_mappings)
+         lid_mappings: Enum.uniq(explicit_mappings ++ conversation_mappings),
+         call_log_records: call_log_records
        }}
     end
   end

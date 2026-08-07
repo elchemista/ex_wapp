@@ -134,6 +134,11 @@ defmodule ExWapp.Config do
       app_state: %{
         initial_sync_enabled: true
       },
+      calls: %{
+        # Retention bound for the local call log (`ExWapp.Call`); oldest
+        # records are dropped first once the bound is reached.
+        max_records: 500
+      },
       protocol: %{
         strict_mode: false,
         client_mode: :web,

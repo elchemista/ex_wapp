@@ -227,6 +227,21 @@ defmodule ExWapp.Client.API do
   def get_chat(%Client{} = client, jid), do: client_read(client, :get_chat, [jid])
 
   @doc """
+  Lists locally stored call log entries through the configured transport.
+
+  Accepts the same options as `ExWapp.Call.list/2` (`:limit`, `:status`,
+  `:since`, ...).
+  """
+  @spec list_calls(Client.t(), keyword()) :: read_result([ExWapp.Call.t()])
+  def list_calls(%Client{} = client, opts \\ []), do: client_read(client, :list_calls, [opts])
+
+  @doc """
+  Fetches one stored call log entry by call ID through the configured transport.
+  """
+  @spec get_call(Client.t(), String.t()) :: read_result(ExWapp.Call.t())
+  def get_call(%Client{} = client, call_id), do: client_read(client, :get_call, [call_id])
+
+  @doc """
   Gets locally retained messages for a chat through the configured transport.
 
   The `:limit` option accepts a non-negative integer or `:all`; `:offset`

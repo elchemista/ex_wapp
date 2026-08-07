@@ -9,7 +9,7 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
   require Logger
 
   alias ExWapp.AppState.Engine
-  alias ExWapp.{Chat, Log, PrivacyToken, Store}
+  alias ExWapp.{Call, Chat, Config, Log, PrivacyToken, Store}
   alias ExWapp.Message.Content, as: MessageContent
   alias ExWapp.Message.Handler.Common
   alias ExWapp.Message.Handler.Inbound.{Content, Projection}
@@ -65,7 +65,8 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
        )
        when is_binary(payload) do
     case HistorySync.extract_from_message(payload) do
-      {:ok, %{sync_type: sync_type, conversations: conversations, lid_mappings: lid_mappings}} ->
+      {:ok,
+       %{sync_type: sync_type, conversations: conversations, lid_mappings: lid_mappings} = parsed} ->
         target = Common.chat_target(session, state)
 
         history_message_count =
@@ -77,11 +78,14 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
           Enum.each(conversations, &upsert_chat_from_history_sync(target, &1))
         end
 
+        call_log_count =
+          ingest_history_call_log(target, Map.get(parsed, :call_log_records, []), state)
+
         persist_history_sync_lid_mappings(state, lid_mappings)
         privacy_token_count = persist_history_sync_privacy_tokens(state, conversations)
 
         Logger.debug(
-          "[HISTORY_SYNC] Applied protocol history sync from=#{Log.reference(from)} id=#{Log.reference(id)} sync_type=#{inspect(sync_type)} conversations=#{length(conversations)} messages=#{history_message_count} lid_mappings=#{length(lid_mappings)} privacy_tokens=#{privacy_token_count}"
+          "[HISTORY_SYNC] Applied protocol history sync from=#{Log.reference(from)} id=#{Log.reference(id)} sync_type=#{inspect(sync_type)} conversations=#{length(conversations)} messages=#{history_message_count} lid_mappings=#{length(lid_mappings)} privacy_tokens=#{privacy_token_count} call_log_records=#{call_log_count}"
         )
 
         state
@@ -456,6 +460,30 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
   end
 
   defp upsert_chat_from_history_sync(_target, _conversation), do: :ok
+
+  @spec ingest_history_call_log(term(), [Call.t()], map()) :: non_neg_integer()
+  defp ingest_history_call_log(nil, _records, _state), do: 0
+  defp ingest_history_call_log(_target, [], _state), do: 0
+
+  defp ingest_history_call_log(target, records, state) when is_list(records) do
+    opts = history_call_log_opts(state)
+
+    Enum.reduce(records, 0, fn record, count ->
+      case Call.upsert(target, record, opts) do
+        {:ok, _merged} -> count + 1
+        {:error, _reason} -> count
+      end
+    end)
+  end
+
+  defp ingest_history_call_log(_target, _records, _state), do: 0
+
+  defp history_call_log_opts(state) do
+    case Config.get(Map.get(state, :runtime_cfg, %{}), [:calls, :max_records]) do
+      max when is_integer(max) and max > 0 -> [max_records: max]
+      _unset -> []
+    end
+  end
 
   @spec history_sync_chat_messages([map()], binary()) :: [map()]
   defp history_sync_chat_messages(history_messages, jid)

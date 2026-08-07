@@ -10,6 +10,7 @@ defmodule ExWapp.Config.Validator do
       fn -> validate_send(cfg) end,
       fn -> validate_signal(cfg) end,
       fn -> validate_app_state(cfg) end,
+      fn -> validate_calls(cfg) end,
       fn -> validate_send_error_guard(cfg) end,
       fn -> validate_queue(cfg) end,
       fn -> validate_throttle(cfg) end,
@@ -78,6 +79,12 @@ defmodule ExWapp.Config.Validator do
   defp validate_app_state(cfg) do
     run_validations([
       fn -> ensure_boolean(cfg, [:app_state, :initial_sync_enabled]) end
+    ])
+  end
+
+  defp validate_calls(cfg) do
+    run_validations([
+      fn -> ensure_positive_integer(cfg, [:calls, :max_records]) end
     ])
   end
 

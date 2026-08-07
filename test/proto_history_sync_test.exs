@@ -87,6 +87,52 @@ defmodule ExWapp.Proto.HistorySyncTest do
 
     assert {"70000002222@lid", "15550002222@s.whatsapp.net"} in extracted.lid_mappings
     assert {"70000001111@lid", "15550001111@s.whatsapp.net"} in extracted.lid_mappings
+    assert extracted.call_log_records == []
+  end
+
+  test "extracts call log records from an inline payload" do
+    history = %HistorySyncProto{
+      syncType: :RECENT,
+      callLogRecords: [
+        %WAWebProtobufSyncAction.CallLogRecord{
+          callID: "HISTCALL1",
+          callResult: :MISSED,
+          isIncoming: true,
+          isVideo: true,
+          startTime: 1_754_000_000,
+          duration: 0,
+          callCreatorJID: "15550002222@s.whatsapp.net"
+        },
+        %WAWebProtobufSyncAction.CallLogRecord{callID: ""}
+      ]
+    }
+
+    payload =
+      %Message{
+        protocolMessage: %ProtocolMessage{
+          type: :HISTORY_SYNC_NOTIFICATION,
+          historySyncNotification: %HistorySyncNotification{
+            syncType: :RECENT,
+            initialHistBootstrapInlinePayload:
+              history |> HistorySyncProto.encode!() |> IO.iodata_to_binary() |> :zlib.compress()
+          }
+        }
+      }
+      |> Message.encode!()
+      |> IO.iodata_to_binary()
+
+    assert {:ok, extracted} = HistorySync.extract_from_message(payload)
+
+    # The empty-ID record is dropped; the usable one is fully mapped.
+    assert [record] = extracted.call_log_records
+    assert %ExWapp.Call{} = record
+    assert record.id == "HISTCALL1"
+    assert record.status == :missed
+    assert record.is_incoming == true
+    assert record.is_video == true
+    assert record.start_time == 1_754_000_000
+    assert record.chat_jid == "15550002222@s.whatsapp.net"
+    assert record.source == :history_sync
   end
 
   test "keeps the blob reference when a chunk is delivered as media" do

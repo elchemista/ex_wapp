@@ -168,6 +168,30 @@ defmodule ExWapp.Session.Worker.Subscribers do
   end
 
   @doc """
+  Broadcasts one call-log state change parsed from an inbound `<call>` stanza.
+
+  Published because only the session observes call signalling; without it a
+  caller would have to poll `ExWapp.Call.list/2` to notice a ringing or missed
+  call. Every phase change ships the merged `%ExWapp.Call{}`, so subscribers
+  read the current status from the struct itself.
+
+  Events are sent on:
+  - per-session: `"ex_wapp:calls:<session_id>"` with `{:ex_wapp_call, call}`
+  - global: `"ex_wapp:calls"` with `{session_id, {:ex_wapp_call, call}}`
+  """
+  @spec broadcast_call(term(), ExWapp.Call.t()) :: :ok
+  def broadcast_call(session_id, call) do
+    topic_key = session_id || self()
+    event = {:ex_wapp_call, call}
+
+    Phoenix.PubSub.broadcast(ExWapp.PubSub, "ex_wapp:calls:#{topic_key}", event)
+    Phoenix.PubSub.broadcast(ExWapp.PubSub, "ex_wapp:calls", {topic_key, event})
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  @doc """
   Broadcasts session health events (errors, drops, retries, guard trips).
 
   Events are sent on:

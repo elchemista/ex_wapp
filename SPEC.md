@@ -972,3 +972,62 @@ Web references:
 - https://github.com/tulir/whatsmeow/blob/main/send.go
 - https://github.com/WhiskeySockets/Baileys/blob/master/src/Socket/messages-send.ts
 - https://github.com/WhiskeySockets/Baileys/issues/2106
+
+---
+
+## 21. Call Stanzas and Call Log
+
+Companion clients receive call signalling without implementing VoIP: the
+`<call>` stanza announces every phase, and the phone later syncs an
+authoritative `CallLogRecord`. ExWapp merges both into one local register
+(`ExWapp.Call`, store key `:call_log`, bounded by `calls.max_records`).
+
+### 21.1 Live `<call>` Stanza
+
+One child per stanza names the phase; the child carries `call-id` (record
+identity) and `call-creator` (calling account, with `caller_pn`/`caller_lid`
+alternates). The outer node carries `from` (chat) and `t` (unix seconds).
+
+| Child | Meaning | Log effect |
+|---|---|---|
+| `offer` | 1:1 call ringing; `<video>` child ⇒ video call | `:ringing`, `start_time` |
+| `offer_notice` | group call ringing; `media="audio\|video"`, `type="group"`, `group-jid` | `:ringing` |
+| `accept` | some device answered | `:ongoing`, `accepted_at` |
+| `terminate` | call over; `reason` attr (e.g. `timeout`), optional `duration` | final status, `ended_at` |
+| `reject` | declined on a device | `:rejected` |
+| `preaccept`/`transport`/`relaylatency`/... | VoIP negotiation | none (skipped) |
+
+Terminate resolution: accept seen (or positive `duration` attr) ⇒
+`:connected` with `duration = ended_at - accepted_at` unless the attr provided
+it; otherwise `:cancelled` when the call-creator is a local identity
+(outgoing), else `:missed`. The raw reason string is preserved in
+`end_reason`. Reference: whatsmeow `call.go` (events only, no outcome
+resolution) and Baileys `messages-recv.ts` (`terminate reason="timeout"` ⇒
+missed; synthesizes `CALL_MISSED_*` stub messages).
+
+`<call>` stanzas MUST still be ACKed at the connection boundary before this
+processing (§10.2); the handler itself never sends nodes.
+
+### 21.2 Synced `CallLogRecord`
+
+`WAWebProtobufSyncAction.CallLogRecord` carries the phone's authoritative
+outcome: `callResult` (CONNECTED/REJECTED/CANCELLED/ACCEPTEDELSEWHERE/
+MISSED/...), `duration`, `startTime`, `isIncoming`, `isVideo`, `callType`,
+`participants`. Two transports feed it:
+
+- **App-state**: `SyncActionValue.callLogAction` (field 42), index
+  `["call_log", ...]` in the `regular` collection; incremental after pairing.
+  `DeleteIndividualCallLogAction` (`deleteIndividualCallLog`, field 46)
+  removes one peer's 1:1 entries, direction-scoped by `isIncoming`.
+- **History sync**: `HistorySync.callLogRecords` (field 13); the phone only
+  includes it when DeviceProps registered `supportCallLogHistory: true`
+  (config `protocol.pairing_device_props.history_sync_config.
+  support_call_log_history`, default `false`; changing it requires re-pairing,
+  and blob-delivered chunks still depend on the §"pending_blob" download gap).
+
+Merge rule: records merge by call ID field-by-field; a transient status
+(`:ringing`/`:ongoing`) never overwrites a final outcome, so replayed or late
+stanzas cannot downgrade a settled call.
+
+E2E `Message.callLogMesssage` (field 69, official triple-s typo) also exists
+(`CallLogMessage`: `callOutcome`, `durationSecs`) but is not yet consumed.

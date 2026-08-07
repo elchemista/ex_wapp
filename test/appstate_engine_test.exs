@@ -14,8 +14,11 @@ defmodule ExWapp.AppState.EngineTest do
 
   alias WAWebProtobufSyncAction.{
     ArchiveChatAction,
+    CallLogAction,
+    CallLogRecord,
     ContactAction,
     DeleteChatAction,
+    DeleteIndividualCallLogAction,
     MuteAction,
     PinAction,
     SyncActionData,
@@ -622,6 +625,69 @@ defmodule ExWapp.AppState.EngineTest do
 
       {:ok, chat} = ExWapp.Chat.get(store, "1234@s.whatsapp.net")
       assert chat.muted_until == -1
+    end
+
+    test "dispatches call log action into the call log", %{store: store} do
+      action = %SyncActionValue{
+        callLogAction: %CallLogAction{
+          callLogRecord: %CallLogRecord{
+            callID: "SYNCCALL1",
+            callResult: :MISSED,
+            isIncoming: true,
+            startTime: 1_754_000_000,
+            duration: 0,
+            callCreatorJID: "1234@s.whatsapp.net"
+          }
+        }
+      }
+
+      assert :ok = Engine.dispatch_mutation(store, ["call_log", "1234@s.whatsapp.net"], action)
+
+      assert {:ok, call} = ExWapp.Call.get(store, "SYNCCALL1")
+      assert call.status == :missed
+      assert call.is_incoming == true
+      assert call.chat_jid == "1234@s.whatsapp.net"
+      assert call.source == :app_state
+    end
+
+    test "ignores call log actions without a record", %{store: store} do
+      assert :ignored =
+               Engine.dispatch_mutation(
+                 store,
+                 ["call_log", "1234@s.whatsapp.net"],
+                 %SyncActionValue{}
+               )
+    end
+
+    test "dispatches delete individual call log action", %{store: store} do
+      action = %SyncActionValue{
+        callLogAction: %CallLogAction{
+          callLogRecord: %CallLogRecord{
+            callID: "SYNCCALL2",
+            callResult: :CONNECTED,
+            isIncoming: true,
+            callCreatorJID: "1234@s.whatsapp.net"
+          }
+        }
+      }
+
+      assert :ok = Engine.dispatch_mutation(store, ["call_log", "1234@s.whatsapp.net"], action)
+
+      delete_action = %SyncActionValue{
+        deleteIndividualCallLog: %DeleteIndividualCallLogAction{
+          peerJID: "1234@s.whatsapp.net",
+          isIncoming: true
+        }
+      }
+
+      assert :ok =
+               Engine.dispatch_mutation(
+                 store,
+                 ["delete_individual_call_log", "1234@s.whatsapp.net"],
+                 delete_action
+               )
+
+      assert {:error, :not_found} = ExWapp.Call.get(store, "SYNCCALL2")
     end
 
     test "dispatches delete chat action", %{store: store} do

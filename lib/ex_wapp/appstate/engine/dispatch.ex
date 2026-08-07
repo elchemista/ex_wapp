@@ -87,6 +87,19 @@ defmodule ExWapp.AppState.Engine.Dispatch do
     dispatch_mark_read_mutation(store, operation, jid, action_value)
   end
 
+  defp dispatch_index_mutation(store, operation, ["call_log" | _rest], action_value) do
+    dispatch_call_log_mutation(store, operation, action_value)
+  end
+
+  defp dispatch_index_mutation(
+         store,
+         operation,
+         ["delete_individual_call_log" | rest],
+         action_value
+       ) do
+    dispatch_delete_call_log_mutation(store, operation, rest, action_value)
+  end
+
   defp dispatch_index_mutation(_store, _operation, _index, _action_value), do: :ignored
 
   defp dispatch_contact_mutation(store, 1, jid, _action_value),
@@ -130,6 +143,45 @@ defmodule ExWapp.AppState.Engine.Dispatch do
   end
 
   defp dispatch_delete_chat_mutation(store, _operation, jid), do: ExWapp.Chat.delete(store, jid)
+
+  # A remove operation carries no action payload and no call ID in the index,
+  # so there is nothing to apply locally.
+  defp dispatch_call_log_mutation(_store, 1, _action_value), do: :ignored
+
+  defp dispatch_call_log_mutation(store, _operation, action_value) do
+    case get_action_field(action_value, :callLogAction) do
+      %{callLogRecord: %{} = record} -> ExWapp.Call.merge_from_sync(store, record)
+      _ -> :ignored
+    end
+  end
+
+  defp dispatch_delete_call_log_mutation(_store, 1, _rest, _action_value), do: :ignored
+
+  defp dispatch_delete_call_log_mutation(store, _operation, rest, action_value) do
+    case get_action_field(action_value, :deleteIndividualCallLog) do
+      %{peerJID: peer} = action when is_binary(peer) and peer != "" ->
+        delete_peer_call_log(store, peer, delete_call_log_direction(action))
+
+      _ ->
+        delete_call_log_from_index(store, rest)
+    end
+  end
+
+  defp delete_call_log_direction(%{isIncoming: incoming}) when is_boolean(incoming), do: incoming
+  defp delete_call_log_direction(_action), do: nil
+
+  defp delete_call_log_from_index(store, [peer | _rest]) when is_binary(peer) and peer != "",
+    do: delete_peer_call_log(store, peer, nil)
+
+  defp delete_call_log_from_index(_store, _rest), do: :ignored
+
+  defp delete_peer_call_log(store, peer, direction) do
+    case ExWapp.Call.delete_by_peer(store, peer, direction) do
+      :ok -> :ok
+      _error -> :ignored
+    end
+  end
+
   defp dispatch_mark_read_mutation(_store, 1, _jid, _action_value), do: :ignored
 
   defp dispatch_mark_read_mutation(store, _operation, jid, action_value) do

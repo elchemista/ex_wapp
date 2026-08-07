@@ -1041,6 +1041,23 @@ defmodule ExWapp.Session.Worker do
     {:noreply, state}
   end
 
+  # Call state change parsed from an inbound <call> stanza - notify subscribers
+  def handle_info({:call_event, %ExWapp.Call{} = call}, state) do
+    Logger.info(
+      "[WORKER] Call event id=#{Log.reference(call.id)} status=#{inspect(call.status)} jid=#{Log.reference(call.chat_jid)} session=#{Log.reference(state.session_id)}"
+    )
+
+    Events.emit_telemetry(
+      :call_event,
+      %{event_count: 1},
+      state,
+      %{call_id: call.id, status: call.status, jid: call.chat_jid}
+    )
+
+    Subscribers.broadcast_call(state.session_id, call)
+    {:noreply, state}
+  end
+
   def handle_info(
         {:request_placeholder_resend, chat_jid, sender_jid, message_id, metadata},
         state
