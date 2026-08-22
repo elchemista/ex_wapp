@@ -1267,7 +1267,9 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_info({:retry_outgoing_message, jid, message_id, retry_meta}, state) do
-    {:noreply, SendRecovery.maybe_retry_outgoing_message(state, jid, message_id, retry_meta)}
+    state = SendRecovery.maybe_retry_outgoing_message(state, jid, message_id, retry_meta)
+    acknowledge_retry_receipt(state, retry_meta)
+    {:noreply, state}
   end
 
   def handle_info({:ack_session_rejection, message_id, jid, ack}, state) do
@@ -1397,6 +1399,15 @@ defmodule ExWapp.Session.Worker do
     |> Map.update(:state, :redacted, &format_status_state/1)
     |> Map.put(:log, [])
   end
+
+  # The stanza ack for a retry receipt is withheld by `Message.Handler.Receipt`
+  # until the resend has been dispatched or ruled out, so it goes out here —
+  # whether or not a retry worker actually started, the receipt has been dealt
+  # with. Retries triggered internally (session repair) carry no ack.
+  defp acknowledge_retry_receipt(state, %{ack_node: %Binary.Node{tag: "ack"} = ack}),
+    do: NodeHandler.safe_handle_action({:send_node, ack}, state)
+
+  defp acknowledge_retry_receipt(_state, _retry_meta), do: :ok
 
   # Establishing and closing connections
 

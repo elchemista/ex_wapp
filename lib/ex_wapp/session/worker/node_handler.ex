@@ -76,7 +76,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
   end
 
   defp maybe_log_missing_immediate_ack_identity(%Binary.Node{tag: tag, attrs: attrs})
-       when tag in ["message", "call"] do
+       when tag in ["message", "call", "status"] do
     Logger.warning(
       "[ACK] cannot acknowledge inbound stanza class=#{tag}: " <>
         "id_present?=#{non_empty_attr?(attrs, "id")} from_present?=#{non_empty_attr?(attrs, "from")}"
@@ -230,7 +230,16 @@ defmodule ExWapp.Session.Worker.NodeHandler do
 
   # Handle incoming messages and notifications via MessageHandler
   defp handle_connection_node(%Binary.Node{tag: tag} = node, state)
-       when tag in ["message", "notification", "receipt", "ack", "call", "presence", "chatstate"] do
+       when tag in [
+              "message",
+              "status",
+              "notification",
+              "receipt",
+              "ack",
+              "call",
+              "presence",
+              "chatstate"
+            ] do
     Logger.debug(
       "[NODE_HANDLER] routing inbound content node session=#{Log.reference(Map.get(state, :session_id))} tag=#{tag} attrs=#{inspect(loggable_attrs(node.attrs || %{}), limit: 60)}"
     )
@@ -832,7 +841,16 @@ defmodule ExWapp.Session.Worker.NodeHandler do
     :ok
   end
 
-  defp handle_pairing_action(_action, _state), do: :ok
+  # An action nobody executes is a handler asking for something the session
+  # cannot do; say so instead of dropping it, or the request silently goes
+  # nowhere (inbound retry receipts were lost this way for months).
+  defp handle_pairing_action(action, state) do
+    Logger.warning(
+      "[NODE_HANDLER] unhandled action session=#{Log.reference(Map.get(state, :session_id))} action=#{inspect(compact_action(action), limit: 80)}"
+    )
+
+    :ok
+  end
 
   # Subscriber and state helpers
 

@@ -563,17 +563,22 @@ status update — otherwise the message stays `:pending` forever.
 
 ### 10.2 Immediate ACK for an Inbound Stanza
 
-Inbound `message` and `call` stanzas MUST be ACKed at the connection boundary,
-before routing, decryption, persistence, or subscriber publication:
+Inbound `message`, `call` and `status` stanzas MUST be ACKed at the connection
+boundary, before routing, decryption, persistence, or subscriber publication:
 
 ```xml
 <ack class="message" id="MSG_ID" to="sender:device@s.whatsapp.net"/>
 <ack class="call" id="CALL_ID" to="sender@s.whatsapp.net" type="offer"/>
+<ack class="status" id="MSG_ID" to="123@newsletter" type="text"/>
 ```
 
 - Copy `participant` and `recipient` when present.
+- Every class but `message` echoes the stanza's own `type` when it has one.
 - For calls, derive `type` from the first child tag (`offer`, etc.) when it is
   absent on the outer node.
+- `status` carries newsletter status updates in the clear (whatsmeow
+  `handleUnencryptedMessage`, Jul 2026). ExWapp acks and logs them; newsletter
+  content is not decoded yet.
 - The protocol ACK uses a priority transport queue and is independent of the
   later delivery receipt.
 - A stream error containing `<ack class="call" .../>` means this ACK was
@@ -642,18 +647,41 @@ the base-key-matched ratchet is the strong replay signal.
 
 When server forwards a retry receipt for our message:
 
-1. Look up original outbound text from chat store
-2. Spawn retry send worker (bounded attempts)
-3. Re-run normal send pipeline (DM/group/self rules apply)
-4. If needed, refresh sessions/prekeys and re-encrypt
+```xml
+<receipt from="peer:device@s.whatsapp.net" id="MSG_ID" type="retry" [recipient=...] [participant=...]>
+  <retry count="1" id="MSG_ID" t="..." v="1"/>
+  <keys>...</keys>   <!-- peer's fresh prekey bundle; ExWapp refetches instead -->
+</receipt>
+```
 
-> whatsmeow `retry.go:128-324`: Full retry handling.
+1. `Message.Handler.Receipt` turns it into
+   `{:retry_outgoing_message, from, MSG_ID, retry_meta}` — the message ID comes
+   from the `<retry id>` child, `retry_meta` carries `count`, `error`,
+   `participant`, `recipient` and the stanza ack node
+2. `Session.Worker` → `SendRecovery` looks up the retained payload
+   (`outgoing_retry_payloads`, then the chat store)
+3. The peer's Signal sessions are dropped and a retry send worker re-runs the
+   normal send pipeline under the **same message ID** (DM/group/self rules
+   apply), so the fresh prekey fetch rebuilds the session
+4. Only then is the receipt ACKed (`<ack class="receipt" type="retry" .../>`):
+   a session that dies before dispatching the resend has the receipt delivered
+   again instead of losing it — whatsmeow acks retry receipts from inside its
+   retry handler for the same reason (Jul 2026)
+
+Before Aug 2026 step 1 emitted an action nothing consumed, so inbound retry
+receipts were acked and dropped; `NodeHandler` now logs unhandled actions at
+warning level so that cannot hide again.
+
+> whatsmeow `retry.go:208-401`: Full retry handling.
 
 ### 11.3 Retry Limits
 
 - Max 5 retry receipts sent per message ID
-- Max 10 incoming retry requests handled per (sender, messageID) pair
-- Session recreation cooldown: 1 hour
+- Incoming retry requests per (jid, messageID): `send.max_outgoing_retry_attempts`
+  (default 2; whatsmeow caps at 10 and only recreates the session from the
+  second request — ExWapp always drops the peer sessions before resending,
+  same as the ack-463 repair path)
+- Session recreation cooldown: 1 hour (whatsmeow; not enforced here)
 
 ---
 

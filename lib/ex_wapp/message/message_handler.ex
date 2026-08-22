@@ -20,6 +20,9 @@ defmodule ExWapp.MessageHandler do
   def handle_node(%Node{tag: "message"} = node, session, state),
     do: Inbound.handle_message(node, session, state)
 
+  def handle_node(%Node{tag: "status"} = node, _session, state),
+    do: Status.handle_status_update(node, state)
+
   def handle_node(%Node{tag: "notification"} = node, session, state),
     do: Notification.handle_notification(node, session, state)
 

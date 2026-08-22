@@ -36,10 +36,15 @@ defmodule ExWapp.Message.Handler.Receipt do
       end)
     end)
 
-    actions = receipt_actions(type, from, id)
     ack_actions = receipt_ack_actions(id, from_raw, participant, recipient, type)
 
-    {:ok, state, actions ++ ack_actions}
+    actions =
+      case retry_request(type, from, id, retry_info, attrs, ack_actions) do
+        nil -> ack_actions
+        retry_action -> [retry_action]
+      end
+
+    {:ok, state, actions}
   end
 
   @doc "Expands a receipt stanza into one entry per normal or grouped participant receipt."
@@ -268,10 +273,78 @@ defmodule ExWapp.Message.Handler.Receipt do
   defp maybe_update_receipt_status(target, from, id, status),
     do: ExWapp.Chat.update_message_status(target, from, id, status)
 
-  defp receipt_actions("retry", from, id) when from != "" and id != "",
-    do: [{:retry_send, from, id}]
+  # A retry receipt is the peer saying it could not decrypt our message, so the
+  # retained payload is re-encrypted and sent again under the same ID (the
+  # session owns that: `Session.Worker` handles `{:retry_outgoing_message, ...}`
+  # through `SendRecovery`). The stanza ack rides inside the request instead of
+  # being emitted here: the session acknowledges the receipt only once the
+  # resend has been dispatched or ruled out, so a session that dies in between
+  # has the receipt delivered again rather than losing the request — whatsmeow
+  # acks retry receipts from inside its retry handler for the same reason.
+  #
+  # The message ID comes from the `<retry id=...>` child when present; the
+  # receipt's own `id` is the same value in practice, but the child is what the
+  # retry protocol defines.
+  defp retry_request("retry", from, id, retry_info, attrs, ack_actions) when from != "" do
+    case retry_message_id(retry_info, id) do
+      "" ->
+        nil
 
-  defp receipt_actions(_type, _from, _id), do: []
+      message_id ->
+        retry_meta =
+          %{}
+          |> put_retry_meta(:retry_count, parse_retry_count(retry_info))
+          |> put_retry_meta(:error, retry_info_field(retry_info, :error))
+          |> put_retry_meta(:participant, Map.get(attrs, "participant"))
+          |> put_retry_meta(:recipient, Map.get(attrs, "recipient"))
+          |> put_retry_ack(ack_actions)
+
+        {:retry_outgoing_message, from, message_id, retry_meta}
+    end
+  end
+
+  defp retry_request(_type, _from, _id, _retry_info, _attrs, _ack_actions), do: nil
+
+  defp retry_message_id(retry_info, id) do
+    case retry_info_field(retry_info, :id) do
+      nil -> id || ""
+      retry_id -> retry_id
+    end
+  end
+
+  defp retry_info_field(%{} = retry_info, key) do
+    case Map.get(retry_info, key) do
+      value when is_binary(value) and value != "" -> value
+      _ -> nil
+    end
+  end
+
+  defp retry_info_field(_retry_info, _key), do: nil
+
+  defp parse_retry_count(retry_info) do
+    case retry_info_field(retry_info, :count) do
+      nil -> nil
+      raw -> parse_integer(raw)
+    end
+  end
+
+  defp parse_integer(raw) do
+    case Integer.parse(raw) do
+      {count, ""} -> count
+      _ -> nil
+    end
+  end
+
+  defp put_retry_meta(meta, key, value) when is_binary(value) and value != "",
+    do: Map.put(meta, key, value)
+
+  defp put_retry_meta(meta, key, value) when is_integer(value), do: Map.put(meta, key, value)
+  defp put_retry_meta(meta, _key, _value), do: meta
+
+  defp put_retry_ack(meta, [{:send_node, %Node{tag: "ack"} = ack} | _rest]),
+    do: Map.put(meta, :ack_node, ack)
+
+  defp put_retry_ack(meta, _ack_actions), do: meta
 
   defp effective_ack_type(type, error) when type in [nil, ""] and error not in [nil, ""],
     do: "error"

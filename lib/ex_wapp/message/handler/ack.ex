@@ -4,7 +4,9 @@ defmodule ExWapp.Message.Handler.Ack do
   alias ExWapp.Binary.Node
   alias ExWapp.JID
 
-  @immediate_ack_classes ["message", "call"]
+  # `status` carries newsletter status updates in the clear; the server expects
+  # the same stanza ack as for a message (whatsmeow `handleUnencryptedMessage`).
+  @immediate_ack_classes ["message", "call", "status"]
 
   @doc """
   Builds the transport-level ACK that must be queued before expensive inbound
@@ -53,7 +55,10 @@ defmodule ExWapp.Message.Handler.Ack do
     first_non_empty([Map.get(attrs, "type"), child_tag(child)])
   end
 
-  defp immediate_ack_type(_stanza_class, _attrs, _child), do: ""
+  # Every class but `message` echoes the stanza's own `type` when it has one
+  # (whatsmeow `sendAck`).
+  defp immediate_ack_type("message", _attrs, _child), do: ""
+  defp immediate_ack_type(_stanza_class, attrs, _child), do: Map.get(attrs, "type") || ""
 
   defp first_child([%Node{} = child | _rest]), do: child
   defp first_child(_content), do: nil
