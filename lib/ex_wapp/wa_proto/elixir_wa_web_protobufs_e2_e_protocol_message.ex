@@ -31,7 +31,6 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
             aiMetadataOperation: nil,
             markAsVerifiedAction: nil,
             coexStateSync: nil,
-            syncRequestMutationRetry: nil,
             __uf__: []
 
   (
@@ -78,7 +77,6 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
         |> encode_aiMetadataOperation(msg)
         |> encode_markAsVerifiedAction(msg)
         |> encode_coexStateSync(msg)
-        |> encode_syncRequestMutationRetry(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -495,18 +493,6 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
             reraise Protox.EncodingError.new(:coexStateSync, "invalid field value"),
                     __STACKTRACE__
         end
-      end,
-      defp encode_syncRequestMutationRetry(acc, msg) do
-        try do
-          case msg.syncRequestMutationRetry do
-            nil -> acc
-            _ -> [acc, "\x92\x02", Protox.Encode.encode_message(msg.syncRequestMutationRetry)]
-          end
-        rescue
-          ArgumentError ->
-            reraise Protox.EncodingError.new(:syncRequestMutationRetry, "invalid field value"),
-                    __STACKTRACE__
-        end
       end
     ]
 
@@ -865,18 +851,6 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
                    )
                ], rest}
 
-            {34, _, bytes} ->
-              {len, bytes} = Protox.Varint.decode(bytes)
-              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
-
-              {[
-                 syncRequestMutationRetry:
-                   Protox.MergeMessage.merge(
-                     msg.syncRequestMutationRetry,
-                     WAWebProtobufsE2E.SyncRequestMutationRetry.decode!(delimited)
-                   )
-               ], rest}
-
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -996,11 +970,7 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
         32 =>
           {:markAsVerifiedAction, {:scalar, nil},
            {:message, WAWebProtobufsE2E.MarkAsVerifiedAction}},
-        33 =>
-          {:coexStateSync, {:scalar, nil}, {:message, WAWebProtobufsServerSync.CoexStateSync}},
-        34 =>
-          {:syncRequestMutationRetry, {:scalar, nil},
-           {:message, WAWebProtobufsE2E.SyncRequestMutationRetry}}
+        33 => {:coexStateSync, {:scalar, nil}, {:message, WAWebProtobufsServerSync.CoexStateSync}}
       }
     end
 
@@ -1055,8 +1025,6 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
            {:message, WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage}},
         requestWelcomeMessageMetadata:
           {20, {:scalar, nil}, {:message, WAWebProtobufsE2E.RequestWelcomeMessageMetadata}},
-        syncRequestMutationRetry:
-          {34, {:scalar, nil}, {:message, WAWebProtobufsE2E.SyncRequestMutationRetry}},
         timestampMS: {15, {:scalar, 0}, :int64},
         type: {2, {:scalar, :REVOKE}, {:enum, WAWebProtobufsE2E.ProtocolMessage.Type}}
       }
@@ -1336,15 +1304,6 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
           name: :coexStateSync,
           tag: 33,
           type: {:message, WAWebProtobufsServerSync.CoexStateSync}
-        },
-        %{
-          __struct__: Protox.Field,
-          json_name: "syncRequestMutationRetry",
-          kind: {:scalar, nil},
-          label: :optional,
-          name: :syncRequestMutationRetry,
-          tag: 34,
-          type: {:message, WAWebProtobufsE2E.SyncRequestMutationRetry}
         }
       ]
     end
@@ -2221,35 +2180,6 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
 
         []
       ),
-      (
-        def field_def(:syncRequestMutationRetry) do
-          {:ok,
-           %{
-             __struct__: Protox.Field,
-             json_name: "syncRequestMutationRetry",
-             kind: {:scalar, nil},
-             label: :optional,
-             name: :syncRequestMutationRetry,
-             tag: 34,
-             type: {:message, WAWebProtobufsE2E.SyncRequestMutationRetry}
-           }}
-        end
-
-        def field_def("syncRequestMutationRetry") do
-          {:ok,
-           %{
-             __struct__: Protox.Field,
-             json_name: "syncRequestMutationRetry",
-             kind: {:scalar, nil},
-             label: :optional,
-             name: :syncRequestMutationRetry,
-             tag: 34,
-             type: {:message, WAWebProtobufsE2E.SyncRequestMutationRetry}
-           }}
-        end
-
-        []
-      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -2377,9 +2307,6 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
       {:ok, nil}
     end,
     def default(:coexStateSync) do
-      {:ok, nil}
-    end,
-    def default(:syncRequestMutationRetry) do
       {:ok, nil}
     end,
     def default(_) do

@@ -117,10 +117,7 @@ defmodule ExWapp.SessionHelpersTest do
     assert_receive {:sent_node,
                     %ExWapp.Binary.Node{
                       tag: "chatstate",
-                      attrs: %{
-                        "from" => "15550009999:4@s.whatsapp.net",
-                        "to" => "15550001111@s.whatsapp.net"
-                      },
+                      attrs: %{"to" => "15550001111@s.whatsapp.net"},
                       content: [%ExWapp.Binary.Node{tag: "composing"}]
                     }}
 
@@ -129,15 +126,12 @@ defmodule ExWapp.SessionHelpersTest do
     assert_receive {:sent_node,
                     %ExWapp.Binary.Node{
                       tag: "chatstate",
-                      attrs: %{
-                        "from" => "999900001111:4@lid",
-                        "to" => "777700001111@lid"
-                      },
+                      attrs: %{"to" => "777700001111@lid"},
                       content: [%ExWapp.Binary.Node{tag: "composing"}]
                     }}
   end
 
-  test "send_typing refuses to emit a chatstate without the local identity" do
+  test "send_typing no longer requires or emits the local identity" do
     session_id = "typing_missing_identity_#{System.unique_integer([:positive])}"
 
     {:ok, pid} =
@@ -152,10 +146,14 @@ defmodule ExWapp.SessionHelpersTest do
     test_pid = self()
     :sys.replace_state(pid, fn state -> %{state | status: :connected, conn: test_pid} end)
 
-    assert {:error, :local_identity_unavailable} =
-             ExWapp.send_typing(pid, "15550001111@s.whatsapp.net")
+    assert :ok = ExWapp.send_typing(pid, "15550001111@s.whatsapp.net")
 
-    refute_receive {:sent_node, _node}
+    assert_receive {:sent_node,
+                    %ExWapp.Binary.Node{
+                      tag: "chatstate",
+                      attrs: %{"to" => "15550001111@s.whatsapp.net"},
+                      content: [%ExWapp.Binary.Node{tag: "composing"}]
+                    }}
   end
 
   test "supervisor live-session helpers handle zero and one runtime" do

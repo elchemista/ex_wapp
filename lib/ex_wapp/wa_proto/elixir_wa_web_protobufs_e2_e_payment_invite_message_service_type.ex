@@ -48,6 +48,15 @@ defmodule WAWebProtobufsE2E.PaymentInviteMessage.ServiceType do
         def encode("UPI") do
           3
         end
+      ),
+      (
+        def encode(:PIX) do
+          4
+        end
+
+        def encode("PIX") do
+          4
+        end
       )
     ]
 
@@ -68,6 +77,9 @@ defmodule WAWebProtobufsE2E.PaymentInviteMessage.ServiceType do
       end,
       def decode(3) do
         :UPI
+      end,
+      def decode(4) do
+        :PIX
       end
     ]
 
@@ -77,7 +89,7 @@ defmodule WAWebProtobufsE2E.PaymentInviteMessage.ServiceType do
 
     @spec constants() :: [{integer(), atom()}]
     def constants() do
-      [{0, :UNKNOWN}, {1, :FBPAY}, {2, :NOVI}, {3, :UPI}]
+      [{0, :UNKNOWN}, {1, :FBPAY}, {2, :NOVI}, {3, :UPI}, {4, :PIX}]
     end
 
     @spec has_constant?(any()) :: boolean()
@@ -93,6 +105,9 @@ defmodule WAWebProtobufsE2E.PaymentInviteMessage.ServiceType do
           true
         end,
         def has_constant?(:UPI) do
+          true
+        end,
+        def has_constant?(:PIX) do
           true
         end
       ]

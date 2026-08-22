@@ -97,7 +97,6 @@ defmodule WAWebProtobufsE2E.Message do
             newsletterFollowerInviteMessageV2: nil,
             pollResultSnapshotMessageV3: nil,
             newsletterAdminProfileMessage: nil,
-            newsletterAdminProfileMessageV2: nil,
             spoilerMessage: nil,
             pollCreationMessageV6: nil,
             conditionalRevealMessage: nil,
@@ -109,6 +108,9 @@ defmodule WAWebProtobufsE2E.Message do
             newsletterAdminProfileStatusMessage: nil,
             rootSecretDistributeMessage: nil,
             splitPaymentUpdateMessage: nil,
+            musicMessage: nil,
+            statusLinkPreviewMetadata: nil,
+            botPlatformRegistrationSuccessMessage: nil,
             __uf__: []
 
   (
@@ -221,7 +223,6 @@ defmodule WAWebProtobufsE2E.Message do
         |> encode_newsletterFollowerInviteMessageV2(msg)
         |> encode_pollResultSnapshotMessageV3(msg)
         |> encode_newsletterAdminProfileMessage(msg)
-        |> encode_newsletterAdminProfileMessageV2(msg)
         |> encode_spoilerMessage(msg)
         |> encode_pollCreationMessageV6(msg)
         |> encode_conditionalRevealMessage(msg)
@@ -233,6 +234,9 @@ defmodule WAWebProtobufsE2E.Message do
         |> encode_newsletterAdminProfileStatusMessage(msg)
         |> encode_rootSecretDistributeMessage(msg)
         |> encode_splitPaymentUpdateMessage(msg)
+        |> encode_musicMessage(msg)
+        |> encode_statusLinkPreviewMetadata(msg)
+        |> encode_botPlatformRegistrationSuccessMessage(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -1423,24 +1427,6 @@ defmodule WAWebProtobufsE2E.Message do
                     __STACKTRACE__
         end
       end,
-      defp encode_newsletterAdminProfileMessageV2(acc, msg) do
-        try do
-          case msg.newsletterAdminProfileMessageV2 do
-            nil ->
-              acc
-
-            _ ->
-              [acc, "\xAA\a", Protox.Encode.encode_message(msg.newsletterAdminProfileMessageV2)]
-          end
-        rescue
-          ArgumentError ->
-            reraise Protox.EncodingError.new(
-                      :newsletterAdminProfileMessageV2,
-                      "invalid field value"
-                    ),
-                    __STACKTRACE__
-        end
-      end,
       defp encode_spoilerMessage(acc, msg) do
         try do
           case msg.spoilerMessage do
@@ -1580,6 +1566,51 @@ defmodule WAWebProtobufsE2E.Message do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:splitPaymentUpdateMessage, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_musicMessage(acc, msg) do
+        try do
+          case msg.musicMessage do
+            nil -> acc
+            _ -> [acc, "\x8A\b", Protox.Encode.encode_message(msg.musicMessage)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:musicMessage, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_statusLinkPreviewMetadata(acc, msg) do
+        try do
+          case msg.statusLinkPreviewMetadata do
+            nil -> acc
+            _ -> [acc, "\x92\b", Protox.Encode.encode_message(msg.statusLinkPreviewMetadata)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:statusLinkPreviewMetadata, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_botPlatformRegistrationSuccessMessage(acc, msg) do
+        try do
+          case msg.botPlatformRegistrationSuccessMessage do
+            nil ->
+              acc
+
+            _ ->
+              [
+                acc,
+                "\x9A\b",
+                Protox.Encode.encode_message(msg.botPlatformRegistrationSuccessMessage)
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :botPlatformRegistrationSuccessMessage,
+                      "invalid field value"
+                    ),
                     __STACKTRACE__
         end
       end
@@ -2776,18 +2807,6 @@ defmodule WAWebProtobufsE2E.Message do
                    )
                ], rest}
 
-            {117, _, bytes} ->
-              {len, bytes} = Protox.Varint.decode(bytes)
-              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
-
-              {[
-                 newsletterAdminProfileMessageV2:
-                   Protox.MergeMessage.merge(
-                     msg.newsletterAdminProfileMessageV2,
-                     WAWebProtobufsE2E.FutureProofMessage.decode!(delimited)
-                   )
-               ], rest}
-
             {118, _, bytes} ->
               {len, bytes} = Protox.Varint.decode(bytes)
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
@@ -2917,6 +2936,42 @@ defmodule WAWebProtobufsE2E.Message do
                    Protox.MergeMessage.merge(
                      msg.splitPaymentUpdateMessage,
                      WAWebProtobufsE2E.SplitPaymentUpdateMessage.decode!(delimited)
+                   )
+               ], rest}
+
+            {129, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 musicMessage:
+                   Protox.MergeMessage.merge(
+                     msg.musicMessage,
+                     WAWebProtobufsE2E.MusicMessage.decode!(delimited)
+                   )
+               ], rest}
+
+            {130, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 statusLinkPreviewMetadata:
+                   Protox.MergeMessage.merge(
+                     msg.statusLinkPreviewMetadata,
+                     WAWebProtobufsE2E.StatusLinkPreviewMetadata.decode!(delimited)
+                   )
+               ], rest}
+
+            {131, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 botPlatformRegistrationSuccessMessage:
+                   Protox.MergeMessage.merge(
+                     msg.botPlatformRegistrationSuccessMessage,
+                     WAWebProtobufsE2E.FutureProofMessage.decode!(delimited)
                    )
                ], rest}
 
@@ -3194,9 +3249,6 @@ defmodule WAWebProtobufsE2E.Message do
         116 =>
           {:newsletterAdminProfileMessage, {:scalar, nil},
            {:message, WAWebProtobufsE2E.FutureProofMessage}},
-        117 =>
-          {:newsletterAdminProfileMessageV2, {:scalar, nil},
-           {:message, WAWebProtobufsE2E.FutureProofMessage}},
         118 =>
           {:spoilerMessage, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         119 =>
@@ -3226,7 +3278,14 @@ defmodule WAWebProtobufsE2E.Message do
            {:message, WAWebProtobufsE2E.RootSecretDistributeMessage}},
         128 =>
           {:splitPaymentUpdateMessage, {:scalar, nil},
-           {:message, WAWebProtobufsE2E.SplitPaymentUpdateMessage}}
+           {:message, WAWebProtobufsE2E.SplitPaymentUpdateMessage}},
+        129 => {:musicMessage, {:scalar, nil}, {:message, WAWebProtobufsE2E.MusicMessage}},
+        130 =>
+          {:statusLinkPreviewMetadata, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.StatusLinkPreviewMetadata}},
+        131 =>
+          {:botPlatformRegistrationSuccessMessage, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.FutureProofMessage}}
       }
     end
 
@@ -3244,6 +3303,8 @@ defmodule WAWebProtobufsE2E.Message do
         botForwardedMessage:
           {104, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         botInvokeMessage: {67, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
+        botPlatformRegistrationSuccessMessage:
+          {131, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         botTaskMessage: {100, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         buttonsMessage: {42, {:scalar, nil}, {:message, WAWebProtobufsE2E.ButtonsMessage}},
         buttonsResponseMessage:
@@ -3317,12 +3378,11 @@ defmodule WAWebProtobufsE2E.Message do
           {70, {:scalar, nil}, {:message, WAWebProtobufsE2E.MessageHistoryBundle}},
         messageHistoryNotice:
           {102, {:scalar, nil}, {:message, WAWebProtobufsE2E.MessageHistoryNotice}},
+        musicMessage: {129, {:scalar, nil}, {:message, WAWebProtobufsE2E.MusicMessage}},
         newsletterAdminInviteMessage:
           {78, {:scalar, nil}, {:message, WAWebProtobufsE2E.NewsletterAdminInviteMessage}},
         newsletterAdminProfileMessage:
           {116, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
-        newsletterAdminProfileMessageV2:
-          {117, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         newsletterAdminProfileStatusMessage:
           {126, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         newsletterFollowerInviteMessageV2:
@@ -3389,6 +3449,8 @@ defmodule WAWebProtobufsE2E.Message do
           {128, {:scalar, nil}, {:message, WAWebProtobufsE2E.SplitPaymentUpdateMessage}},
         spoilerMessage: {118, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         statusAddYours: {95, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
+        statusLinkPreviewMetadata:
+          {130, {:scalar, nil}, {:message, WAWebProtobufsE2E.StatusLinkPreviewMetadata}},
         statusMentionMessage:
           {87, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         statusNotificationMessage:
@@ -4286,15 +4348,6 @@ defmodule WAWebProtobufsE2E.Message do
         },
         %{
           __struct__: Protox.Field,
-          json_name: "newsletterAdminProfileMessageV2",
-          kind: {:scalar, nil},
-          label: :optional,
-          name: :newsletterAdminProfileMessageV2,
-          tag: 117,
-          type: {:message, WAWebProtobufsE2E.FutureProofMessage}
-        },
-        %{
-          __struct__: Protox.Field,
           json_name: "spoilerMessage",
           kind: {:scalar, nil},
           label: :optional,
@@ -4391,6 +4444,33 @@ defmodule WAWebProtobufsE2E.Message do
           name: :splitPaymentUpdateMessage,
           tag: 128,
           type: {:message, WAWebProtobufsE2E.SplitPaymentUpdateMessage}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "musicMessage",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :musicMessage,
+          tag: 129,
+          type: {:message, WAWebProtobufsE2E.MusicMessage}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "statusLinkPreviewMetadata",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :statusLinkPreviewMetadata,
+          tag: 130,
+          type: {:message, WAWebProtobufsE2E.StatusLinkPreviewMetadata}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "botPlatformRegistrationSuccessMessage",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :botPlatformRegistrationSuccessMessage,
+          tag: 131,
+          type: {:message, WAWebProtobufsE2E.FutureProofMessage}
         }
       ]
     end
@@ -7182,35 +7262,6 @@ defmodule WAWebProtobufsE2E.Message do
         []
       ),
       (
-        def field_def(:newsletterAdminProfileMessageV2) do
-          {:ok,
-           %{
-             __struct__: Protox.Field,
-             json_name: "newsletterAdminProfileMessageV2",
-             kind: {:scalar, nil},
-             label: :optional,
-             name: :newsletterAdminProfileMessageV2,
-             tag: 117,
-             type: {:message, WAWebProtobufsE2E.FutureProofMessage}
-           }}
-        end
-
-        def field_def("newsletterAdminProfileMessageV2") do
-          {:ok,
-           %{
-             __struct__: Protox.Field,
-             json_name: "newsletterAdminProfileMessageV2",
-             kind: {:scalar, nil},
-             label: :optional,
-             name: :newsletterAdminProfileMessageV2,
-             tag: 117,
-             type: {:message, WAWebProtobufsE2E.FutureProofMessage}
-           }}
-        end
-
-        []
-      ),
-      (
         def field_def(:spoilerMessage) do
           {:ok,
            %{
@@ -7524,6 +7575,93 @@ defmodule WAWebProtobufsE2E.Message do
              name: :splitPaymentUpdateMessage,
              tag: 128,
              type: {:message, WAWebProtobufsE2E.SplitPaymentUpdateMessage}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:musicMessage) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "musicMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :musicMessage,
+             tag: 129,
+             type: {:message, WAWebProtobufsE2E.MusicMessage}
+           }}
+        end
+
+        def field_def("musicMessage") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "musicMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :musicMessage,
+             tag: 129,
+             type: {:message, WAWebProtobufsE2E.MusicMessage}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:statusLinkPreviewMetadata) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "statusLinkPreviewMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :statusLinkPreviewMetadata,
+             tag: 130,
+             type: {:message, WAWebProtobufsE2E.StatusLinkPreviewMetadata}
+           }}
+        end
+
+        def field_def("statusLinkPreviewMetadata") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "statusLinkPreviewMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :statusLinkPreviewMetadata,
+             tag: 130,
+             type: {:message, WAWebProtobufsE2E.StatusLinkPreviewMetadata}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:botPlatformRegistrationSuccessMessage) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "botPlatformRegistrationSuccessMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :botPlatformRegistrationSuccessMessage,
+             tag: 131,
+             type: {:message, WAWebProtobufsE2E.FutureProofMessage}
+           }}
+        end
+
+        def field_def("botPlatformRegistrationSuccessMessage") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "botPlatformRegistrationSuccessMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :botPlatformRegistrationSuccessMessage,
+             tag: 131,
+             type: {:message, WAWebProtobufsE2E.FutureProofMessage}
            }}
         end
 
@@ -7856,9 +7994,6 @@ defmodule WAWebProtobufsE2E.Message do
     def default(:newsletterAdminProfileMessage) do
       {:ok, nil}
     end,
-    def default(:newsletterAdminProfileMessageV2) do
-      {:ok, nil}
-    end,
     def default(:spoilerMessage) do
       {:ok, nil}
     end,
@@ -7890,6 +8025,15 @@ defmodule WAWebProtobufsE2E.Message do
       {:ok, nil}
     end,
     def default(:splitPaymentUpdateMessage) do
+      {:ok, nil}
+    end,
+    def default(:musicMessage) do
+      {:ok, nil}
+    end,
+    def default(:statusLinkPreviewMetadata) do
+      {:ok, nil}
+    end,
+    def default(:botPlatformRegistrationSuccessMessage) do
       {:ok, nil}
     end,
     def default(_) do

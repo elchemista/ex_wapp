@@ -318,6 +318,15 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction.SettingKey do
         def encode("COLOR_SCHEME_ID") do
           33
         end
+      ),
+      (
+        def encode(:STOCK_WALLPAPER_IMAGE_ID) do
+          34
+        end
+
+        def encode("STOCK_WALLPAPER_IMAGE_ID") do
+          34
+        end
       )
     ]
 
@@ -332,6 +341,9 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction.SettingKey do
       end,
       def decode(4) do
         :REPLACE_TEXT_WITH_EMOJI
+      end,
+      def decode(34) do
+        :STOCK_WALLPAPER_IMAGE_ID
       end,
       def decode(12) do
         :DEFAULT_NOTIFICATION_TONE_ID
@@ -471,7 +483,8 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction.SettingKey do
         {30, :STATUS_NOTIFICATION_TONE_ID},
         {31, :SHOULD_PLAY_SOUND_FOR_CALL_NOTIFICATION},
         {32, :CHAT_THEME_ID},
-        {33, :COLOR_SCHEME_ID}
+        {33, :COLOR_SCHEME_ID},
+        {34, :STOCK_WALLPAPER_IMAGE_ID}
       ]
     end
 
@@ -578,6 +591,9 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction.SettingKey do
           true
         end,
         def has_constant?(:COLOR_SCHEME_ID) do
+          true
+        end,
+        def has_constant?(:STOCK_WALLPAPER_IMAGE_ID) do
           true
         end
       ]

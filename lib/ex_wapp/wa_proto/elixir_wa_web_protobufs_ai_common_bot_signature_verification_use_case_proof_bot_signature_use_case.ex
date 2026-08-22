@@ -48,6 +48,24 @@ defmodule WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof.BotSignatu
         def encode("P2P_PILLS") do
           3
         end
+      ),
+      (
+        def encode(:WA_WAFFLE) do
+          4
+        end
+
+        def encode("WA_WAFFLE") do
+          4
+        end
+      ),
+      (
+        def encode(:WA_FEATURE_PKI) do
+          5
+        end
+
+        def encode("WA_FEATURE_PKI") do
+          5
+        end
       )
     ]
 
@@ -68,6 +86,12 @@ defmodule WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof.BotSignatu
       end,
       def decode(3) do
         :P2P_PILLS
+      end,
+      def decode(4) do
+        :WA_WAFFLE
+      end,
+      def decode(5) do
+        :WA_FEATURE_PKI
       end
     ]
 
@@ -77,7 +101,14 @@ defmodule WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof.BotSignatu
 
     @spec constants() :: [{integer(), atom()}]
     def constants() do
-      [{0, :UNSPECIFIED}, {1, :WA_BOT_MSG}, {2, :WA_TEE_BOT_MSG}, {3, :P2P_PILLS}]
+      [
+        {0, :UNSPECIFIED},
+        {1, :WA_BOT_MSG},
+        {2, :WA_TEE_BOT_MSG},
+        {3, :P2P_PILLS},
+        {4, :WA_WAFFLE},
+        {5, :WA_FEATURE_PKI}
+      ]
     end
 
     @spec has_constant?(any()) :: boolean()
@@ -93,6 +124,12 @@ defmodule WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof.BotSignatu
           true
         end,
         def has_constant?(:P2P_PILLS) do
+          true
+        end,
+        def has_constant?(:WA_WAFFLE) do
+          true
+        end,
+        def has_constant?(:WA_FEATURE_PKI) do
           true
         end
       ]

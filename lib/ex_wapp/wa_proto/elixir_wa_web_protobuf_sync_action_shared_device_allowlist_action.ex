@@ -1,7 +1,7 @@
 # credo:disable-for-this-file
-defmodule WAWebProtobufsE2E.SyncRequestMutationRetry.Collection do
+defmodule WAWebProtobufSyncAction.SharedDeviceAllowlistAction do
   @moduledoc false
-  defstruct name: nil, storedSyncdVersion: nil, __uf__: []
+  defstruct allowed: nil, __uf__: []
 
   (
     (
@@ -16,34 +16,22 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry.Collection do
 
       @spec encode!(struct) :: iodata | no_return
       def encode!(msg) do
-        [] |> encode_name(msg) |> encode_storedSyncdVersion(msg) |> encode_unknown_fields(msg)
+        [] |> encode_allowed(msg) |> encode_unknown_fields(msg)
       end
     )
 
     []
 
     [
-      defp encode_name(acc, msg) do
+      defp encode_allowed(acc, msg) do
         try do
-          case msg.name do
+          case msg.allowed do
             nil -> acc
-            _ -> [acc, "\n", Protox.Encode.encode_string(msg.name)]
+            _ -> [acc, "\b", Protox.Encode.encode_bool(msg.allowed)]
           end
         rescue
           ArgumentError ->
-            reraise Protox.EncodingError.new(:name, "invalid field value"), __STACKTRACE__
-        end
-      end,
-      defp encode_storedSyncdVersion(acc, msg) do
-        try do
-          case msg.storedSyncdVersion do
-            nil -> acc
-            _ -> [acc, "\x10", Protox.Encode.encode_uint64(msg.storedSyncdVersion)]
-          end
-        rescue
-          ArgumentError ->
-            reraise Protox.EncodingError.new(:storedSyncdVersion, "invalid field value"),
-                    __STACKTRACE__
+            reraise Protox.EncodingError.new(:allowed, "invalid field value"), __STACKTRACE__
         end
       end
     ]
@@ -83,7 +71,7 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry.Collection do
       (
         @spec decode!(binary) :: struct | no_return
         def decode!(bytes) do
-          parse_key_value(bytes, struct(WAWebProtobufsE2E.SyncRequestMutationRetry.Collection))
+          parse_key_value(bytes, struct(WAWebProtobufSyncAction.SharedDeviceAllowlistAction))
         end
       )
     )
@@ -101,13 +89,8 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry.Collection do
               raise %Protox.IllegalTagError{}
 
             {1, _, bytes} ->
-              {len, bytes} = Protox.Varint.decode(bytes)
-              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
-              {[name: Protox.Decode.validate_string!(delimited)], rest}
-
-            {2, _, bytes} ->
-              {value, rest} = Protox.Decode.parse_uint64(bytes)
-              {[storedSyncdVersion: value], rest}
+              {value, rest} = Protox.Decode.parse_bool(bytes)
+              {[allowed: value], rest}
 
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
@@ -142,7 +125,7 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry.Collection do
 
       Protox.JsonDecode.decode!(
         input,
-        WAWebProtobufsE2E.SyncRequestMutationRetry.Collection,
+        WAWebProtobufSyncAction.SharedDeviceAllowlistAction,
         &json_library_wrapper.decode!(json_library, &1)
       )
     end
@@ -169,7 +152,7 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry.Collection do
             required(non_neg_integer) => {atom, Protox.Types.kind(), Protox.Types.type()}
           }
     def defs() do
-      %{1 => {:name, {:scalar, ""}, :string}, 2 => {:storedSyncdVersion, {:scalar, 0}, :uint64}}
+      %{1 => {:allowed, {:scalar, false}, :bool}}
     end
 
     @deprecated "Use fields_defs()/0 instead"
@@ -177,7 +160,7 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry.Collection do
             required(atom) => {non_neg_integer, Protox.Types.kind(), Protox.Types.type()}
           }
     def defs_by_name() do
-      %{name: {1, {:scalar, ""}, :string}, storedSyncdVersion: {2, {:scalar, 0}, :uint64}}
+      %{allowed: {1, {:scalar, false}, :bool}}
     end
   )
 
@@ -187,21 +170,12 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry.Collection do
       [
         %{
           __struct__: Protox.Field,
-          json_name: "name",
-          kind: {:scalar, ""},
+          json_name: "allowed",
+          kind: {:scalar, false},
           label: :optional,
-          name: :name,
+          name: :allowed,
           tag: 1,
-          type: :string
-        },
-        %{
-          __struct__: Protox.Field,
-          json_name: "storedSyncdVersion",
-          kind: {:scalar, 0},
-          label: :optional,
-          name: :storedSyncdVersion,
-          tag: 2,
-          type: :uint64
+          type: :bool
         }
       ]
     end
@@ -209,58 +183,29 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry.Collection do
     [
       @spec(field_def(atom) :: {:ok, Protox.Field.t()} | {:error, :no_such_field}),
       (
-        def field_def(:name) do
+        def field_def(:allowed) do
           {:ok,
            %{
              __struct__: Protox.Field,
-             json_name: "name",
-             kind: {:scalar, ""},
+             json_name: "allowed",
+             kind: {:scalar, false},
              label: :optional,
-             name: :name,
+             name: :allowed,
              tag: 1,
-             type: :string
+             type: :bool
            }}
         end
 
-        def field_def("name") do
+        def field_def("allowed") do
           {:ok,
            %{
              __struct__: Protox.Field,
-             json_name: "name",
-             kind: {:scalar, ""},
+             json_name: "allowed",
+             kind: {:scalar, false},
              label: :optional,
-             name: :name,
+             name: :allowed,
              tag: 1,
-             type: :string
-           }}
-        end
-
-        []
-      ),
-      (
-        def field_def(:storedSyncdVersion) do
-          {:ok,
-           %{
-             __struct__: Protox.Field,
-             json_name: "storedSyncdVersion",
-             kind: {:scalar, 0},
-             label: :optional,
-             name: :storedSyncdVersion,
-             tag: 2,
-             type: :uint64
-           }}
-        end
-
-        def field_def("storedSyncdVersion") do
-          {:ok,
-           %{
-             __struct__: Protox.Field,
-             json_name: "storedSyncdVersion",
-             kind: {:scalar, 0},
-             label: :optional,
-             name: :storedSyncdVersion,
-             tag: 2,
-             type: :uint64
+             type: :bool
            }}
         end
 
@@ -305,11 +250,8 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry.Collection do
 
   [
     @spec(default(atom) :: {:ok, boolean | integer | String.t() | float} | {:error, atom}),
-    def default(:name) do
-      {:ok, ""}
-    end,
-    def default(:storedSyncdVersion) do
-      {:ok, 0}
+    def default(:allowed) do
+      {:ok, false}
     end,
     def default(_) do
       {:error, :no_such_field}
@@ -326,7 +268,7 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry.Collection do
         cc_generic_services: nil,
         csharp_namespace: nil,
         deprecated: nil,
-        go_package: "go.mau.fi/whatsmeow/proto/waE2E",
+        go_package: "go.mau.fi/whatsmeow/proto/waSyncAction",
         java_generate_equals_and_hash: nil,
         java_generic_services: nil,
         java_multiple_files: nil,
