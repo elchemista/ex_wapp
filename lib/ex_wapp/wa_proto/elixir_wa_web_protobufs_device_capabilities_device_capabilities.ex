@@ -8,6 +8,8 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
             memberNameTagPrimarySupport: nil,
             aiThread: nil,
             aiFbidMigration: nil,
+            bizAiSettingsSync: nil,
+            contactRefresh: nil,
             __uf__: []
 
   (
@@ -31,6 +33,8 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
         |> encode_memberNameTagPrimarySupport(msg)
         |> encode_aiThread(msg)
         |> encode_aiFbidMigration(msg)
+        |> encode_bizAiSettingsSync(msg)
+        |> encode_contactRefresh(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -135,6 +139,30 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:aiFbidMigration, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_bizAiSettingsSync(acc, msg) do
+        try do
+          case msg.bizAiSettingsSync do
+            nil -> acc
+            _ -> [acc, "B", Protox.Encode.encode_message(msg.bizAiSettingsSync)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:bizAiSettingsSync, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_contactRefresh(acc, msg) do
+        try do
+          case msg.contactRefresh do
+            nil -> acc
+            _ -> [acc, "J", Protox.Encode.encode_message(msg.contactRefresh)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:contactRefresh, "invalid field value"),
                     __STACKTRACE__
         end
       end
@@ -280,6 +308,34 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
                    )
                ], rest}
 
+            {8, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 bizAiSettingsSync:
+                   Protox.MergeMessage.merge(
+                     msg.bizAiSettingsSync,
+                     WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BizAiSettingsSync.decode!(
+                       delimited
+                     )
+                   )
+               ], rest}
+
+            {9, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 contactRefresh:
+                   Protox.MergeMessage.merge(
+                     msg.contactRefresh,
+                     WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ContactRefresh.decode!(
+                       delimited
+                     )
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -362,7 +418,13 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
            {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.AiThread}},
         7 =>
           {:aiFbidMigration, {:scalar, nil},
-           {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.AiFbidMigration}}
+           {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.AiFbidMigration}},
+        8 =>
+          {:bizAiSettingsSync, {:scalar, nil},
+           {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BizAiSettingsSync}},
+        9 =>
+          {:contactRefresh, {:scalar, nil},
+           {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ContactRefresh}}
       }
     end
 
@@ -378,12 +440,18 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
         aiThread:
           {6, {:scalar, nil},
            {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.AiThread}},
+        bizAiSettingsSync:
+          {8, {:scalar, nil},
+           {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BizAiSettingsSync}},
         businessBroadcast:
           {3, {:scalar, nil},
            {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BusinessBroadcast}},
         chatLockSupportLevel:
           {1, {:scalar, :NONE},
            {:enum, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ChatLockSupportLevel}},
+        contactRefresh:
+          {9, {:scalar, nil},
+           {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ContactRefresh}},
         lidMigration:
           {2, {:scalar, nil},
            {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.LIDMigration}},
@@ -466,6 +534,24 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
           name: :aiFbidMigration,
           tag: 7,
           type: {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.AiFbidMigration}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "bizAiSettingsSync",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :bizAiSettingsSync,
+          tag: 8,
+          type: {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BizAiSettingsSync}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "contactRefresh",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :contactRefresh,
+          tag: 9,
+          type: {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ContactRefresh}
         }
       ]
     end
@@ -683,6 +769,66 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
 
         []
       ),
+      (
+        def field_def(:bizAiSettingsSync) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "bizAiSettingsSync",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :bizAiSettingsSync,
+             tag: 8,
+             type:
+               {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BizAiSettingsSync}
+           }}
+        end
+
+        def field_def("bizAiSettingsSync") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "bizAiSettingsSync",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :bizAiSettingsSync,
+             tag: 8,
+             type:
+               {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BizAiSettingsSync}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:contactRefresh) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "contactRefresh",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :contactRefresh,
+             tag: 9,
+             type: {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ContactRefresh}
+           }}
+        end
+
+        def field_def("contactRefresh") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "contactRefresh",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :contactRefresh,
+             tag: 9,
+             type: {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ContactRefresh}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -741,6 +887,12 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
       {:ok, nil}
     end,
     def default(:aiFbidMigration) do
+      {:ok, nil}
+    end,
+    def default(:bizAiSettingsSync) do
+      {:ok, nil}
+    end,
+    def default(:contactRefresh) do
       {:ok, nil}
     end,
     def default(_) do

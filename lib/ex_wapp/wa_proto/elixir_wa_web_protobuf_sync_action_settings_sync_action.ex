@@ -34,6 +34,7 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction do
             shouldPlaySoundForCallNotification: nil,
             chatThemeID: nil,
             colorSchemeID: nil,
+            stockWallpaperImageID: nil,
             __uf__: []
 
   (
@@ -83,6 +84,7 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction do
         |> encode_shouldPlaySoundForCallNotification(msg)
         |> encode_chatThemeID(msg)
         |> encode_colorSchemeID(msg)
+        |> encode_stockWallpaperImageID(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -552,6 +554,18 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction do
             reraise Protox.EncodingError.new(:colorSchemeID, "invalid field value"),
                     __STACKTRACE__
         end
+      end,
+      defp encode_stockWallpaperImageID(acc, msg) do
+        try do
+          case msg.stockWallpaperImageID do
+            nil -> acc
+            _ -> [acc, "\x92\x02", Protox.Encode.encode_string(msg.stockWallpaperImageID)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:stockWallpaperImageID, "invalid field value"),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -757,6 +771,11 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[colorSchemeID: Protox.Decode.validate_string!(delimited)], rest}
 
+            {34, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[stockWallpaperImageID: Protox.Decode.validate_string!(delimited)], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -856,7 +875,8 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction do
         30 => {:statusNotificationToneID, {:scalar, 0}, :int32},
         31 => {:shouldPlaySoundForCallNotification, {:scalar, false}, :bool},
         32 => {:chatThemeID, {:scalar, ""}, :string},
-        33 => {:colorSchemeID, {:scalar, ""}, :string}
+        33 => {:colorSchemeID, {:scalar, ""}, :string},
+        34 => {:stockWallpaperImageID, {:scalar, ""}, :string}
       }
     end
 
@@ -901,6 +921,7 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction do
         shouldPlaySoundForCallNotification: {31, {:scalar, false}, :bool},
         startAtLogin: {1, {:scalar, false}, :bool},
         statusNotificationToneID: {30, {:scalar, 0}, :int32},
+        stockWallpaperImageID: {34, {:scalar, ""}, :string},
         unreadCounterBadgeDisplayMode:
           {6, {:scalar, :DISPLAY_MODE_UNKNOWN},
            {:enum, WAWebProtobufSyncAction.SettingsSyncAction.DisplayMode}},
@@ -1208,6 +1229,15 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction do
           label: :optional,
           name: :colorSchemeID,
           tag: 33,
+          type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "stockWallpaperImageID",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :stockWallpaperImageID,
+          tag: 34,
           type: :string
         }
       ]
@@ -2172,6 +2202,35 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction do
 
         []
       ),
+      (
+        def field_def(:stockWallpaperImageID) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "stockWallpaperImageID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :stockWallpaperImageID,
+             tag: 34,
+             type: :string
+           }}
+        end
+
+        def field_def("stockWallpaperImageID") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "stockWallpaperImageID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :stockWallpaperImageID,
+             tag: 34,
+             type: :string
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -2308,6 +2367,9 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction do
       {:ok, ""}
     end,
     def default(:colorSchemeID) do
+      {:ok, ""}
+    end,
+    def default(:stockWallpaperImageID) do
       {:ok, ""}
     end,
     def default(_) do

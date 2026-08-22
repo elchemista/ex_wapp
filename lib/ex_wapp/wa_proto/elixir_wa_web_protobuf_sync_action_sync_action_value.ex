@@ -83,6 +83,11 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
             wasaRootSecretAction: nil,
             bubbleLockMessageAction: nil,
             labelSublistAction: nil,
+            deviceCapabilitiesV2: nil,
+            ctwaMessageReceivedAction: nil,
+            sharedDeviceAllowlistAction: nil,
+            contactManagerMetadataAction: nil,
+            businessFolderActivationAction: nil,
             __uf__: []
 
   (
@@ -181,6 +186,11 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
         |> encode_wasaRootSecretAction(msg)
         |> encode_bubbleLockMessageAction(msg)
         |> encode_labelSublistAction(msg)
+        |> encode_deviceCapabilitiesV2(msg)
+        |> encode_ctwaMessageReceivedAction(msg)
+        |> encode_sharedDeviceAllowlistAction(msg)
+        |> encode_contactManagerMetadataAction(msg)
+        |> encode_businessFolderActivationAction(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -1264,6 +1274,75 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
             reraise Protox.EncodingError.new(:labelSublistAction, "invalid field value"),
                     __STACKTRACE__
         end
+      end,
+      defp encode_deviceCapabilitiesV2(acc, msg) do
+        try do
+          case msg.deviceCapabilitiesV2 do
+            nil -> acc
+            _ -> [acc, "\xE2\x05", Protox.Encode.encode_message(msg.deviceCapabilitiesV2)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:deviceCapabilitiesV2, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_ctwaMessageReceivedAction(acc, msg) do
+        try do
+          case msg.ctwaMessageReceivedAction do
+            nil -> acc
+            _ -> [acc, "\xEA\x05", Protox.Encode.encode_message(msg.ctwaMessageReceivedAction)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:ctwaMessageReceivedAction, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_sharedDeviceAllowlistAction(acc, msg) do
+        try do
+          case msg.sharedDeviceAllowlistAction do
+            nil -> acc
+            _ -> [acc, "\xF2\x05", Protox.Encode.encode_message(msg.sharedDeviceAllowlistAction)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:sharedDeviceAllowlistAction, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_contactManagerMetadataAction(acc, msg) do
+        try do
+          case msg.contactManagerMetadataAction do
+            nil -> acc
+            _ -> [acc, "\xFA\x05", Protox.Encode.encode_message(msg.contactManagerMetadataAction)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :contactManagerMetadataAction,
+                      "invalid field value"
+                    ),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_businessFolderActivationAction(acc, msg) do
+        try do
+          case msg.businessFolderActivationAction do
+            nil ->
+              acc
+
+            _ ->
+              [acc, "\x82\x06", Protox.Encode.encode_message(msg.businessFolderActivationAction)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :businessFolderActivationAction,
+                      "invalid field value"
+                    ),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -2301,6 +2380,66 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
                    )
                ], rest}
 
+            {92, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 deviceCapabilitiesV2:
+                   Protox.MergeMessage.merge(
+                     msg.deviceCapabilitiesV2,
+                     WAWebProtobufsDeviceCapabilities.DeviceCapabilities.decode!(delimited)
+                   )
+               ], rest}
+
+            {93, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 ctwaMessageReceivedAction:
+                   Protox.MergeMessage.merge(
+                     msg.ctwaMessageReceivedAction,
+                     WAWebProtobufSyncAction.CtwaMessageReceivedAction.decode!(delimited)
+                   )
+               ], rest}
+
+            {94, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 sharedDeviceAllowlistAction:
+                   Protox.MergeMessage.merge(
+                     msg.sharedDeviceAllowlistAction,
+                     WAWebProtobufSyncAction.SharedDeviceAllowlistAction.decode!(delimited)
+                   )
+               ], rest}
+
+            {95, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 contactManagerMetadataAction:
+                   Protox.MergeMessage.merge(
+                     msg.contactManagerMetadataAction,
+                     WAWebProtobufSyncAction.ContactManagerMetadataAction.decode!(delimited)
+                   )
+               ], rest}
+
+            {96, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 businessFolderActivationAction:
+                   Protox.MergeMessage.merge(
+                     msg.businessFolderActivationAction,
+                     WAWebProtobufSyncAction.BusinessFolderActivationAction.decode!(delimited)
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -2576,7 +2715,22 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
            {:message, WAWebProtobufSyncAction.BubbleLockMessageAction}},
         91 =>
           {:labelSublistAction, {:scalar, nil},
-           {:message, WAWebProtobufSyncAction.LabelSublistAction}}
+           {:message, WAWebProtobufSyncAction.LabelSublistAction}},
+        92 =>
+          {:deviceCapabilitiesV2, {:scalar, nil},
+           {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities}},
+        93 =>
+          {:ctwaMessageReceivedAction, {:scalar, nil},
+           {:message, WAWebProtobufSyncAction.CtwaMessageReceivedAction}},
+        94 =>
+          {:sharedDeviceAllowlistAction, {:scalar, nil},
+           {:message, WAWebProtobufSyncAction.SharedDeviceAllowlistAction}},
+        95 =>
+          {:contactManagerMetadataAction, {:scalar, nil},
+           {:message, WAWebProtobufSyncAction.ContactManagerMetadataAction}},
+        96 =>
+          {:businessFolderActivationAction, {:scalar, nil},
+           {:message, WAWebProtobufSyncAction.BusinessFolderActivationAction}}
       }
     end
 
@@ -2612,6 +2766,8 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
            {:message, WAWebProtobufSyncAction.BusinessBroadcastInsightsAction}},
         businessBroadcastListAction:
           {69, {:scalar, nil}, {:message, WAWebProtobufSyncAction.BusinessBroadcastListAction}},
+        businessFolderActivationAction:
+          {96, {:scalar, nil}, {:message, WAWebProtobufSyncAction.BusinessFolderActivationAction}},
         callLogAction: {42, {:scalar, nil}, {:message, WAWebProtobufSyncAction.CallLogAction}},
         chatAssignment:
           {35, {:scalar, nil}, {:message, WAWebProtobufSyncAction.ChatAssignmentAction}},
@@ -2625,6 +2781,10 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
         coexV2VersionAction:
           {88, {:scalar, nil}, {:message, WAWebProtobufSyncAction.CoexV2VersionAction}},
         contactAction: {3, {:scalar, nil}, {:message, WAWebProtobufSyncAction.ContactAction}},
+        contactManagerMetadataAction:
+          {95, {:scalar, nil}, {:message, WAWebProtobufSyncAction.ContactManagerMetadataAction}},
+        ctwaMessageReceivedAction:
+          {93, {:scalar, nil}, {:message, WAWebProtobufSyncAction.CtwaMessageReceivedAction}},
         ctwaPerCustomerDataSharingAction:
           {62, {:scalar, nil},
            {:message, WAWebProtobufSyncAction.CtwaPerCustomerDataSharingAction}},
@@ -2642,6 +2802,8 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
           {66, {:scalar, nil}, {:message, WAWebProtobufSyncAction.DetectedOutcomesStatusAction}},
         deviceCapabilities:
           {54, {:scalar, nil}, {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities}},
+        deviceCapabilitiesV2:
+          {92, {:scalar, nil}, {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities}},
         externalWebBetaAction:
           {40, {:scalar, nil}, {:message, WAWebProtobufSyncAction.ExternalWebBetaAction}},
         favoritesAction:
@@ -2716,6 +2878,8 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
           {34, {:scalar, nil}, {:message, WAWebProtobufSyncAction.RemoveRecentStickerAction}},
         settingsSyncAction:
           {78, {:scalar, nil}, {:message, WAWebProtobufSyncAction.SettingsSyncAction}},
+        sharedDeviceAllowlistAction:
+          {94, {:scalar, nil}, {:message, WAWebProtobufSyncAction.SharedDeviceAllowlistAction}},
         starAction: {2, {:scalar, nil}, {:message, WAWebProtobufSyncAction.StarAction}},
         statusPostOptInNotificationPreferencesAction:
           {71, {:scalar, nil},
@@ -3492,6 +3656,51 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
           name: :labelSublistAction,
           tag: 91,
           type: {:message, WAWebProtobufSyncAction.LabelSublistAction}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "deviceCapabilitiesV2",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :deviceCapabilitiesV2,
+          tag: 92,
+          type: {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "ctwaMessageReceivedAction",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :ctwaMessageReceivedAction,
+          tag: 93,
+          type: {:message, WAWebProtobufSyncAction.CtwaMessageReceivedAction}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "sharedDeviceAllowlistAction",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :sharedDeviceAllowlistAction,
+          tag: 94,
+          type: {:message, WAWebProtobufSyncAction.SharedDeviceAllowlistAction}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "contactManagerMetadataAction",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :contactManagerMetadataAction,
+          tag: 95,
+          type: {:message, WAWebProtobufSyncAction.ContactManagerMetadataAction}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "businessFolderActivationAction",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :businessFolderActivationAction,
+          tag: 96,
+          type: {:message, WAWebProtobufSyncAction.BusinessFolderActivationAction}
         }
       ]
     end
@@ -5882,6 +6091,151 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
 
         []
       ),
+      (
+        def field_def(:deviceCapabilitiesV2) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "deviceCapabilitiesV2",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :deviceCapabilitiesV2,
+             tag: 92,
+             type: {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities}
+           }}
+        end
+
+        def field_def("deviceCapabilitiesV2") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "deviceCapabilitiesV2",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :deviceCapabilitiesV2,
+             tag: 92,
+             type: {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:ctwaMessageReceivedAction) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "ctwaMessageReceivedAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :ctwaMessageReceivedAction,
+             tag: 93,
+             type: {:message, WAWebProtobufSyncAction.CtwaMessageReceivedAction}
+           }}
+        end
+
+        def field_def("ctwaMessageReceivedAction") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "ctwaMessageReceivedAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :ctwaMessageReceivedAction,
+             tag: 93,
+             type: {:message, WAWebProtobufSyncAction.CtwaMessageReceivedAction}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:sharedDeviceAllowlistAction) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "sharedDeviceAllowlistAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :sharedDeviceAllowlistAction,
+             tag: 94,
+             type: {:message, WAWebProtobufSyncAction.SharedDeviceAllowlistAction}
+           }}
+        end
+
+        def field_def("sharedDeviceAllowlistAction") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "sharedDeviceAllowlistAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :sharedDeviceAllowlistAction,
+             tag: 94,
+             type: {:message, WAWebProtobufSyncAction.SharedDeviceAllowlistAction}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:contactManagerMetadataAction) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "contactManagerMetadataAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :contactManagerMetadataAction,
+             tag: 95,
+             type: {:message, WAWebProtobufSyncAction.ContactManagerMetadataAction}
+           }}
+        end
+
+        def field_def("contactManagerMetadataAction") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "contactManagerMetadataAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :contactManagerMetadataAction,
+             tag: 95,
+             type: {:message, WAWebProtobufSyncAction.ContactManagerMetadataAction}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:businessFolderActivationAction) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "businessFolderActivationAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :businessFolderActivationAction,
+             tag: 96,
+             type: {:message, WAWebProtobufSyncAction.BusinessFolderActivationAction}
+           }}
+        end
+
+        def field_def("businessFolderActivationAction") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "businessFolderActivationAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :businessFolderActivationAction,
+             tag: 96,
+             type: {:message, WAWebProtobufSyncAction.BusinessFolderActivationAction}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -6165,6 +6519,21 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
       {:ok, nil}
     end,
     def default(:labelSublistAction) do
+      {:ok, nil}
+    end,
+    def default(:deviceCapabilitiesV2) do
+      {:ok, nil}
+    end,
+    def default(:ctwaMessageReceivedAction) do
+      {:ok, nil}
+    end,
+    def default(:sharedDeviceAllowlistAction) do
+      {:ok, nil}
+    end,
+    def default(:contactManagerMetadataAction) do
+      {:ok, nil}
+    end,
+    def default(:businessFolderActivationAction) do
       {:ok, nil}
     end,
     def default(_) do

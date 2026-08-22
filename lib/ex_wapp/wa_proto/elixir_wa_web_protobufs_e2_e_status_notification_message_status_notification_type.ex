@@ -48,6 +48,15 @@ defmodule WAWebProtobufsE2E.StatusNotificationMessage.StatusNotificationType do
         def encode("STATUS_QUESTION_ANSWER_RESHARE") do
           3
         end
+      ),
+      (
+        def encode(:STATUS_GROUP_STATUS_REPLY) do
+          4
+        end
+
+        def encode("STATUS_GROUP_STATUS_REPLY") do
+          4
+        end
       )
     ]
 
@@ -68,6 +77,9 @@ defmodule WAWebProtobufsE2E.StatusNotificationMessage.StatusNotificationType do
       end,
       def decode(3) do
         :STATUS_QUESTION_ANSWER_RESHARE
+      end,
+      def decode(4) do
+        :STATUS_GROUP_STATUS_REPLY
       end
     ]
 
@@ -81,7 +93,8 @@ defmodule WAWebProtobufsE2E.StatusNotificationMessage.StatusNotificationType do
         {0, :UNKNOWN},
         {1, :STATUS_ADD_YOURS},
         {2, :STATUS_RESHARE},
-        {3, :STATUS_QUESTION_ANSWER_RESHARE}
+        {3, :STATUS_QUESTION_ANSWER_RESHARE},
+        {4, :STATUS_GROUP_STATUS_REPLY}
       ]
     end
 
@@ -98,6 +111,9 @@ defmodule WAWebProtobufsE2E.StatusNotificationMessage.StatusNotificationType do
           true
         end,
         def has_constant?(:STATUS_QUESTION_ANSWER_RESHARE) do
+          true
+        end,
+        def has_constant?(:STATUS_GROUP_STATUS_REPLY) do
           true
         end
       ]

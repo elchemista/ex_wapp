@@ -66,6 +66,15 @@ defmodule WAWebProtobufSyncAction.BizAISettingsNudgeAction.BizAISettingsCategory
         def encode("LEAD_GEN") do
           5
         end
+      ),
+      (
+        def encode(:HANDOFF_REMOVAL_TIMING) do
+          6
+        end
+
+        def encode("HANDOFF_REMOVAL_TIMING") do
+          6
+        end
       )
     ]
 
@@ -92,6 +101,9 @@ defmodule WAWebProtobufSyncAction.BizAISettingsNudgeAction.BizAISettingsCategory
       end,
       def decode(5) do
         :LEAD_GEN
+      end,
+      def decode(6) do
+        :HANDOFF_REMOVAL_TIMING
       end
     ]
 
@@ -107,7 +119,8 @@ defmodule WAWebProtobufSyncAction.BizAISettingsNudgeAction.BizAISettingsCategory
         {2, :RESPONSE_SETTINGS},
         {3, :EXAMPLE_RESPONSES},
         {4, :KNOWLEDGE},
-        {5, :LEAD_GEN}
+        {5, :LEAD_GEN},
+        {6, :HANDOFF_REMOVAL_TIMING}
       ]
     end
 
@@ -130,6 +143,9 @@ defmodule WAWebProtobufSyncAction.BizAISettingsNudgeAction.BizAISettingsCategory
           true
         end,
         def has_constant?(:LEAD_GEN) do
+          true
+        end,
+        def has_constant?(:HANDOFF_REMOVAL_TIMING) do
           true
         end
       ]

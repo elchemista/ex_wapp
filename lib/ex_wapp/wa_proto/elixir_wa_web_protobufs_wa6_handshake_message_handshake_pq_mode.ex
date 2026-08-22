@@ -41,6 +41,15 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.HandshakePqMode do
         end
       ),
       (
+        def encode(:XXKEM_EPH) do
+          9
+        end
+
+        def encode("XXKEM_EPH") do
+          9
+        end
+      ),
+      (
         def encode(:WA_CLASSICAL) do
           3
         end
@@ -128,6 +137,9 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.HandshakePqMode do
       end,
       def decode(8) do
         :IKKEM_2
+      end,
+      def decode(9) do
+        :XXKEM_EPH
       end
     ]
 
@@ -141,6 +153,7 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.HandshakePqMode do
         {0, :HANDSHAKE_PQ_MODE_UNKNOWN},
         {1, :XXKEM},
         {2, :XXKEM_FS},
+        {9, :XXKEM_EPH},
         {3, :WA_CLASSICAL},
         {4, :WA_PQ},
         {5, :IKKEM},
@@ -160,6 +173,9 @@ defmodule WAWebProtobufsWa6.HandshakeMessage.HandshakePqMode do
           true
         end,
         def has_constant?(:XXKEM_FS) do
+          true
+        end,
+        def has_constant?(:XXKEM_EPH) do
           true
         end,
         def has_constant?(:WA_CLASSICAL) do

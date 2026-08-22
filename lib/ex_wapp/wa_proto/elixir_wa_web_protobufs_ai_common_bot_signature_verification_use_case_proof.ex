@@ -1,7 +1,12 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof do
   @moduledoc false
-  defstruct version: nil, useCase: nil, signature: nil, certificateChain: [], __uf__: []
+  defstruct version: nil,
+            useCase: nil,
+            signature: nil,
+            certificateChain: [],
+            certificateChainSki: [],
+            __uf__: []
 
   (
     (
@@ -21,6 +26,7 @@ defmodule WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof do
         |> encode_useCase(msg)
         |> encode_signature(msg)
         |> encode_certificateChain(msg)
+        |> encode_certificateChainSki(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -87,6 +93,26 @@ defmodule WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:certificateChain, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_certificateChainSki(acc, msg) do
+        try do
+          case msg.certificateChainSki do
+            [] ->
+              acc
+
+            values ->
+              [
+                acc,
+                Enum.reduce(values, [], fn value, acc ->
+                  [acc, "*", Protox.Encode.encode_message(value)]
+                end)
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:certificateChainSki, "invalid field value"),
                     __STACKTRACE__
         end
       end
@@ -170,6 +196,20 @@ defmodule WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[certificateChain: msg.certificateChain ++ [delimited]], rest}
 
+            {5, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 certificateChainSki:
+                   msg.certificateChainSki ++
+                     [
+                       WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof.CertificateSKI.decode!(
+                         delimited
+                       )
+                     ]
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -237,7 +277,10 @@ defmodule WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof do
            {:enum,
             WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof.BotSignatureUseCase}},
         3 => {:signature, {:scalar, ""}, :bytes},
-        4 => {:certificateChain, :unpacked, :bytes}
+        4 => {:certificateChain, :unpacked, :bytes},
+        5 =>
+          {:certificateChainSki, :unpacked,
+           {:message, WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof.CertificateSKI}}
       }
     end
 
@@ -248,6 +291,9 @@ defmodule WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof do
     def defs_by_name() do
       %{
         certificateChain: {4, :unpacked, :bytes},
+        certificateChainSki:
+          {5, :unpacked,
+           {:message, WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof.CertificateSKI}},
         signature: {3, {:scalar, ""}, :bytes},
         useCase:
           {2, {:scalar, :UNSPECIFIED},
@@ -299,6 +345,16 @@ defmodule WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof do
           name: :certificateChain,
           tag: 4,
           type: :bytes
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "certificateChainSki",
+          kind: :unpacked,
+          label: :repeated,
+          name: :certificateChainSki,
+          tag: 5,
+          type:
+            {:message, WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof.CertificateSKI}
         }
       ]
     end
@@ -425,6 +481,39 @@ defmodule WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof do
 
         []
       ),
+      (
+        def field_def(:certificateChainSki) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "certificateChainSki",
+             kind: :unpacked,
+             label: :repeated,
+             name: :certificateChainSki,
+             tag: 5,
+             type:
+               {:message,
+                WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof.CertificateSKI}
+           }}
+        end
+
+        def field_def("certificateChainSki") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "certificateChainSki",
+             kind: :unpacked,
+             label: :repeated,
+             name: :certificateChainSki,
+             tag: 5,
+             type:
+               {:message,
+                WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof.CertificateSKI}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -474,6 +563,9 @@ defmodule WAWebProtobufsAICommon.BotSignatureVerificationUseCaseProof do
       {:ok, ""}
     end,
     def default(:certificateChain) do
+      {:error, :no_default_value}
+    end,
+    def default(:certificateChainSki) do
       {:error, :no_default_value}
     end,
     def default(_) do

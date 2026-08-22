@@ -56,9 +56,18 @@ defmodule ExWapp.Media.Crypto do
   end
 
   @doc """
-  Decrypts an encrypted media body and validates all available integrity checks.
+  Decrypts an encrypted media body, or accepts a server-declared unencrypted
+  body when no encrypted SHA-256 is present, and validates all available
+  integrity checks.
   """
   @spec decrypt_download(binary(), Media.Ref.t()) :: {:ok, binary()} | {:error, term()}
+  def decrypt_download(body, %Media.Ref{file_enc_sha256: nil} = ref) when is_binary(body) do
+    with :ok <- validate_plain_hash(body, ref.file_sha256),
+         :ok <- validate_file_length(body, ref.file_length) do
+      {:ok, body}
+    end
+  end
+
   def decrypt_download(body, %Media.Ref{} = ref) when is_binary(body) do
     with :ok <- validate_ref(ref),
          :ok <- validate_body_size(body),
@@ -127,9 +136,7 @@ defmodule ExWapp.Media.Crypto do
 
   defp secure_compare(_left, _right), do: false
 
-  @spec validate_enc_hash(binary(), binary() | nil) :: :ok | {:error, :invalid_media_enc_sha256}
-  defp validate_enc_hash(_body, nil), do: :ok
-
+  @spec validate_enc_hash(binary(), binary()) :: :ok | {:error, :invalid_media_enc_sha256}
   defp validate_enc_hash(body, hash) when is_binary(hash) do
     if :crypto.hash(:sha256, body) == hash, do: :ok, else: {:error, :invalid_media_enc_sha256}
   end

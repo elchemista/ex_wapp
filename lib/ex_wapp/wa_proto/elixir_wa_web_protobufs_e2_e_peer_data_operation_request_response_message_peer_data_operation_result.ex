@@ -13,6 +13,7 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
             historySyncChunkRetryResponse: nil,
             flowResponsesCsvBundle: nil,
             bizBroadcastInsightsContactListResponse: nil,
+            contactRefreshResponse: nil,
             __uf__: []
 
   (
@@ -41,6 +42,7 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
         |> encode_historySyncChunkRetryResponse(msg)
         |> encode_flowResponsesCsvBundle(msg)
         |> encode_bizBroadcastInsightsContactListResponse(msg)
+        |> encode_contactRefreshResponse(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -242,6 +244,18 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
                       :bizBroadcastInsightsContactListResponse,
                       "invalid field value"
                     ),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_contactRefreshResponse(acc, msg) do
+        try do
+          case msg.contactRefreshResponse do
+            nil -> acc
+            _ -> [acc, "j", Protox.Encode.encode_message(msg.contactRefreshResponse)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:contactRefreshResponse, "invalid field value"),
                     __STACKTRACE__
         end
       end
@@ -462,6 +476,20 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
                    )
                ], rest}
 
+            {13, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 contactRefreshResponse:
+                   Protox.MergeMessage.merge(
+                     msg.contactRefreshResponse,
+                     WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.ContactRefreshResponse.decode!(
+                       delimited
+                     )
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -566,7 +594,11 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
         12 =>
           {:bizBroadcastInsightsContactListResponse, {:scalar, nil},
            {:message,
-            WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.BizBroadcastInsightsContactListResponse}}
+            WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.BizBroadcastInsightsContactListResponse}},
+        13 =>
+          {:contactRefreshResponse, {:scalar, nil},
+           {:message,
+            WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.ContactRefreshResponse}}
       }
     end
 
@@ -588,6 +620,10 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
           {7, {:scalar, nil},
            {:message,
             WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.CompanionMetaNonceFetchResponse}},
+        contactRefreshResponse:
+          {13, {:scalar, nil},
+           {:message,
+            WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.ContactRefreshResponse}},
         flowResponsesCsvBundle:
           {11, {:scalar, nil},
            {:message,
@@ -754,6 +790,17 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
           type:
             {:message,
              WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.BizBroadcastInsightsContactListResponse}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "contactRefreshResponse",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :contactRefreshResponse,
+          tag: 13,
+          type:
+            {:message,
+             WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.ContactRefreshResponse}
         }
       ]
     end
@@ -1148,6 +1195,39 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
 
         []
       ),
+      (
+        def field_def(:contactRefreshResponse) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "contactRefreshResponse",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :contactRefreshResponse,
+             tag: 13,
+             type:
+               {:message,
+                WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.ContactRefreshResponse}
+           }}
+        end
+
+        def field_def("contactRefreshResponse") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "contactRefreshResponse",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :contactRefreshResponse,
+             tag: 13,
+             type:
+               {:message,
+                WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOperationResult.ContactRefreshResponse}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -1221,6 +1301,9 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage.PeerDataOper
       {:ok, nil}
     end,
     def default(:bizBroadcastInsightsContactListResponse) do
+      {:ok, nil}
+    end,
+    def default(:contactRefreshResponse) do
       {:ok, nil}
     end,
     def default(_) do

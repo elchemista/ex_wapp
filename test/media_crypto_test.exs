@@ -29,6 +29,24 @@ defmodule ExWapp.MediaCryptoTest do
     assert reason in [:invalid_media_hmac, :invalid_media_enc_sha256]
   end
 
+  test "decrypt_download accepts unencrypted media without an encrypted hash" do
+    plaintext = "new unencrypted media payload"
+
+    ref = %Media.Ref{
+      type: :image,
+      media_key: :binary.copy(<<7>>, 32),
+      file_sha256: :crypto.hash(:sha256, plaintext),
+      file_enc_sha256: nil,
+      file_length: byte_size(plaintext)
+    }
+
+    assert {:ok, ^plaintext} = Media.Crypto.decrypt_download(plaintext, ref)
+    assert {:ok, ^plaintext} = Media.Crypto.decrypt_download(plaintext, %{ref | media_key: nil})
+
+    assert {:error, :invalid_media_sha256} =
+             Media.Crypto.decrypt_download(plaintext <> "tampered", ref)
+  end
+
   test "validates encrypted hash, plaintext hash, length and media key" do
     assert {:ok, upload, body} = Media.Crypto.encrypt_upload("document-bytes", :document)
     ref = Media.ref_from_upload(upload)
@@ -74,9 +92,16 @@ defmodule ExWapp.MediaCryptoTest do
       :crypto.mac(:hmac, :sha256, keys.mac_key, keys.iv <> bad_ciphertext)
       |> binary_part(0, 10)
 
-    padding_ref = %{ref | file_sha256: nil, file_enc_sha256: nil, file_length: nil}
+    bad_body = bad_ciphertext <> bad_mac
+
+    padding_ref = %{
+      ref
+      | file_sha256: nil,
+        file_enc_sha256: :crypto.hash(:sha256, bad_body),
+        file_length: nil
+    }
 
     assert {:error, :invalid_padding} =
-             Media.Crypto.decrypt_download(bad_ciphertext <> bad_mac, padding_ref)
+             Media.Crypto.decrypt_download(bad_body, padding_ref)
   end
 end

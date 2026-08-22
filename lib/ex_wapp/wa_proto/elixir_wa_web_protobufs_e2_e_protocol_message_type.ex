@@ -300,15 +300,6 @@ defmodule WAWebProtobufsE2E.ProtocolMessage.Type do
         def encode("COEX_STATE_SYNC") do
           37
         end
-      ),
-      (
-        def encode(:SYNC_REQUEST_MUTATION_RETRY) do
-          38
-        end
-
-        def encode("SYNC_REQUEST_MUTATION_RETRY") do
-          38
-        end
       )
     ]
 
@@ -318,41 +309,92 @@ defmodule WAWebProtobufsE2E.ProtocolMessage.Type do
 
     @spec decode(integer()) :: atom() | integer()
     [
-      def decode(18) do
-        :REQUEST_WELCOME_MESSAGE
+      def decode(0) do
+        :REVOKE
+      end,
+      def decode(3) do
+        :EPHEMERAL_SETTING
       end,
       def decode(4) do
         :EPHEMERAL_SYNC_RESPONSE
       end,
-      def decode(34) do
-        :CHAT_THEME_SETTING
+      def decode(5) do
+        :HISTORY_SYNC_NOTIFICATION
       end,
-      def decode(19) do
-        :BOT_FEEDBACK_MESSAGE
-      end,
-      def decode(29) do
-        :AI_QUERY_FANOUT
+      def decode(6) do
+        :APP_STATE_SYNC_KEY_SHARE
       end,
       def decode(7) do
         :APP_STATE_SYNC_KEY_REQUEST
       end,
-      def decode(38) do
-        :SYNC_REQUEST_MUTATION_RETRY
-      end,
-      def decode(31) do
-        :AI_MEDIA_COLLECTION_MESSAGE
-      end,
       def decode(8) do
         :MSG_FANOUT_BACKFILL_REQUEST
+      end,
+      def decode(9) do
+        :INITIAL_SECURITY_NOTIFICATION_SETTING_SYNC
       end,
       def decode(10) do
         :APP_STATE_FATAL_EXCEPTION_NOTIFICATION
       end,
+      def decode(11) do
+        :SHARE_PHONE_NUMBER
+      end,
+      def decode(14) do
+        :MESSAGE_EDIT
+      end,
+      def decode(16) do
+        :PEER_DATA_OPERATION_REQUEST_MESSAGE
+      end,
+      def decode(17) do
+        :PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE
+      end,
+      def decode(18) do
+        :REQUEST_WELCOME_MESSAGE
+      end,
+      def decode(19) do
+        :BOT_FEEDBACK_MESSAGE
+      end,
+      def decode(20) do
+        :MEDIA_NOTIFY_MESSAGE
+      end,
+      def decode(21) do
+        :CLOUD_API_THREAD_CONTROL_NOTIFICATION
+      end,
+      def decode(22) do
+        :LID_MIGRATION_MAPPING_SYNC
+      end,
       def decode(23) do
         :REMINDER_MESSAGE
       end,
-      def decode(9) do
-        :INITIAL_SECURITY_NOTIFICATION_SETTING_SYNC
+      def decode(24) do
+        :BOT_MEMU_ONBOARDING_MESSAGE
+      end,
+      def decode(25) do
+        :STATUS_MENTION_MESSAGE
+      end,
+      def decode(26) do
+        :STOP_GENERATION_MESSAGE
+      end,
+      def decode(27) do
+        :LIMIT_SHARING
+      end,
+      def decode(28) do
+        :AI_PSI_METADATA
+      end,
+      def decode(29) do
+        :AI_QUERY_FANOUT
+      end,
+      def decode(30) do
+        :GROUP_MEMBER_LABEL_CHANGE
+      end,
+      def decode(31) do
+        :AI_MEDIA_COLLECTION_MESSAGE
+      end,
+      def decode(32) do
+        :MESSAGE_UNSCHEDULE
+      end,
+      def decode(34) do
+        :CHAT_THEME_SETTING
       end,
       def decode(35) do
         :AI_METADATA_OPERATION
@@ -360,62 +402,8 @@ defmodule WAWebProtobufsE2E.ProtocolMessage.Type do
       def decode(36) do
         :MARK_AS_VERIFIED_ACTION
       end,
-      def decode(32) do
-        :MESSAGE_UNSCHEDULE
-      end,
-      def decode(25) do
-        :STATUS_MENTION_MESSAGE
-      end,
-      def decode(28) do
-        :AI_PSI_METADATA
-      end,
-      def decode(20) do
-        :MEDIA_NOTIFY_MESSAGE
-      end,
-      def decode(6) do
-        :APP_STATE_SYNC_KEY_SHARE
-      end,
-      def decode(11) do
-        :SHARE_PHONE_NUMBER
-      end,
-      def decode(17) do
-        :PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE
-      end,
-      def decode(24) do
-        :BOT_MEMU_ONBOARDING_MESSAGE
-      end,
       def decode(37) do
         :COEX_STATE_SYNC
-      end,
-      def decode(14) do
-        :MESSAGE_EDIT
-      end,
-      def decode(3) do
-        :EPHEMERAL_SETTING
-      end,
-      def decode(16) do
-        :PEER_DATA_OPERATION_REQUEST_MESSAGE
-      end,
-      def decode(30) do
-        :GROUP_MEMBER_LABEL_CHANGE
-      end,
-      def decode(21) do
-        :CLOUD_API_THREAD_CONTROL_NOTIFICATION
-      end,
-      def decode(5) do
-        :HISTORY_SYNC_NOTIFICATION
-      end,
-      def decode(0) do
-        :REVOKE
-      end,
-      def decode(27) do
-        :LIMIT_SHARING
-      end,
-      def decode(26) do
-        :STOP_GENERATION_MESSAGE
-      end,
-      def decode(22) do
-        :LID_MIGRATION_MAPPING_SYNC
       end
     ]
 
@@ -457,8 +445,7 @@ defmodule WAWebProtobufsE2E.ProtocolMessage.Type do
         {34, :CHAT_THEME_SETTING},
         {35, :AI_METADATA_OPERATION},
         {36, :MARK_AS_VERIFIED_ACTION},
-        {37, :COEX_STATE_SYNC},
-        {38, :SYNC_REQUEST_MUTATION_RETRY}
+        {37, :COEX_STATE_SYNC}
       ]
     end
 
@@ -559,9 +546,6 @@ defmodule WAWebProtobufsE2E.ProtocolMessage.Type do
           true
         end,
         def has_constant?(:COEX_STATE_SYNC) do
-          true
-        end,
-        def has_constant?(:SYNC_REQUEST_MUTATION_RETRY) do
           true
         end
       ]

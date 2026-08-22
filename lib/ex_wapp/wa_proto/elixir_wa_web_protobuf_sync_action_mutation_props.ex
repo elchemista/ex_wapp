@@ -779,6 +779,51 @@ defmodule WAWebProtobufSyncAction.MutationProps do
         end
       ),
       (
+        def encode(:DEVICE_CAPABILITIES_V2) do
+          92
+        end
+
+        def encode("DEVICE_CAPABILITIES_V2") do
+          92
+        end
+      ),
+      (
+        def encode(:CTWA_MESSAGE_RECEIVED_ACTION) do
+          93
+        end
+
+        def encode("CTWA_MESSAGE_RECEIVED_ACTION") do
+          93
+        end
+      ),
+      (
+        def encode(:SHARED_DEVICE_ALLOWLIST_ACTION) do
+          94
+        end
+
+        def encode("SHARED_DEVICE_ALLOWLIST_ACTION") do
+          94
+        end
+      ),
+      (
+        def encode(:CONTACT_MANAGER_METADATA_ACTION) do
+          95
+        end
+
+        def encode("CONTACT_MANAGER_METADATA_ACTION") do
+          95
+        end
+      ),
+      (
+        def encode(:BUSINESS_FOLDER_ACTIVATION_ACTION) do
+          96
+        end
+
+        def encode("BUSINESS_FOLDER_ACTIVATION_ACTION") do
+          96
+        end
+      ),
+      (
         def encode(:SHARE_OWN_PN) do
           10001
         end
@@ -819,6 +864,12 @@ defmodule WAWebProtobufSyncAction.MutationProps do
       def decode(18) do
         :DELETE_MESSAGE_FOR_ME_ACTION
       end,
+      def decode(96) do
+        :BUSINESS_FOLDER_ACTIVATION_ACTION
+      end,
+      def decode(94) do
+        :SHARED_DEVICE_ALLOWLIST_ACTION
+      end,
       def decode(84) do
         :SUBSCRIPTIONS_SYNC_V2_ACTION
       end,
@@ -831,6 +882,9 @@ defmodule WAWebProtobufSyncAction.MutationProps do
       def decode(68) do
         :MAIBA_AI_FEATURES_CONTROL_ACTION
       end,
+      def decode(93) do
+        :CTWA_MESSAGE_RECEIVED_ACTION
+      end,
       def decode(34) do
         :REMOVE_RECENT_STICKER_ACTION
       end,
@@ -839,6 +893,9 @@ defmodule WAWebProtobufSyncAction.MutationProps do
       end,
       def decode(52) do
         :WAMO_USER_IDENTIFIER_ACTION
+      end,
+      def decode(92) do
+        :DEVICE_CAPABILITIES_V2
       end,
       def decode(19) do
         :KEY_EXPIRATION
@@ -965,6 +1022,9 @@ defmodule WAWebProtobufSyncAction.MutationProps do
       end,
       def decode(6) do
         :SECURITY_NOTIFICATION_SETTING
+      end,
+      def decode(95) do
+        :CONTACT_MANAGER_METADATA_ACTION
       end,
       def decode(83) do
         :CUSTOMER_DATA_ACTION
@@ -1171,6 +1231,11 @@ defmodule WAWebProtobufSyncAction.MutationProps do
         {89, :WASA_ROOT_SECRET_ACTION},
         {90, :BUBBLE_LOCK_MESSAGE_ACTION},
         {91, :LABEL_SUBLIST_ACTION},
+        {92, :DEVICE_CAPABILITIES_V2},
+        {93, :CTWA_MESSAGE_RECEIVED_ACTION},
+        {94, :SHARED_DEVICE_ALLOWLIST_ACTION},
+        {95, :CONTACT_MANAGER_METADATA_ACTION},
+        {96, :BUSINESS_FOLDER_ACTIVATION_ACTION},
         {10001, :SHARE_OWN_PN},
         {10002, :BUSINESS_BROADCAST_ACTION},
         {10003, :AI_THREAD_DELETE_ACTION}
@@ -1433,6 +1498,21 @@ defmodule WAWebProtobufSyncAction.MutationProps do
           true
         end,
         def has_constant?(:LABEL_SUBLIST_ACTION) do
+          true
+        end,
+        def has_constant?(:DEVICE_CAPABILITIES_V2) do
+          true
+        end,
+        def has_constant?(:CTWA_MESSAGE_RECEIVED_ACTION) do
+          true
+        end,
+        def has_constant?(:SHARED_DEVICE_ALLOWLIST_ACTION) do
+          true
+        end,
+        def has_constant?(:CONTACT_MANAGER_METADATA_ACTION) do
+          true
+        end,
+        def has_constant?(:BUSINESS_FOLDER_ACTIVATION_ACTION) do
           true
         end,
         def has_constant?(:SHARE_OWN_PN) do

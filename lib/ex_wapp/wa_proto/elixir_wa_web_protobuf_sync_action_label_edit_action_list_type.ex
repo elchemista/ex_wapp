@@ -165,6 +165,15 @@ defmodule WAWebProtobufSyncAction.LabelEditAction.ListType do
         def encode("LEAD") do
           16
         end
+      ),
+      (
+        def encode(:MENTIONS_AND_REPLIES) do
+          17
+        end
+
+        def encode("MENTIONS_AND_REPLIES") do
+          17
+        end
       )
     ]
 
@@ -224,6 +233,9 @@ defmodule WAWebProtobufSyncAction.LabelEditAction.ListType do
       end,
       def decode(16) do
         :LEAD
+      end,
+      def decode(17) do
+        :MENTIONS_AND_REPLIES
       end
     ]
 
@@ -250,7 +262,8 @@ defmodule WAWebProtobufSyncAction.LabelEditAction.ListType do
         {13, :LOCKED},
         {14, :INVITES},
         {15, :THIRD_PARTY},
-        {16, :LEAD}
+        {16, :LEAD},
+        {17, :MENTIONS_AND_REPLIES}
       ]
     end
 
@@ -306,6 +319,9 @@ defmodule WAWebProtobufSyncAction.LabelEditAction.ListType do
           true
         end,
         def has_constant?(:LEAD) do
+          true
+        end,
+        def has_constant?(:MENTIONS_AND_REPLIES) do
           true
         end
       ]

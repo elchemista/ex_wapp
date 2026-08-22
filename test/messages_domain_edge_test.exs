@@ -452,10 +452,10 @@ defmodule ExWapp.MessagesDomainEdgeTest do
                Messages.build_typing(@jid, false)
     end
 
-    test "typing with a local identity carries from and to" do
+    test "typing omits the obsolete local identity attribute" do
       node = Messages.build_typing(@jid, "15550002222@s.whatsapp.net", true)
 
-      assert node.attrs == %{"to" => @jid, "from" => "15550002222@s.whatsapp.net"}
+      assert node.attrs == %{"to" => @jid}
     end
 
     test "presence subscription is a bare subscribe node" do

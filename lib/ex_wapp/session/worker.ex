@@ -639,14 +639,8 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_call({:send_typing, jid, composing}, _from, %{conn: conn} = state) do
-    case Account.local_account_chatstate_jid(state.store, jid) do
-      "" ->
-        {:reply, {:error, :local_identity_unavailable}, state}
-
-      from_jid ->
-        node = Messages.build_typing(jid, from_jid, composing)
-        {:reply, state.transport_mod.send_node(conn, node), state}
-    end
+    node = Messages.build_typing(jid, composing)
+    {:reply, state.transport_mod.send_node(conn, node), state}
   end
 
   def handle_call({:send_iq, node, message_id}, from, %{status: status, conn: conn} = state)

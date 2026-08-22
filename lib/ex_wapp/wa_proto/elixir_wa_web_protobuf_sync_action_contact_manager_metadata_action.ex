@@ -1,7 +1,7 @@
 # credo:disable-for-this-file
-defmodule WAWebProtobufsE2E.SyncRequestMutationRetry do
+defmodule WAWebProtobufSyncAction.ContactManagerMetadataAction do
   @moduledoc false
-  defstruct collections: [], count: nil, __uf__: []
+  defstruct isHidden: nil, __uf__: []
 
   (
     (
@@ -16,41 +16,22 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry do
 
       @spec encode!(struct) :: iodata | no_return
       def encode!(msg) do
-        [] |> encode_collections(msg) |> encode_count(msg) |> encode_unknown_fields(msg)
+        [] |> encode_isHidden(msg) |> encode_unknown_fields(msg)
       end
     )
 
     []
 
     [
-      defp encode_collections(acc, msg) do
+      defp encode_isHidden(acc, msg) do
         try do
-          case msg.collections do
-            [] ->
-              acc
-
-            values ->
-              [
-                acc,
-                Enum.reduce(values, [], fn value, acc ->
-                  [acc, "\n", Protox.Encode.encode_message(value)]
-                end)
-              ]
-          end
-        rescue
-          ArgumentError ->
-            reraise Protox.EncodingError.new(:collections, "invalid field value"), __STACKTRACE__
-        end
-      end,
-      defp encode_count(acc, msg) do
-        try do
-          case msg.count do
+          case msg.isHidden do
             nil -> acc
-            _ -> [acc, "\x10", Protox.Encode.encode_uint32(msg.count)]
+            _ -> [acc, "\b", Protox.Encode.encode_bool(msg.isHidden)]
           end
         rescue
           ArgumentError ->
-            reraise Protox.EncodingError.new(:count, "invalid field value"), __STACKTRACE__
+            reraise Protox.EncodingError.new(:isHidden, "invalid field value"), __STACKTRACE__
         end
       end
     ]
@@ -90,7 +71,7 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry do
       (
         @spec decode!(binary) :: struct | no_return
         def decode!(bytes) do
-          parse_key_value(bytes, struct(WAWebProtobufsE2E.SyncRequestMutationRetry))
+          parse_key_value(bytes, struct(WAWebProtobufSyncAction.ContactManagerMetadataAction))
         end
       )
     )
@@ -108,18 +89,8 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry do
               raise %Protox.IllegalTagError{}
 
             {1, _, bytes} ->
-              {len, bytes} = Protox.Varint.decode(bytes)
-              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
-
-              {[
-                 collections:
-                   msg.collections ++
-                     [WAWebProtobufsE2E.SyncRequestMutationRetry.Collection.decode!(delimited)]
-               ], rest}
-
-            {2, _, bytes} ->
-              {value, rest} = Protox.Decode.parse_uint32(bytes)
-              {[count: value], rest}
+              {value, rest} = Protox.Decode.parse_bool(bytes)
+              {[isHidden: value], rest}
 
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
@@ -154,7 +125,7 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry do
 
       Protox.JsonDecode.decode!(
         input,
-        WAWebProtobufsE2E.SyncRequestMutationRetry,
+        WAWebProtobufSyncAction.ContactManagerMetadataAction,
         &json_library_wrapper.decode!(json_library, &1)
       )
     end
@@ -181,12 +152,7 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry do
             required(non_neg_integer) => {atom, Protox.Types.kind(), Protox.Types.type()}
           }
     def defs() do
-      %{
-        1 =>
-          {:collections, :unpacked,
-           {:message, WAWebProtobufsE2E.SyncRequestMutationRetry.Collection}},
-        2 => {:count, {:scalar, 0}, :uint32}
-      }
+      %{1 => {:isHidden, {:scalar, false}, :bool}}
     end
 
     @deprecated "Use fields_defs()/0 instead"
@@ -194,11 +160,7 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry do
             required(atom) => {non_neg_integer, Protox.Types.kind(), Protox.Types.type()}
           }
     def defs_by_name() do
-      %{
-        collections:
-          {1, :unpacked, {:message, WAWebProtobufsE2E.SyncRequestMutationRetry.Collection}},
-        count: {2, {:scalar, 0}, :uint32}
-      }
+      %{isHidden: {1, {:scalar, false}, :bool}}
     end
   )
 
@@ -208,21 +170,12 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry do
       [
         %{
           __struct__: Protox.Field,
-          json_name: "collections",
-          kind: :unpacked,
-          label: :repeated,
-          name: :collections,
-          tag: 1,
-          type: {:message, WAWebProtobufsE2E.SyncRequestMutationRetry.Collection}
-        },
-        %{
-          __struct__: Protox.Field,
-          json_name: "count",
-          kind: {:scalar, 0},
+          json_name: "isHidden",
+          kind: {:scalar, false},
           label: :optional,
-          name: :count,
-          tag: 2,
-          type: :uint32
+          name: :isHidden,
+          tag: 1,
+          type: :bool
         }
       ]
     end
@@ -230,58 +183,29 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry do
     [
       @spec(field_def(atom) :: {:ok, Protox.Field.t()} | {:error, :no_such_field}),
       (
-        def field_def(:collections) do
+        def field_def(:isHidden) do
           {:ok,
            %{
              __struct__: Protox.Field,
-             json_name: "collections",
-             kind: :unpacked,
-             label: :repeated,
-             name: :collections,
-             tag: 1,
-             type: {:message, WAWebProtobufsE2E.SyncRequestMutationRetry.Collection}
-           }}
-        end
-
-        def field_def("collections") do
-          {:ok,
-           %{
-             __struct__: Protox.Field,
-             json_name: "collections",
-             kind: :unpacked,
-             label: :repeated,
-             name: :collections,
-             tag: 1,
-             type: {:message, WAWebProtobufsE2E.SyncRequestMutationRetry.Collection}
-           }}
-        end
-
-        []
-      ),
-      (
-        def field_def(:count) do
-          {:ok,
-           %{
-             __struct__: Protox.Field,
-             json_name: "count",
-             kind: {:scalar, 0},
+             json_name: "isHidden",
+             kind: {:scalar, false},
              label: :optional,
-             name: :count,
-             tag: 2,
-             type: :uint32
+             name: :isHidden,
+             tag: 1,
+             type: :bool
            }}
         end
 
-        def field_def("count") do
+        def field_def("isHidden") do
           {:ok,
            %{
              __struct__: Protox.Field,
-             json_name: "count",
-             kind: {:scalar, 0},
+             json_name: "isHidden",
+             kind: {:scalar, false},
              label: :optional,
-             name: :count,
-             tag: 2,
-             type: :uint32
+             name: :isHidden,
+             tag: 1,
+             type: :bool
            }}
         end
 
@@ -326,11 +250,8 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry do
 
   [
     @spec(default(atom) :: {:ok, boolean | integer | String.t() | float} | {:error, atom}),
-    def default(:collections) do
-      {:error, :no_default_value}
-    end,
-    def default(:count) do
-      {:ok, 0}
+    def default(:isHidden) do
+      {:ok, false}
     end,
     def default(_) do
       {:error, :no_such_field}
@@ -347,7 +268,7 @@ defmodule WAWebProtobufsE2E.SyncRequestMutationRetry do
         cc_generic_services: nil,
         csharp_namespace: nil,
         deprecated: nil,
-        go_package: "go.mau.fi/whatsmeow/proto/waE2E",
+        go_package: "go.mau.fi/whatsmeow/proto/waSyncAction",
         java_generate_equals_and_hash: nil,
         java_generic_services: nil,
         java_multiple_files: nil,
