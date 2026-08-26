@@ -10,6 +10,8 @@ defmodule ExWapp.Store.Codec do
   @codec "ex_wapp_json_v2"
   @version 2
 
+  alias ExWapp.JSON
+
   @type decode_result :: {:ok, map()} | {:error, :unknown_codec | :invalid_store_blob}
 
   @spec encode(map()) :: {:ok, binary()} | {:error, term()}
@@ -20,7 +22,7 @@ defmodule ExWapp.Store.Codec do
       "data" => encode_value(data)
     }
 
-    with {:ok, json} <- Jason.encode(envelope) do
+    with {:ok, json} <- JSON.encode(envelope) do
       {:ok, @magic <> :zlib.gzip(json)}
     end
   rescue
@@ -33,11 +35,10 @@ defmodule ExWapp.Store.Codec do
   @spec decode(binary()) :: decode_result()
   def decode(<<@magic, compressed::binary>>) do
     with {:ok, json} <- gunzip(compressed),
-         {:ok, envelope} <- Jason.decode(json),
+         {:ok, envelope} <- JSON.decode(json),
          {:ok, data} <- decode_envelope(envelope) do
       {:ok, data}
     else
-      {:error, %Jason.DecodeError{}} -> {:error, :invalid_store_blob}
       {:error, _reason} -> {:error, :invalid_store_blob}
     end
   end

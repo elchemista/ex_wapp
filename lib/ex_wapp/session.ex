@@ -1,8 +1,11 @@
 defmodule ExWapp.Session do
   @moduledoc """
-  Public API facade for WhatsApp session lifecycle and messaging.
+  Internal facade for the built-in WhatsApp session engine.
 
-  The GenServer implementation lives in `ExWapp.Session.Worker`.
+  The GenServer implementation lives in `ExWapp.Session.Worker`. This module is
+  used by `ExWapp.Client.Transport.Session`; it is documented for maintainers
+  and custom transport authors, but it is not part of ExWapp's stable public
+  API. Applications should use the `%ExWapp.Client{}` API through `ExWapp`.
   """
 
   alias ExWapp.Message

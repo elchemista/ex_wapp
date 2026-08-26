@@ -8,6 +8,7 @@ defmodule ExWapp.AppState.Engine.Codec do
   """
 
   alias ExWapp.AppState.{Crypto, LTHash}
+  alias ExWapp.JSON
   alias WAWebProtobufSyncAction.{SyncActionData, SyncActionValue}
 
   alias WAWebProtobufsServerSync.{
@@ -221,7 +222,7 @@ defmodule ExWapp.AppState.Engine.Codec do
   defp encode_single_mutation(mut, keys, key_id, timestamp, mmacs) do
     operation = if Map.get(mut, :operation) == :remove, do: 1, else: 0
     value = %{mut.value | timestamp: timestamp}
-    index_json = Jason.encode!(mut.index)
+    index_json = JSON.encode!(mut.index)
 
     content =
       %SyncActionData{
@@ -408,7 +409,7 @@ defmodule ExWapp.AppState.Engine.Codec do
 
   defp build_decoded_mutation(operation, sync_data, index_mac, value_mac) do
     index =
-      case Jason.decode(sync_data.index || "[]") do
+      case JSON.decode(sync_data.index || "[]") do
         {:ok, parsed} when is_list(parsed) -> parsed
         _ -> []
       end

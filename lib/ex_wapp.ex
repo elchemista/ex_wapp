@@ -1,109 +1,36 @@
 defmodule ExWapp do
   @moduledoc """
-  Elixir client for WhatsApp Web.
+  Stable public client facade for ExWapp.
 
-  ExWapp implements the WhatsApp Web protocol, allowing you to send and receive
-  messages through a linked companion device. This is the same protocol used by
-  WhatsApp Web in browsers.
+  Public application code should create a `%ExWapp.Client{}` with `new/1` and
+  pass the returned client to the functions in this module. Each mutating
+  operation returns an updated client, so applications normally keep it in
+  their own GenServer, GenStateMachine, or other state owner.
 
   ## Quick Start
 
   ```elixir
-  # Start a session with default ETS storage
-  {:ok, session} = ExWapp.start_link()
+  client =
+    ExWapp.new(
+      session_id: "account_1",
+      store: {ExWapp.Store.Ets, path: "/var/lib/my_app/account_1.etf"},
+      transport: ExWapp.Client.Transport.Session,
+      events: MyApp.WhatsAppEvents
+    )
 
-  # Connect to WhatsApp servers
-  ExWapp.connect(session)
+  {:ok, client} = ExWapp.connect(client)
+  {:ok, client, {:code, qr}} = ExWapp.pair(client)
 
-  # Stream QR codes for pairing
-  ExWapp.qr_stream(session)
-  |> Stream.each(fn
-    {:code, data} ->
-      # Display QR code for user to scan
-      IO.puts("Scan this QR with WhatsApp:")
-      data |> ExWapp.Pairing.QR.to_terminal() |> IO.puts()
-
-    :success ->
-      IO.puts("Successfully paired!")
-
-    {:error, reason} ->
-      IO.puts("Pairing failed: \#{inspect(reason)}")
-  end)
-  |> Stream.run()
+  {:ok, client, message_id} =
+    ExWapp.send_message(client, to: "393XXXXXXXXX@s.whatsapp.net", text: "hello")
   ```
 
-  ## Architecture
+  `ExWapp.Session` and PID-accepting compatibility clauses expose the internal
+  built-in runtime. They may return the same chat and message values, but are
+  not the supported public API and can change as the runtime evolves.
 
-  ExWapp is organized into several layers:
-
-  - **Transport** (`ExWapp.Conn`) - WebSocket connection to WhatsApp servers
-  - **Noise Protocol** (`ExWapp.Noise`) - End-to-end encryption handshake
-  - **Signal Protocol** (`ExWapp.Signal`) - Message encryption (Double Ratchet)
-  - **Binary Encoding** (`ExWapp.Binary`) - WhatsApp's custom XML-binary format
-  - **Session** (`ExWapp.Session`) - State machine orchestrating the above
-
-  ## Storage Adapters
-
-  Session state (keys, identity, message history) is persisted via storage adapters.
-  See `ExWapp.Store` for the behaviour and built-in implementations:
-
-  ```elixir
-  # Default: ETS with file persistence
-  ExWapp.start_link(store: nil)
-
-  # ETS with custom path
-  ExWapp.start_link(store: {ExWapp.Store.Ets, path: "/my/path.etf"})
-
-  # In-memory for testing
-  ExWapp.start_link(store: ExWapp.Store.Memory)
-
-  # Custom adapter (e.g., PostgreSQL)
-  ExWapp.start_link(store: {MyApp.PostgresStore, user_id: 123})
-  ```
-
-  ## Example: Persistent Session
-
-  ```elixir
-  defmodule MyApp.WhatsApp do
-    @store_path "/var/lib/myapp/whatsapp_session.etf"
-
-    def start do
-      {:ok, session} = ExWapp.start_link(
-        store: {ExWapp.Store.Ets, path: @store_path}
-      )
-
-      case ExWapp.state(session) do
-        :connected ->
-          IO.puts("Already connected")
-          {:ok, session}
-
-        _other ->
-          ExWapp.connect(session)
-          wait_for_pairing(session)
-      end
-    end
-
-    defp wait_for_pairing(session) do
-      ExWapp.qr_stream(session)
-      |> Enum.find(fn
-        :success -> true
-        {:error, _} -> true
-        _ -> false
-      end)
-      |> case do
-        :success -> {:ok, session}
-        {:error, reason} -> {:error, reason}
-      end
-    end
-  end
-  ```
-
-  ## Protocol Details
-
-  For implementation details, see:
-  - `FLOW.md` - Detailed protocol documentation
-  - `ExWapp.Noise` - Noise_XX_25519_AESGCM_SHA256 handshake
-  - `ExWapp.Signal` - X3DH and Double Ratchet
+  See the README for installation, JSON configuration, storage, events, and
+  the complete public API overview.
   """
 
   alias ExWapp.AppState.Engine

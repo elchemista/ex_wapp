@@ -128,7 +128,7 @@ defmodule ExWapp.Proto.SyncActionTest do
   describe "SyncActionData encode/decode round-trip" do
     test "contact action" do
       data = %SyncActionData{
-        index: Jason.encode!(["contact", "15550001111@s.whatsapp.net"]),
+        index: ExWapp.JSON.encode!(["contact", "15550001111@s.whatsapp.net"]),
         value: %SyncActionValue{
           timestamp: 1_700_000_000,
           contactAction: %ContactAction{
@@ -151,7 +151,7 @@ defmodule ExWapp.Proto.SyncActionTest do
 
     test "contact action with all fields" do
       data = %SyncActionData{
-        index: Jason.encode!(["contact", "15550001111@s.whatsapp.net"]),
+        index: ExWapp.JSON.encode!(["contact", "15550001111@s.whatsapp.net"]),
         value: %SyncActionValue{
           timestamp: 1_700_000_000,
           contactAction: %ContactAction{
@@ -179,7 +179,7 @@ defmodule ExWapp.Proto.SyncActionTest do
 
     test "mute action" do
       data = %SyncActionData{
-        index: Jason.encode!(["mute", "15550001111@s.whatsapp.net"]),
+        index: ExWapp.JSON.encode!(["mute", "15550001111@s.whatsapp.net"]),
         value: %SyncActionValue{
           timestamp: 1_700_000_000,
           muteAction: %MuteAction{
@@ -198,7 +198,7 @@ defmodule ExWapp.Proto.SyncActionTest do
 
     test "pin action" do
       data = %SyncActionData{
-        index: Jason.encode!(["pin_v1", "15550001111@s.whatsapp.net"]),
+        index: ExWapp.JSON.encode!(["pin_v1", "15550001111@s.whatsapp.net"]),
         value: %SyncActionValue{
           timestamp: 1_700_000_000,
           pinAction: %PinAction{pinned: true}
@@ -214,7 +214,7 @@ defmodule ExWapp.Proto.SyncActionTest do
 
     test "archive chat action with message range" do
       data = %SyncActionData{
-        index: Jason.encode!(["archive", "15550001111@s.whatsapp.net"]),
+        index: ExWapp.JSON.encode!(["archive", "15550001111@s.whatsapp.net"]),
         value: %SyncActionValue{
           timestamp: 1_700_000_000,
           archiveChatAction: %ArchiveChatAction{
@@ -237,7 +237,7 @@ defmodule ExWapp.Proto.SyncActionTest do
 
     test "delete chat action" do
       data = %SyncActionData{
-        index: Jason.encode!(["deleteChat", "15550001111@s.whatsapp.net"]),
+        index: ExWapp.JSON.encode!(["deleteChat", "15550001111@s.whatsapp.net"]),
         value: %SyncActionValue{
           timestamp: 1_700_000_000,
           deleteChatAction: %DeleteChatAction{
@@ -257,7 +257,7 @@ defmodule ExWapp.Proto.SyncActionTest do
 
     test "mark chat as read action" do
       data = %SyncActionData{
-        index: Jason.encode!(["markChatAsRead", "15550001111@s.whatsapp.net"]),
+        index: ExWapp.JSON.encode!(["markChatAsRead", "15550001111@s.whatsapp.net"]),
         value: %SyncActionValue{
           timestamp: 1_700_000_000,
           markChatAsReadAction: %MarkChatAsReadAction{
@@ -277,7 +277,7 @@ defmodule ExWapp.Proto.SyncActionTest do
 
     test "clear chat action" do
       data = %SyncActionData{
-        index: Jason.encode!(["clearChat", "15550001111@s.whatsapp.net"]),
+        index: ExWapp.JSON.encode!(["clearChat", "15550001111@s.whatsapp.net"]),
         value: %SyncActionValue{
           timestamp: 1_700_000_000,
           clearChatAction: %ClearChatAction{
@@ -296,7 +296,7 @@ defmodule ExWapp.Proto.SyncActionTest do
 
     test "push name setting keeps its wire tag" do
       data = %SyncActionData{
-        index: Jason.encode!(["setting_pushName"]),
+        index: ExWapp.JSON.encode!(["setting_pushName"]),
         value: %SyncActionValue{
           timestamp: 1_700_000_000,
           pushNameSetting: %PushNameSetting{name: "My Name"}

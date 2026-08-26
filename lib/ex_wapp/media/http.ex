@@ -7,7 +7,7 @@ defmodule ExWapp.Media.HTTP do
   bodies that are later verified and decrypted by `ExWapp.Media.Crypto`.
   """
 
-  alias ExWapp.Media
+  alias ExWapp.{JSON, Media}
   alias ExWapp.Session.IQ
   alias ExWapp.Transport.TLS
 
@@ -168,7 +168,7 @@ defmodule ExWapp.Media.HTTP do
 
   @spec parse_upload_response(binary()) :: map()
   defp parse_upload_response(body) when is_binary(body) do
-    case Jason.decode(body) do
+    case JSON.decode(body) do
       {:ok, json} ->
         %{
           url: Map.get(json, "url"),
@@ -178,10 +178,8 @@ defmodule ExWapp.Media.HTTP do
         }
 
       _ ->
-        %{}
+        parse_upload_response_without_json(body)
     end
-  rescue
-    UndefinedFunctionError -> parse_upload_response_without_json(body)
   end
 
   @spec parse_upload_response_without_json(binary()) :: map()

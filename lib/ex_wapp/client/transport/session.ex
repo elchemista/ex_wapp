@@ -17,9 +17,9 @@ defmodule ExWapp.Client.Transport.Session do
       {:ok, client} = ExWapp.connect(client)
       {:ok, client, message_id} = ExWapp.send_message(client, to: jid, text: "hello")
 
-  Session events are also available directly from the worker with
-  `ExWapp.Session.qr_stream/1`, `ExWapp.Session.message_stream/1`, or PubSub.
-  The worker pid is stored in `client.metadata[:session_pid]`.
+  The internal worker pid is stored in `client.metadata[:session_pid]`. Treat
+  that metadata as an implementation detail; public application code should
+  continue passing the returned `%ExWapp.Client{}` to `ExWapp` functions.
   """
 
   @behaviour ExWapp.Client.Transport

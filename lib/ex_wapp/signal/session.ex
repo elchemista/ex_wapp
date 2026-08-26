@@ -160,7 +160,7 @@ defmodule ExWapp.Signal.Session do
   Returns the encrypted ciphertext and updated session state.
   Uses proper Signal Protocol wire format with AES-CBC + HMAC.
   """
-  @spec encrypt(session_state(), binary()) :: {:ok, binary(), session_state()} | {:error, term()}
+  @spec encrypt(session_state(), binary()) :: {:ok, binary(), session_state()}
   def encrypt(session, plaintext) do
     # Derive message keys (cipher_key, mac_key, iv)
     {message_keys, updated_chain} = derive_message_keys(session.sending_chain)
@@ -195,25 +195,25 @@ defmodule ExWapp.Signal.Session do
   Uses proper Signal Protocol wire format.
   """
   @spec encrypt_prekey_message(session_state(), binary(), map()) ::
-          {:ok, binary(), session_state()} | {:error, term()}
+          {:ok, binary(), session_state()}
   def encrypt_prekey_message(session, plaintext, bundle_info) do
-    with {:ok, inner_signal_message, updated_session} <- encrypt(session, plaintext) do
-      # Build PreKeySignalMessage with proper protobuf format
-      # base_key is from our session creation (the ephemeral key we generated)
-      base_key = Map.get(bundle_info, :base_key) || session.ratchet_key.public
+    {:ok, inner_signal_message, updated_session} = encrypt(session, plaintext)
 
-      prekey_message =
-        WireFormat.serialize_prekey_signal_message(
-          bundle_info.registration_id,
-          bundle_info.prekey_id,
-          bundle_info.signed_prekey_id,
-          base_key,
-          session.local_identity_key.public,
-          inner_signal_message
-        )
+    # Build PreKeySignalMessage with proper protobuf format
+    # base_key is from our session creation (the ephemeral key we generated)
+    base_key = Map.get(bundle_info, :base_key) || session.ratchet_key.public
 
-      {:ok, prekey_message, updated_session}
-    end
+    prekey_message =
+      WireFormat.serialize_prekey_signal_message(
+        bundle_info.registration_id,
+        bundle_info.prekey_id,
+        bundle_info.signed_prekey_id,
+        base_key,
+        session.local_identity_key.public,
+        inner_signal_message
+      )
+
+    {:ok, prekey_message, updated_session}
   end
 
   # Decrypting inbound Signal messages

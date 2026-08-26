@@ -23,7 +23,7 @@
 # log_*.txt
 
 .claude
-
+.agents
 .vscode
 
 .expert

@@ -3,8 +3,8 @@
     %{
       name: "default",
       files: %{
-        included: ["mix.exs", "config/", "lib/", "test/"],
-        excluded: [~r"/_build/", ~r"/deps/"]
+        included: ["mix.exs", "config/", "lib/"],
+        excluded: [~r"/_build/", ~r"/deps/", ~r"/lib/ex_wapp/wa_proto/"]
       },
       strict: false,
       color: true,

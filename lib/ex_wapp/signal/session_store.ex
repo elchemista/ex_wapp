@@ -607,24 +607,16 @@ defmodule ExWapp.Signal.SessionStore do
       {session, store} =
         ensure_outbound_pending_prekey(store, jid, session, base_key, remote_bundle)
 
-      case Signal.encrypt(session, plaintext) do
-        {:ok, ciphertext, updated_session} ->
-          updated_store = update_session(store, jid, updated_session)
+      {:ok, ciphertext, updated_session} = Signal.encrypt(session, plaintext)
+      updated_store = update_session(store, jid, updated_session)
 
-          wrap_encrypted(
-            ciphertext,
-            active_pending_prekey(updated_store, jid, updated_session),
-            local_identity,
-            local_registration_id,
-            updated_store
-          )
-
-        {:error, _reason} = error ->
-          # A CaseClauseError here would escape the per-target error handling
-          # in the encryptor and abort the whole multi-device fanout; an error
-          # tuple records just this target as failed.
-          error
-      end
+      wrap_encrypted(
+        ciphertext,
+        active_pending_prekey(updated_store, jid, updated_session),
+        local_identity,
+        local_registration_id,
+        updated_store
+      )
     end
   end
 

@@ -421,7 +421,7 @@ defmodule ExWapp.AppState.EngineTest do
       keys = Crypto.expand_keys(key_data)
 
       # Build a mutation manually
-      index_json = Jason.encode!(["mute", "test@s.whatsapp.net"])
+      index_json = ExWapp.JSON.encode!(["mute", "test@s.whatsapp.net"])
 
       action_data = %SyncActionData{
         index: index_json,
@@ -504,7 +504,7 @@ defmodule ExWapp.AppState.EngineTest do
       key_data = :crypto.strong_rand_bytes(32)
       keys = Crypto.expand_keys(key_data)
 
-      index_json = Jason.encode!(["contact", "test@s.whatsapp.net"])
+      index_json = ExWapp.JSON.encode!(["contact", "test@s.whatsapp.net"])
 
       content =
         SyncActionData.encode!(%SyncActionData{

@@ -47,7 +47,7 @@ defmodule ExWapp.Signal.Adapter do
 
   Returns `{:ok, ciphertext, updated_session}`.
   """
-  @spec encrypt(map(), binary(), keyword()) :: {:ok, binary(), map()} | {:error, term()}
+  @spec encrypt(map(), binary(), keyword()) :: {:ok, binary(), map()}
   def encrypt(session, plaintext, opts \\ []) do
     is_prekey = Keyword.get(opts, :is_prekey, false)
     bundle_info = Keyword.get(opts, :bundle_info, %{})
@@ -65,7 +65,7 @@ defmodule ExWapp.Signal.Adapter do
   Convenience wrapper for `encrypt/3` with `is_prekey: true`.
   """
   @spec encrypt_prekey_message(map(), binary(), map()) ::
-          {:ok, binary(), map()} | {:error, term()}
+          {:ok, binary(), map()}
   def encrypt_prekey_message(session, plaintext, bundle_info) do
     encrypt(session, plaintext, is_prekey: true, bundle_info: bundle_info)
   end

@@ -1,8 +1,10 @@
 name: Dialyzer
 
 on:
+  push:
+    branches: [main]
   pull_request:
-    types: [closed]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,7 +15,6 @@ concurrency:
 
 jobs:
   dialyzer:
-    if: github.event.pull_request.merged == true
     name: Type analysis
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -28,8 +29,8 @@ jobs:
         id: beam
         uses: erlef/setup-beam@v1.24.1
         with:
-          otp-version: "28.x"
-          elixir-version: "1.19.x"
+          otp-version: "29.x"
+          elixir-version: "1.20.x"
 
       - name: Restore Mix and PLT cache
         uses: actions/cache@v6
@@ -44,7 +45,7 @@ jobs:
             ${{ runner.os }}-dialyzer-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
 
       - name: Install dependencies
-        run: mix deps.get
+        run: mix deps.get --only test --check-locked
 
       - name: Run Dialyzer
         run: mix dialyzer --format github

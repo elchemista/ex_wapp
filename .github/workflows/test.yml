@@ -1,8 +1,10 @@
 name: Tests
 
 on:
+  push:
+    branches: [main]
   pull_request:
-    types: [closed]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,12 +15,19 @@ concurrency:
 
 jobs:
   test:
-    if: github.event.pull_request.merged == true
-    name: Compile and test
+    name: Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       MIX_ENV: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: "1.19.x"
+            otp: "28.x"
+          - elixir: "1.20.x"
+            otp: "29.x"
 
     steps:
       - name: Check out repository
@@ -28,8 +37,8 @@ jobs:
         id: beam
         uses: erlef/setup-beam@v1.24.1
         with:
-          otp-version: "28.x"
-          elixir-version: "1.19.x"
+          otp-version: ${{ matrix.otp }}
+          elixir-version: ${{ matrix.elixir }}
 
       - name: Restore Mix cache
         uses: actions/cache@v6
@@ -42,10 +51,30 @@ jobs:
             ${{ runner.os }}-tests-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
 
       - name: Install dependencies
-        run: mix deps.get
+        run: mix deps.get --only test --check-locked
+
+      - name: Check formatting
+        run: mix format --check-formatted
 
       - name: Compile with warnings as errors
         run: mix compile --warnings-as-errors
 
       - name: Run tests
+        if: matrix.elixir == '1.19.x'
         run: mix test
+
+      - name: Run tests and enforce maintained-code coverage
+        if: matrix.elixir == '1.20.x'
+        run: mix test --cover
+
+      - name: Install documentation dependencies
+        if: matrix.elixir == '1.20.x'
+        run: MIX_ENV=dev mix deps.get --only dev --check-locked
+
+      - name: Build documentation
+        if: matrix.elixir == '1.20.x'
+        run: MIX_ENV=dev mix docs --warnings-as-errors
+
+      - name: Validate Hex package
+        if: matrix.elixir == '1.20.x'
+        run: MIX_ENV=dev mix hex.build --output /tmp/ex_wapp.tar
