@@ -334,7 +334,11 @@ defmodule ExWapp.Debug do
         pull: false,
         userAgent: %UserAgent{
           platform: :WEB,
-          appVersion: %AppVersion{primary: 2, secondary: 3000, tertiary: 1_041_540_217},
+          appVersion: %AppVersion{
+            primary: version.primary,
+            secondary: version.secondary,
+            tertiary: version.tertiary
+          },
           mcc: "000",
           mnc: "000",
           osVersion: "0.1",

@@ -709,6 +709,7 @@ defmodule ExWapp.Store do
     merged =
       (fallback_messages_for(store, jid) ++ messages)
       |> Enum.filter(&is_map/1)
+      |> Enum.reverse()
       |> Enum.uniq_by(&Map.get(&1, :id))
       |> Enum.sort_by(&message_sort_key/1, :desc)
 
@@ -766,6 +767,12 @@ defmodule ExWapp.Store do
     store
     |> load!()
     |> Map.put(:chat_messages, messages)
+    |> Map.update(:chats, %{}, fn chats ->
+      Map.new(chats, fn
+        {jid, chat} when is_map(chat) -> {jid, Map.delete(chat, :messages)}
+        entry -> entry
+      end)
+    end)
     |> then(&persist(store, &1))
   end
 

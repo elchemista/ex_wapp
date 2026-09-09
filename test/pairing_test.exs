@@ -53,6 +53,74 @@ defmodule ExWapp.PairingTest do
     assert Enum.any?(actions, &(&1 == {:status, :success}))
   end
 
+  test "legacy identity fallback remains authenticated when acknowledgement addressing is absent" do
+    store = store_fixture()
+    {identity, secret} = identity_fixture()
+    Store.persist(store, %{identity: identity, signal: %{}, adv_secret: secret})
+    {blob, _} = adv_identity_fixture(identity, secret)
+    node = %{build_pair_success_node(blob) | attrs: %{}}
+    {paired, actions} = Pairing.apply_node(Pairing.new(store), node)
+    assert paired.status == :paired
+    assert actions == [{:status, :success}]
+    assert Store.get(store, :signal).identity_key == identity
+
+    assert {:ok, signed} =
+             ADVSignedDeviceIdentity.decode(Store.get(store, :pairing).adv_self_signed)
+
+    assert byte_size(signed.deviceSignature) == 64
+  end
+
+  test "empty and extended QR reference lists preserve registration credentials" do
+    store = store_fixture()
+    {identity, secret} = identity_fixture()
+    noise = Keys.generate_key_pair()
+    original = %{identity: identity, adv_secret: secret, noise: %{static_public: noise.public}}
+    Store.persist(store, original)
+    original = Store.load!(store)
+    state = Pairing.new(store)
+
+    for content <- [nil, [], [%Binary.Node{tag: "extension"}]] do
+      {waiting, actions} =
+        Pairing.apply_node(state, %Binary.Node{
+          tag: "iq",
+          attrs: %{"id" => "qr", "from" => "s.whatsapp.net"},
+          content: [%Binary.Node{tag: "pair-device", content: content}]
+        })
+
+      assert waiting.ref == nil
+      assert [{:send_node, _}] = actions
+      assert Store.load!(store) == original
+    end
+
+    node = %Binary.Node{
+      tag: "iq",
+      attrs: %{"id" => "qr", "from" => "s.whatsapp.net"},
+      content: [
+        %Binary.Node{
+          tag: "pair-device",
+          content: [
+            %Binary.Node{tag: "extension"},
+            %Binary.Node{tag: "ref", content: "2@existing-prefix"}
+          ]
+        }
+      ]
+    }
+
+    {_, actions} = Pairing.apply_node(state, node)
+    assert {:qr, value} = Enum.find(actions, &match?({:qr, _}, &1))
+
+    assert String.split(value, ",") == [
+             "2@existing-prefix",
+             Base.encode64(noise.public),
+             Base.encode64(identity.public),
+             Base.encode64(secret)
+           ]
+
+    assert Store.load!(store) == original
+    assert Pairing.apply_node(state, %Binary.Node{tag: "ignored"}) == {state, []}
+    assert Pairing.apply_node(state, %Binary.Node{tag: "iq"}) == {state, []}
+  end
+
   test "pair-device emits only first qr ref" do
     store = store_fixture()
     :ok = Store.persist(store, %{noise: %{static_public: :crypto.strong_rand_bytes(32)}})
@@ -112,6 +180,64 @@ defmodule ExWapp.PairingTest do
              Enum.find(actions, &match?({:send_node, _}, &1))
 
     assert Enum.any?(actions, &match?({:error, :adv_invalid_account_signature_fields}, &1))
+  end
+
+  test "malformed pair-success cannot overwrite existing account data" do
+    {identity, secret} = identity_fixture()
+    {blob, _} = adv_identity_fixture(identity, secret)
+    valid = build_pair_success_node(blob)
+
+    for initial <- [
+          %{identity: identity},
+          %{identity: identity, adv_secret: <<1>>},
+          %{adv_secret: secret},
+          %{identity: %{public: <<1>>, private: <<2>>}},
+          %{identity: identity, adv_secret: secret}
+        ] do
+      store = Store.Memory.new(initial_data: Map.put(initial, :marker, "retain"))
+
+      node =
+        if initial == %{identity: identity, adv_secret: secret},
+          do: %{
+            valid
+            | content: [
+                %Binary.Node{
+                  tag: "pair-success",
+                  content: [
+                    %Binary.Node{tag: "device", attrs: %{"jid" => "1555:1@s.whatsapp.net"}}
+                  ]
+                }
+              ]
+          },
+          else: valid
+
+      state = Pairing.new(store)
+      assert {^state, actions} = Pairing.apply_node(state, node)
+      assert Enum.any?(actions, &match?({:error, _}, &1))
+      refute {:status, :success} in actions
+      assert Store.load!(store) == Map.put(initial, :marker, "retain")
+    end
+  end
+
+  test "pair-success with authenticated identity but no device never reports success" do
+    {identity, secret} = identity_fixture()
+    {blob, _} = adv_identity_fixture(identity, secret)
+    store = Store.Memory.new(initial_data: %{identity: identity, adv_secret: secret})
+
+    node = %Binary.Node{
+      tag: "iq",
+      attrs: %{},
+      content: [
+        %Binary.Node{
+          tag: "pair-success",
+          content: [%Binary.Node{tag: "device-identity", content: blob}]
+        }
+      ]
+    }
+
+    state = Pairing.new(store)
+    assert {^state, [{:error, {:missing_child, "device"}}]} = Pairing.apply_node(state, node)
+    refute Map.has_key?(Store.load!(store), :pairing)
   end
 
   defp identity_fixture do

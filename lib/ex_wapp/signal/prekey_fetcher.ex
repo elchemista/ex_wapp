@@ -156,7 +156,7 @@ defmodule ExWapp.Signal.PrekeyFetcher do
   defp maybe_put_user_bundle(_other, acc), do: acc
 
   defp parse_user_prekey(%Binary.Node{attrs: attrs, content: content}) when is_list(content) do
-    jid = Map.get(attrs, "jid")
+    jid = normalize_wire_jid(Map.get(attrs, "jid"))
 
     # Extract registration ID
     registration = find_child(content, "registration")
@@ -268,6 +268,7 @@ defmodule ExWapp.Signal.PrekeyFetcher do
   end
 
   defp extract_binary_content(nil), do: nil
+  defp extract_binary_content(%Binary.Raw{data: binary}) when is_binary(binary), do: binary
   defp extract_binary_content(binary) when is_binary(binary), do: binary
   defp extract_binary_content({:raw, binary}) when is_binary(binary), do: binary
   defp extract_binary_content([{:raw, binary}]) when is_binary(binary), do: binary
@@ -281,11 +282,15 @@ defmodule ExWapp.Signal.PrekeyFetcher do
     end)
   end
 
-  defp get_attr(%Binary.Node{attrs: attrs}, key), do: Map.get(attrs, key)
+  defp get_attr(%Binary.Node{attrs: attrs}, "jid"),
+    do: normalize_wire_jid(Map.get(attrs, "jid"))
+
+  defp normalize_wire_jid(%ExWapp.JID{} = jid), do: to_string(jid)
+  defp normalize_wire_jid(jid), do: jid
 
   defp normalize_jid(jid) when is_binary(jid) do
     case String.split(jid, [":", "@"]) do
-      [user, _device, domain] -> "#{user}@#{domain}"
+      [user, device, domain] -> "#{user}:#{device}@#{domain}"
       [user, domain] -> "#{user}@#{domain}"
       _ -> jid
     end

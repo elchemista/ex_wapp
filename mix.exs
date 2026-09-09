@@ -123,7 +123,7 @@ defmodule ExWapp.MixProject do
   defp test_coverage do
     [
       ignore_modules: [~r/^W[A-Z]/],
-      summary: [threshold: 70]
+      summary: [threshold: 90]
     ]
   end
 end

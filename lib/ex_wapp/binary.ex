@@ -83,13 +83,9 @@ defmodule ExWapp.Binary do
   """
   @spec encode(binary_node() | tuple()) :: {:ok, binary()} | {:error, any()}
   def encode(node) do
-    node = normalize_node(node)
-
-    try do
-      {:ok, encode!(node)}
-    rescue
-      e -> {:error, e}
-    end
+    {:ok, encode!(node)}
+  rescue
+    e -> {:error, e}
   end
 
   @doc """

@@ -153,6 +153,92 @@ defmodule ExWapp.PairingADVTest do
     assert decoded_without_key.deviceSignature == parsed.signed.deviceSignature
   end
 
+  test "signed future or damaged details preserve a recoverable key index without skipping authentication" do
+    identity = Keys.generate_key_pair()
+    account = Keys.generate_key_pair()
+    secret = :crypto.strong_rand_bytes(32)
+
+    fixtures = [
+      {<<8, 1, 24, 172, 2, 0>>, 300},
+      {<<129, 1, 0::64, 24, 9, 0>>, 9},
+      {<<133, 1, 0::32, 24, 9, 0>>, 9},
+      {<<130, 1, 2, 1, 2, 24, 9, 0>>, 9},
+      {<<129, 1, 0>>, nil},
+      {<<133, 1, 0>>, nil},
+      {<<130, 1, 255>>, nil},
+      {<<128>>, nil},
+      {:binary.copy(<<128>>, 12), nil},
+      {<<8, 128>>, nil},
+      {<<7>>, nil}
+    ]
+
+    for {details, index} <- fixtures do
+      signed = %ADVSignedDeviceIdentity{
+        details: details,
+        accountSignatureKey: account.public,
+        accountSignature:
+          Keys.sign_message(account.private, <<6, 0>> <> details <> identity.public)
+      }
+
+      bytes = encode_to_binary!(ADVSignedDeviceIdentity, signed)
+
+      blob =
+        encode_to_binary!(ADVSignedDeviceIdentityHMAC, %ADVSignedDeviceIdentityHMAC{
+          details: bytes,
+          HMAC: :crypto.mac(:hmac, :sha256, secret, bytes)
+        })
+
+      assert {:ok, parsed} = ADV.parse_signed_device_identity(blob, secret, identity)
+      assert parsed.details.keyIndex == index
+
+      assert Keys.verify_message(
+               identity.public,
+               <<6, 1>> <> details <> identity.public <> account.public,
+               parsed.device_signature
+             )
+
+      assert {:error, :adv_hmac_mismatch} =
+               ADV.parse_signed_device_identity(blob, <<0::256>>, identity)
+    end
+  end
+
+  test "invalid identity material and malformed containers return explicit errors" do
+    fixture = valid_adv_fixture(:E2EE)
+
+    assert {:ok, nil} =
+             ADV.parse_signed_device_identity(nil, fixture.adv_secret, fixture.identity)
+
+    assert {:error, :invalid_adv_payload} =
+             ADV.parse_signed_device_identity(:invalid, fixture.adv_secret, fixture.identity)
+
+    assert {:error, {:invalid_length, :adv_secret}} =
+             ADV.parse_signed_device_identity(fixture.blob, <<1>>, fixture.identity)
+
+    assert {:error, :invalid_identity_keypair} =
+             ADV.parse_signed_device_identity(fixture.blob, fixture.adv_secret, %{
+               public: <<1>>,
+               private: <<2>>
+             })
+
+    assert {:error, :adv_missing_details} =
+             ADV.parse_signed_device_identity(<<>>, fixture.adv_secret, fixture.identity)
+
+    assert {:error, _} =
+             ADV.parse_signed_device_identity(<<10, 255>>, fixture.adv_secret, fixture.identity)
+
+    assert {:error, :invalid_signed_device_identity} = ADV.encode_signed_device_identity(%{})
+    bytes = <<10, 255>>
+
+    blob =
+      encode_to_binary!(ADVSignedDeviceIdentityHMAC, %ADVSignedDeviceIdentityHMAC{
+        details: bytes,
+        HMAC: :crypto.mac(:hmac, :sha256, fixture.adv_secret, bytes)
+      })
+
+    assert {:error, {:adv_signed_identity_decode, _}} =
+             ADV.parse_signed_device_identity(blob, fixture.adv_secret, fixture.identity)
+  end
+
   defp do_adv_roundtrip(account_type) do
     # Identity keypair (Curve25519, same as runtime Signal identity)
     %{private: identity_priv, public: identity_pub} = Keys.generate_key_pair()

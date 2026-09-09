@@ -178,14 +178,17 @@ defmodule ExWapp.Transport.WebSocket do
 
   @doc false
   @impl true
-  @spec handle_connect(term(), State.t()) ::
-          {:reply, {:binary, binary()}, State.t()} | {:ok, State.t()}
+  @spec handle_connect(term(), State.t()) :: {:ok, State.t()}
   def handle_connect(_conn, %State{} = state) do
     notify_owner(state, {:connected, self()})
 
     case connect(state) do
-      {:ok, next_state, payload} -> {:reply, {:binary, payload}, next_state}
-      {:error, reason} -> handle_transport_error(state, reason)
+      {:ok, next_state, payload} ->
+        send(self(), {:send_raw_frame, payload})
+        {:ok, next_state}
+
+      {:error, reason} ->
+        handle_transport_error(state, reason)
     end
   end
 
@@ -242,9 +245,11 @@ defmodule ExWapp.Transport.WebSocket do
   @doc false
   @impl true
   @spec handle_cast(
-          {:send_node, Binary.binary_node() | tuple()} | {:send_payload, binary()},
+          {:send_node, Binary.binary_node() | tuple()} | {:send_payload, binary()} | :stop,
           State.t()
-        ) :: {:reply, {:binary, binary()}, State.t()} | {:ok, State.t()}
+        ) :: {:reply, {:binary, binary()}, State.t()} | {:ok, State.t()} | {:close, State.t()}
+  def handle_cast(:stop, %State{} = state), do: {:close, state}
+
   def handle_cast({:send_node, node}, %State{} = state) do
     case encode_node(state, node) do
       {:ok, next_state, payload} -> {:reply, {:binary, payload}, next_state}

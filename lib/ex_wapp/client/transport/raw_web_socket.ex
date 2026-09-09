@@ -42,7 +42,7 @@ defmodule ExWapp.Client.Transport.RawWebSocket do
   @spec disconnect(Client.t()) :: {:ok, Client.t()}
   def disconnect(%Client{} = client) do
     case get_in(client.metadata, [:transport_pid]) do
-      pid when is_pid(pid) -> Process.exit(pid, :normal)
+      pid when is_pid(pid) -> WebSockex.cast(pid, :stop)
       _ -> :ok
     end
 

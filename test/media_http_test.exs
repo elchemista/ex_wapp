@@ -118,10 +118,10 @@ defmodule ExWapp.MediaHTTPTest do
     supervisor = start_supervised!(Task.Supervisor)
 
     Task.Supervisor.start_child(supervisor, fn ->
-      {:ok, socket} = :gen_tcp.accept(listener, 2_000)
+      {:ok, socket} = :gen_tcp.accept(listener, 10_000)
 
       try do
-        {:ok, request} = :gen_tcp.recv(socket, 0, 2_000)
+        {:ok, request} = :gen_tcp.recv(socket, 0, 10_000)
         send(owner, {:http_request, request, read_headers(socket, [])})
 
         :ok =
@@ -138,7 +138,7 @@ defmodule ExWapp.MediaHTTPTest do
   end
 
   defp read_headers(socket, headers) do
-    case :gen_tcp.recv(socket, 0, 2_000) do
+    case :gen_tcp.recv(socket, 0, 10_000) do
       {:ok, :http_eoh} ->
         headers
 

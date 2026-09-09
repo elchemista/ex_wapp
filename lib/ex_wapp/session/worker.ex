@@ -563,7 +563,7 @@ defmodule ExWapp.Session.Worker do
     with false <- Map.has_key?(state.pending_media_retries, message_id),
          {chat_jid, message} <- Store.find_message_by_id(state.store, message_id),
          %Media.Ref{media_key: media_key} = ref <- message_media_ref(message),
-         true <- is_binary(media_key) and byte_size(media_key) == 32,
+         :ok <- validate_retry_media_key(media_key),
          own_jid when is_binary(own_jid) and own_jid != "" <-
            Account.local_account_base_jid(state.store) do
       receipt =
@@ -596,6 +596,7 @@ defmodule ExWapp.Session.Worker do
       true -> {:reply, {:error, :media_retry_already_pending}, state}
       nil -> {:reply, {:error, :message_not_found}, state}
       %Media.Ref{} -> {:reply, {:error, :invalid_media_key}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
       _ -> {:reply, {:error, :not_media}, state}
     end
   end
@@ -1565,6 +1566,9 @@ defmodule ExWapp.Session.Worker do
 
   defp message_media_ref(_message), do: nil
 
+  defp validate_retry_media_key(key) when is_binary(key) and byte_size(key) == 32, do: :ok
+  defp validate_retry_media_key(_key), do: {:error, :invalid_media_key}
+
   defp retry_media_timeout(opts) do
     case Keyword.get(opts, :timeout, 30_000) do
       value when is_integer(value) and value > 0 -> value
@@ -1582,6 +1586,10 @@ defmodule ExWapp.Session.Worker do
   rescue
     error ->
       Logger.warning("[SESSION] Failed flushing store: #{Log.reason(error)}")
+      :ok
+  catch
+    kind, reason ->
+      Logger.warning("[SESSION] Failed flushing store: #{Log.reason({kind, reason})}")
       :ok
   end
 

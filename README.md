@@ -386,7 +386,13 @@ The coverage configuration excludes the generated `WA*` Protox modules. Those
 modules are validated by schema, wire-compatibility, and round-trip tests;
 including every generated line would measure the size of the protocol snapshot
 rather than the maintained ExWapp implementation. CI rejects maintained-code
-coverage below 70%.
+coverage below 90%.
+
+Protocol integration tests exchange authenticated Noise and Signal messages with
+local peers, exercise HTTP/HTTPS and WebSocket servers, and verify persistence
+and recovery after failures. They run without a WhatsApp account. The HTTPS
+tests require `openssl` to generate a temporary certificate authority and server
+certificate; certificate verification remains enabled.
 
 ## License
 
