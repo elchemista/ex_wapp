@@ -47,7 +47,7 @@ Add ExWapp and the JSON implementation of your choice to your application:
 ```elixir
 def deps do
   [
-    {:ex_wapp, "~> 0.1.2"},
+    {:ex_wapp, "~> 0.1.3"},
     {:jason, "~> 1.4"}
   ]
 end
@@ -386,7 +386,7 @@ The coverage configuration excludes the generated `WA*` Protox modules. Those
 modules are validated by schema, wire-compatibility, and round-trip tests;
 including every generated line would measure the size of the protocol snapshot
 rather than the maintained ExWapp implementation. CI rejects maintained-code
-coverage below 67%.
+coverage below 70%.
 
 ## License
 

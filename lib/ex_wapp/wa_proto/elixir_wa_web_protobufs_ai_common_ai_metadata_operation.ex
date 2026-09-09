@@ -1,7 +1,7 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsAICommon.AIMetadataOperation do
   @moduledoc false
-  defstruct hatchMetadataSync: nil, __uf__: []
+  defstruct hatchMetadataSync: nil, bizAiMetadataSync: nil, __uf__: []
 
   (
     (
@@ -16,7 +16,10 @@ defmodule WAWebProtobufsAICommon.AIMetadataOperation do
 
       @spec encode!(struct) :: iodata | no_return
       def encode!(msg) do
-        [] |> encode_hatchMetadataSync(msg) |> encode_unknown_fields(msg)
+        []
+        |> encode_hatchMetadataSync(msg)
+        |> encode_bizAiMetadataSync(msg)
+        |> encode_unknown_fields(msg)
       end
     )
 
@@ -32,6 +35,18 @@ defmodule WAWebProtobufsAICommon.AIMetadataOperation do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:hatchMetadataSync, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_bizAiMetadataSync(acc, msg) do
+        try do
+          case msg.bizAiMetadataSync do
+            nil -> acc
+            _ -> [acc, "\x12", Protox.Encode.encode_message(msg.bizAiMetadataSync)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:bizAiMetadataSync, "invalid field value"),
                     __STACKTRACE__
         end
       end
@@ -101,6 +116,18 @@ defmodule WAWebProtobufsAICommon.AIMetadataOperation do
                    )
                ], rest}
 
+            {2, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 bizAiMetadataSync:
+                   Protox.MergeMessage.merge(
+                     msg.bizAiMetadataSync,
+                     WAWebProtobufsAICommon.BizAIMetadataSync.decode!(delimited)
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -164,7 +191,10 @@ defmodule WAWebProtobufsAICommon.AIMetadataOperation do
       %{
         1 =>
           {:hatchMetadataSync, {:scalar, nil},
-           {:message, WAWebProtobufsAICommon.HatchMetadataSync}}
+           {:message, WAWebProtobufsAICommon.HatchMetadataSync}},
+        2 =>
+          {:bizAiMetadataSync, {:scalar, nil},
+           {:message, WAWebProtobufsAICommon.BizAIMetadataSync}}
       }
     end
 
@@ -174,6 +204,8 @@ defmodule WAWebProtobufsAICommon.AIMetadataOperation do
           }
     def defs_by_name() do
       %{
+        bizAiMetadataSync:
+          {2, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BizAIMetadataSync}},
         hatchMetadataSync:
           {1, {:scalar, nil}, {:message, WAWebProtobufsAICommon.HatchMetadataSync}}
       }
@@ -192,6 +224,15 @@ defmodule WAWebProtobufsAICommon.AIMetadataOperation do
           name: :hatchMetadataSync,
           tag: 1,
           type: {:message, WAWebProtobufsAICommon.HatchMetadataSync}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "bizAiMetadataSync",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :bizAiMetadataSync,
+          tag: 2,
+          type: {:message, WAWebProtobufsAICommon.BizAIMetadataSync}
         }
       ]
     end
@@ -222,6 +263,35 @@ defmodule WAWebProtobufsAICommon.AIMetadataOperation do
              name: :hatchMetadataSync,
              tag: 1,
              type: {:message, WAWebProtobufsAICommon.HatchMetadataSync}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:bizAiMetadataSync) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "bizAiMetadataSync",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :bizAiMetadataSync,
+             tag: 2,
+             type: {:message, WAWebProtobufsAICommon.BizAIMetadataSync}
+           }}
+        end
+
+        def field_def("bizAiMetadataSync") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "bizAiMetadataSync",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :bizAiMetadataSync,
+             tag: 2,
+             type: {:message, WAWebProtobufsAICommon.BizAIMetadataSync}
            }}
         end
 
@@ -267,6 +337,9 @@ defmodule WAWebProtobufsAICommon.AIMetadataOperation do
   [
     @spec(default(atom) :: {:ok, boolean | integer | String.t() | float} | {:error, atom}),
     def default(:hatchMetadataSync) do
+      {:ok, nil}
+    end,
+    def default(:bizAiMetadataSync) do
       {:ok, nil}
     end,
     def default(_) do

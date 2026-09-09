@@ -1,7 +1,12 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsE2E.AIRichResponseMessage do
   @moduledoc false
-  defstruct messageType: nil, submessages: [], unifiedResponse: nil, contextInfo: nil, __uf__: []
+  defstruct messageType: nil,
+            submessages: [],
+            unifiedResponse: nil,
+            contextInfo: nil,
+            originalRecipientMetadata: nil,
+            __uf__: []
 
   (
     (
@@ -21,6 +26,7 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
         |> encode_submessages(msg)
         |> encode_unifiedResponse(msg)
         |> encode_contextInfo(msg)
+        |> encode_originalRecipientMetadata(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -88,6 +94,18 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:contextInfo, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_originalRecipientMetadata(acc, msg) do
+        try do
+          case msg.originalRecipientMetadata do
+            nil -> acc
+            _ -> [acc, "*", Protox.Encode.encode_message(msg.originalRecipientMetadata)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:originalRecipientMetadata, "invalid field value"),
+                    __STACKTRACE__
         end
       end
     ]
@@ -184,6 +202,18 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
                    )
                ], rest}
 
+            {5, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 originalRecipientMetadata:
+                   Protox.MergeMessage.merge(
+                     msg.originalRecipientMetadata,
+                     WAWebProtobufsAICommon.AIRichResponseUnifiedResponse.decode!(delimited)
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -252,7 +282,10 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
         3 =>
           {:unifiedResponse, {:scalar, nil},
            {:message, WAWebProtobufsAICommon.AIRichResponseUnifiedResponse}},
-        4 => {:contextInfo, {:scalar, nil}, {:message, WAWebProtobufsE2E.ContextInfo}}
+        4 => {:contextInfo, {:scalar, nil}, {:message, WAWebProtobufsE2E.ContextInfo}},
+        5 =>
+          {:originalRecipientMetadata, {:scalar, nil},
+           {:message, WAWebProtobufsAICommon.AIRichResponseUnifiedResponse}}
       }
     end
 
@@ -266,6 +299,8 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
         messageType:
           {1, {:scalar, :AI_RICH_RESPONSE_TYPE_UNKNOWN},
            {:enum, WAAICommonDeprecated.AIRichResponseMessageType}},
+        originalRecipientMetadata:
+          {5, {:scalar, nil}, {:message, WAWebProtobufsAICommon.AIRichResponseUnifiedResponse}},
         submessages: {2, :unpacked, {:message, WAAICommonDeprecated.AIRichResponseSubMessage}},
         unifiedResponse:
           {3, {:scalar, nil}, {:message, WAWebProtobufsAICommon.AIRichResponseUnifiedResponse}}
@@ -312,6 +347,15 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
           name: :contextInfo,
           tag: 4,
           type: {:message, WAWebProtobufsE2E.ContextInfo}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "originalRecipientMetadata",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :originalRecipientMetadata,
+          tag: 5,
+          type: {:message, WAWebProtobufsAICommon.AIRichResponseUnifiedResponse}
         }
       ]
     end
@@ -434,6 +478,35 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
 
         []
       ),
+      (
+        def field_def(:originalRecipientMetadata) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "originalRecipientMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :originalRecipientMetadata,
+             tag: 5,
+             type: {:message, WAWebProtobufsAICommon.AIRichResponseUnifiedResponse}
+           }}
+        end
+
+        def field_def("originalRecipientMetadata") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "originalRecipientMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :originalRecipientMetadata,
+             tag: 5,
+             type: {:message, WAWebProtobufsAICommon.AIRichResponseUnifiedResponse}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -483,6 +556,9 @@ defmodule WAWebProtobufsE2E.AIRichResponseMessage do
       {:ok, nil}
     end,
     def default(:contextInfo) do
+      {:ok, nil}
+    end,
+    def default(:originalRecipientMetadata) do
       {:ok, nil}
     end,
     def default(_) do

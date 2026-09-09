@@ -43,6 +43,7 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
             subscriptionUpsellMetadata: nil,
             pttPromptMetadata: nil,
             botHistoryShareMetadata: nil,
+            responseStoppedByUser: nil,
             internalMetadata: nil,
             __uf__: []
 
@@ -102,6 +103,7 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
         |> encode_subscriptionUpsellMetadata(msg)
         |> encode_pttPromptMetadata(msg)
         |> encode_botHistoryShareMetadata(msg)
+        |> encode_responseStoppedByUser(msg)
         |> encode_internalMetadata(msg)
         |> encode_unknown_fields(msg)
       end
@@ -610,6 +612,18 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:botHistoryShareMetadata, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_responseStoppedByUser(acc, msg) do
+        try do
+          case msg.responseStoppedByUser do
+            nil -> acc
+            _ -> [acc, "\xE0\x02", Protox.Encode.encode_bool(msg.responseStoppedByUser)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:responseStoppedByUser, "invalid field value"),
                     __STACKTRACE__
         end
       end,
@@ -1134,6 +1148,10 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
                    )
                ], rest}
 
+            {44, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_bool(bytes)
+              {[responseStoppedByUser: value], rest}
+
             {999, _, bytes} ->
               {len, bytes} = Protox.Varint.decode(bytes)
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
@@ -1303,6 +1321,7 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
         43 =>
           {:botHistoryShareMetadata, {:scalar, nil},
            {:message, WAWebProtobufsAICommon.BotHistoryShareMetadata}},
+        44 => {:responseStoppedByUser, {:scalar, false}, :bool},
         999 => {:internalMetadata, {:scalar, ""}, :bytes}
       }
     end
@@ -1372,6 +1391,7 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
           {16, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotRenderingMetadata}},
         resolvedToolCallMetadata:
           {40, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotResolvedToolCallMetadata}},
+        responseStoppedByUser: {44, {:scalar, false}, :bool},
         richResponseSourcesMetadata:
           {19, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotSourcesMetadata}},
         sessionMetadata:
@@ -1773,6 +1793,15 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
           name: :botHistoryShareMetadata,
           tag: 43,
           type: {:message, WAWebProtobufsAICommon.BotHistoryShareMetadata}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "responseStoppedByUser",
+          kind: {:scalar, false},
+          label: :optional,
+          name: :responseStoppedByUser,
+          tag: 44,
+          type: :bool
         },
         %{
           __struct__: Protox.Field,
@@ -3007,6 +3036,35 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
         []
       ),
       (
+        def field_def(:responseStoppedByUser) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "responseStoppedByUser",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :responseStoppedByUser,
+             tag: 44,
+             type: :bool
+           }}
+        end
+
+        def field_def("responseStoppedByUser") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "responseStoppedByUser",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :responseStoppedByUser,
+             tag: 44,
+             type: :bool
+           }}
+        end
+
+        []
+      ),
+      (
         def field_def(:internalMetadata) do
           {:ok,
            %{
@@ -3199,6 +3257,9 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
     end,
     def default(:botHistoryShareMetadata) do
       {:ok, nil}
+    end,
+    def default(:responseStoppedByUser) do
+      {:ok, false}
     end,
     def default(:internalMetadata) do
       {:ok, ""}

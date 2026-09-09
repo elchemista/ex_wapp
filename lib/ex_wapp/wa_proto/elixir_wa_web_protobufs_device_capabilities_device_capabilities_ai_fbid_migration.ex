@@ -1,7 +1,7 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.AiFbidMigration do
   @moduledoc false
-  defstruct chatDbMigrationTimestamp: nil, __uf__: []
+  defstruct chatDbMigrationTimestamp: nil, supportVersion: nil, __uf__: []
 
   (
     (
@@ -16,7 +16,10 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.AiFbidMigration do
 
       @spec encode!(struct) :: iodata | no_return
       def encode!(msg) do
-        [] |> encode_chatDbMigrationTimestamp(msg) |> encode_unknown_fields(msg)
+        []
+        |> encode_chatDbMigrationTimestamp(msg)
+        |> encode_supportVersion(msg)
+        |> encode_unknown_fields(msg)
       end
     )
 
@@ -32,6 +35,18 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.AiFbidMigration do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:chatDbMigrationTimestamp, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_supportVersion(acc, msg) do
+        try do
+          case msg.supportVersion do
+            nil -> acc
+            _ -> [acc, "\x10", Protox.Encode.encode_uint32(msg.supportVersion)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:supportVersion, "invalid field value"),
                     __STACKTRACE__
         end
       end
@@ -96,6 +111,10 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.AiFbidMigration do
               {value, rest} = Protox.Decode.parse_uint64(bytes)
               {[chatDbMigrationTimestamp: value], rest}
 
+            {2, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_uint32(bytes)
+              {[supportVersion: value], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -156,7 +175,10 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.AiFbidMigration do
             required(non_neg_integer) => {atom, Protox.Types.kind(), Protox.Types.type()}
           }
     def defs() do
-      %{1 => {:chatDbMigrationTimestamp, {:scalar, 0}, :uint64}}
+      %{
+        1 => {:chatDbMigrationTimestamp, {:scalar, 0}, :uint64},
+        2 => {:supportVersion, {:scalar, 0}, :uint32}
+      }
     end
 
     @deprecated "Use fields_defs()/0 instead"
@@ -164,7 +186,10 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.AiFbidMigration do
             required(atom) => {non_neg_integer, Protox.Types.kind(), Protox.Types.type()}
           }
     def defs_by_name() do
-      %{chatDbMigrationTimestamp: {1, {:scalar, 0}, :uint64}}
+      %{
+        chatDbMigrationTimestamp: {1, {:scalar, 0}, :uint64},
+        supportVersion: {2, {:scalar, 0}, :uint32}
+      }
     end
   )
 
@@ -180,6 +205,15 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.AiFbidMigration do
           name: :chatDbMigrationTimestamp,
           tag: 1,
           type: :uint64
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "supportVersion",
+          kind: {:scalar, 0},
+          label: :optional,
+          name: :supportVersion,
+          tag: 2,
+          type: :uint32
         }
       ]
     end
@@ -210,6 +244,35 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.AiFbidMigration do
              name: :chatDbMigrationTimestamp,
              tag: 1,
              type: :uint64
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:supportVersion) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "supportVersion",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :supportVersion,
+             tag: 2,
+             type: :uint32
+           }}
+        end
+
+        def field_def("supportVersion") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "supportVersion",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :supportVersion,
+             tag: 2,
+             type: :uint32
            }}
         end
 
@@ -255,6 +318,9 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.AiFbidMigration do
   [
     @spec(default(atom) :: {:ok, boolean | integer | String.t() | float} | {:error, atom}),
     def default(:chatDbMigrationTimestamp) do
+      {:ok, 0}
+    end,
+    def default(:supportVersion) do
       {:ok, 0}
     end,
     def default(_) do

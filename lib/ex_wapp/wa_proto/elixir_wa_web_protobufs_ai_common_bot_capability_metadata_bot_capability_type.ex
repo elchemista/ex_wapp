@@ -642,6 +642,24 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
         def encode("AI_RICH_RESPONSE_REMINDERS_ENABLED") do
           69
         end
+      ),
+      (
+        def encode(:AI_STOP_GENERATION_ENABLED) do
+          70
+        end
+
+        def encode("AI_STOP_GENERATION_ENABLED") do
+          70
+        end
+      ),
+      (
+        def encode(:AI_RICH_RESPONSE_3P_LINKING_CARD_ENABLED) do
+          71
+        end
+
+        def encode("AI_RICH_RESPONSE_3P_LINKING_CARD_ENABLED") do
+          71
+        end
       )
     ]
 
@@ -714,6 +732,9 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       def decode(31) do
         :RICH_RESPONSE_LATEX_INLINE
       end,
+      def decode(70) do
+        :AI_STOP_GENERATION_ENABLED
+      end,
       def decode(8) do
         :RICH_RESPONSE_STRUCTURED_RESPONSE
       end,
@@ -731,6 +752,9 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       end,
       def decode(49) do
         :RICH_RESPONSE_UR_REASONING
+      end,
+      def decode(71) do
+        :AI_RICH_RESPONSE_3P_LINKING_CARD_ENABLED
       end,
       def decode(66) do
         :RICH_RESPONSE_SPORTS_WIDGET_ENABLED
@@ -939,7 +963,9 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
         {66, :RICH_RESPONSE_SPORTS_WIDGET_ENABLED},
         {67, :AI_RICH_RESPONSE_ARTIFACTS_ENABLED},
         {68, :AI_RICH_RESPONSE_EMAIL_CALENDAR_ENABLED},
-        {69, :AI_RICH_RESPONSE_REMINDERS_ENABLED}
+        {69, :AI_RICH_RESPONSE_REMINDERS_ENABLED},
+        {70, :AI_STOP_GENERATION_ENABLED},
+        {71, :AI_RICH_RESPONSE_3P_LINKING_CARD_ENABLED}
       ]
     end
 
@@ -1154,6 +1180,12 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
           true
         end,
         def has_constant?(:AI_RICH_RESPONSE_REMINDERS_ENABLED) do
+          true
+        end,
+        def has_constant?(:AI_STOP_GENERATION_ENABLED) do
+          true
+        end,
+        def has_constant?(:AI_RICH_RESPONSE_3P_LINKING_CARD_ENABLED) do
           true
         end
       ]

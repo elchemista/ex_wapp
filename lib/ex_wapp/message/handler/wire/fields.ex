@@ -145,6 +145,7 @@ defmodule ExWapp.Message.Handler.Wire.Fields do
       decode_wire_fields_acc(next, [{field_num, 2, value} | acc])
     else
       false -> {:error, :invalid_length}
+      {:error, _} = error -> error
     end
   end
 
@@ -222,6 +223,7 @@ defmodule ExWapp.Message.Handler.Wire.Fields do
         else: do_find_length_delimited_field(next, field_num)
     else
       false -> {:error, :invalid_length}
+      {:error, _} = error -> error
     end
   end
 
@@ -296,6 +298,7 @@ defmodule ExWapp.Message.Handler.Wire.Fields do
       collect_length_delimited_fields(next, [value | acc])
     else
       false -> {:error, :invalid_length}
+      {:error, _} = error -> error
     end
   end
 

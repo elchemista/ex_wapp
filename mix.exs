@@ -1,7 +1,7 @@
 defmodule ExWapp.MixProject do
   use Mix.Project
 
-  @version "0.1.2"
+  @version "0.1.3"
   @author "Yuriy Zhar"
   @source_url "https://github.com/elchemista/ex_wapp"
   @author_url "https://github.com/elchemista"
@@ -123,7 +123,7 @@ defmodule ExWapp.MixProject do
   defp test_coverage do
     [
       ignore_modules: [~r/^W[A-Z]/],
-      summary: [threshold: 67]
+      summary: [threshold: 70]
     ]
   end
 end

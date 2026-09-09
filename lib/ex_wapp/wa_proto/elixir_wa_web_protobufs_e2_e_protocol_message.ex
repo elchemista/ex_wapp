@@ -31,6 +31,7 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
             aiMetadataOperation: nil,
             markAsVerifiedAction: nil,
             coexStateSync: nil,
+            acp2Setting: nil,
             __uf__: []
 
   (
@@ -77,6 +78,7 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
         |> encode_aiMetadataOperation(msg)
         |> encode_markAsVerifiedAction(msg)
         |> encode_coexStateSync(msg)
+        |> encode_acp2Setting(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -493,6 +495,17 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
             reraise Protox.EncodingError.new(:coexStateSync, "invalid field value"),
                     __STACKTRACE__
         end
+      end,
+      defp encode_acp2Setting(acc, msg) do
+        try do
+          case msg.acp2Setting do
+            nil -> acc
+            _ -> [acc, "\x9A\x02", Protox.Encode.encode_message(msg.acp2Setting)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:acp2Setting, "invalid field value"), __STACKTRACE__
+        end
       end
     ]
 
@@ -851,6 +864,18 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
                    )
                ], rest}
 
+            {35, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 acp2Setting:
+                   Protox.MergeMessage.merge(
+                     msg.acp2Setting,
+                     WACommon.ACP2Setting.decode!(delimited)
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -970,7 +995,9 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
         32 =>
           {:markAsVerifiedAction, {:scalar, nil},
            {:message, WAWebProtobufsE2E.MarkAsVerifiedAction}},
-        33 => {:coexStateSync, {:scalar, nil}, {:message, WAWebProtobufsServerSync.CoexStateSync}}
+        33 =>
+          {:coexStateSync, {:scalar, nil}, {:message, WAWebProtobufsServerSync.CoexStateSync}},
+        35 => {:acp2Setting, {:scalar, nil}, {:message, WACommon.ACP2Setting}}
       }
     end
 
@@ -980,6 +1007,7 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
           }
     def defs_by_name() do
       %{
+        acp2Setting: {35, {:scalar, nil}, {:message, WACommon.ACP2Setting}},
         afterReadDuration: {29, {:scalar, 0}, :uint32},
         aiMediaCollectionMessage:
           {28, {:scalar, nil}, {:message, WAWebProtobufsAICommon.AIMediaCollectionMessage}},
@@ -1304,6 +1332,15 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
           name: :coexStateSync,
           tag: 33,
           type: {:message, WAWebProtobufsServerSync.CoexStateSync}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "acp2Setting",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :acp2Setting,
+          tag: 35,
+          type: {:message, WACommon.ACP2Setting}
         }
       ]
     end
@@ -2180,6 +2217,35 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
 
         []
       ),
+      (
+        def field_def(:acp2Setting) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "acp2Setting",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :acp2Setting,
+             tag: 35,
+             type: {:message, WACommon.ACP2Setting}
+           }}
+        end
+
+        def field_def("acp2Setting") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "acp2Setting",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :acp2Setting,
+             tag: 35,
+             type: {:message, WACommon.ACP2Setting}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -2307,6 +2373,9 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
       {:ok, nil}
     end,
     def default(:coexStateSync) do
+      {:ok, nil}
+    end,
+    def default(:acp2Setting) do
       {:ok, nil}
     end,
     def default(_) do

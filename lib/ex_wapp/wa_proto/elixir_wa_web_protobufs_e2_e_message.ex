@@ -111,6 +111,8 @@ defmodule WAWebProtobufsE2E.Message do
             musicMessage: nil,
             statusLinkPreviewMetadata: nil,
             botPlatformRegistrationSuccessMessage: nil,
+            newsletterScheduledMessage: nil,
+            acp2SettingMessage: nil,
             __uf__: []
 
   (
@@ -237,6 +239,8 @@ defmodule WAWebProtobufsE2E.Message do
         |> encode_musicMessage(msg)
         |> encode_statusLinkPreviewMetadata(msg)
         |> encode_botPlatformRegistrationSuccessMessage(msg)
+        |> encode_newsletterScheduledMessage(msg)
+        |> encode_acp2SettingMessage(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -1613,6 +1617,30 @@ defmodule WAWebProtobufsE2E.Message do
                     ),
                     __STACKTRACE__
         end
+      end,
+      defp encode_newsletterScheduledMessage(acc, msg) do
+        try do
+          case msg.newsletterScheduledMessage do
+            nil -> acc
+            _ -> [acc, "\xA2\b", Protox.Encode.encode_message(msg.newsletterScheduledMessage)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:newsletterScheduledMessage, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_acp2SettingMessage(acc, msg) do
+        try do
+          case msg.acp2SettingMessage do
+            nil -> acc
+            _ -> [acc, "\xAA\b", Protox.Encode.encode_message(msg.acp2SettingMessage)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:acp2SettingMessage, "invalid field value"),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -2975,6 +3003,30 @@ defmodule WAWebProtobufsE2E.Message do
                    )
                ], rest}
 
+            {132, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 newsletterScheduledMessage:
+                   Protox.MergeMessage.merge(
+                     msg.newsletterScheduledMessage,
+                     WAWebProtobufsE2E.FutureProofMessage.decode!(delimited)
+                   )
+               ], rest}
+
+            {133, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 acp2SettingMessage:
+                   Protox.MergeMessage.merge(
+                     msg.acp2SettingMessage,
+                     WAWebProtobufsE2E.FutureProofMessage.decode!(delimited)
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -3285,7 +3337,12 @@ defmodule WAWebProtobufsE2E.Message do
            {:message, WAWebProtobufsE2E.StatusLinkPreviewMetadata}},
         131 =>
           {:botPlatformRegistrationSuccessMessage, {:scalar, nil},
-           {:message, WAWebProtobufsE2E.FutureProofMessage}}
+           {:message, WAWebProtobufsE2E.FutureProofMessage}},
+        132 =>
+          {:newsletterScheduledMessage, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.FutureProofMessage}},
+        133 =>
+          {:acp2SettingMessage, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}}
       }
     end
 
@@ -3295,6 +3352,8 @@ defmodule WAWebProtobufsE2E.Message do
           }
     def defs_by_name() do
       %{
+        acp2SettingMessage:
+          {133, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         albumMessage: {83, {:scalar, nil}, {:message, WAWebProtobufsE2E.AlbumMessage}},
         associatedChildMessage:
           {91, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
@@ -3387,6 +3446,8 @@ defmodule WAWebProtobufsE2E.Message do
           {126, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         newsletterFollowerInviteMessageV2:
           {113, {:scalar, nil}, {:message, WAWebProtobufsE2E.NewsletterFollowerInviteMessage}},
+        newsletterScheduledMessage:
+          {132, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         orderMessage: {38, {:scalar, nil}, {:message, WAWebProtobufsE2E.OrderMessage}},
         paymentInviteMessage:
           {44, {:scalar, nil}, {:message, WAWebProtobufsE2E.PaymentInviteMessage}},
@@ -4470,6 +4531,24 @@ defmodule WAWebProtobufsE2E.Message do
           label: :optional,
           name: :botPlatformRegistrationSuccessMessage,
           tag: 131,
+          type: {:message, WAWebProtobufsE2E.FutureProofMessage}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "newsletterScheduledMessage",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :newsletterScheduledMessage,
+          tag: 132,
+          type: {:message, WAWebProtobufsE2E.FutureProofMessage}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "acp2SettingMessage",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :acp2SettingMessage,
+          tag: 133,
           type: {:message, WAWebProtobufsE2E.FutureProofMessage}
         }
       ]
@@ -7667,6 +7746,64 @@ defmodule WAWebProtobufsE2E.Message do
 
         []
       ),
+      (
+        def field_def(:newsletterScheduledMessage) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "newsletterScheduledMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :newsletterScheduledMessage,
+             tag: 132,
+             type: {:message, WAWebProtobufsE2E.FutureProofMessage}
+           }}
+        end
+
+        def field_def("newsletterScheduledMessage") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "newsletterScheduledMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :newsletterScheduledMessage,
+             tag: 132,
+             type: {:message, WAWebProtobufsE2E.FutureProofMessage}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:acp2SettingMessage) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "acp2SettingMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :acp2SettingMessage,
+             tag: 133,
+             type: {:message, WAWebProtobufsE2E.FutureProofMessage}
+           }}
+        end
+
+        def field_def("acp2SettingMessage") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "acp2SettingMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :acp2SettingMessage,
+             tag: 133,
+             type: {:message, WAWebProtobufsE2E.FutureProofMessage}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -8034,6 +8171,12 @@ defmodule WAWebProtobufsE2E.Message do
       {:ok, nil}
     end,
     def default(:botPlatformRegistrationSuccessMessage) do
+      {:ok, nil}
+    end,
+    def default(:newsletterScheduledMessage) do
+      {:ok, nil}
+    end,
+    def default(:acp2SettingMessage) do
       {:ok, nil}
     end,
     def default(_) do

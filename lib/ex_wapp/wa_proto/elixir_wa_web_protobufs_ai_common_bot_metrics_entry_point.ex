@@ -453,6 +453,15 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
         def encode("CONTACTS_TAB") do
           57
         end
+      ),
+      (
+        def encode(:NEW_3P_AGENT_CREATION) do
+          58
+        end
+
+        def encode("NEW_3P_AGENT_CREATION") do
+          58
+        end
       )
     ]
 
@@ -533,6 +542,9 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
       end,
       def decode(32) do
         :NEW_CHAT_AI_CONTACT
+      end,
+      def decode(58) do
+        :NEW_3P_AGENT_CREATION
       end,
       def decode(1) do
         :FAVICON
@@ -666,7 +678,8 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
         {54, :GROUP_MEMBER},
         {55, :CHATLIST_SEARCH},
         {56, :NEW_CHAT_LIST},
-        {57, :CONTACTS_TAB}
+        {57, :CONTACTS_TAB},
+        {58, :NEW_3P_AGENT_CREATION}
       ]
     end
 
@@ -818,6 +831,9 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
           true
         end,
         def has_constant?(:CONTACTS_TAB) do
+          true
+        end,
+        def has_constant?(:NEW_3P_AGENT_CREATION) do
           true
         end
       ]

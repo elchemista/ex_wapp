@@ -9,6 +9,42 @@ Application developers should not build against the modules described here.
 The only supported application boundary is the `ExWapp` facade operating on a
 `%ExWapp.Client{}`.
 
+## Upstream snapshot: 2026-09-09
+
+The default WhatsApp Web version is `2.3000.1047068806`, verified against
+[whatsmeow `9ec8f76`](https://github.com/tulir/whatsmeow/tree/9ec8f76db5f17712efc34a29b684a80d2dcb4aaf).
+The generated Protox modules use that same checkout. Compared with the previous
+[August snapshot](https://github.com/tulir/whatsmeow/compare/33cfac5116293e4cb86f8e4099e8eaf6de7ebc08...9ec8f76db5f17712efc34a29b684a80d2dcb4aaf),
+the imported schema changes add fields and enum values without removing or
+renumbering existing fields:
+
+- ACP2 settings in protocol messages, message context and message wrappers.
+- Scheduled newsletter wrappers, DASH video manifest URLs, packed experience
+  IDs and TEE context anchors.
+- Business AI onboarding events, response-stop metadata, new bot capabilities
+  and original-recipient AI response metadata.
+- AI migration and business broadcast device capabilities, plus `WORK_ANDROID`
+  and `WORK_IOS` user-agent platform values.
+
+These additions provide protobuf encoding and decoding; they do not add public
+APIs for the corresponding features. The binary token dictionary is unchanged.
+The upstream Labyrinth/WASM schema also changed, but it is outside this client's
+generated entrypoints and runtime.
+
+Other upstream commits adjust Go socket context lifetime and stream-error
+ordering, self-authored history messages in LID chats, unencrypted thumbnails
+and group metadata handling. They are separate runtime changes, not imported by
+protobuf regeneration. Upstream also added
+[experimental `companion_reg_refresh` handling](https://github.com/tulir/whatsmeow/commit/9ec8f76db5f17712efc34a29b684a80d2dcb4aaf)
+to rotate the ADV secret and refresh QR codes; ExWapp does not implement that
+notification yet.
+
+To refresh this snapshot, run `scripts/update_wa_protos.sh`, compare the version
+in `tmp/whatsmeow_upstream/store/clientpayload.go` with `ExWapp.Config`, and update
+the verification date after checking upstream. Run the full test suite after
+the script's wire checks. Version verification records the upstream value;
+successful pairing still requires validation against a live WhatsApp account.
+
 ## Addressing and identity
 
 ### JID families

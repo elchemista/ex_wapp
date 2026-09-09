@@ -6,6 +6,7 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BusinessBroadcast 
             campaignSyncEnabled: nil,
             insightsSyncEnabled: nil,
             recipientLimit: nil,
+            proCompanionSupportEnabled: nil,
             __uf__: []
 
   (
@@ -27,6 +28,7 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BusinessBroadcast 
         |> encode_campaignSyncEnabled(msg)
         |> encode_insightsSyncEnabled(msg)
         |> encode_recipientLimit(msg)
+        |> encode_proCompanionSupportEnabled(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -91,6 +93,18 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BusinessBroadcast 
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:recipientLimit, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_proCompanionSupportEnabled(acc, msg) do
+        try do
+          case msg.proCompanionSupportEnabled do
+            nil -> acc
+            _ -> [acc, "0", Protox.Encode.encode_bool(msg.proCompanionSupportEnabled)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:proCompanionSupportEnabled, "invalid field value"),
                     __STACKTRACE__
         end
       end
@@ -171,6 +185,10 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BusinessBroadcast 
               {value, rest} = Protox.Decode.parse_int32(bytes)
               {[recipientLimit: value], rest}
 
+            {6, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_bool(bytes)
+              {[proCompanionSupportEnabled: value], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -236,7 +254,8 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BusinessBroadcast 
         2 => {:companionSupportEnabled, {:scalar, false}, :bool},
         3 => {:campaignSyncEnabled, {:scalar, false}, :bool},
         4 => {:insightsSyncEnabled, {:scalar, false}, :bool},
-        5 => {:recipientLimit, {:scalar, 0}, :int32}
+        5 => {:recipientLimit, {:scalar, 0}, :int32},
+        6 => {:proCompanionSupportEnabled, {:scalar, false}, :bool}
       }
     end
 
@@ -250,6 +269,7 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BusinessBroadcast 
         companionSupportEnabled: {2, {:scalar, false}, :bool},
         importListEnabled: {1, {:scalar, false}, :bool},
         insightsSyncEnabled: {4, {:scalar, false}, :bool},
+        proCompanionSupportEnabled: {6, {:scalar, false}, :bool},
         recipientLimit: {5, {:scalar, 0}, :int32}
       }
     end
@@ -303,6 +323,15 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BusinessBroadcast 
           name: :recipientLimit,
           tag: 5,
           type: :int32
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "proCompanionSupportEnabled",
+          kind: {:scalar, false},
+          label: :optional,
+          name: :proCompanionSupportEnabled,
+          tag: 6,
+          type: :bool
         }
       ]
     end
@@ -454,6 +483,35 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BusinessBroadcast 
 
         []
       ),
+      (
+        def field_def(:proCompanionSupportEnabled) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "proCompanionSupportEnabled",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :proCompanionSupportEnabled,
+             tag: 6,
+             type: :bool
+           }}
+        end
+
+        def field_def("proCompanionSupportEnabled") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "proCompanionSupportEnabled",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :proCompanionSupportEnabled,
+             tag: 6,
+             type: :bool
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -507,6 +565,9 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BusinessBroadcast 
     end,
     def default(:recipientLimit) do
       {:ok, 0}
+    end,
+    def default(:proCompanionSupportEnabled) do
+      {:ok, false}
     end,
     def default(_) do
       {:error, :no_such_field}

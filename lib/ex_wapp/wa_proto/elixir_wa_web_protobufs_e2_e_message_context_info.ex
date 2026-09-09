@@ -20,6 +20,8 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
             teeBotMetadata: nil,
             accountEncryptionAttestation: nil,
             associatedPrimaryIdentityKey: nil,
+            teeContextAnchorMessageID: nil,
+            acp2Setting: nil,
             __uf__: []
 
   (
@@ -55,6 +57,8 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
         |> encode_teeBotMetadata(msg)
         |> encode_accountEncryptionAttestation(msg)
         |> encode_associatedPrimaryIdentityKey(msg)
+        |> encode_teeContextAnchorMessageID(msg)
+        |> encode_acp2Setting(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -317,6 +321,29 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
                     ),
                     __STACKTRACE__
         end
+      end,
+      defp encode_teeContextAnchorMessageID(acc, msg) do
+        try do
+          case msg.teeContextAnchorMessageID do
+            nil -> acc
+            _ -> [acc, "\xA2\x01", Protox.Encode.encode_string(msg.teeContextAnchorMessageID)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:teeContextAnchorMessageID, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_acp2Setting(acc, msg) do
+        try do
+          case msg.acp2Setting do
+            nil -> acc
+            _ -> [acc, "\xAA\x01", Protox.Encode.encode_message(msg.acp2Setting)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:acp2Setting, "invalid field value"), __STACKTRACE__
+        end
       end
     ]
 
@@ -510,6 +537,23 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[associatedPrimaryIdentityKey: delimited], rest}
 
+            {20, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[teeContextAnchorMessageID: Protox.Decode.validate_string!(delimited)], rest}
+
+            {21, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 acp2Setting:
+                   Protox.MergeMessage.merge(
+                     msg.acp2Setting,
+                     WACommon.ACP2Setting.decode!(delimited)
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -597,7 +641,9 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
         18 =>
           {:accountEncryptionAttestation, {:scalar, nil},
            {:message, WAWebProtobufsAea.NonE2EEAttestation}},
-        19 => {:associatedPrimaryIdentityKey, {:scalar, ""}, :bytes}
+        19 => {:associatedPrimaryIdentityKey, {:scalar, ""}, :bytes},
+        20 => {:teeContextAnchorMessageID, {:scalar, ""}, :string},
+        21 => {:acp2Setting, {:scalar, nil}, {:message, WACommon.ACP2Setting}}
       }
     end
 
@@ -609,6 +655,7 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
       %{
         accountEncryptionAttestation:
           {18, {:scalar, nil}, {:message, WAWebProtobufsAea.NonE2EEAttestation}},
+        acp2Setting: {21, {:scalar, nil}, {:message, WACommon.ACP2Setting}},
         associatedPrimaryIdentityKey: {19, {:scalar, ""}, :bytes},
         botMessageSecret: {6, {:scalar, ""}, :bytes},
         botMetadata: {7, {:scalar, nil}, {:message, WAWebProtobufsAICommon.BotMetadata}},
@@ -628,6 +675,7 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
         reportingTokenVersion: {8, {:scalar, 0}, :int32},
         supportPayload: {12, {:scalar, ""}, :string},
         teeBotMetadata: {17, {:scalar, ""}, :bytes},
+        teeContextAnchorMessageID: {20, {:scalar, ""}, :string},
         threadID: {15, :unpacked, {:message, WAWebProtobufsE2E.ThreadID}},
         weblinkRenderConfig:
           {16, {:scalar, :WEBVIEW}, {:enum, WAWebProtobufsE2E.WebLinkRenderConfig}}
@@ -809,6 +857,24 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
           name: :associatedPrimaryIdentityKey,
           tag: 19,
           type: :bytes
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "teeContextAnchorMessageID",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :teeContextAnchorMessageID,
+          tag: 20,
+          type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "acp2Setting",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :acp2Setting,
+          tag: 21,
+          type: {:message, WACommon.ACP2Setting}
         }
       ]
     end
@@ -1366,6 +1432,64 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
 
         []
       ),
+      (
+        def field_def(:teeContextAnchorMessageID) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "teeContextAnchorMessageID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :teeContextAnchorMessageID,
+             tag: 20,
+             type: :string
+           }}
+        end
+
+        def field_def("teeContextAnchorMessageID") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "teeContextAnchorMessageID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :teeContextAnchorMessageID,
+             tag: 20,
+             type: :string
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:acp2Setting) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "acp2Setting",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :acp2Setting,
+             tag: 21,
+             type: {:message, WACommon.ACP2Setting}
+           }}
+        end
+
+        def field_def("acp2Setting") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "acp2Setting",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :acp2Setting,
+             tag: 21,
+             type: {:message, WACommon.ACP2Setting}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -1461,6 +1585,12 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
     end,
     def default(:associatedPrimaryIdentityKey) do
       {:ok, ""}
+    end,
+    def default(:teeContextAnchorMessageID) do
+      {:ok, ""}
+    end,
+    def default(:acp2Setting) do
+      {:ok, nil}
     end,
     def default(_) do
       {:error, :no_such_field}

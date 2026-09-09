@@ -31,6 +31,7 @@ defmodule WAWebProtobufsE2E.VideoMessage do
             motionPhotoPresentationOffsetMS: nil,
             metadataURL: nil,
             videoSourceType: nil,
+            dashManifestURL: nil,
             __uf__: []
 
   (
@@ -77,6 +78,7 @@ defmodule WAWebProtobufsE2E.VideoMessage do
         |> encode_motionPhotoPresentationOffsetMS(msg)
         |> encode_metadataURL(msg)
         |> encode_videoSourceType(msg)
+        |> encode_dashManifestURL(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -485,6 +487,18 @@ defmodule WAWebProtobufsE2E.VideoMessage do
             reraise Protox.EncodingError.new(:videoSourceType, "invalid field value"),
                     __STACKTRACE__
         end
+      end,
+      defp encode_dashManifestURL(acc, msg) do
+        try do
+          case msg.dashManifestURL do
+            nil -> acc
+            _ -> [acc, "\x8A\x02", Protox.Encode.encode_string(msg.dashManifestURL)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:dashManifestURL, "invalid field value"),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -703,6 +717,11 @@ defmodule WAWebProtobufsE2E.VideoMessage do
 
               {[videoSourceType: value], rest}
 
+            {33, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[dashManifestURL: Protox.Decode.validate_string!(delimited)], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -798,7 +817,8 @@ defmodule WAWebProtobufsE2E.VideoMessage do
         30 => {:metadataURL, {:scalar, ""}, :string},
         31 =>
           {:videoSourceType, {:scalar, :USER_VIDEO},
-           {:enum, WAWebProtobufsE2E.VideoMessage.VideoSourceType}}
+           {:enum, WAWebProtobufsE2E.VideoMessage.VideoSourceType}},
+        33 => {:dashManifestURL, {:scalar, ""}, :string}
       }
     end
 
@@ -814,6 +834,7 @@ defmodule WAWebProtobufsE2E.VideoMessage do
         annotations: {25, :unpacked, {:message, WAWebProtobufsE2E.InteractiveAnnotation}},
         caption: {7, {:scalar, ""}, :string},
         contextInfo: {17, {:scalar, nil}, {:message, WAWebProtobufsE2E.ContextInfo}},
+        dashManifestURL: {33, {:scalar, ""}, :string},
         directPath: {13, {:scalar, ""}, :string},
         externalShareFullVideoDurationInSeconds: {28, {:scalar, 0}, :uint32},
         fileEncSHA256: {11, {:scalar, ""}, :bytes},
@@ -1118,6 +1139,15 @@ defmodule WAWebProtobufsE2E.VideoMessage do
           name: :videoSourceType,
           tag: 31,
           type: {:enum, WAWebProtobufsE2E.VideoMessage.VideoSourceType}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "dashManifestURL",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :dashManifestURL,
+          tag: 33,
+          type: :string
         }
       ]
     end
@@ -1994,6 +2024,35 @@ defmodule WAWebProtobufsE2E.VideoMessage do
 
         []
       ),
+      (
+        def field_def(:dashManifestURL) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "dashManifestURL",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :dashManifestURL,
+             tag: 33,
+             type: :string
+           }}
+        end
+
+        def field_def("dashManifestURL") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "dashManifestURL",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :dashManifestURL,
+             tag: 33,
+             type: :string
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -2122,6 +2181,9 @@ defmodule WAWebProtobufsE2E.VideoMessage do
     end,
     def default(:videoSourceType) do
       {:ok, :USER_VIDEO}
+    end,
+    def default(:dashManifestURL) do
+      {:ok, ""}
     end,
     def default(_) do
       {:error, :no_such_field}

@@ -128,6 +128,80 @@ defmodule ExWapp.WaProtoE2EParityTest do
     end
   end
 
+  describe "September 2026 upstream wire fixtures" do
+    # Produced by protoc --encode=WAWebProtobufsE2E.Message against
+    # tulir/whatsmeow 9ec8f76db5f17712efc34a29b684a80d2dcb4aaf.
+    # These bytes are independent of Protox and pin the new field numbers,
+    # packed uint32 encoding and nested oneof alternatives.
+    test "ACP2 settings decode in protocol messages, context and wrappers" do
+      bytes =
+        Base.decode16!(
+          "621110279A020C080110011880A4A7DA0620009A020EA20106616E63686F72AA01020801" <>
+            "AA080B0A090A0770726976616379"
+        )
+
+      decoded = Message.decode!(bytes)
+      assert decoded.protocolMessage.type == :ACP2_SETTING
+
+      assert %WACommon.ACP2Setting{
+               enabled: true,
+               trigger: :CHAT_SETTING,
+               settingTimestamp: 1_800_000_000,
+               initiatedByMe: false
+             } = decoded.protocolMessage.acp2Setting
+
+      assert decoded.messageContextInfo.teeContextAnchorMessageID == "anchor"
+      assert decoded.messageContextInfo.acp2Setting.enabled == true
+      assert decoded.acp2SettingMessage.message.conversation == "privacy"
+      assert encode(decoded) == bytes
+    end
+
+    test "scheduled newsletter messages retain their nested payload" do
+      bytes = Base.decode16!("A2080D0A0B0A097363686564756C6564")
+      decoded = Message.decode!(bytes)
+
+      assert decoded.newsletterScheduledMessage.message.conversation == "scheduled"
+      assert encode(decoded) == bytes
+    end
+
+    test "DASH video metadata preserves packed experience IDs through uint32 maximum" do
+      bytes =
+        Base.decode16!(
+          "4A2F8A010B92050801AC02FFFFFFFF0F8A021E" <>
+            "68747470733A2F2F6578616D706C652E746573742F766964656F2E6D7064"
+        )
+
+      decoded = Message.decode!(bytes)
+
+      assert decoded.videoMessage.dashManifestURL == "https://example.test/video.mpd"
+      assert decoded.videoMessage.contextInfo.experienceIDs == [1, 300, 4_294_967_295]
+      assert encode(decoded) == bytes
+    end
+
+    test "business AI metadata preserves both server-event alternatives" do
+      fixtures = [
+        {"620B1023FA010612040A020801", {:protocolEvent, :AGENT_CHAT_READY}},
+        {"620D1023FA010812060A041202083C",
+         {:agentOnboardingStarted,
+          %WAWebProtobufsAICommon.BizAIMetadataSync.ServerEvent.AgentOnboardingStarted{
+            composerBlockDurationSecs: 60
+          }}}
+      ]
+
+      for {hex, expected_event} <- fixtures do
+        bytes = Base.decode16!(hex)
+        decoded = Message.decode!(bytes)
+        assert decoded.protocolMessage.type == :AI_METADATA_OPERATION
+
+        assert {:serverEvent, server_event} =
+                 decoded.protocolMessage.aiMetadataOperation.bizAiMetadataSync.operation
+
+        assert server_event.event == expected_event
+        assert encode(decoded) == bytes
+      end
+    end
+  end
+
   defp upload_fixture do
     %ExWapp.Media.Upload{
       url: "https://mmg.whatsapp.net/d/f/synthetic",

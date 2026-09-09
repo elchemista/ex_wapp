@@ -65,6 +65,7 @@ defmodule WAWebProtobufsE2E.ContextInfo do
             posterStatusID: nil,
             instagramThreadLink: nil,
             aiProvenance: nil,
+            experienceIDs: [],
             __uf__: []
 
   (
@@ -145,6 +146,7 @@ defmodule WAWebProtobufsE2E.ContextInfo do
         |> encode_posterStatusID(msg)
         |> encode_instagramThreadLink(msg)
         |> encode_aiProvenance(msg)
+        |> encode_experienceIDs(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -1011,6 +1013,33 @@ defmodule WAWebProtobufsE2E.ContextInfo do
           ArgumentError ->
             reraise Protox.EncodingError.new(:aiProvenance, "invalid field value"), __STACKTRACE__
         end
+      end,
+      defp encode_experienceIDs(acc, msg) do
+        try do
+          case msg.experienceIDs do
+            [] ->
+              acc
+
+            values ->
+              [
+                acc,
+                "\x92\x05",
+                (
+                  {bytes, len} =
+                    Enum.reduce(values, {[], 0}, fn value, {acc, len} ->
+                      value_bytes = :binary.list_to_bin([Protox.Encode.encode_uint32(value)])
+                      {[acc, value_bytes], len + byte_size(value_bytes)}
+                    end)
+
+                  [Protox.Varint.encode(len), bytes]
+                )
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:experienceIDs, "invalid field value"),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -1551,6 +1580,19 @@ defmodule WAWebProtobufsE2E.ContextInfo do
                    )
                ], rest}
 
+            {82, 2, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 experienceIDs:
+                   msg.experienceIDs ++ Protox.Decode.parse_repeated_uint32([], delimited)
+               ], rest}
+
+            {82, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_uint32(bytes)
+              {[experienceIDs: msg.experienceIDs ++ [value]], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -1711,7 +1753,8 @@ defmodule WAWebProtobufsE2E.ContextInfo do
         80 =>
           {:instagramThreadLink, {:scalar, nil},
            {:message, WAWebProtobufsE2E.ContextInfo.InstagramThreadLink}},
-        81 => {:aiProvenance, {:scalar, nil}, {:message, WAWebProtobufsAICommon.AIProvenance}}
+        81 => {:aiProvenance, {:scalar, nil}, {:message, WAWebProtobufsAICommon.AIProvenance}},
+        82 => {:experienceIDs, :packed, :uint32}
       }
     end
 
@@ -1750,6 +1793,7 @@ defmodule WAWebProtobufsE2E.ContextInfo do
         entryPointConversionSource: {29, {:scalar, ""}, :string},
         ephemeralSettingTimestamp: {26, {:scalar, 0}, :int64},
         ephemeralSharedSecret: {27, {:scalar, ""}, :bytes},
+        experienceIDs: {82, :packed, :uint32},
         expiration: {25, {:scalar, 0}, :uint32},
         externalAdReply:
           {28, {:scalar, nil}, {:message, WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo}},
@@ -2390,6 +2434,15 @@ defmodule WAWebProtobufsE2E.ContextInfo do
           name: :aiProvenance,
           tag: 81,
           type: {:message, WAWebProtobufsAICommon.AIProvenance}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "experienceIDs",
+          kind: :packed,
+          label: :repeated,
+          name: :experienceIDs,
+          tag: 82,
+          type: :uint32
         }
       ]
     end
@@ -4252,6 +4305,35 @@ defmodule WAWebProtobufsE2E.ContextInfo do
 
         []
       ),
+      (
+        def field_def(:experienceIDs) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "experienceIDs",
+             kind: :packed,
+             label: :repeated,
+             name: :experienceIDs,
+             tag: 82,
+             type: :uint32
+           }}
+        end
+
+        def field_def("experienceIDs") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "experienceIDs",
+             kind: :packed,
+             label: :repeated,
+             name: :experienceIDs,
+             tag: 82,
+             type: :uint32
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -4482,6 +4564,9 @@ defmodule WAWebProtobufsE2E.ContextInfo do
     end,
     def default(:aiProvenance) do
       {:ok, nil}
+    end,
+    def default(:experienceIDs) do
+      {:error, :no_default_value}
     end,
     def default(_) do
       {:error, :no_such_field}

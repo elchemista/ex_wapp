@@ -363,6 +363,24 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.Platform do
         def encode("WAIL") do
           38
         end
+      ),
+      (
+        def encode(:WORK_ANDROID) do
+          39
+        end
+
+        def encode("WORK_ANDROID") do
+          39
+        end
+      ),
+      (
+        def encode(:WORK_IOS) do
+          40
+        end
+
+        def encode("WORK_IOS") do
+          40
+        end
       )
     ]
 
@@ -456,6 +474,9 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.Platform do
       def decode(37) do
         :AR_WRIST
       end,
+      def decode(40) do
+        :WORK_IOS
+      end,
       def decode(14) do
         :WEB
       end,
@@ -488,6 +509,9 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.Platform do
       end,
       def decode(22) do
         :IGLITE_ANDROID
+      end,
+      def decode(39) do
+        :WORK_ANDROID
       end
     ]
 
@@ -536,7 +560,9 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.Platform do
         {35, :SMART_GLASSES},
         {36, :BLUE_VR},
         {37, :AR_WRIST},
-        {38, :WAIL}
+        {38, :WAIL},
+        {39, :WORK_ANDROID},
+        {40, :WORK_IOS}
       ]
     end
 
@@ -658,6 +684,12 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.Platform do
           true
         end,
         def has_constant?(:WAIL) do
+          true
+        end,
+        def has_constant?(:WORK_ANDROID) do
+          true
+        end,
+        def has_constant?(:WORK_IOS) do
           true
         end
       ]
