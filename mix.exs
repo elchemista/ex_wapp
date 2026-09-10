@@ -58,6 +58,7 @@ defmodule ExWapp.MixProject do
         "lib",
         "mix.exs",
         "README.md",
+        "CHANGELOG.md",
         "docs",
         "LICENSE"
       ],
@@ -80,6 +81,7 @@ defmodule ExWapp.MixProject do
       source_url: @source_url,
       extras: [
         "README.md",
+        "CHANGELOG.md",
         "docs/architecture.md",
         "docs/design-decisions.md",
         "docs/protocol-flow.md",

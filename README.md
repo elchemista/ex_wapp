@@ -8,6 +8,8 @@
 
 ExWapp is a runtime-neutral WhatsApp Web client library for Elixir, proven through sustained production use across multiple applications.
 
+See the [changelog](CHANGELOG.md) for release notes.
+
 ## Status and public API
 
 The only supported public application API is the `%ExWapp.Client{}` workflow
