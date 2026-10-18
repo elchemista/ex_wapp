@@ -14,6 +14,7 @@ defmodule ExWapp.Message.Handler.Wire do
            enc_type: binary(),
            enc_version: term(),
            enc_count: non_neg_integer() | nil,
+           enc_state: term(),
            ciphertext: binary() | nil,
            to_jid: binary()
          }
@@ -51,6 +52,7 @@ defmodule ExWapp.Message.Handler.Wire do
       enc_type: enc_type,
       enc_version: enc_version,
       enc_count: Map.get(List.first(enc_candidates) || %{}, :enc_count),
+      enc_state: Map.get(List.first(enc_candidates) || %{}, :enc_state),
       ciphertext: ciphertext,
       enc_candidates: enc_candidates
     }
@@ -97,6 +99,7 @@ defmodule ExWapp.Message.Handler.Wire do
               enc_type: Map.get(enc_attrs, "type", "msg"),
               enc_version: Common.parse_enc_version(Map.get(enc_attrs, "v")),
               enc_count: Common.parse_non_neg_integer(Map.get(enc_attrs, "count")),
+              enc_state: Map.get(enc_attrs, "state"),
               ciphertext: Common.normalize_content(enc_content),
               to_jid: Common.normalize_jid_with_device(current_to_jid)
             }

@@ -622,10 +622,23 @@ defmodule ExWapp.Signal.SessionStore do
 
   @doc """
   Decrypts a message from a sender.
+
+  With `stateless: true`, prekey messages are decrypted against a temporary
+  copy of the sender's session. No session, alias or pending prekey is changed.
   """
   @spec decrypt_message(t(), String.t(), binary(), boolean(), map(), map()) ::
           {:ok, binary(), t()} | {:error, term()}
-  def decrypt_message(store, jid, ciphertext, is_prekey_message, local_identity, local_prekeys) do
+  @spec decrypt_message(t(), String.t(), binary(), boolean(), map(), map(), keyword()) ::
+          {:ok, binary(), t()} | {:error, term()}
+  def decrypt_message(
+        store,
+        jid,
+        ciphertext,
+        is_prekey_message,
+        local_identity,
+        local_prekeys,
+        opts \\ []
+      ) do
     jid = normalize_jid(jid)
 
     with_session_mutation(
@@ -633,16 +646,35 @@ defmodule ExWapp.Signal.SessionStore do
       [jid],
       prekey_identity_hints(ciphertext, is_prekey_message),
       fn ->
-        do_decrypt_message(
-          store,
-          jid,
-          ciphertext,
-          is_prekey_message,
-          local_identity,
-          local_prekeys
-        )
+        if is_prekey_message and Keyword.get(opts, :stateless, false) do
+          decrypt_stateless_prekey(store, jid, ciphertext, local_identity, local_prekeys)
+        else
+          do_decrypt_message(
+            store,
+            jid,
+            ciphertext,
+            is_prekey_message,
+            local_identity,
+            local_prekeys
+          )
+        end
       end
     )
+  end
+
+  defp decrypt_stateless_prekey(store, jid, ciphertext, local_identity, local_prekeys) do
+    # Read under the same mutation lock as normal decryption. The temporary map
+    # also prevents writes through an ETS reference or to pending PN/LID aliases.
+    temporary =
+      case get_session(store, jid) do
+        {:ok, session} -> put_session(new(), jid, session)
+        :not_found -> new()
+      end
+
+    with {:ok, plaintext, _temporary} <-
+           decrypt_prekey(temporary, jid, ciphertext, local_identity, local_prekeys) do
+      {:ok, plaintext, store}
+    end
   end
 
   defp do_decrypt_message(

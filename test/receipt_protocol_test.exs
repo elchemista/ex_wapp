@@ -10,6 +10,30 @@ defmodule ExWapp.ReceiptProtocolTest do
   alias ExWapp.Store
   alias ExWapp.Store.Memory
 
+  test "receipt and notification ACKs cannot change a message with the same ID" do
+    jid = "15550001111@s.whatsapp.net"
+    store = Memory.new()
+    on_exit(fn -> Memory.stop(store) end)
+    state = %{store: store}
+
+    for class <- ["receipt", "notification", "call", ""],
+        error <- [nil, "429", "479"] do
+      :ok =
+        Store.upsert_messages(store, jid, [%{id: "shared-id", from_me: true, status: :pending}])
+
+      attrs = %{"id" => "shared-id", "to" => jid, "class" => class, "type" => "retry"}
+      attrs = if error, do: Map.put(attrs, "error", error), else: attrs
+
+      assert {:ok, ^state} = Receipt.handle_ack(%Node{tag: "ack", attrs: attrs}, self(), state)
+      assert Store.find_message(store, jid, "shared-id").status == :pending
+      refute_received {:ack_session_rejection, _, _, _}
+    end
+
+    ack = %Node{tag: "ack", attrs: %{"id" => "shared-id", "to" => jid, "class" => "message"}}
+    assert {:ok, ^state} = Receipt.handle_ack(ack, self(), state)
+    assert Store.find_message(store, jid, "shared-id").status == :sent
+  end
+
   defmodule QueueTransport do
     def send_node(conn, node) do
       send(conn, {:transport_send, node})

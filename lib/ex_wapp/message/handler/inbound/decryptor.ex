@@ -118,11 +118,20 @@ defmodule ExWapp.Message.Handler.Inbound.Decryptor do
         log_decrypt_failure(state, from, enc_type, reason, decrypt_ctx)
 
         {updated_message_data, updated_state} =
-          error_result(message_data, state, reason, decrypt_ctx.sender_candidates)
+          error_result(message_data, state, reason, session_reset_candidates(decrypt_ctx))
 
         {:error, updated_message_data, updated_state}
     end
   end
+
+  # A failed stateless prekey does not invalidate the established session.
+  # Candidate errors report the first payload, even when later fallbacks fail.
+  defp session_reset_candidates(%{
+         decryptable_payloads: [%{enc_type: "pkmsg", enc_state: "false"} | _]
+       }),
+       do: []
+
+  defp session_reset_candidates(decrypt_ctx), do: decrypt_ctx.sender_candidates
 
   @spec build_success(
           map(),
@@ -278,15 +287,13 @@ defmodule ExWapp.Message.Handler.Inbound.Decryptor do
          [payload | rest],
          chat_jid
        ) do
-    ciphertext = Map.get(payload, :ciphertext)
     enc_type = Map.get(payload, :enc_type, "msg")
 
     case decrypt_with_candidates(
            store,
            signal_sessions,
            candidates,
-           ciphertext,
-           enc_type,
+           payload,
            chat_jid
          ) do
       {:ok, plaintext, updated_sessions, sender_jid} ->
@@ -304,21 +311,22 @@ defmodule ExWapp.Message.Handler.Inbound.Decryptor do
           term(),
           term(),
           [String.t()],
-          binary(),
-          term(),
+          Envelope.payload_candidate(),
           term()
         ) :: {:ok, binary(), SessionStore.t(), String.t()} | {:error, term()}
-  defp decrypt_with_candidates(_store, _signal_sessions, [], _ciphertext, _enc_type, _chat_jid),
+  defp decrypt_with_candidates(_store, _signal_sessions, [], _payload, _chat_jid),
     do: {:error, :no_sender_candidates}
 
   defp decrypt_with_candidates(
          store,
          signal_sessions,
          [candidate | rest],
-         ciphertext,
-         enc_type,
+         payload,
          chat_jid
        ) do
+    ciphertext = Map.get(payload, :ciphertext)
+    enc_type = Map.get(payload, :enc_type, "msg")
+
     decrypt_result =
       if sender_key_message?(enc_type, chat_jid) do
         case SenderKey.decrypt_group_message(store, chat_jid, candidate, ciphertext) do
@@ -331,7 +339,8 @@ defmodule ExWapp.Message.Handler.Inbound.Decryptor do
           signal_sessions,
           candidate,
           ciphertext,
-          enc_type
+          enc_type,
+          state: Map.get(payload, :enc_state)
         )
       end
 
@@ -340,7 +349,7 @@ defmodule ExWapp.Message.Handler.Inbound.Decryptor do
         {:ok, plaintext, updated_sessions, candidate}
 
       {:error, reason} ->
-        case decrypt_with_candidates(store, signal_sessions, rest, ciphertext, enc_type, chat_jid) do
+        case decrypt_with_candidates(store, signal_sessions, rest, payload, chat_jid) do
           {:ok, _plaintext, _updated_sessions, _candidate} = success -> success
           {:error, _} -> {:error, {:decrypt_failed_for_candidate, candidate, reason}}
         end
