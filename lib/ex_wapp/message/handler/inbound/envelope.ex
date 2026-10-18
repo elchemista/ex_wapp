@@ -18,6 +18,7 @@ defmodule ExWapp.Message.Handler.Inbound.Envelope do
           optional(:enc_type) => term(),
           optional(:enc_version) => term(),
           optional(:enc_count) => term(),
+          optional(:enc_state) => term(),
           optional(:ciphertext) => term(),
           optional(:to_jid) => term()
         }
@@ -355,6 +356,7 @@ defmodule ExWapp.Message.Handler.Inbound.Envelope do
           enc_type: Map.get(message_data, :enc_type, "msg"),
           enc_version: Map.get(message_data, :enc_version),
           enc_count: Map.get(message_data, :enc_count),
+          enc_state: Map.get(message_data, :enc_state),
           ciphertext: Map.get(message_data, :ciphertext),
           to_jid: nil
         }

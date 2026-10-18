@@ -57,6 +57,15 @@ defmodule WAWebProtobufsWeb.MessageAddOn.MessageAddOnType do
         def encode("PIN_IN_CHAT") do
           4
         end
+      ),
+      (
+        def encode(:REQUEST_LOCATION_UPDATE) do
+          5
+        end
+
+        def encode("REQUEST_LOCATION_UPDATE") do
+          5
+        end
       )
     ]
 
@@ -80,6 +89,9 @@ defmodule WAWebProtobufsWeb.MessageAddOn.MessageAddOnType do
       end,
       def decode(4) do
         :PIN_IN_CHAT
+      end,
+      def decode(5) do
+        :REQUEST_LOCATION_UPDATE
       end
     ]
 
@@ -94,7 +106,8 @@ defmodule WAWebProtobufsWeb.MessageAddOn.MessageAddOnType do
         {1, :REACTION},
         {2, :EVENT_RESPONSE},
         {3, :POLL_UPDATE},
-        {4, :PIN_IN_CHAT}
+        {4, :PIN_IN_CHAT},
+        {5, :REQUEST_LOCATION_UPDATE}
       ]
     end
 
@@ -114,6 +127,9 @@ defmodule WAWebProtobufsWeb.MessageAddOn.MessageAddOnType do
           true
         end,
         def has_constant?(:PIN_IN_CHAT) do
+          true
+        end,
+        def has_constant?(:REQUEST_LOCATION_UPDATE) do
           true
         end
       ]

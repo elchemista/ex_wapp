@@ -64,6 +64,8 @@ defmodule WAWebProtobufsHistorySync.Conversation do
             authAgentParentCompanyName: nil,
             authAgentObaPhoneNumber: nil,
             identityVerification: nil,
+            acp2Setting: nil,
+            acp2HistoryWithheld: nil,
             __uf__: []
 
   (
@@ -143,6 +145,8 @@ defmodule WAWebProtobufsHistorySync.Conversation do
         |> encode_authAgentParentCompanyName(msg)
         |> encode_authAgentObaPhoneNumber(msg)
         |> encode_identityVerification(msg)
+        |> encode_acp2Setting(msg)
+        |> encode_acp2HistoryWithheld(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -939,6 +943,29 @@ defmodule WAWebProtobufsHistorySync.Conversation do
             reraise Protox.EncodingError.new(:identityVerification, "invalid field value"),
                     __STACKTRACE__
         end
+      end,
+      defp encode_acp2Setting(acc, msg) do
+        try do
+          case msg.acp2Setting do
+            nil -> acc
+            _ -> [acc, "\x82\x04", Protox.Encode.encode_message(msg.acp2Setting)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:acp2Setting, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_acp2HistoryWithheld(acc, msg) do
+        try do
+          case msg.acp2HistoryWithheld do
+            nil -> acc
+            _ -> [acc, "\x88\x04", Protox.Encode.encode_bool(msg.acp2HistoryWithheld)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:acp2HistoryWithheld, "invalid field value"),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -1350,6 +1377,23 @@ defmodule WAWebProtobufsHistorySync.Conversation do
                    )
                ], rest}
 
+            {64, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[:acp2Setting | set_fields],
+               [
+                 acp2Setting:
+                   Protox.MergeMessage.merge(
+                     msg.acp2Setting,
+                     WACommon.ACP2Setting.decode!(delimited)
+                   )
+               ], rest}
+
+            {65, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_bool(bytes)
+              {[:acp2HistoryWithheld | set_fields], [acp2HistoryWithheld: value], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -1485,7 +1529,9 @@ defmodule WAWebProtobufsHistorySync.Conversation do
         62 => {:authAgentObaPhoneNumber, {:scalar, ""}, :string},
         63 =>
           {:identityVerification, {:scalar, nil},
-           {:message, WAWebProtobufsHistorySync.IdentityVerificationState}}
+           {:message, WAWebProtobufsHistorySync.IdentityVerificationState}},
+        64 => {:acp2Setting, {:scalar, nil}, {:message, WACommon.ACP2Setting}},
+        65 => {:acp2HistoryWithheld, {:scalar, false}, :bool}
       }
     end
 
@@ -1497,6 +1543,8 @@ defmodule WAWebProtobufsHistorySync.Conversation do
       %{
         ID: {1, {:scalar, ""}, :string},
         accountLid: {49, {:scalar, ""}, :string},
+        acp2HistoryWithheld: {65, {:scalar, false}, :bool},
+        acp2Setting: {64, {:scalar, nil}, {:message, WACommon.ACP2Setting}},
         afterReadDuration: {57, {:scalar, 0}, :uint32},
         appealStatus:
           {59, {:scalar, :NO_APPEAL},
@@ -2139,6 +2187,24 @@ defmodule WAWebProtobufsHistorySync.Conversation do
           name: :identityVerification,
           tag: 63,
           type: {:message, WAWebProtobufsHistorySync.IdentityVerificationState}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "acp2Setting",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :acp2Setting,
+          tag: 64,
+          type: {:message, WACommon.ACP2Setting}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "acp2HistoryWithheld",
+          kind: {:scalar, false},
+          label: :optional,
+          name: :acp2HistoryWithheld,
+          tag: 65,
+          type: :bool
         }
       ]
     end
@@ -3972,6 +4038,64 @@ defmodule WAWebProtobufsHistorySync.Conversation do
 
         []
       ),
+      (
+        def field_def(:acp2Setting) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "acp2Setting",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :acp2Setting,
+             tag: 64,
+             type: {:message, WACommon.ACP2Setting}
+           }}
+        end
+
+        def field_def("acp2Setting") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "acp2Setting",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :acp2Setting,
+             tag: 64,
+             type: {:message, WACommon.ACP2Setting}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:acp2HistoryWithheld) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "acp2HistoryWithheld",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :acp2HistoryWithheld,
+             tag: 65,
+             type: :bool
+           }}
+        end
+
+        def field_def("acp2HistoryWithheld") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "acp2HistoryWithheld",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :acp2HistoryWithheld,
+             tag: 65,
+             type: :bool
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -4199,6 +4323,12 @@ defmodule WAWebProtobufsHistorySync.Conversation do
     end,
     def default(:identityVerification) do
       {:ok, nil}
+    end,
+    def default(:acp2Setting) do
+      {:ok, nil}
+    end,
+    def default(:acp2HistoryWithheld) do
+      {:ok, false}
     end,
     def default(_) do
       {:error, :no_such_field}

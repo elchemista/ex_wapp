@@ -10,6 +10,10 @@ defmodule WAWebProtobufsE2E.EventInviteMessage do
             isCanceled: nil,
             endTime: nil,
             callLink: nil,
+            coverImageHandle: nil,
+            locationName: nil,
+            lastUpdatedTSUsec: nil,
+            status: nil,
             __uf__: []
 
   (
@@ -35,6 +39,10 @@ defmodule WAWebProtobufsE2E.EventInviteMessage do
         |> encode_isCanceled(msg)
         |> encode_endTime(msg)
         |> encode_callLink(msg)
+        |> encode_coverImageHandle(msg)
+        |> encode_locationName(msg)
+        |> encode_lastUpdatedTSUsec(msg)
+        |> encode_status(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -141,6 +149,61 @@ defmodule WAWebProtobufsE2E.EventInviteMessage do
           ArgumentError ->
             reraise Protox.EncodingError.new(:callLink, "invalid field value"), __STACKTRACE__
         end
+      end,
+      defp encode_coverImageHandle(acc, msg) do
+        try do
+          case msg.coverImageHandle do
+            nil -> acc
+            _ -> [acc, "R", Protox.Encode.encode_string(msg.coverImageHandle)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:coverImageHandle, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_locationName(acc, msg) do
+        try do
+          case msg.locationName do
+            nil -> acc
+            _ -> [acc, "Z", Protox.Encode.encode_string(msg.locationName)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:locationName, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_lastUpdatedTSUsec(acc, msg) do
+        try do
+          case msg.lastUpdatedTSUsec do
+            nil -> acc
+            _ -> [acc, "`", Protox.Encode.encode_int64(msg.lastUpdatedTSUsec)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:lastUpdatedTSUsec, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_status(acc, msg) do
+        try do
+          case msg.status do
+            nil ->
+              acc
+
+            _ ->
+              [
+                acc,
+                "h",
+                msg.status
+                |> WAWebProtobufsE2E.EventInviteMessage.EventStatus.encode()
+                |> Protox.Encode.encode_enum()
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:status, "invalid field value"), __STACKTRACE__
+        end
       end
     ]
 
@@ -245,6 +308,26 @@ defmodule WAWebProtobufsE2E.EventInviteMessage do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[callLink: Protox.Decode.validate_string!(delimited)], rest}
 
+            {10, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[coverImageHandle: Protox.Decode.validate_string!(delimited)], rest}
+
+            {11, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[locationName: Protox.Decode.validate_string!(delimited)], rest}
+
+            {12, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_int64(bytes)
+              {[lastUpdatedTSUsec: value], rest}
+
+            {13, _, bytes} ->
+              {value, rest} =
+                Protox.Decode.parse_enum(bytes, WAWebProtobufsE2E.EventInviteMessage.EventStatus)
+
+              {[status: value], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -314,7 +397,13 @@ defmodule WAWebProtobufsE2E.EventInviteMessage do
         6 => {:caption, {:scalar, ""}, :string},
         7 => {:isCanceled, {:scalar, false}, :bool},
         8 => {:endTime, {:scalar, 0}, :int64},
-        9 => {:callLink, {:scalar, ""}, :string}
+        9 => {:callLink, {:scalar, ""}, :string},
+        10 => {:coverImageHandle, {:scalar, ""}, :string},
+        11 => {:locationName, {:scalar, ""}, :string},
+        12 => {:lastUpdatedTSUsec, {:scalar, 0}, :int64},
+        13 =>
+          {:status, {:scalar, :UNKNOWN},
+           {:enum, WAWebProtobufsE2E.EventInviteMessage.EventStatus}}
       }
     end
 
@@ -328,11 +417,16 @@ defmodule WAWebProtobufsE2E.EventInviteMessage do
         callLink: {9, {:scalar, ""}, :string},
         caption: {6, {:scalar, ""}, :string},
         contextInfo: {1, {:scalar, nil}, {:message, WAWebProtobufsE2E.ContextInfo}},
+        coverImageHandle: {10, {:scalar, ""}, :string},
         endTime: {8, {:scalar, 0}, :int64},
         eventID: {2, {:scalar, ""}, :string},
         eventTitle: {3, {:scalar, ""}, :string},
         isCanceled: {7, {:scalar, false}, :bool},
-        startTime: {5, {:scalar, 0}, :int64}
+        lastUpdatedTSUsec: {12, {:scalar, 0}, :int64},
+        locationName: {11, {:scalar, ""}, :string},
+        startTime: {5, {:scalar, 0}, :int64},
+        status:
+          {13, {:scalar, :UNKNOWN}, {:enum, WAWebProtobufsE2E.EventInviteMessage.EventStatus}}
       }
     end
   )
@@ -421,6 +515,42 @@ defmodule WAWebProtobufsE2E.EventInviteMessage do
           name: :callLink,
           tag: 9,
           type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "coverImageHandle",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :coverImageHandle,
+          tag: 10,
+          type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "locationName",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :locationName,
+          tag: 11,
+          type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "lastUpdatedTSUsec",
+          kind: {:scalar, 0},
+          label: :optional,
+          name: :lastUpdatedTSUsec,
+          tag: 12,
+          type: :int64
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "status",
+          kind: {:scalar, :UNKNOWN},
+          label: :optional,
+          name: :status,
+          tag: 13,
+          type: {:enum, WAWebProtobufsE2E.EventInviteMessage.EventStatus}
         }
       ]
     end
@@ -688,6 +818,122 @@ defmodule WAWebProtobufsE2E.EventInviteMessage do
 
         []
       ),
+      (
+        def field_def(:coverImageHandle) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "coverImageHandle",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :coverImageHandle,
+             tag: 10,
+             type: :string
+           }}
+        end
+
+        def field_def("coverImageHandle") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "coverImageHandle",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :coverImageHandle,
+             tag: 10,
+             type: :string
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:locationName) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "locationName",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :locationName,
+             tag: 11,
+             type: :string
+           }}
+        end
+
+        def field_def("locationName") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "locationName",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :locationName,
+             tag: 11,
+             type: :string
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:lastUpdatedTSUsec) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "lastUpdatedTSUsec",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :lastUpdatedTSUsec,
+             tag: 12,
+             type: :int64
+           }}
+        end
+
+        def field_def("lastUpdatedTSUsec") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "lastUpdatedTSUsec",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :lastUpdatedTSUsec,
+             tag: 12,
+             type: :int64
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:status) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "status",
+             kind: {:scalar, :UNKNOWN},
+             label: :optional,
+             name: :status,
+             tag: 13,
+             type: {:enum, WAWebProtobufsE2E.EventInviteMessage.EventStatus}
+           }}
+        end
+
+        def field_def("status") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "status",
+             kind: {:scalar, :UNKNOWN},
+             label: :optional,
+             name: :status,
+             tag: 13,
+             type: {:enum, WAWebProtobufsE2E.EventInviteMessage.EventStatus}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -753,6 +999,18 @@ defmodule WAWebProtobufsE2E.EventInviteMessage do
     end,
     def default(:callLink) do
       {:ok, ""}
+    end,
+    def default(:coverImageHandle) do
+      {:ok, ""}
+    end,
+    def default(:locationName) do
+      {:ok, ""}
+    end,
+    def default(:lastUpdatedTSUsec) do
+      {:ok, 0}
+    end,
+    def default(:status) do
+      {:ok, :UNKNOWN}
     end,
     def default(_) do
       {:error, :no_such_field}

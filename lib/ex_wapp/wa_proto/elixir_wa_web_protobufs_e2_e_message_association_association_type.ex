@@ -201,6 +201,24 @@ defmodule WAWebProtobufsE2E.MessageAssociation.AssociationType do
         def encode("POLL_ADD_OPTION") do
           20
         end
+      ),
+      (
+        def encode(:AV1_VIDEO_DUAL_UPLOAD) do
+          21
+        end
+
+        def encode("AV1_VIDEO_DUAL_UPLOAD") do
+          21
+        end
+      ),
+      (
+        def encode(:STREAMED_HD_VIDEO_DUAL_UPLOAD) do
+          22
+        end
+
+        def encode("STREAMED_HD_VIDEO_DUAL_UPLOAD") do
+          22
+        end
       )
     ]
 
@@ -272,6 +290,12 @@ defmodule WAWebProtobufsE2E.MessageAssociation.AssociationType do
       end,
       def decode(20) do
         :POLL_ADD_OPTION
+      end,
+      def decode(21) do
+        :AV1_VIDEO_DUAL_UPLOAD
+      end,
+      def decode(22) do
+        :STREAMED_HD_VIDEO_DUAL_UPLOAD
       end
     ]
 
@@ -302,7 +326,9 @@ defmodule WAWebProtobufsE2E.MessageAssociation.AssociationType do
         {17, :STATUS_ADD_YOURS_DIWALI},
         {18, :STATUS_REACTION},
         {19, :HEVC_VIDEO_DUAL_UPLOAD},
-        {20, :POLL_ADD_OPTION}
+        {20, :POLL_ADD_OPTION},
+        {21, :AV1_VIDEO_DUAL_UPLOAD},
+        {22, :STREAMED_HD_VIDEO_DUAL_UPLOAD}
       ]
     end
 
@@ -370,6 +396,12 @@ defmodule WAWebProtobufsE2E.MessageAssociation.AssociationType do
           true
         end,
         def has_constant?(:POLL_ADD_OPTION) do
+          true
+        end,
+        def has_constant?(:AV1_VIDEO_DUAL_UPLOAD) do
+          true
+        end,
+        def has_constant?(:STREAMED_HD_VIDEO_DUAL_UPLOAD) do
           true
         end
       ]

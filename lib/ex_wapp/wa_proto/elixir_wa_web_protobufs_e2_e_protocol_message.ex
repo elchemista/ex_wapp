@@ -32,6 +32,9 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
             markAsVerifiedAction: nil,
             coexStateSync: nil,
             acp2Setting: nil,
+            sharedDeviceContactHashKeyShare: nil,
+            sharedDeviceContactHashKeyRequest: nil,
+            additionalPromptIDs: [],
             __uf__: []
 
   (
@@ -79,6 +82,9 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
         |> encode_markAsVerifiedAction(msg)
         |> encode_coexStateSync(msg)
         |> encode_acp2Setting(msg)
+        |> encode_sharedDeviceContactHashKeyShare(msg)
+        |> encode_sharedDeviceContactHashKeyRequest(msg)
+        |> encode_additionalPromptIDs(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -506,6 +512,66 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
           ArgumentError ->
             reraise Protox.EncodingError.new(:acp2Setting, "invalid field value"), __STACKTRACE__
         end
+      end,
+      defp encode_sharedDeviceContactHashKeyShare(acc, msg) do
+        try do
+          case msg.sharedDeviceContactHashKeyShare do
+            nil ->
+              acc
+
+            _ ->
+              [acc, "\xA2\x02", Protox.Encode.encode_message(msg.sharedDeviceContactHashKeyShare)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :sharedDeviceContactHashKeyShare,
+                      "invalid field value"
+                    ),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_sharedDeviceContactHashKeyRequest(acc, msg) do
+        try do
+          case msg.sharedDeviceContactHashKeyRequest do
+            nil ->
+              acc
+
+            _ ->
+              [
+                acc,
+                "\xAA\x02",
+                Protox.Encode.encode_message(msg.sharedDeviceContactHashKeyRequest)
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :sharedDeviceContactHashKeyRequest,
+                      "invalid field value"
+                    ),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_additionalPromptIDs(acc, msg) do
+        try do
+          case msg.additionalPromptIDs do
+            [] ->
+              acc
+
+            values ->
+              [
+                acc,
+                Enum.reduce(values, [], fn value, acc ->
+                  [acc, "\xB2\x02", Protox.Encode.encode_string(value)]
+                end)
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:additionalPromptIDs, "invalid field value"),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -876,6 +942,39 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
                    )
                ], rest}
 
+            {36, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 sharedDeviceContactHashKeyShare:
+                   Protox.MergeMessage.merge(
+                     msg.sharedDeviceContactHashKeyShare,
+                     WAWebProtobufsE2E.SharedDeviceContactHashKeyShare.decode!(delimited)
+                   )
+               ], rest}
+
+            {37, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 sharedDeviceContactHashKeyRequest:
+                   Protox.MergeMessage.merge(
+                     msg.sharedDeviceContactHashKeyRequest,
+                     WAWebProtobufsE2E.SharedDeviceContactHashKeyRequest.decode!(delimited)
+                   )
+               ], rest}
+
+            {38, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 additionalPromptIDs:
+                   msg.additionalPromptIDs ++ [Protox.Decode.validate_string!(delimited)]
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -997,7 +1096,14 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
            {:message, WAWebProtobufsE2E.MarkAsVerifiedAction}},
         33 =>
           {:coexStateSync, {:scalar, nil}, {:message, WAWebProtobufsServerSync.CoexStateSync}},
-        35 => {:acp2Setting, {:scalar, nil}, {:message, WACommon.ACP2Setting}}
+        35 => {:acp2Setting, {:scalar, nil}, {:message, WACommon.ACP2Setting}},
+        36 =>
+          {:sharedDeviceContactHashKeyShare, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.SharedDeviceContactHashKeyShare}},
+        37 =>
+          {:sharedDeviceContactHashKeyRequest, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.SharedDeviceContactHashKeyRequest}},
+        38 => {:additionalPromptIDs, :unpacked, :string}
       }
     end
 
@@ -1008,6 +1114,7 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
     def defs_by_name() do
       %{
         acp2Setting: {35, {:scalar, nil}, {:message, WACommon.ACP2Setting}},
+        additionalPromptIDs: {38, :unpacked, :string},
         afterReadDuration: {29, {:scalar, 0}, :uint32},
         aiMediaCollectionMessage:
           {28, {:scalar, nil}, {:message, WAWebProtobufsAICommon.AIMediaCollectionMessage}},
@@ -1053,6 +1160,10 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
            {:message, WAWebProtobufsE2E.PeerDataOperationRequestResponseMessage}},
         requestWelcomeMessageMetadata:
           {20, {:scalar, nil}, {:message, WAWebProtobufsE2E.RequestWelcomeMessageMetadata}},
+        sharedDeviceContactHashKeyRequest:
+          {37, {:scalar, nil}, {:message, WAWebProtobufsE2E.SharedDeviceContactHashKeyRequest}},
+        sharedDeviceContactHashKeyShare:
+          {36, {:scalar, nil}, {:message, WAWebProtobufsE2E.SharedDeviceContactHashKeyShare}},
         timestampMS: {15, {:scalar, 0}, :int64},
         type: {2, {:scalar, :REVOKE}, {:enum, WAWebProtobufsE2E.ProtocolMessage.Type}}
       }
@@ -1341,6 +1452,33 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
           name: :acp2Setting,
           tag: 35,
           type: {:message, WACommon.ACP2Setting}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "sharedDeviceContactHashKeyShare",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :sharedDeviceContactHashKeyShare,
+          tag: 36,
+          type: {:message, WAWebProtobufsE2E.SharedDeviceContactHashKeyShare}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "sharedDeviceContactHashKeyRequest",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :sharedDeviceContactHashKeyRequest,
+          tag: 37,
+          type: {:message, WAWebProtobufsE2E.SharedDeviceContactHashKeyRequest}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "additionalPromptIDs",
+          kind: :unpacked,
+          label: :repeated,
+          name: :additionalPromptIDs,
+          tag: 38,
+          type: :string
         }
       ]
     end
@@ -2246,6 +2384,93 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
 
         []
       ),
+      (
+        def field_def(:sharedDeviceContactHashKeyShare) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "sharedDeviceContactHashKeyShare",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :sharedDeviceContactHashKeyShare,
+             tag: 36,
+             type: {:message, WAWebProtobufsE2E.SharedDeviceContactHashKeyShare}
+           }}
+        end
+
+        def field_def("sharedDeviceContactHashKeyShare") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "sharedDeviceContactHashKeyShare",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :sharedDeviceContactHashKeyShare,
+             tag: 36,
+             type: {:message, WAWebProtobufsE2E.SharedDeviceContactHashKeyShare}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:sharedDeviceContactHashKeyRequest) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "sharedDeviceContactHashKeyRequest",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :sharedDeviceContactHashKeyRequest,
+             tag: 37,
+             type: {:message, WAWebProtobufsE2E.SharedDeviceContactHashKeyRequest}
+           }}
+        end
+
+        def field_def("sharedDeviceContactHashKeyRequest") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "sharedDeviceContactHashKeyRequest",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :sharedDeviceContactHashKeyRequest,
+             tag: 37,
+             type: {:message, WAWebProtobufsE2E.SharedDeviceContactHashKeyRequest}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:additionalPromptIDs) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "additionalPromptIDs",
+             kind: :unpacked,
+             label: :repeated,
+             name: :additionalPromptIDs,
+             tag: 38,
+             type: :string
+           }}
+        end
+
+        def field_def("additionalPromptIDs") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "additionalPromptIDs",
+             kind: :unpacked,
+             label: :repeated,
+             name: :additionalPromptIDs,
+             tag: 38,
+             type: :string
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -2377,6 +2602,15 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
     end,
     def default(:acp2Setting) do
       {:ok, nil}
+    end,
+    def default(:sharedDeviceContactHashKeyShare) do
+      {:ok, nil}
+    end,
+    def default(:sharedDeviceContactHashKeyRequest) do
+      {:ok, nil}
+    end,
+    def default(:additionalPromptIDs) do
+      {:error, :no_default_value}
     end,
     def default(_) do
       {:error, :no_such_field}

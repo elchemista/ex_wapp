@@ -23,6 +23,7 @@ defmodule WAWebProtobufsE2E.StickerMessage do
             accessibilityLabel: nil,
             premium: nil,
             emojis: nil,
+            audio: nil,
             __uf__: []
 
   (
@@ -39,6 +40,7 @@ defmodule WAWebProtobufsE2E.StickerMessage do
       @spec encode!(struct) :: iodata | no_return
       def encode!(msg) do
         []
+        |> encode_audio(msg)
         |> encode_URL(msg)
         |> encode_fileSHA256(msg)
         |> encode_fileEncSHA256(msg)
@@ -65,7 +67,14 @@ defmodule WAWebProtobufsE2E.StickerMessage do
       end
     )
 
-    []
+    [
+      defp encode_audio(acc, msg) do
+        case msg.audio do
+          nil -> acc
+          {:audioMessage, _field_value} -> encode_audioMessage(acc, msg)
+        end
+      end
+    ]
 
     [
       defp encode_URL(acc, msg) do
@@ -315,6 +324,15 @@ defmodule WAWebProtobufsE2E.StickerMessage do
           ArgumentError ->
             reraise Protox.EncodingError.new(:emojis, "invalid field value"), __STACKTRACE__
         end
+      end,
+      defp encode_audioMessage(acc, msg) do
+        try do
+          {_, child_field_value} = msg.audio
+          [acc, "\xD2\x01", Protox.Encode.encode_message(child_field_value)]
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:audioMessage, "invalid field value"), __STACKTRACE__
+        end
       end
     ]
 
@@ -476,6 +494,25 @@ defmodule WAWebProtobufsE2E.StickerMessage do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[emojis: Protox.Decode.validate_string!(delimited)], rest}
 
+            {26, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 case msg.audio do
+                   {:audioMessage, previous_value} ->
+                     {:audio,
+                      {:audioMessage,
+                       Protox.MergeMessage.merge(
+                         previous_value,
+                         WAWebProtobufsE2E.AudioMessage.decode!(delimited)
+                       )}}
+
+                   _ ->
+                     {:audio, {:audioMessage, WAWebProtobufsE2E.AudioMessage.decode!(delimited)}}
+                 end
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -558,7 +595,8 @@ defmodule WAWebProtobufsE2E.StickerMessage do
         21 => {:isLottie, {:scalar, false}, :bool},
         22 => {:accessibilityLabel, {:scalar, ""}, :string},
         24 => {:premium, {:scalar, 0}, :int32},
-        25 => {:emojis, {:scalar, ""}, :string}
+        25 => {:emojis, {:scalar, ""}, :string},
+        26 => {:audioMessage, {:oneof, :audio}, {:message, WAWebProtobufsE2E.AudioMessage}}
       }
     end
 
@@ -570,6 +608,7 @@ defmodule WAWebProtobufsE2E.StickerMessage do
       %{
         URL: {1, {:scalar, ""}, :string},
         accessibilityLabel: {22, {:scalar, ""}, :string},
+        audioMessage: {26, {:oneof, :audio}, {:message, WAWebProtobufsE2E.AudioMessage}},
         contextInfo: {17, {:scalar, nil}, {:message, WAWebProtobufsE2E.ContextInfo}},
         directPath: {8, {:scalar, ""}, :string},
         emojis: {25, {:scalar, ""}, :string},
@@ -795,6 +834,15 @@ defmodule WAWebProtobufsE2E.StickerMessage do
           name: :emojis,
           tag: 25,
           type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "audioMessage",
+          kind: {:oneof, :audio},
+          label: :optional,
+          name: :audioMessage,
+          tag: 26,
+          type: {:message, WAWebProtobufsE2E.AudioMessage}
         }
       ]
     end
@@ -1439,6 +1487,35 @@ defmodule WAWebProtobufsE2E.StickerMessage do
 
         []
       ),
+      (
+        def field_def(:audioMessage) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "audioMessage",
+             kind: {:oneof, :audio},
+             label: :optional,
+             name: :audioMessage,
+             tag: 26,
+             type: {:message, WAWebProtobufsE2E.AudioMessage}
+           }}
+        end
+
+        def field_def("audioMessage") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "audioMessage",
+             kind: {:oneof, :audio},
+             label: :optional,
+             name: :audioMessage,
+             tag: 26,
+             type: {:message, WAWebProtobufsE2E.AudioMessage}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -1543,6 +1620,9 @@ defmodule WAWebProtobufsE2E.StickerMessage do
     end,
     def default(:emojis) do
       {:ok, ""}
+    end,
+    def default(:audioMessage) do
+      {:error, :no_default_value}
     end,
     def default(_) do
       {:error, :no_such_field}

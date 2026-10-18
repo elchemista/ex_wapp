@@ -21,6 +21,15 @@ defmodule WAWebProtobufsAICommon.BotMessageOrigin.BotMessageOriginType do
         def encode("BOT_MESSAGE_ORIGIN_TYPE_AI_INITIATED") do
           0
         end
+      ),
+      (
+        def encode(:BOT_MESSAGE_ORIGIN_TYPE_META_AI_THREAD_WELCOME) do
+          1
+        end
+
+        def encode("BOT_MESSAGE_ORIGIN_TYPE_META_AI_THREAD_WELCOME") do
+          1
+        end
       )
     ]
 
@@ -32,6 +41,9 @@ defmodule WAWebProtobufsAICommon.BotMessageOrigin.BotMessageOriginType do
     [
       def decode(0) do
         :BOT_MESSAGE_ORIGIN_TYPE_AI_INITIATED
+      end,
+      def decode(1) do
+        :BOT_MESSAGE_ORIGIN_TYPE_META_AI_THREAD_WELCOME
       end
     ]
 
@@ -41,13 +53,19 @@ defmodule WAWebProtobufsAICommon.BotMessageOrigin.BotMessageOriginType do
 
     @spec constants() :: [{integer(), atom()}]
     def constants() do
-      [{0, :BOT_MESSAGE_ORIGIN_TYPE_AI_INITIATED}]
+      [
+        {0, :BOT_MESSAGE_ORIGIN_TYPE_AI_INITIATED},
+        {1, :BOT_MESSAGE_ORIGIN_TYPE_META_AI_THREAD_WELCOME}
+      ]
     end
 
     @spec has_constant?(any()) :: boolean()
     (
       [
         def has_constant?(:BOT_MESSAGE_ORIGIN_TYPE_AI_INITIATED) do
+          true
+        end,
+        def has_constant?(:BOT_MESSAGE_ORIGIN_TYPE_META_AI_THREAD_WELCOME) do
           true
         end
       ]

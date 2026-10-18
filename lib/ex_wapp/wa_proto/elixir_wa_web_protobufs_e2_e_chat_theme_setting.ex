@@ -37,6 +37,7 @@ defmodule WAWebProtobufsE2E.ChatThemeSetting do
           {:solidColor, _field_value} -> encode_solidColor(acc, msg)
           {:stockImage, _field_value} -> encode_stockImage(acc, msg)
           {:customImage, _field_value} -> encode_customImage(acc, msg)
+          {:animatedWallpaper, _field_value} -> encode_animatedWallpaper(acc, msg)
         end
       end
     ]
@@ -112,6 +113,16 @@ defmodule WAWebProtobufsE2E.ChatThemeSetting do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:customImage, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_animatedWallpaper(acc, msg) do
+        try do
+          {_, child_field_value} = msg.wallpaper
+          [acc, "r", Protox.Encode.encode_message(child_field_value)]
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:animatedWallpaper, "invalid field value"),
+                    __STACKTRACE__
         end
       end
     ]
@@ -263,6 +274,27 @@ defmodule WAWebProtobufsE2E.ChatThemeSetting do
                  end
                ], rest}
 
+            {14, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 case msg.wallpaper do
+                   {:animatedWallpaper, previous_value} ->
+                     {:wallpaper,
+                      {:animatedWallpaper,
+                       Protox.MergeMessage.merge(
+                         previous_value,
+                         WAWebProtobufsE2E.ChatAnimatedWallpaper.decode!(delimited)
+                       )}}
+
+                   _ ->
+                     {:wallpaper,
+                      {:animatedWallpaper,
+                       WAWebProtobufsE2E.ChatAnimatedWallpaper.decode!(delimited)}}
+                 end
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -338,7 +370,10 @@ defmodule WAWebProtobufsE2E.ChatThemeSetting do
            {:message, WAWebProtobufsE2E.ChatStockImageWallpaper}},
         13 =>
           {:customImage, {:oneof, :wallpaper},
-           {:message, WAWebProtobufsE2E.ChatCustomImageWallpaper}}
+           {:message, WAWebProtobufsE2E.ChatCustomImageWallpaper}},
+        14 =>
+          {:animatedWallpaper, {:oneof, :wallpaper},
+           {:message, WAWebProtobufsE2E.ChatAnimatedWallpaper}}
       }
     end
 
@@ -348,6 +383,8 @@ defmodule WAWebProtobufsE2E.ChatThemeSetting do
           }
     def defs_by_name() do
       %{
+        animatedWallpaper:
+          {14, {:oneof, :wallpaper}, {:message, WAWebProtobufsE2E.ChatAnimatedWallpaper}},
         clearTheme: {2, {:scalar, false}, :bool},
         colorSchemeID: {3, {:scalar, ""}, :string},
         customImage:
@@ -429,6 +466,15 @@ defmodule WAWebProtobufsE2E.ChatThemeSetting do
           name: :customImage,
           tag: 13,
           type: {:message, WAWebProtobufsE2E.ChatCustomImageWallpaper}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "animatedWallpaper",
+          kind: {:oneof, :wallpaper},
+          label: :optional,
+          name: :animatedWallpaper,
+          tag: 14,
+          type: {:message, WAWebProtobufsE2E.ChatAnimatedWallpaper}
         }
       ]
     end
@@ -638,6 +684,35 @@ defmodule WAWebProtobufsE2E.ChatThemeSetting do
 
         []
       ),
+      (
+        def field_def(:animatedWallpaper) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "animatedWallpaper",
+             kind: {:oneof, :wallpaper},
+             label: :optional,
+             name: :animatedWallpaper,
+             tag: 14,
+             type: {:message, WAWebProtobufsE2E.ChatAnimatedWallpaper}
+           }}
+        end
+
+        def field_def("animatedWallpaper") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "animatedWallpaper",
+             kind: {:oneof, :wallpaper},
+             label: :optional,
+             name: :animatedWallpaper,
+             tag: 14,
+             type: {:message, WAWebProtobufsE2E.ChatAnimatedWallpaper}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -696,6 +771,9 @@ defmodule WAWebProtobufsE2E.ChatThemeSetting do
       {:error, :no_default_value}
     end,
     def default(:customImage) do
+      {:error, :no_default_value}
+    end,
+    def default(:animatedWallpaper) do
       {:error, :no_default_value}
     end,
     def default(_) do

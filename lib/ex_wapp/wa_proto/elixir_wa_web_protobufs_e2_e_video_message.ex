@@ -32,6 +32,7 @@ defmodule WAWebProtobufsE2E.VideoMessage do
             metadataURL: nil,
             videoSourceType: nil,
             dashManifestURL: nil,
+            smartThumbnailTS: nil,
             __uf__: []
 
   (
@@ -79,6 +80,7 @@ defmodule WAWebProtobufsE2E.VideoMessage do
         |> encode_metadataURL(msg)
         |> encode_videoSourceType(msg)
         |> encode_dashManifestURL(msg)
+        |> encode_smartThumbnailTS(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -499,6 +501,18 @@ defmodule WAWebProtobufsE2E.VideoMessage do
             reraise Protox.EncodingError.new(:dashManifestURL, "invalid field value"),
                     __STACKTRACE__
         end
+      end,
+      defp encode_smartThumbnailTS(acc, msg) do
+        try do
+          case msg.smartThumbnailTS do
+            nil -> acc
+            _ -> [acc, "\x90\x02", Protox.Encode.encode_int64(msg.smartThumbnailTS)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:smartThumbnailTS, "invalid field value"),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -722,6 +736,10 @@ defmodule WAWebProtobufsE2E.VideoMessage do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[dashManifestURL: Protox.Decode.validate_string!(delimited)], rest}
 
+            {34, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_int64(bytes)
+              {[smartThumbnailTS: value], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -818,7 +836,8 @@ defmodule WAWebProtobufsE2E.VideoMessage do
         31 =>
           {:videoSourceType, {:scalar, :USER_VIDEO},
            {:enum, WAWebProtobufsE2E.VideoMessage.VideoSourceType}},
-        33 => {:dashManifestURL, {:scalar, ""}, :string}
+        33 => {:dashManifestURL, {:scalar, ""}, :string},
+        34 => {:smartThumbnailTS, {:scalar, 0}, :int64}
       }
     end
 
@@ -853,6 +872,7 @@ defmodule WAWebProtobufsE2E.VideoMessage do
         motionPhotoPresentationOffsetMS: {29, {:scalar, 0}, :uint64},
         processedVideos: {27, :unpacked, {:message, WAWebProtobufsE2E.ProcessedVideo}},
         seconds: {5, {:scalar, 0}, :uint32},
+        smartThumbnailTS: {34, {:scalar, 0}, :int64},
         staticURL: {24, {:scalar, ""}, :string},
         streamingSidecar: {18, {:scalar, ""}, :bytes},
         thumbnailDirectPath: {21, {:scalar, ""}, :string},
@@ -1148,6 +1168,15 @@ defmodule WAWebProtobufsE2E.VideoMessage do
           name: :dashManifestURL,
           tag: 33,
           type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "smartThumbnailTS",
+          kind: {:scalar, 0},
+          label: :optional,
+          name: :smartThumbnailTS,
+          tag: 34,
+          type: :int64
         }
       ]
     end
@@ -2053,6 +2082,35 @@ defmodule WAWebProtobufsE2E.VideoMessage do
 
         []
       ),
+      (
+        def field_def(:smartThumbnailTS) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "smartThumbnailTS",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :smartThumbnailTS,
+             tag: 34,
+             type: :int64
+           }}
+        end
+
+        def field_def("smartThumbnailTS") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "smartThumbnailTS",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :smartThumbnailTS,
+             tag: 34,
+             type: :int64
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -2184,6 +2242,9 @@ defmodule WAWebProtobufsE2E.VideoMessage do
     end,
     def default(:dashManifestURL) do
       {:ok, ""}
+    end,
+    def default(:smartThumbnailTS) do
+      {:ok, 0}
     end,
     def default(_) do
       {:error, :no_such_field}

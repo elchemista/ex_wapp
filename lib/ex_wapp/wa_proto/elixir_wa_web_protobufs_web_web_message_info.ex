@@ -73,6 +73,7 @@ defmodule WAWebProtobufsWeb.WebMessageInfo do
             scheduledMessageMetadata: nil,
             decisionID: nil,
             decisionSources: [],
+            eventInviteAdditionalMetadata: nil,
             __uf__: []
 
   (
@@ -161,6 +162,7 @@ defmodule WAWebProtobufsWeb.WebMessageInfo do
         |> encode_scheduledMessageMetadata(msg)
         |> encode_decisionID(msg)
         |> encode_decisionSources(msg)
+        |> encode_eventInviteAdditionalMetadata(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -1148,6 +1150,24 @@ defmodule WAWebProtobufsWeb.WebMessageInfo do
             reraise Protox.EncodingError.new(:decisionSources, "invalid field value"),
                     __STACKTRACE__
         end
+      end,
+      defp encode_eventInviteAdditionalMetadata(acc, msg) do
+        try do
+          case msg.eventInviteAdditionalMetadata do
+            nil ->
+              acc
+
+            _ ->
+              [acc, "\xA2\x05", Protox.Encode.encode_message(msg.eventInviteAdditionalMetadata)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :eventInviteAdditionalMetadata,
+                      "invalid field value"
+                    ),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -1793,6 +1813,19 @@ defmodule WAWebProtobufsWeb.WebMessageInfo do
                    msg.decisionSources ++ [Protox.Decode.validate_string!(delimited)]
                ], rest}
 
+            {84, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[:eventInviteAdditionalMetadata | set_fields],
+               [
+                 eventInviteAdditionalMetadata:
+                   Protox.MergeMessage.merge(
+                     msg.eventInviteAdditionalMetadata,
+                     WAWebProtobufsWeb.EventInviteAdditionalMetadata.decode!(delimited)
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -1948,7 +1981,10 @@ defmodule WAWebProtobufsWeb.WebMessageInfo do
           {:scheduledMessageMetadata, {:scalar, nil},
            {:message, WAWebProtobufsWeb.ScheduledMessageMetadata}},
         82 => {:decisionID, {:scalar, ""}, :string},
-        83 => {:decisionSources, :unpacked, :string}
+        83 => {:decisionSources, :unpacked, :string},
+        84 =>
+          {:eventInviteAdditionalMetadata, {:scalar, nil},
+           {:message, WAWebProtobufsWeb.EventInviteAdditionalMetadata}}
       }
     end
 
@@ -1976,6 +2012,8 @@ defmodule WAWebProtobufsWeb.WebMessageInfo do
         ephemeralStartTimestamp: {32, {:scalar, 0}, :uint64},
         eventAdditionalMetadata:
           {64, {:scalar, nil}, {:message, WAWebProtobufsWeb.EventAdditionalMetadata}},
+        eventInviteAdditionalMetadata:
+          {84, {:scalar, nil}, {:message, WAWebProtobufsWeb.EventInviteAdditionalMetadata}},
         eventResponses: {61, :unpacked, {:message, WAWebProtobufsWeb.EventResponse}},
         finalLiveLocation:
           {30, {:scalar, nil}, {:message, WAWebProtobufsE2E.LiveLocationMessage}},
@@ -2698,6 +2736,15 @@ defmodule WAWebProtobufsWeb.WebMessageInfo do
           name: :decisionSources,
           tag: 83,
           type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "eventInviteAdditionalMetadata",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :eventInviteAdditionalMetadata,
+          tag: 84,
+          type: {:message, WAWebProtobufsWeb.EventInviteAdditionalMetadata}
         }
       ]
     end
@@ -4792,6 +4839,35 @@ defmodule WAWebProtobufsWeb.WebMessageInfo do
 
         []
       ),
+      (
+        def field_def(:eventInviteAdditionalMetadata) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "eventInviteAdditionalMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :eventInviteAdditionalMetadata,
+             tag: 84,
+             type: {:message, WAWebProtobufsWeb.EventInviteAdditionalMetadata}
+           }}
+        end
+
+        def field_def("eventInviteAdditionalMetadata") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "eventInviteAdditionalMetadata",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :eventInviteAdditionalMetadata,
+             tag: 84,
+             type: {:message, WAWebProtobufsWeb.EventInviteAdditionalMetadata}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -5046,6 +5122,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo do
     end,
     def default(:decisionSources) do
       {:error, :no_default_value}
+    end,
+    def default(:eventInviteAdditionalMetadata) do
+      {:ok, nil}
     end,
     def default(_) do
       {:error, :no_such_field}

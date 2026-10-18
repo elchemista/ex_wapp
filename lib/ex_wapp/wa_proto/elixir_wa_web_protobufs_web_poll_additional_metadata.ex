@@ -1,7 +1,7 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
   @moduledoc false
-  defstruct pollInvalidated: nil, pollNameHashHistory: [], __uf__: []
+  defstruct pollInvalidated: nil, pollNameHashHistory: [], originalOptions: [], __uf__: []
 
   (
     (
@@ -19,6 +19,7 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
         []
         |> encode_pollInvalidated(msg)
         |> encode_pollNameHashHistory(msg)
+        |> encode_originalOptions(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -55,6 +56,26 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:pollNameHashHistory, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_originalOptions(acc, msg) do
+        try do
+          case msg.originalOptions do
+            [] ->
+              acc
+
+            values ->
+              [
+                acc,
+                Enum.reduce(values, [], fn value, acc ->
+                  [acc, "\x1A", Protox.Encode.encode_message(value)]
+                end)
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:originalOptions, "invalid field value"),
                     __STACKTRACE__
         end
       end
@@ -130,6 +151,16 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
                      ]
                ], rest}
 
+            {3, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 originalOptions:
+                   msg.originalOptions ++
+                     [WAWebProtobufsE2E.PollCreationMessage.Option.decode!(delimited)]
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -194,7 +225,9 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
         1 => {:pollInvalidated, {:scalar, false}, :bool},
         2 =>
           {:pollNameHashHistory, :unpacked,
-           {:message, WAWebProtobufsWeb.PollAdditionalMetadata.PollNameHashHistoryEntry}}
+           {:message, WAWebProtobufsWeb.PollAdditionalMetadata.PollNameHashHistoryEntry}},
+        3 =>
+          {:originalOptions, :unpacked, {:message, WAWebProtobufsE2E.PollCreationMessage.Option}}
       }
     end
 
@@ -204,6 +237,7 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
           }
     def defs_by_name() do
       %{
+        originalOptions: {3, :unpacked, {:message, WAWebProtobufsE2E.PollCreationMessage.Option}},
         pollInvalidated: {1, {:scalar, false}, :bool},
         pollNameHashHistory:
           {2, :unpacked,
@@ -233,6 +267,15 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
           name: :pollNameHashHistory,
           tag: 2,
           type: {:message, WAWebProtobufsWeb.PollAdditionalMetadata.PollNameHashHistoryEntry}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "originalOptions",
+          kind: :unpacked,
+          label: :repeated,
+          name: :originalOptions,
+          tag: 3,
+          type: {:message, WAWebProtobufsE2E.PollCreationMessage.Option}
         }
       ]
     end
@@ -297,6 +340,35 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
 
         []
       ),
+      (
+        def field_def(:originalOptions) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "originalOptions",
+             kind: :unpacked,
+             label: :repeated,
+             name: :originalOptions,
+             tag: 3,
+             type: {:message, WAWebProtobufsE2E.PollCreationMessage.Option}
+           }}
+        end
+
+        def field_def("originalOptions") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "originalOptions",
+             kind: :unpacked,
+             label: :repeated,
+             name: :originalOptions,
+             tag: 3,
+             type: {:message, WAWebProtobufsE2E.PollCreationMessage.Option}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -340,6 +412,9 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
       {:ok, false}
     end,
     def default(:pollNameHashHistory) do
+      {:error, :no_default_value}
+    end,
+    def default(:originalOptions) do
       {:error, :no_default_value}
     end,
     def default(_) do

@@ -7,6 +7,7 @@ defmodule WAWebProtobufSyncAction.ContactAction do
             saveOnPrimaryAddressbook: nil,
             pnJID: nil,
             username: nil,
+            birthday: nil,
             __uf__: []
 
   (
@@ -29,6 +30,7 @@ defmodule WAWebProtobufSyncAction.ContactAction do
         |> encode_saveOnPrimaryAddressbook(msg)
         |> encode_pnJID(msg)
         |> encode_username(msg)
+        |> encode_birthday(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -101,6 +103,17 @@ defmodule WAWebProtobufSyncAction.ContactAction do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:username, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_birthday(acc, msg) do
+        try do
+          case msg.birthday do
+            nil -> acc
+            _ -> [acc, ":", Protox.Encode.encode_string(msg.birthday)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:birthday, "invalid field value"), __STACKTRACE__
         end
       end
     ]
@@ -186,6 +199,11 @@ defmodule WAWebProtobufSyncAction.ContactAction do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[username: Protox.Decode.validate_string!(delimited)], rest}
 
+            {7, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[birthday: Protox.Decode.validate_string!(delimited)], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -252,7 +270,8 @@ defmodule WAWebProtobufSyncAction.ContactAction do
         3 => {:lidJID, {:scalar, ""}, :string},
         4 => {:saveOnPrimaryAddressbook, {:scalar, false}, :bool},
         5 => {:pnJID, {:scalar, ""}, :string},
-        6 => {:username, {:scalar, ""}, :string}
+        6 => {:username, {:scalar, ""}, :string},
+        7 => {:birthday, {:scalar, ""}, :string}
       }
     end
 
@@ -262,6 +281,7 @@ defmodule WAWebProtobufSyncAction.ContactAction do
           }
     def defs_by_name() do
       %{
+        birthday: {7, {:scalar, ""}, :string},
         firstName: {2, {:scalar, ""}, :string},
         fullName: {1, {:scalar, ""}, :string},
         lidJID: {3, {:scalar, ""}, :string},
@@ -328,6 +348,15 @@ defmodule WAWebProtobufSyncAction.ContactAction do
           label: :optional,
           name: :username,
           tag: 6,
+          type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "birthday",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :birthday,
+          tag: 7,
           type: :string
         }
       ]
@@ -509,6 +538,35 @@ defmodule WAWebProtobufSyncAction.ContactAction do
 
         []
       ),
+      (
+        def field_def(:birthday) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "birthday",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :birthday,
+             tag: 7,
+             type: :string
+           }}
+        end
+
+        def field_def("birthday") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "birthday",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :birthday,
+             tag: 7,
+             type: :string
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -564,6 +622,9 @@ defmodule WAWebProtobufSyncAction.ContactAction do
       {:ok, ""}
     end,
     def default(:username) do
+      {:ok, ""}
+    end,
+    def default(:birthday) do
       {:ok, ""}
     end,
     def default(_) do

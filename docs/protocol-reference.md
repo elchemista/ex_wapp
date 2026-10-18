@@ -9,41 +9,65 @@ Application developers should not build against the modules described here.
 The only supported application boundary is the `ExWapp` facade operating on a
 `%ExWapp.Client{}`.
 
-## Upstream snapshot: 2026-09-09
+## Upstream snapshot: 2026-10-18
 
-The default WhatsApp Web version is `2.3000.1047068806`, verified against
-[whatsmeow `9ec8f76`](https://github.com/tulir/whatsmeow/tree/9ec8f76db5f17712efc34a29b684a80d2dcb4aaf).
-The generated Protox modules use that same checkout. Compared with the previous
-[August snapshot](https://github.com/tulir/whatsmeow/compare/33cfac5116293e4cb86f8e4099e8eaf6de7ebc08...9ec8f76db5f17712efc34a29b684a80d2dcb4aaf),
-the imported schema changes add fields and enum values without removing or
-renumbering existing fields:
+The default WhatsApp Web version is `2.3000.1050728964`, verified against
+[whatsmeow `b2b1e71`](https://github.com/tulir/whatsmeow/tree/b2b1e71d45e2ff171153b025b5a42f475bb30ef8)
+(commit dated 2026-10-17). The 772 generated Protox modules use that checkout.
+The [changes since the September snapshot](https://github.com/tulir/whatsmeow/compare/9ec8f76db5f17712efc34a29b684a80d2dcb4aaf...b2b1e71d45e2ff171153b025b5a42f475bb30ef8)
+include:
 
-- ACP2 settings in protocol messages, message context and message wrappers.
-- Scheduled newsletter wrappers, DASH video manifest URLs, packed experience
-  IDs and TEE context anchors.
-- Business AI onboarding events, response-stop metadata, new bot capabilities
-  and original-recipient AI response metadata.
-- AI migration and business broadcast device capabilities, plus `WORK_ANDROID`
-  and `WORK_IOS` user-agent platform values.
+- Audio stickers, instant images, location requests and cancellations, and
+  additional event invitation metadata.
+- Shared-device contact hash keys, group-history settings, community nesting,
+  business broadcast actions, contact birthdays and shared-device secrets.
+- ACP2 history restrictions, omitted conversations, favorite stickers, additional
+  device capabilities and the `AUTOMOTIVE` platform.
+- Animated chat wallpapers and ARGB wallpaper colors. Unlike the other schema
+  additions, `ChatSolidColorWallpaper` fields 1 and 2 change from strings
+  (`colorLight`/`colorDark`) to `fixed32` (`backgroundLightArgb`/
+  `backgroundDarkArgb`). These generated types are internal; ExWapp's supported
+  facade does not expose a chat-theme API. Independent protoc fixtures verify
+  the new wire representation, including unsigned 32-bit color values.
 
-These additions provide protobuf encoding and decoding; they do not add public
-APIs for the corresponding features. The binary token dictionary is unchanged.
-The upstream Labyrinth/WASM schema also changed, but it is outside this client's
-generated entrypoints and runtime.
+These schema updates extend encoding and decoding; they do not add public APIs
+for all the corresponding features. The binary token dictionary is unchanged.
+Labyrinth/WASM and Armadillo schema changes remain outside this client's
+entrypoints and runtime.
 
-Other upstream commits adjust Go socket context lifetime and stream-error
-ordering, self-authored history messages in LID chats, unencrypted thumbnails
-and group metadata handling. They are separate runtime changes, not imported by
-protobuf regeneration. Upstream also added
-[experimental `companion_reg_refresh` handling](https://github.com/tulir/whatsmeow/commit/9ec8f76db5f17712efc34a29b684a80d2dcb4aaf)
-to rotate the ADV secret and refresh QR codes; ExWapp does not implement that
-notification yet.
+### Runtime fix review
 
-To refresh this snapshot, run `scripts/update_wa_protos.sh`, compare the version
-in `tmp/whatsmeow_upstream/store/clientpayload.go` with `ExWapp.Config`, and update
-the verification date after checking upstream. Run the full test suite after
-the script's wire checks. Version verification records the upstream value;
-successful pairing still requires validation against a live WhatsApp account.
+| Upstream change | ExWapp result |
+| --- | --- |
+| [Stateless prekey messages](https://github.com/tulir/whatsmeow/commit/f376da2) | Ported: `pkmsg` with `state="false"` decrypts without creating, replacing or advancing stored Signal sessions or pending aliases. Authenticated one-time prekeys are still consumed; failed stateless messages do not reset existing sessions. Tested with map and ETS stores. |
+| [ACK correlation report, PR #1264](https://github.com/tulir/whatsmeow/pull/1264) | The upstream PR remains open. Local regression testing exposed an analogous stored-status bug: receipt, notification and call ACKs could update a message sharing their ID. Only `class="message"` now updates message status. This is a local fix, not an import of the Go waiter API. |
+| [Split frame lengths](https://github.com/tulir/whatsmeow/commit/f331563) | Already handled by `Transport.Frame`: the three-byte length prefix is excluded from payload size. Existing encrypted transport tests exercise header, length, ciphertext and coalesced-frame splits. |
+| [Malformed stanza tags](https://github.com/tulir/whatsmeow/commit/bb54a07) | Already rejected by the binary decoder. A JID token used as a stanza tag now has explicit regression coverage. |
+| [Prefer participant phone-number aliases](https://github.com/tulir/whatsmeow/commit/19c6103) | Envelope handling already accepts `participant_pn` without an addressing-mode hint. Added group LID mapping and device-candidate coverage. |
+| [App-state fetch failures](https://github.com/tulir/whatsmeow/commit/3bc895e) | Initial sync already aggregates fetch failures and emits a failed lifecycle event. |
+
+Upstream also changed Muse/WASA bot encryption and root-secret storage,
+newsletter live updates, blocklist hashes, group permission checks, Messenger
+cache invalidation and Go-specific socket, dependency and JSON behavior. Those
+features and implementations are not provided by the current public ExWapp
+facade; protobuf regeneration does not implement them. The experimental
+[`companion_reg_refresh` notification](https://github.com/tulir/whatsmeow/commit/9ec8f76db5f17712efc34a29b684a80d2dcb4aaf)
+and ADV-secret QR rotation are still unimplemented.
+
+To refresh to upstream `main`, run `scripts/update_wa_protos.sh`. To reproduce
+this snapshot, run:
+
+```bash
+UPSTREAM_REF=b2b1e71d45e2ff171153b025b5a42f475bb30ef8 scripts/update_wa_protos.sh
+```
+
+The updater preserves local upstream edits by refusing to overwrite a dirty
+tracked checkout; `SKIP_FETCH=1` uses the current checkout directly. Compare
+`tmp/whatsmeow_upstream/store/clientpayload.go` with `ExWapp.Config`, then update
+the verification date. The updater runs E2E, media, history, sync-action and
+snapshot wire tests; run the full suite and maintained-code coverage afterward.
+Version verification records the upstream value; live pairing still requires
+validation against a WhatsApp account.
 
 ## Addressing and identity
 
@@ -261,6 +285,10 @@ protocol payloads do not become empty chat messages.
 
 `pkmsg` routing first attempts a stored session matching the envelope base key.
 Fresh X3DH creation is a fallback when no retained/current session matches.
+For `state="false"`, both paths use a temporary session copy under the normal
+mutation lock. Successful authentication consumes any one-time prekey without
+saving a session or advancing existing ratchets and pending aliases. Failed
+stateless decryption leaves established sessions intact.
 
 ## ACKs, receipts, and retry
 
@@ -277,7 +305,9 @@ message processing, ExWapp sends the appropriate delivery receipt.
 ### Outbound ACK classification
 
 An outgoing socket write is not acceptance or delivery. A later server ACK can
-accept or reject the message. `ExWapp.Error.Ack` currently classifies known ACK
+accept or reject the message. Only an ACK with `class="message"` updates its
+stored status; other ACK classes may reuse the ID for unrelated operations.
+`ExWapp.Error.Ack` currently classifies known ACK
 codes conservatively:
 
 | ACK code | Category | Runtime treatment |

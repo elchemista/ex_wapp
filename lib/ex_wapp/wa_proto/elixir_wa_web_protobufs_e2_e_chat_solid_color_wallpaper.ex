@@ -1,7 +1,12 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsE2E.ChatSolidColorWallpaper do
   @moduledoc false
-  defstruct colorLight: nil, colorDark: nil, isDoodleEnabled: nil, __uf__: []
+  defstruct backgroundLightArgb: nil,
+            backgroundDarkArgb: nil,
+            isDoodleEnabled: nil,
+            doodleLightArgb: nil,
+            doodleDarkArgb: nil,
+            __uf__: []
 
   (
     (
@@ -17,9 +22,11 @@ defmodule WAWebProtobufsE2E.ChatSolidColorWallpaper do
       @spec encode!(struct) :: iodata | no_return
       def encode!(msg) do
         []
-        |> encode_colorLight(msg)
-        |> encode_colorDark(msg)
+        |> encode_backgroundLightArgb(msg)
+        |> encode_backgroundDarkArgb(msg)
         |> encode_isDoodleEnabled(msg)
+        |> encode_doodleLightArgb(msg)
+        |> encode_doodleDarkArgb(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -27,26 +34,28 @@ defmodule WAWebProtobufsE2E.ChatSolidColorWallpaper do
     []
 
     [
-      defp encode_colorLight(acc, msg) do
+      defp encode_backgroundLightArgb(acc, msg) do
         try do
-          case msg.colorLight do
+          case msg.backgroundLightArgb do
             nil -> acc
-            _ -> [acc, "\n", Protox.Encode.encode_string(msg.colorLight)]
+            _ -> [acc, "\r", Protox.Encode.encode_fixed32(msg.backgroundLightArgb)]
           end
         rescue
           ArgumentError ->
-            reraise Protox.EncodingError.new(:colorLight, "invalid field value"), __STACKTRACE__
+            reraise Protox.EncodingError.new(:backgroundLightArgb, "invalid field value"),
+                    __STACKTRACE__
         end
       end,
-      defp encode_colorDark(acc, msg) do
+      defp encode_backgroundDarkArgb(acc, msg) do
         try do
-          case msg.colorDark do
+          case msg.backgroundDarkArgb do
             nil -> acc
-            _ -> [acc, "\x12", Protox.Encode.encode_string(msg.colorDark)]
+            _ -> [acc, "\x15", Protox.Encode.encode_fixed32(msg.backgroundDarkArgb)]
           end
         rescue
           ArgumentError ->
-            reraise Protox.EncodingError.new(:colorDark, "invalid field value"), __STACKTRACE__
+            reraise Protox.EncodingError.new(:backgroundDarkArgb, "invalid field value"),
+                    __STACKTRACE__
         end
       end,
       defp encode_isDoodleEnabled(acc, msg) do
@@ -58,6 +67,30 @@ defmodule WAWebProtobufsE2E.ChatSolidColorWallpaper do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:isDoodleEnabled, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_doodleLightArgb(acc, msg) do
+        try do
+          case msg.doodleLightArgb do
+            nil -> acc
+            _ -> [acc, "%", Protox.Encode.encode_fixed32(msg.doodleLightArgb)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:doodleLightArgb, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_doodleDarkArgb(acc, msg) do
+        try do
+          case msg.doodleDarkArgb do
+            nil -> acc
+            _ -> [acc, "-", Protox.Encode.encode_fixed32(msg.doodleDarkArgb)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:doodleDarkArgb, "invalid field value"),
                     __STACKTRACE__
         end
       end
@@ -116,18 +149,24 @@ defmodule WAWebProtobufsE2E.ChatSolidColorWallpaper do
               raise %Protox.IllegalTagError{}
 
             {1, _, bytes} ->
-              {len, bytes} = Protox.Varint.decode(bytes)
-              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
-              {[colorLight: Protox.Decode.validate_string!(delimited)], rest}
+              {value, rest} = Protox.Decode.parse_fixed32(bytes)
+              {[backgroundLightArgb: value], rest}
 
             {2, _, bytes} ->
-              {len, bytes} = Protox.Varint.decode(bytes)
-              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
-              {[colorDark: Protox.Decode.validate_string!(delimited)], rest}
+              {value, rest} = Protox.Decode.parse_fixed32(bytes)
+              {[backgroundDarkArgb: value], rest}
 
             {3, _, bytes} ->
               {value, rest} = Protox.Decode.parse_bool(bytes)
               {[isDoodleEnabled: value], rest}
+
+            {4, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_fixed32(bytes)
+              {[doodleLightArgb: value], rest}
+
+            {5, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_fixed32(bytes)
+              {[doodleDarkArgb: value], rest}
 
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
@@ -190,9 +229,11 @@ defmodule WAWebProtobufsE2E.ChatSolidColorWallpaper do
           }
     def defs() do
       %{
-        1 => {:colorLight, {:scalar, ""}, :string},
-        2 => {:colorDark, {:scalar, ""}, :string},
-        3 => {:isDoodleEnabled, {:scalar, false}, :bool}
+        1 => {:backgroundLightArgb, {:scalar, 0}, :fixed32},
+        2 => {:backgroundDarkArgb, {:scalar, 0}, :fixed32},
+        3 => {:isDoodleEnabled, {:scalar, false}, :bool},
+        4 => {:doodleLightArgb, {:scalar, 0}, :fixed32},
+        5 => {:doodleDarkArgb, {:scalar, 0}, :fixed32}
       }
     end
 
@@ -202,8 +243,10 @@ defmodule WAWebProtobufsE2E.ChatSolidColorWallpaper do
           }
     def defs_by_name() do
       %{
-        colorDark: {2, {:scalar, ""}, :string},
-        colorLight: {1, {:scalar, ""}, :string},
+        backgroundDarkArgb: {2, {:scalar, 0}, :fixed32},
+        backgroundLightArgb: {1, {:scalar, 0}, :fixed32},
+        doodleDarkArgb: {5, {:scalar, 0}, :fixed32},
+        doodleLightArgb: {4, {:scalar, 0}, :fixed32},
         isDoodleEnabled: {3, {:scalar, false}, :bool}
       }
     end
@@ -215,21 +258,21 @@ defmodule WAWebProtobufsE2E.ChatSolidColorWallpaper do
       [
         %{
           __struct__: Protox.Field,
-          json_name: "colorLight",
-          kind: {:scalar, ""},
+          json_name: "backgroundLightArgb",
+          kind: {:scalar, 0},
           label: :optional,
-          name: :colorLight,
+          name: :backgroundLightArgb,
           tag: 1,
-          type: :string
+          type: :fixed32
         },
         %{
           __struct__: Protox.Field,
-          json_name: "colorDark",
-          kind: {:scalar, ""},
+          json_name: "backgroundDarkArgb",
+          kind: {:scalar, 0},
           label: :optional,
-          name: :colorDark,
+          name: :backgroundDarkArgb,
           tag: 2,
-          type: :string
+          type: :fixed32
         },
         %{
           __struct__: Protox.Field,
@@ -239,6 +282,24 @@ defmodule WAWebProtobufsE2E.ChatSolidColorWallpaper do
           name: :isDoodleEnabled,
           tag: 3,
           type: :bool
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "doodleLightArgb",
+          kind: {:scalar, 0},
+          label: :optional,
+          name: :doodleLightArgb,
+          tag: 4,
+          type: :fixed32
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "doodleDarkArgb",
+          kind: {:scalar, 0},
+          label: :optional,
+          name: :doodleDarkArgb,
+          tag: 5,
+          type: :fixed32
         }
       ]
     end
@@ -246,58 +307,58 @@ defmodule WAWebProtobufsE2E.ChatSolidColorWallpaper do
     [
       @spec(field_def(atom) :: {:ok, Protox.Field.t()} | {:error, :no_such_field}),
       (
-        def field_def(:colorLight) do
+        def field_def(:backgroundLightArgb) do
           {:ok,
            %{
              __struct__: Protox.Field,
-             json_name: "colorLight",
-             kind: {:scalar, ""},
+             json_name: "backgroundLightArgb",
+             kind: {:scalar, 0},
              label: :optional,
-             name: :colorLight,
+             name: :backgroundLightArgb,
              tag: 1,
-             type: :string
+             type: :fixed32
            }}
         end
 
-        def field_def("colorLight") do
+        def field_def("backgroundLightArgb") do
           {:ok,
            %{
              __struct__: Protox.Field,
-             json_name: "colorLight",
-             kind: {:scalar, ""},
+             json_name: "backgroundLightArgb",
+             kind: {:scalar, 0},
              label: :optional,
-             name: :colorLight,
+             name: :backgroundLightArgb,
              tag: 1,
-             type: :string
+             type: :fixed32
            }}
         end
 
         []
       ),
       (
-        def field_def(:colorDark) do
+        def field_def(:backgroundDarkArgb) do
           {:ok,
            %{
              __struct__: Protox.Field,
-             json_name: "colorDark",
-             kind: {:scalar, ""},
+             json_name: "backgroundDarkArgb",
+             kind: {:scalar, 0},
              label: :optional,
-             name: :colorDark,
+             name: :backgroundDarkArgb,
              tag: 2,
-             type: :string
+             type: :fixed32
            }}
         end
 
-        def field_def("colorDark") do
+        def field_def("backgroundDarkArgb") do
           {:ok,
            %{
              __struct__: Protox.Field,
-             json_name: "colorDark",
-             kind: {:scalar, ""},
+             json_name: "backgroundDarkArgb",
+             kind: {:scalar, 0},
              label: :optional,
-             name: :colorDark,
+             name: :backgroundDarkArgb,
              tag: 2,
-             type: :string
+             type: :fixed32
            }}
         end
 
@@ -327,6 +388,64 @@ defmodule WAWebProtobufsE2E.ChatSolidColorWallpaper do
              name: :isDoodleEnabled,
              tag: 3,
              type: :bool
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:doodleLightArgb) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "doodleLightArgb",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :doodleLightArgb,
+             tag: 4,
+             type: :fixed32
+           }}
+        end
+
+        def field_def("doodleLightArgb") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "doodleLightArgb",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :doodleLightArgb,
+             tag: 4,
+             type: :fixed32
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:doodleDarkArgb) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "doodleDarkArgb",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :doodleDarkArgb,
+             tag: 5,
+             type: :fixed32
+           }}
+        end
+
+        def field_def("doodleDarkArgb") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "doodleDarkArgb",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :doodleDarkArgb,
+             tag: 5,
+             type: :fixed32
            }}
         end
 
@@ -371,14 +490,20 @@ defmodule WAWebProtobufsE2E.ChatSolidColorWallpaper do
 
   [
     @spec(default(atom) :: {:ok, boolean | integer | String.t() | float} | {:error, atom}),
-    def default(:colorLight) do
-      {:ok, ""}
+    def default(:backgroundLightArgb) do
+      {:ok, 0}
     end,
-    def default(:colorDark) do
-      {:ok, ""}
+    def default(:backgroundDarkArgb) do
+      {:ok, 0}
     end,
     def default(:isDoodleEnabled) do
       {:ok, false}
+    end,
+    def default(:doodleLightArgb) do
+      {:ok, 0}
+    end,
+    def default(:doodleDarkArgb) do
+      {:ok, 0}
     end,
     def default(_) do
       {:error, :no_such_field}

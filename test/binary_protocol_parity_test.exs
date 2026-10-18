@@ -162,7 +162,9 @@ defmodule ExWapp.BinaryProtocolParityTest do
         <<255, 255, 255>>,
         <<0, 248>>,
         <<0, 249, 0>>,
-        <<0, 248, 2>>
+        <<0, 248, 2>>,
+        # A JID-pair token is valid as an attribute, but cannot be a stanza tag.
+        <<0, 248, 1, 250, 252, 1, "1", 252, 3, "lid">>
       ]
 
       for payload <- malformed do

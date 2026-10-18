@@ -84,7 +84,9 @@ defmodule ExWapp.Message.Handler.Receipt do
     status = ack_status(type)
 
     log_ack(class, type, id, from, to, error)
-    maybe_update_ack_status(target, jid, id, status)
+    # Receipts (including media retries), calls and notifications can reuse a
+    # message ID. Only a message ACK carries a verdict for the stored message.
+    if class == "message", do: maybe_update_ack_status(target, jid, id, status)
 
     if session_repair_requested?(session, class, id, jid, status, error) do
       :ok

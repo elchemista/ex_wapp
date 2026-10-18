@@ -127,11 +127,24 @@ defmodule ExWapp.Signal.Encryption do
 
   @doc """
   Decrypts an incoming message without GenServer calls (safe inside Session handlers).
+
+  A prekey envelope with `state: "false"` consumes its one-time prekey after
+  successful authentication but does not save or replace a Signal session.
   """
   @spec decrypt_from_sender_sync(any(), any(), String.t(), binary(), atom() | String.t()) ::
           {:ok, binary(), any()} | {:error, term()}
-  def decrypt_from_sender_sync(store, signal_sessions, jid, ciphertext, enc_type) do
+  @spec decrypt_from_sender_sync(
+          any(),
+          any(),
+          String.t(),
+          binary(),
+          atom() | String.t(),
+          keyword()
+        ) ::
+          {:ok, binary(), any()} | {:error, term()}
+  def decrypt_from_sender_sync(store, signal_sessions, jid, ciphertext, enc_type, opts \\ []) do
     is_prekey = prekey_message?(enc_type)
+    stateless? = is_prekey and Keyword.get(opts, :state) == "false"
 
     Logger.debug(
       "[ENCRYPTION] decrypt_from_sender_sync: jid=#{Log.reference(jid)} enc_type=#{inspect(enc_type)} is_prekey=#{is_prekey} ct_size=#{byte_size(ciphertext)}"
@@ -151,10 +164,12 @@ defmodule ExWapp.Signal.Encryption do
                ciphertext,
                is_prekey,
                local_identity,
-               local_prekeys
+               local_prekeys,
+               stateless: stateless?
              ) do
           {:ok, plaintext, updated_store} ->
-            :ok = consume_one_time_prekey(store, ciphertext, is_prekey, updated_store)
+            sessions_to_persist = sessions_to_persist(updated_store, stateless?)
+            :ok = consume_one_time_prekey(store, ciphertext, is_prekey, sessions_to_persist)
             Logger.debug("[ENCRYPTION] Decrypt succeeded, plaintext_size=#{byte_size(plaintext)}")
             {:ok, plaintext, updated_store}
 
@@ -340,7 +355,10 @@ defmodule ExWapp.Signal.Encryption do
 
   defp note_unrecoverable_prekey(_store, _ciphertext, _is_prekey, _reason), do: :ok
 
-  @spec consume_one_time_prekey(term(), binary(), boolean(), SessionStore.t()) :: :ok
+  defp sessions_to_persist(_sessions, true), do: nil
+  defp sessions_to_persist(sessions, false), do: sessions
+
+  @spec consume_one_time_prekey(term(), binary(), boolean(), SessionStore.t() | nil) :: :ok
   defp consume_one_time_prekey(_store, _ciphertext, false, _sessions), do: :ok
 
   defp consume_one_time_prekey(store, ciphertext, true, sessions) do
@@ -385,8 +403,11 @@ defmodule ExWapp.Signal.Encryption do
     :ok
   end
 
-  @spec persist_session_before_prekey_delete(term(), SessionStore.t(), pos_integer()) ::
+  @spec persist_session_before_prekey_delete(term(), SessionStore.t() | nil, pos_integer()) ::
           :ok | {:error, term()}
+  # Stateless prekey messages intentionally have no session to persist.
+  defp persist_session_before_prekey_delete(_store, nil, _prekey_id), do: :ok
+
   defp persist_session_before_prekey_delete(store, sessions, prekey_id) do
     case ExWapp.Store.persist_signal_sessions(store, sessions) do
       :ok ->

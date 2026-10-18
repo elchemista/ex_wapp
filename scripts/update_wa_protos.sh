@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 #
-# Pulls WhatsApp's official proto definitions from whatsmeow upstream,
+# Pulls WhatsApp proto definitions extracted by whatsmeow upstream,
 # regenerates the protox modules in lib/ex_wapp/wa_proto, and verifies the
 # result compiles and still passes the wire-format tests.
 #
 # Usage:
 #   scripts/update_wa_protos.sh              # fetch upstream, regenerate, verify
 #   SKIP_FETCH=1 scripts/update_wa_protos.sh # regenerate from the local checkout
+#   UPSTREAM_REF=<commit> scripts/update_wa_protos.sh # reproduce a pinned snapshot
 #
-# Requirements: git, protoc, mix (protox is a project dependency).
+# Requirements: git, protoc, rsync, mix (protox is a project dependency).
 #
 # whatsmeow extracts these protos from the WhatsApp Web bundle and keeps them
 # current; this script makes protocol updates a pull-regenerate-test loop.
@@ -19,6 +20,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 UPSTREAM_REPO="${UPSTREAM_REPO:-https://github.com/tulir/whatsmeow.git}"
+UPSTREAM_REF="${UPSTREAM_REF:-main}"
 UPSTREAM_DIR="tmp/whatsmeow_upstream"
 OUT_DIR="lib/ex_wapp/wa_proto"
 
@@ -39,12 +41,16 @@ step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 step "Fetching upstream protos"
 if [[ "${SKIP_FETCH:-0}" == "1" ]]; then
   echo "SKIP_FETCH=1 — using the existing checkout as-is"
-elif [[ -d "$UPSTREAM_DIR/.git" ]]; then
-  git -C "$UPSTREAM_DIR" fetch --depth 1 origin main
-  git -C "$UPSTREAM_DIR" reset --hard origin/main --quiet
 else
-  rm -rf "$UPSTREAM_DIR"
-  git clone --depth 1 "$UPSTREAM_REPO" "$UPSTREAM_DIR"
+  if [[ ! -d "$UPSTREAM_DIR/.git" ]]; then
+    git clone --depth 1 --no-checkout "$UPSTREAM_REPO" "$UPSTREAM_DIR"
+  elif ! git -C "$UPSTREAM_DIR" diff --quiet || ! git -C "$UPSTREAM_DIR" diff --cached --quiet; then
+    echo "upstream checkout has local changes; commit/stash them or use SKIP_FETCH=1" >&2
+    exit 1
+  fi
+
+  git -C "$UPSTREAM_DIR" fetch --depth 1 origin "$UPSTREAM_REF"
+  git -C "$UPSTREAM_DIR" checkout --detach --quiet FETCH_HEAD
 fi
 echo "upstream at: $(git -C "$UPSTREAM_DIR" log -1 --format='%h %cs %s' 2>/dev/null || echo 'local snapshot')"
 
@@ -81,7 +87,7 @@ mix compile --warnings-as-errors
 
 step "Running wire-format tests"
 mix test test/wa_proto_e2e_parity_test.exs test/messages_domain_edge_test.exs \
-  test/proto_message_media_test.exs test/whatsmeow_parity_test.exs
+  test/proto_*_test.exs test/whatsmeow_parity_test.exs
 
 step "Done"
 if [[ -z "$(git status --porcelain -- "$OUT_DIR")" ]]; then

@@ -21,6 +21,9 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
             nctSalt: nil,
             inlineContacts: [],
             inlineContactsProvided: nil,
+            favoriteStickers: [],
+            omittedConversations: [],
+            omittedConversationsProvided: nil,
             __uf__: []
 
   (
@@ -57,6 +60,9 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
         |> encode_nctSalt(msg)
         |> encode_inlineContacts(msg)
         |> encode_inlineContactsProvided(msg)
+        |> encode_favoriteStickers(msg)
+        |> encode_omittedConversations(msg)
+        |> encode_omittedConversationsProvided(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -397,6 +403,61 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
             reraise Protox.EncodingError.new(:inlineContactsProvided, "invalid field value"),
                     __STACKTRACE__
         end
+      end,
+      defp encode_favoriteStickers(acc, msg) do
+        try do
+          case msg.favoriteStickers do
+            [] ->
+              acc
+
+            values ->
+              [
+                acc,
+                Enum.reduce(values, [], fn value, acc ->
+                  [acc, "\xB2\x01", Protox.Encode.encode_message(value)]
+                end)
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:favoriteStickers, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_omittedConversations(acc, msg) do
+        try do
+          case msg.omittedConversations do
+            [] ->
+              acc
+
+            values ->
+              [
+                acc,
+                Enum.reduce(values, [], fn value, acc ->
+                  [acc, "\xBA\x01", Protox.Encode.encode_message(value)]
+                end)
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:omittedConversations, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_omittedConversationsProvided(acc, msg) do
+        try do
+          case msg.omittedConversationsProvided do
+            nil -> acc
+            _ -> [acc, "\xC0\x01", Protox.Encode.encode_bool(msg.omittedConversationsProvided)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :omittedConversationsProvided,
+                      "invalid field value"
+                    ),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -623,6 +684,34 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
               {value, rest} = Protox.Decode.parse_bool(bytes)
               {[:inlineContactsProvided | set_fields], [inlineContactsProvided: value], rest}
 
+            {22, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[:favoriteStickers | set_fields],
+               [
+                 favoriteStickers:
+                   msg.favoriteStickers ++
+                     [WAWebProtobufsHistorySync.StickerMetadata.decode!(delimited)]
+               ], rest}
+
+            {23, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[:omittedConversations | set_fields],
+               [
+                 omittedConversations:
+                   msg.omittedConversations ++
+                     [WAWebProtobufsHistorySync.RecoverableHistoryConversation.decode!(delimited)]
+               ], rest}
+
+            {24, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_bool(bytes)
+
+              {[:omittedConversationsProvided | set_fields],
+               [omittedConversationsProvided: value], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -712,7 +801,13 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
         18 => {:accounts, :unpacked, {:message, WAWebProtobufsHistorySync.Account}},
         19 => {:nctSalt, {:scalar, ""}, :bytes},
         20 => {:inlineContacts, :unpacked, {:message, WAWebProtobufsHistorySync.InlineContact}},
-        21 => {:inlineContactsProvided, {:scalar, false}, :bool}
+        21 => {:inlineContactsProvided, {:scalar, false}, :bool},
+        22 =>
+          {:favoriteStickers, :unpacked, {:message, WAWebProtobufsHistorySync.StickerMetadata}},
+        23 =>
+          {:omittedConversations, :unpacked,
+           {:message, WAWebProtobufsHistorySync.RecoverableHistoryConversation}},
+        24 => {:omittedConversationsProvided, {:scalar, false}, :bool}
       }
     end
 
@@ -730,10 +825,14 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
         chunkOrder: {5, {:scalar, 0}, :uint32},
         companionMetaNonce: {16, {:scalar, ""}, :string},
         conversations: {2, :unpacked, {:message, WAWebProtobufsHistorySync.Conversation}},
+        favoriteStickers: {22, :unpacked, {:message, WAWebProtobufsHistorySync.StickerMetadata}},
         globalSettings: {8, {:scalar, nil}, {:message, WAWebProtobufsHistorySync.GlobalSettings}},
         inlineContacts: {20, :unpacked, {:message, WAWebProtobufsHistorySync.InlineContact}},
         inlineContactsProvided: {21, {:scalar, false}, :bool},
         nctSalt: {19, {:scalar, ""}, :bytes},
+        omittedConversations:
+          {23, :unpacked, {:message, WAWebProtobufsHistorySync.RecoverableHistoryConversation}},
+        omittedConversationsProvided: {24, {:scalar, false}, :bool},
         pastParticipants: {12, :unpacked, {:message, WAWebProtobufsHistorySync.PastParticipants}},
         phoneNumberToLidMappings:
           {15, :unpacked, {:message, WAWebProtobufsHistorySync.PhoneNumberToLIDMapping}},
@@ -933,6 +1032,33 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
           label: :optional,
           name: :inlineContactsProvided,
           tag: 21,
+          type: :bool
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "favoriteStickers",
+          kind: :unpacked,
+          label: :repeated,
+          name: :favoriteStickers,
+          tag: 22,
+          type: {:message, WAWebProtobufsHistorySync.StickerMetadata}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "omittedConversations",
+          kind: :unpacked,
+          label: :repeated,
+          name: :omittedConversations,
+          tag: 23,
+          type: {:message, WAWebProtobufsHistorySync.RecoverableHistoryConversation}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "omittedConversationsProvided",
+          kind: {:scalar, false},
+          label: :optional,
+          name: :omittedConversationsProvided,
+          tag: 24,
           type: :bool
         }
       ]
@@ -1520,6 +1646,93 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
 
         []
       ),
+      (
+        def field_def(:favoriteStickers) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "favoriteStickers",
+             kind: :unpacked,
+             label: :repeated,
+             name: :favoriteStickers,
+             tag: 22,
+             type: {:message, WAWebProtobufsHistorySync.StickerMetadata}
+           }}
+        end
+
+        def field_def("favoriteStickers") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "favoriteStickers",
+             kind: :unpacked,
+             label: :repeated,
+             name: :favoriteStickers,
+             tag: 22,
+             type: {:message, WAWebProtobufsHistorySync.StickerMetadata}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:omittedConversations) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "omittedConversations",
+             kind: :unpacked,
+             label: :repeated,
+             name: :omittedConversations,
+             tag: 23,
+             type: {:message, WAWebProtobufsHistorySync.RecoverableHistoryConversation}
+           }}
+        end
+
+        def field_def("omittedConversations") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "omittedConversations",
+             kind: :unpacked,
+             label: :repeated,
+             name: :omittedConversations,
+             tag: 23,
+             type: {:message, WAWebProtobufsHistorySync.RecoverableHistoryConversation}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:omittedConversationsProvided) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "omittedConversationsProvided",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :omittedConversationsProvided,
+             tag: 24,
+             type: :bool
+           }}
+        end
+
+        def field_def("omittedConversationsProvided") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "omittedConversationsProvided",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :omittedConversationsProvided,
+             tag: 24,
+             type: :bool
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -1617,6 +1830,15 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
       {:error, :no_default_value}
     end,
     def default(:inlineContactsProvided) do
+      {:ok, false}
+    end,
+    def default(:favoriteStickers) do
+      {:error, :no_default_value}
+    end,
+    def default(:omittedConversations) do
+      {:error, :no_default_value}
+    end,
+    def default(:omittedConversationsProvided) do
       {:ok, false}
     end,
     def default(_) do

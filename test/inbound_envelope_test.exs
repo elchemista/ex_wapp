@@ -64,6 +64,24 @@ defmodule ExWapp.Message.Handler.Inbound.EnvelopeTest do
            )
   end
 
+  test "uses participant_pn for a group LID sender without an addressing_mode hint" do
+    store = Memory.new()
+    on_exit(fn -> Memory.stop(store) end)
+    state = %{store: store, signal_sessions: SessionStore.new()}
+    group = "120363000000000000@g.us"
+    lid = "90000000001:5@lid"
+    pn = "15550001111@s.whatsapp.net"
+    attrs = %{"participant_pn" => pn}
+
+    assert Envelope.persist_lid_mappings(state, attrs, group, lid) == state
+    mapping = Store.load!(store).lid_mapping
+    assert mapping[{:lid_to_pn, "90000000001@lid"}] == pn
+
+    context = Envelope.decrypt_context(%{ciphertext: <<1>>}, state, group, lid, attrs)
+    assert pn in context.sender_candidates
+    assert "15550001111:5@s.whatsapp.net" in context.sender_candidates
+  end
+
   test "authorizes self-only protocol senders from PN, LID, and group participant" do
     own_pn = "15550009999@s.whatsapp.net"
     own_lid = "90000000099@lid"
