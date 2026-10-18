@@ -6,6 +6,7 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
             messageCount: nil,
             nonHistoryReceivers: [],
             oldestMessageTimestampInBundle: nil,
+            includesChatTheme: nil,
             __uf__: []
 
   (
@@ -27,6 +28,7 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
         |> encode_messageCount(msg)
         |> encode_nonHistoryReceivers(msg)
         |> encode_oldestMessageTimestampInBundle(msg)
+        |> encode_includesChatTheme(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -114,6 +116,18 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
                     ),
                     __STACKTRACE__
         end
+      end,
+      defp encode_includesChatTheme(acc, msg) do
+        try do
+          case msg.includesChatTheme do
+            nil -> acc
+            _ -> [acc, "0", Protox.Encode.encode_bool(msg.includesChatTheme)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:includesChatTheme, "invalid field value"),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -199,6 +213,10 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
               {value, rest} = Protox.Decode.parse_int64(bytes)
               {[oldestMessageTimestampInBundle: value], rest}
 
+            {6, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_bool(bytes)
+              {[includesChatTheme: value], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -264,7 +282,8 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
         2 => {:oldestMessageTimestampInWindow, {:scalar, 0}, :int64},
         3 => {:messageCount, {:scalar, 0}, :int64},
         4 => {:nonHistoryReceivers, :unpacked, :string},
-        5 => {:oldestMessageTimestampInBundle, {:scalar, 0}, :int64}
+        5 => {:oldestMessageTimestampInBundle, {:scalar, 0}, :int64},
+        6 => {:includesChatTheme, {:scalar, false}, :bool}
       }
     end
 
@@ -275,6 +294,7 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
     def defs_by_name() do
       %{
         historyReceivers: {1, :unpacked, :string},
+        includesChatTheme: {6, {:scalar, false}, :bool},
         messageCount: {3, {:scalar, 0}, :int64},
         nonHistoryReceivers: {4, :unpacked, :string},
         oldestMessageTimestampInBundle: {5, {:scalar, 0}, :int64},
@@ -331,6 +351,15 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
           name: :oldestMessageTimestampInBundle,
           tag: 5,
           type: :int64
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "includesChatTheme",
+          kind: {:scalar, false},
+          label: :optional,
+          name: :includesChatTheme,
+          tag: 6,
+          type: :bool
         }
       ]
     end
@@ -482,6 +511,35 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
 
         []
       ),
+      (
+        def field_def(:includesChatTheme) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "includesChatTheme",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :includesChatTheme,
+             tag: 6,
+             type: :bool
+           }}
+        end
+
+        def field_def("includesChatTheme") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "includesChatTheme",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :includesChatTheme,
+             tag: 6,
+             type: :bool
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -535,6 +593,9 @@ defmodule WAWebProtobufsE2E.MessageHistoryMetadata do
     end,
     def default(:oldestMessageTimestampInBundle) do
       {:ok, 0}
+    end,
+    def default(:includesChatTheme) do
+      {:ok, false}
     end,
     def default(_) do
       {:error, :no_such_field}

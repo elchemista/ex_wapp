@@ -33,6 +33,15 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
             agmTitleStrategy: nil,
             agmSubtitleStrategy: nil,
             agmHeaderInteractionStrategy: nil,
+            containsCtwaFlowsAutoLabel: nil,
+            productID: nil,
+            containsCtwaPromo: nil,
+            ctwaPromoResponseID: nil,
+            ctwaPromoOfferID: nil,
+            ctwaPromoAdEntryID: nil,
+            ctwaPromoResponseExpiresAtSeconds: nil,
+            ctwaPromoSchemaVersion: nil,
+            ctwaPromoAdgroupID: nil,
             __uf__: []
 
   (
@@ -81,6 +90,15 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
         |> encode_agmTitleStrategy(msg)
         |> encode_agmSubtitleStrategy(msg)
         |> encode_agmHeaderInteractionStrategy(msg)
+        |> encode_containsCtwaFlowsAutoLabel(msg)
+        |> encode_productID(msg)
+        |> encode_containsCtwaPromo(msg)
+        |> encode_ctwaPromoResponseID(msg)
+        |> encode_ctwaPromoOfferID(msg)
+        |> encode_ctwaPromoAdEntryID(msg)
+        |> encode_ctwaPromoResponseExpiresAtSeconds(msg)
+        |> encode_ctwaPromoSchemaVersion(msg)
+        |> encode_ctwaPromoAdgroupID(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -484,6 +502,123 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
                     ),
                     __STACKTRACE__
         end
+      end,
+      defp encode_containsCtwaFlowsAutoLabel(acc, msg) do
+        try do
+          case msg.containsCtwaFlowsAutoLabel do
+            nil -> acc
+            _ -> [acc, "\x88\x02", Protox.Encode.encode_bool(msg.containsCtwaFlowsAutoLabel)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:containsCtwaFlowsAutoLabel, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_productID(acc, msg) do
+        try do
+          case msg.productID do
+            nil -> acc
+            _ -> [acc, "\x92\x02", Protox.Encode.encode_string(msg.productID)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:productID, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_containsCtwaPromo(acc, msg) do
+        try do
+          case msg.containsCtwaPromo do
+            nil -> acc
+            _ -> [acc, "\x98\x02", Protox.Encode.encode_bool(msg.containsCtwaPromo)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:containsCtwaPromo, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_ctwaPromoResponseID(acc, msg) do
+        try do
+          case msg.ctwaPromoResponseID do
+            nil -> acc
+            _ -> [acc, "\xA2\x02", Protox.Encode.encode_string(msg.ctwaPromoResponseID)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:ctwaPromoResponseID, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_ctwaPromoOfferID(acc, msg) do
+        try do
+          case msg.ctwaPromoOfferID do
+            nil -> acc
+            _ -> [acc, "\xAA\x02", Protox.Encode.encode_string(msg.ctwaPromoOfferID)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:ctwaPromoOfferID, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_ctwaPromoAdEntryID(acc, msg) do
+        try do
+          case msg.ctwaPromoAdEntryID do
+            nil -> acc
+            _ -> [acc, "\xB2\x02", Protox.Encode.encode_string(msg.ctwaPromoAdEntryID)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:ctwaPromoAdEntryID, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_ctwaPromoResponseExpiresAtSeconds(acc, msg) do
+        try do
+          case msg.ctwaPromoResponseExpiresAtSeconds do
+            nil ->
+              acc
+
+            _ ->
+              [
+                acc,
+                "\xB8\x02",
+                Protox.Encode.encode_uint64(msg.ctwaPromoResponseExpiresAtSeconds)
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :ctwaPromoResponseExpiresAtSeconds,
+                      "invalid field value"
+                    ),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_ctwaPromoSchemaVersion(acc, msg) do
+        try do
+          case msg.ctwaPromoSchemaVersion do
+            nil -> acc
+            _ -> [acc, "\xC0\x02", Protox.Encode.encode_uint32(msg.ctwaPromoSchemaVersion)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:ctwaPromoSchemaVersion, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_ctwaPromoAdgroupID(acc, msg) do
+        try do
+          case msg.ctwaPromoAdgroupID do
+            nil -> acc
+            _ -> [acc, "\xCA\x02", Protox.Encode.encode_string(msg.ctwaPromoAdgroupID)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:ctwaPromoAdgroupID, "invalid field value"),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -694,6 +829,47 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
               {value, rest} = Protox.Decode.parse_int32(bytes)
               {[agmHeaderInteractionStrategy: value], rest}
 
+            {33, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_bool(bytes)
+              {[containsCtwaFlowsAutoLabel: value], rest}
+
+            {34, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[productID: Protox.Decode.validate_string!(delimited)], rest}
+
+            {35, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_bool(bytes)
+              {[containsCtwaPromo: value], rest}
+
+            {36, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[ctwaPromoResponseID: Protox.Decode.validate_string!(delimited)], rest}
+
+            {37, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[ctwaPromoOfferID: Protox.Decode.validate_string!(delimited)], rest}
+
+            {38, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[ctwaPromoAdEntryID: Protox.Decode.validate_string!(delimited)], rest}
+
+            {39, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_uint64(bytes)
+              {[ctwaPromoResponseExpiresAtSeconds: value], rest}
+
+            {40, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_uint32(bytes)
+              {[ctwaPromoSchemaVersion: value], rest}
+
+            {41, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[ctwaPromoAdgroupID: Protox.Decode.validate_string!(delimited)], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -790,7 +966,16 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
         29 => {:agmThumbnailStrategy, {:scalar, 0}, :int32},
         30 => {:agmTitleStrategy, {:scalar, 0}, :int32},
         31 => {:agmSubtitleStrategy, {:scalar, 0}, :int32},
-        32 => {:agmHeaderInteractionStrategy, {:scalar, 0}, :int32}
+        32 => {:agmHeaderInteractionStrategy, {:scalar, 0}, :int32},
+        33 => {:containsCtwaFlowsAutoLabel, {:scalar, false}, :bool},
+        34 => {:productID, {:scalar, ""}, :string},
+        35 => {:containsCtwaPromo, {:scalar, false}, :bool},
+        36 => {:ctwaPromoResponseID, {:scalar, ""}, :string},
+        37 => {:ctwaPromoOfferID, {:scalar, ""}, :string},
+        38 => {:ctwaPromoAdEntryID, {:scalar, ""}, :string},
+        39 => {:ctwaPromoResponseExpiresAtSeconds, {:scalar, 0}, :uint64},
+        40 => {:ctwaPromoSchemaVersion, {:scalar, 0}, :uint32},
+        41 => {:ctwaPromoAdgroupID, {:scalar, ""}, :string}
       }
     end
 
@@ -814,9 +999,17 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
         body: {2, {:scalar, ""}, :string},
         clickToWhatsappCall: {15, {:scalar, false}, :bool},
         containsAutoReply: {10, {:scalar, false}, :bool},
+        containsCtwaFlowsAutoLabel: {33, {:scalar, false}, :bool},
         containsCtwaFlowsAutoReply: {28, {:scalar, false}, :bool},
+        containsCtwaPromo: {35, {:scalar, false}, :bool},
         ctaPayload: {20, {:scalar, ""}, :string},
         ctwaClid: {13, {:scalar, ""}, :string},
+        ctwaPromoAdEntryID: {38, {:scalar, ""}, :string},
+        ctwaPromoAdgroupID: {41, {:scalar, ""}, :string},
+        ctwaPromoOfferID: {37, {:scalar, ""}, :string},
+        ctwaPromoResponseExpiresAtSeconds: {39, {:scalar, 0}, :uint64},
+        ctwaPromoResponseID: {36, {:scalar, ""}, :string},
+        ctwaPromoSchemaVersion: {40, {:scalar, 0}, :uint32},
         disableNudge: {21, {:scalar, false}, :bool},
         greetingMessageBody: {19, {:scalar, ""}, :string},
         mediaType:
@@ -824,6 +1017,7 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
            {:enum, WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo.MediaType}},
         mediaURL: {5, {:scalar, ""}, :string},
         originalImageURL: {22, {:scalar, ""}, :string},
+        productID: {34, {:scalar, ""}, :string},
         ref: {14, {:scalar, ""}, :string},
         renderLargerThumbnail: {11, {:scalar, false}, :bool},
         showAdAttribution: {12, {:scalar, false}, :bool},
@@ -1131,6 +1325,87 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
           name: :agmHeaderInteractionStrategy,
           tag: 32,
           type: :int32
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "containsCtwaFlowsAutoLabel",
+          kind: {:scalar, false},
+          label: :optional,
+          name: :containsCtwaFlowsAutoLabel,
+          tag: 33,
+          type: :bool
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "productID",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :productID,
+          tag: 34,
+          type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "containsCtwaPromo",
+          kind: {:scalar, false},
+          label: :optional,
+          name: :containsCtwaPromo,
+          tag: 35,
+          type: :bool
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "ctwaPromoResponseID",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :ctwaPromoResponseID,
+          tag: 36,
+          type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "ctwaPromoOfferID",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :ctwaPromoOfferID,
+          tag: 37,
+          type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "ctwaPromoAdEntryID",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :ctwaPromoAdEntryID,
+          tag: 38,
+          type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "ctwaPromoResponseExpiresAtSeconds",
+          kind: {:scalar, 0},
+          label: :optional,
+          name: :ctwaPromoResponseExpiresAtSeconds,
+          tag: 39,
+          type: :uint64
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "ctwaPromoSchemaVersion",
+          kind: {:scalar, 0},
+          label: :optional,
+          name: :ctwaPromoSchemaVersion,
+          tag: 40,
+          type: :uint32
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "ctwaPromoAdgroupID",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :ctwaPromoAdgroupID,
+          tag: 41,
+          type: :string
         }
       ]
     end
@@ -2065,6 +2340,267 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
 
         []
       ),
+      (
+        def field_def(:containsCtwaFlowsAutoLabel) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "containsCtwaFlowsAutoLabel",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :containsCtwaFlowsAutoLabel,
+             tag: 33,
+             type: :bool
+           }}
+        end
+
+        def field_def("containsCtwaFlowsAutoLabel") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "containsCtwaFlowsAutoLabel",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :containsCtwaFlowsAutoLabel,
+             tag: 33,
+             type: :bool
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:productID) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "productID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :productID,
+             tag: 34,
+             type: :string
+           }}
+        end
+
+        def field_def("productID") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "productID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :productID,
+             tag: 34,
+             type: :string
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:containsCtwaPromo) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "containsCtwaPromo",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :containsCtwaPromo,
+             tag: 35,
+             type: :bool
+           }}
+        end
+
+        def field_def("containsCtwaPromo") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "containsCtwaPromo",
+             kind: {:scalar, false},
+             label: :optional,
+             name: :containsCtwaPromo,
+             tag: 35,
+             type: :bool
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:ctwaPromoResponseID) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "ctwaPromoResponseID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :ctwaPromoResponseID,
+             tag: 36,
+             type: :string
+           }}
+        end
+
+        def field_def("ctwaPromoResponseID") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "ctwaPromoResponseID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :ctwaPromoResponseID,
+             tag: 36,
+             type: :string
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:ctwaPromoOfferID) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "ctwaPromoOfferID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :ctwaPromoOfferID,
+             tag: 37,
+             type: :string
+           }}
+        end
+
+        def field_def("ctwaPromoOfferID") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "ctwaPromoOfferID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :ctwaPromoOfferID,
+             tag: 37,
+             type: :string
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:ctwaPromoAdEntryID) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "ctwaPromoAdEntryID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :ctwaPromoAdEntryID,
+             tag: 38,
+             type: :string
+           }}
+        end
+
+        def field_def("ctwaPromoAdEntryID") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "ctwaPromoAdEntryID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :ctwaPromoAdEntryID,
+             tag: 38,
+             type: :string
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:ctwaPromoResponseExpiresAtSeconds) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "ctwaPromoResponseExpiresAtSeconds",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :ctwaPromoResponseExpiresAtSeconds,
+             tag: 39,
+             type: :uint64
+           }}
+        end
+
+        def field_def("ctwaPromoResponseExpiresAtSeconds") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "ctwaPromoResponseExpiresAtSeconds",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :ctwaPromoResponseExpiresAtSeconds,
+             tag: 39,
+             type: :uint64
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:ctwaPromoSchemaVersion) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "ctwaPromoSchemaVersion",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :ctwaPromoSchemaVersion,
+             tag: 40,
+             type: :uint32
+           }}
+        end
+
+        def field_def("ctwaPromoSchemaVersion") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "ctwaPromoSchemaVersion",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :ctwaPromoSchemaVersion,
+             tag: 40,
+             type: :uint32
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:ctwaPromoAdgroupID) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "ctwaPromoAdgroupID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :ctwaPromoAdgroupID,
+             tag: 41,
+             type: :string
+           }}
+        end
+
+        def field_def("ctwaPromoAdgroupID") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "ctwaPromoAdgroupID",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :ctwaPromoAdgroupID,
+             tag: 41,
+             type: :string
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -2199,6 +2735,33 @@ defmodule WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo do
     end,
     def default(:agmHeaderInteractionStrategy) do
       {:ok, 0}
+    end,
+    def default(:containsCtwaFlowsAutoLabel) do
+      {:ok, false}
+    end,
+    def default(:productID) do
+      {:ok, ""}
+    end,
+    def default(:containsCtwaPromo) do
+      {:ok, false}
+    end,
+    def default(:ctwaPromoResponseID) do
+      {:ok, ""}
+    end,
+    def default(:ctwaPromoOfferID) do
+      {:ok, ""}
+    end,
+    def default(:ctwaPromoAdEntryID) do
+      {:ok, ""}
+    end,
+    def default(:ctwaPromoResponseExpiresAtSeconds) do
+      {:ok, 0}
+    end,
+    def default(:ctwaPromoSchemaVersion) do
+      {:ok, 0}
+    end,
+    def default(:ctwaPromoAdgroupID) do
+      {:ok, ""}
     end,
     def default(_) do
       {:error, :no_such_field}

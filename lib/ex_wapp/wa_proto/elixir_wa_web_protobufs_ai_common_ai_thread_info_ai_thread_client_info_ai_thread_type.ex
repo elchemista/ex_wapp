@@ -48,6 +48,15 @@ defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo.AIThreadType do
         def encode("SIDE_CHAT") do
           3
         end
+      ),
+      (
+        def encode(:PRIVATE_SEARCH_CHAT) do
+          4
+        end
+
+        def encode("PRIVATE_SEARCH_CHAT") do
+          4
+        end
       )
     ]
 
@@ -68,6 +77,9 @@ defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo.AIThreadType do
       end,
       def decode(3) do
         :SIDE_CHAT
+      end,
+      def decode(4) do
+        :PRIVATE_SEARCH_CHAT
       end
     ]
 
@@ -77,7 +89,7 @@ defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo.AIThreadType do
 
     @spec constants() :: [{integer(), atom()}]
     def constants() do
-      [{0, :UNKNOWN}, {1, :DEFAULT}, {2, :INCOGNITO}, {3, :SIDE_CHAT}]
+      [{0, :UNKNOWN}, {1, :DEFAULT}, {2, :INCOGNITO}, {3, :SIDE_CHAT}, {4, :PRIVATE_SEARCH_CHAT}]
     end
 
     @spec has_constant?(any()) :: boolean()
@@ -93,6 +105,9 @@ defmodule WAWebProtobufsAICommon.AIThreadInfo.AIThreadClientInfo.AIThreadType do
           true
         end,
         def has_constant?(:SIDE_CHAT) do
+          true
+        end,
+        def has_constant?(:PRIVATE_SEARCH_CHAT) do
           true
         end
       ]

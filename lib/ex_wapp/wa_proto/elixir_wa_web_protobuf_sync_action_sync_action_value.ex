@@ -88,6 +88,10 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
             sharedDeviceAllowlistAction: nil,
             contactManagerMetadataAction: nil,
             businessFolderActivationAction: nil,
+            groupHistoryToggleAction: nil,
+            bbProPendingCustomerBaseAction: nil,
+            communityNestingStateAction: nil,
+            sharedDeviceSecretAction: nil,
             __uf__: []
 
   (
@@ -191,6 +195,10 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
         |> encode_sharedDeviceAllowlistAction(msg)
         |> encode_contactManagerMetadataAction(msg)
         |> encode_businessFolderActivationAction(msg)
+        |> encode_groupHistoryToggleAction(msg)
+        |> encode_bbProPendingCustomerBaseAction(msg)
+        |> encode_communityNestingStateAction(msg)
+        |> encode_sharedDeviceSecretAction(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -1343,6 +1351,60 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
                     ),
                     __STACKTRACE__
         end
+      end,
+      defp encode_groupHistoryToggleAction(acc, msg) do
+        try do
+          case msg.groupHistoryToggleAction do
+            nil -> acc
+            _ -> [acc, "\x8A\x06", Protox.Encode.encode_message(msg.groupHistoryToggleAction)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:groupHistoryToggleAction, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_bbProPendingCustomerBaseAction(acc, msg) do
+        try do
+          case msg.bbProPendingCustomerBaseAction do
+            nil ->
+              acc
+
+            _ ->
+              [acc, "\x92\x06", Protox.Encode.encode_message(msg.bbProPendingCustomerBaseAction)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :bbProPendingCustomerBaseAction,
+                      "invalid field value"
+                    ),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_communityNestingStateAction(acc, msg) do
+        try do
+          case msg.communityNestingStateAction do
+            nil -> acc
+            _ -> [acc, "\x9A\x06", Protox.Encode.encode_message(msg.communityNestingStateAction)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:communityNestingStateAction, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_sharedDeviceSecretAction(acc, msg) do
+        try do
+          case msg.sharedDeviceSecretAction do
+            nil -> acc
+            _ -> [acc, "\xA2\x06", Protox.Encode.encode_message(msg.sharedDeviceSecretAction)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:sharedDeviceSecretAction, "invalid field value"),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -2440,6 +2502,54 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
                    )
                ], rest}
 
+            {97, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 groupHistoryToggleAction:
+                   Protox.MergeMessage.merge(
+                     msg.groupHistoryToggleAction,
+                     WAWebProtobufSyncAction.GroupHistoryToggleAction.decode!(delimited)
+                   )
+               ], rest}
+
+            {98, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 bbProPendingCustomerBaseAction:
+                   Protox.MergeMessage.merge(
+                     msg.bbProPendingCustomerBaseAction,
+                     WAWebProtobufSyncAction.BBProPendingCustomerBaseAction.decode!(delimited)
+                   )
+               ], rest}
+
+            {99, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 communityNestingStateAction:
+                   Protox.MergeMessage.merge(
+                     msg.communityNestingStateAction,
+                     WAWebProtobufSyncAction.CommunityNestingStateAction.decode!(delimited)
+                   )
+               ], rest}
+
+            {100, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 sharedDeviceSecretAction:
+                   Protox.MergeMessage.merge(
+                     msg.sharedDeviceSecretAction,
+                     WAWebProtobufSyncAction.SharedDeviceSecretAction.decode!(delimited)
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -2730,7 +2840,19 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
            {:message, WAWebProtobufSyncAction.ContactManagerMetadataAction}},
         96 =>
           {:businessFolderActivationAction, {:scalar, nil},
-           {:message, WAWebProtobufSyncAction.BusinessFolderActivationAction}}
+           {:message, WAWebProtobufSyncAction.BusinessFolderActivationAction}},
+        97 =>
+          {:groupHistoryToggleAction, {:scalar, nil},
+           {:message, WAWebProtobufSyncAction.GroupHistoryToggleAction}},
+        98 =>
+          {:bbProPendingCustomerBaseAction, {:scalar, nil},
+           {:message, WAWebProtobufSyncAction.BBProPendingCustomerBaseAction}},
+        99 =>
+          {:communityNestingStateAction, {:scalar, nil},
+           {:message, WAWebProtobufSyncAction.CommunityNestingStateAction}},
+        100 =>
+          {:sharedDeviceSecretAction, {:scalar, nil},
+           {:message, WAWebProtobufSyncAction.SharedDeviceSecretAction}}
       }
     end
 
@@ -2752,6 +2874,8 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
            {:message, WAWebProtobufSyncAction.AutoOrganizeBusinessChatSetting}},
         avatarUpdatedAction:
           {72, {:scalar, nil}, {:message, WAWebProtobufSyncAction.AvatarUpdatedAction}},
+        bbProPendingCustomerBaseAction:
+          {98, {:scalar, nil}, {:message, WAWebProtobufSyncAction.BBProPendingCustomerBaseAction}},
         bizAiSettingsNudgeAction:
           {87, {:scalar, nil}, {:message, WAWebProtobufSyncAction.BizAISettingsNudgeAction}},
         botWelcomeRequestAction:
@@ -2780,6 +2904,8 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
           {21, {:scalar, nil}, {:message, WAWebProtobufSyncAction.ClearChatAction}},
         coexV2VersionAction:
           {88, {:scalar, nil}, {:message, WAWebProtobufSyncAction.CoexV2VersionAction}},
+        communityNestingStateAction:
+          {99, {:scalar, nil}, {:message, WAWebProtobufSyncAction.CommunityNestingStateAction}},
         contactAction: {3, {:scalar, nil}, {:message, WAWebProtobufSyncAction.ContactAction}},
         contactManagerMetadataAction:
           {95, {:scalar, nil}, {:message, WAWebProtobufSyncAction.ContactManagerMetadataAction}},
@@ -2808,6 +2934,8 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
           {40, {:scalar, nil}, {:message, WAWebProtobufSyncAction.ExternalWebBetaAction}},
         favoritesAction:
           {56, {:scalar, nil}, {:message, WAWebProtobufSyncAction.FavoritesAction}},
+        groupHistoryToggleAction:
+          {97, {:scalar, nil}, {:message, WAWebProtobufSyncAction.GroupHistoryToggleAction}},
         interactiveMessageAction:
           {77, {:scalar, nil}, {:message, WAWebProtobufSyncAction.InteractiveMessageAction}},
         keyExpiration: {19, {:scalar, nil}, {:message, WAWebProtobufSyncAction.KeyExpiration}},
@@ -2880,6 +3008,8 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
           {78, {:scalar, nil}, {:message, WAWebProtobufSyncAction.SettingsSyncAction}},
         sharedDeviceAllowlistAction:
           {94, {:scalar, nil}, {:message, WAWebProtobufSyncAction.SharedDeviceAllowlistAction}},
+        sharedDeviceSecretAction:
+          {100, {:scalar, nil}, {:message, WAWebProtobufSyncAction.SharedDeviceSecretAction}},
         starAction: {2, {:scalar, nil}, {:message, WAWebProtobufSyncAction.StarAction}},
         statusPostOptInNotificationPreferencesAction:
           {71, {:scalar, nil},
@@ -3701,6 +3831,42 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
           name: :businessFolderActivationAction,
           tag: 96,
           type: {:message, WAWebProtobufSyncAction.BusinessFolderActivationAction}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "groupHistoryToggleAction",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :groupHistoryToggleAction,
+          tag: 97,
+          type: {:message, WAWebProtobufSyncAction.GroupHistoryToggleAction}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "bbProPendingCustomerBaseAction",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :bbProPendingCustomerBaseAction,
+          tag: 98,
+          type: {:message, WAWebProtobufSyncAction.BBProPendingCustomerBaseAction}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "communityNestingStateAction",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :communityNestingStateAction,
+          tag: 99,
+          type: {:message, WAWebProtobufSyncAction.CommunityNestingStateAction}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "sharedDeviceSecretAction",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :sharedDeviceSecretAction,
+          tag: 100,
+          type: {:message, WAWebProtobufSyncAction.SharedDeviceSecretAction}
         }
       ]
     end
@@ -6236,6 +6402,122 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
 
         []
       ),
+      (
+        def field_def(:groupHistoryToggleAction) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "groupHistoryToggleAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :groupHistoryToggleAction,
+             tag: 97,
+             type: {:message, WAWebProtobufSyncAction.GroupHistoryToggleAction}
+           }}
+        end
+
+        def field_def("groupHistoryToggleAction") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "groupHistoryToggleAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :groupHistoryToggleAction,
+             tag: 97,
+             type: {:message, WAWebProtobufSyncAction.GroupHistoryToggleAction}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:bbProPendingCustomerBaseAction) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "bbProPendingCustomerBaseAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :bbProPendingCustomerBaseAction,
+             tag: 98,
+             type: {:message, WAWebProtobufSyncAction.BBProPendingCustomerBaseAction}
+           }}
+        end
+
+        def field_def("bbProPendingCustomerBaseAction") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "bbProPendingCustomerBaseAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :bbProPendingCustomerBaseAction,
+             tag: 98,
+             type: {:message, WAWebProtobufSyncAction.BBProPendingCustomerBaseAction}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:communityNestingStateAction) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "communityNestingStateAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :communityNestingStateAction,
+             tag: 99,
+             type: {:message, WAWebProtobufSyncAction.CommunityNestingStateAction}
+           }}
+        end
+
+        def field_def("communityNestingStateAction") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "communityNestingStateAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :communityNestingStateAction,
+             tag: 99,
+             type: {:message, WAWebProtobufSyncAction.CommunityNestingStateAction}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:sharedDeviceSecretAction) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "sharedDeviceSecretAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :sharedDeviceSecretAction,
+             tag: 100,
+             type: {:message, WAWebProtobufSyncAction.SharedDeviceSecretAction}
+           }}
+        end
+
+        def field_def("sharedDeviceSecretAction") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "sharedDeviceSecretAction",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :sharedDeviceSecretAction,
+             tag: 100,
+             type: {:message, WAWebProtobufSyncAction.SharedDeviceSecretAction}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -6534,6 +6816,18 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
       {:ok, nil}
     end,
     def default(:businessFolderActivationAction) do
+      {:ok, nil}
+    end,
+    def default(:groupHistoryToggleAction) do
+      {:ok, nil}
+    end,
+    def default(:bbProPendingCustomerBaseAction) do
+      {:ok, nil}
+    end,
+    def default(:communityNestingStateAction) do
+      {:ok, nil}
+    end,
+    def default(:sharedDeviceSecretAction) do
       {:ok, nil}
     end,
     def default(_) do

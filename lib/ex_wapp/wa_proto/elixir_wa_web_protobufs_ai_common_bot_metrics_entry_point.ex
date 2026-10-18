@@ -462,6 +462,15 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
         def encode("NEW_3P_AGENT_CREATION") do
           58
         end
+      ),
+      (
+        def encode(:SHARE) do
+          59
+        end
+
+        def encode("SHARE") do
+          59
+        end
       )
     ]
 
@@ -618,6 +627,9 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
       def decode(45) do
         :META_AI_SETTINGS
       end,
+      def decode(59) do
+        :SHARE
+      end,
       def decode(39) do
         :MEDIA_PICKER_1_ON_1_CHAT
       end
@@ -679,7 +691,8 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
         {55, :CHATLIST_SEARCH},
         {56, :NEW_CHAT_LIST},
         {57, :CONTACTS_TAB},
-        {58, :NEW_3P_AGENT_CREATION}
+        {58, :NEW_3P_AGENT_CREATION},
+        {59, :SHARE}
       ]
     end
 
@@ -834,6 +847,9 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
           true
         end,
         def has_constant?(:NEW_3P_AGENT_CREATION) do
+          true
+        end,
+        def has_constant?(:SHARE) do
           true
         end
       ]

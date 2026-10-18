@@ -1,7 +1,11 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufsE2E.FullHistorySyncOnDemandRequestMetadata do
   @moduledoc false
-  defstruct requestID: nil, businessProduct: nil, opaqueClientData: nil, __uf__: []
+  defstruct requestID: nil,
+            businessProduct: nil,
+            opaqueClientData: nil,
+            connection: nil,
+            __uf__: []
 
   (
     (
@@ -20,6 +24,7 @@ defmodule WAWebProtobufsE2E.FullHistorySyncOnDemandRequestMetadata do
         |> encode_requestID(msg)
         |> encode_businessProduct(msg)
         |> encode_opaqueClientData(msg)
+        |> encode_connection(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -60,6 +65,17 @@ defmodule WAWebProtobufsE2E.FullHistorySyncOnDemandRequestMetadata do
           ArgumentError ->
             reraise Protox.EncodingError.new(:opaqueClientData, "invalid field value"),
                     __STACKTRACE__
+        end
+      end,
+      defp encode_connection(acc, msg) do
+        try do
+          case msg.connection do
+            nil -> acc
+            _ -> [acc, "\"", Protox.Encode.encode_message(msg.connection)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:connection, "invalid field value"), __STACKTRACE__
         end
       end
     ]
@@ -131,6 +147,18 @@ defmodule WAWebProtobufsE2E.FullHistorySyncOnDemandRequestMetadata do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[opaqueClientData: delimited], rest}
 
+            {4, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 connection:
+                   Protox.MergeMessage.merge(
+                     msg.connection,
+                     WAWebProtobufsE2E.CoexConnectionDescriptor.decode!(delimited)
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -194,7 +222,8 @@ defmodule WAWebProtobufsE2E.FullHistorySyncOnDemandRequestMetadata do
       %{
         1 => {:requestID, {:scalar, ""}, :string},
         2 => {:businessProduct, {:scalar, ""}, :string},
-        3 => {:opaqueClientData, {:scalar, ""}, :bytes}
+        3 => {:opaqueClientData, {:scalar, ""}, :bytes},
+        4 => {:connection, {:scalar, nil}, {:message, WAWebProtobufsE2E.CoexConnectionDescriptor}}
       }
     end
 
@@ -205,6 +234,7 @@ defmodule WAWebProtobufsE2E.FullHistorySyncOnDemandRequestMetadata do
     def defs_by_name() do
       %{
         businessProduct: {2, {:scalar, ""}, :string},
+        connection: {4, {:scalar, nil}, {:message, WAWebProtobufsE2E.CoexConnectionDescriptor}},
         opaqueClientData: {3, {:scalar, ""}, :bytes},
         requestID: {1, {:scalar, ""}, :string}
       }
@@ -241,6 +271,15 @@ defmodule WAWebProtobufsE2E.FullHistorySyncOnDemandRequestMetadata do
           name: :opaqueClientData,
           tag: 3,
           type: :bytes
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "connection",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :connection,
+          tag: 4,
+          type: {:message, WAWebProtobufsE2E.CoexConnectionDescriptor}
         }
       ]
     end
@@ -334,6 +373,35 @@ defmodule WAWebProtobufsE2E.FullHistorySyncOnDemandRequestMetadata do
 
         []
       ),
+      (
+        def field_def(:connection) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "connection",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :connection,
+             tag: 4,
+             type: {:message, WAWebProtobufsE2E.CoexConnectionDescriptor}
+           }}
+        end
+
+        def field_def("connection") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "connection",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :connection,
+             tag: 4,
+             type: {:message, WAWebProtobufsE2E.CoexConnectionDescriptor}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -381,6 +449,9 @@ defmodule WAWebProtobufsE2E.FullHistorySyncOnDemandRequestMetadata do
     end,
     def default(:opaqueClientData) do
       {:ok, ""}
+    end,
+    def default(:connection) do
+      {:ok, nil}
     end,
     def default(_) do
       {:error, :no_such_field}

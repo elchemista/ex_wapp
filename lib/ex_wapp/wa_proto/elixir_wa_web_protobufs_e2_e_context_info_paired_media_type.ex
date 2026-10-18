@@ -93,6 +93,42 @@ defmodule WAWebProtobufsE2E.ContextInfo.PairedMediaType do
         def encode("HEVC_VIDEO_CHILD") do
           8
         end
+      ),
+      (
+        def encode(:AV1_VIDEO_PARENT) do
+          9
+        end
+
+        def encode("AV1_VIDEO_PARENT") do
+          9
+        end
+      ),
+      (
+        def encode(:AV1_VIDEO_CHILD) do
+          10
+        end
+
+        def encode("AV1_VIDEO_CHILD") do
+          10
+        end
+      ),
+      (
+        def encode(:STREAMED_VIDEO_PARENT) do
+          11
+        end
+
+        def encode("STREAMED_VIDEO_PARENT") do
+          11
+        end
+      ),
+      (
+        def encode(:STREAMED_VIDEO_CHILD) do
+          12
+        end
+
+        def encode("STREAMED_VIDEO_CHILD") do
+          12
+        end
       )
     ]
 
@@ -128,6 +164,18 @@ defmodule WAWebProtobufsE2E.ContextInfo.PairedMediaType do
       end,
       def decode(8) do
         :HEVC_VIDEO_CHILD
+      end,
+      def decode(9) do
+        :AV1_VIDEO_PARENT
+      end,
+      def decode(10) do
+        :AV1_VIDEO_CHILD
+      end,
+      def decode(11) do
+        :STREAMED_VIDEO_PARENT
+      end,
+      def decode(12) do
+        :STREAMED_VIDEO_CHILD
       end
     ]
 
@@ -146,7 +194,11 @@ defmodule WAWebProtobufsE2E.ContextInfo.PairedMediaType do
         {5, :MOTION_PHOTO_PARENT},
         {6, :MOTION_PHOTO_CHILD},
         {7, :HEVC_VIDEO_PARENT},
-        {8, :HEVC_VIDEO_CHILD}
+        {8, :HEVC_VIDEO_CHILD},
+        {9, :AV1_VIDEO_PARENT},
+        {10, :AV1_VIDEO_CHILD},
+        {11, :STREAMED_VIDEO_PARENT},
+        {12, :STREAMED_VIDEO_CHILD}
       ]
     end
 
@@ -178,6 +230,18 @@ defmodule WAWebProtobufsE2E.ContextInfo.PairedMediaType do
           true
         end,
         def has_constant?(:HEVC_VIDEO_CHILD) do
+          true
+        end,
+        def has_constant?(:AV1_VIDEO_PARENT) do
+          true
+        end,
+        def has_constant?(:AV1_VIDEO_CHILD) do
+          true
+        end,
+        def has_constant?(:STREAMED_VIDEO_PARENT) do
+          true
+        end,
+        def has_constant?(:STREAMED_VIDEO_CHILD) do
           true
         end
       ]

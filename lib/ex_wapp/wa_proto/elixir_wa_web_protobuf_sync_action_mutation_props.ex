@@ -824,6 +824,42 @@ defmodule WAWebProtobufSyncAction.MutationProps do
         end
       ),
       (
+        def encode(:GROUP_HISTORY_TOGGLE_ACTION) do
+          97
+        end
+
+        def encode("GROUP_HISTORY_TOGGLE_ACTION") do
+          97
+        end
+      ),
+      (
+        def encode(:BB_PRO_PENDING_CUSTOMER_BASE_ACTION) do
+          98
+        end
+
+        def encode("BB_PRO_PENDING_CUSTOMER_BASE_ACTION") do
+          98
+        end
+      ),
+      (
+        def encode(:COMMUNITY_NESTING_STATE_ACTION) do
+          99
+        end
+
+        def encode("COMMUNITY_NESTING_STATE_ACTION") do
+          99
+        end
+      ),
+      (
+        def encode(:SHARED_DEVICE_SECRET_ACTION) do
+          100
+        end
+
+        def encode("SHARED_DEVICE_SECRET_ACTION") do
+          100
+        end
+      ),
+      (
         def encode(:SHARE_OWN_PN) do
           10001
         end
@@ -906,6 +942,9 @@ defmodule WAWebProtobufSyncAction.MutationProps do
       def decode(41) do
         :PRIVACY_SETTING_RELAY_ALL_CALLS
       end,
+      def decode(100) do
+        :SHARED_DEVICE_SECRET_ACTION
+      end,
       def decode(29) do
         :USER_STATUS_MUTE_ACTION
       end,
@@ -924,6 +963,9 @@ defmodule WAWebProtobufSyncAction.MutationProps do
       def decode(2) do
         :STAR_ACTION
       end,
+      def decode(98) do
+        :BB_PRO_PENDING_CUSTOMER_BASE_ACTION
+      end,
       def decode(7) do
         :PUSH_NAME_SETTING
       end,
@@ -938,6 +980,9 @@ defmodule WAWebProtobufSyncAction.MutationProps do
       end,
       def decode(61) do
         :LID_CONTACT_ACTION
+      end,
+      def decode(99) do
+        :COMMUNITY_NESTING_STATE_ACTION
       end,
       def decode(65) do
         :BUSINESS_BROADCAST_ASSOCIATION_ACTION
@@ -1001,6 +1046,9 @@ defmodule WAWebProtobufSyncAction.MutationProps do
       end,
       def decode(76) do
         :AI_THREAD_RENAME_ACTION
+      end,
+      def decode(97) do
+        :GROUP_HISTORY_TOGGLE_ACTION
       end,
       def decode(32) do
         :PRIMARY_VERSION_ACTION
@@ -1236,6 +1284,10 @@ defmodule WAWebProtobufSyncAction.MutationProps do
         {94, :SHARED_DEVICE_ALLOWLIST_ACTION},
         {95, :CONTACT_MANAGER_METADATA_ACTION},
         {96, :BUSINESS_FOLDER_ACTIVATION_ACTION},
+        {97, :GROUP_HISTORY_TOGGLE_ACTION},
+        {98, :BB_PRO_PENDING_CUSTOMER_BASE_ACTION},
+        {99, :COMMUNITY_NESTING_STATE_ACTION},
+        {100, :SHARED_DEVICE_SECRET_ACTION},
         {10001, :SHARE_OWN_PN},
         {10002, :BUSINESS_BROADCAST_ACTION},
         {10003, :AI_THREAD_DELETE_ACTION}
@@ -1513,6 +1565,18 @@ defmodule WAWebProtobufSyncAction.MutationProps do
           true
         end,
         def has_constant?(:BUSINESS_FOLDER_ACTIVATION_ACTION) do
+          true
+        end,
+        def has_constant?(:GROUP_HISTORY_TOGGLE_ACTION) do
+          true
+        end,
+        def has_constant?(:BB_PRO_PENDING_CUSTOMER_BASE_ACTION) do
+          true
+        end,
+        def has_constant?(:COMMUNITY_NESTING_STATE_ACTION) do
+          true
+        end,
+        def has_constant?(:SHARED_DEVICE_SECRET_ACTION) do
           true
         end,
         def has_constant?(:SHARE_OWN_PN) do

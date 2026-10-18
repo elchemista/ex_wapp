@@ -66,6 +66,7 @@ defmodule WAWebProtobufsE2E.ContextInfo do
             instagramThreadLink: nil,
             aiProvenance: nil,
             experienceIDs: [],
+            partnerDeepLinkToken: nil,
             __uf__: []
 
   (
@@ -147,6 +148,7 @@ defmodule WAWebProtobufsE2E.ContextInfo do
         |> encode_instagramThreadLink(msg)
         |> encode_aiProvenance(msg)
         |> encode_experienceIDs(msg)
+        |> encode_partnerDeepLinkToken(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -1040,6 +1042,18 @@ defmodule WAWebProtobufsE2E.ContextInfo do
             reraise Protox.EncodingError.new(:experienceIDs, "invalid field value"),
                     __STACKTRACE__
         end
+      end,
+      defp encode_partnerDeepLinkToken(acc, msg) do
+        try do
+          case msg.partnerDeepLinkToken do
+            nil -> acc
+            _ -> [acc, "\x9A\x05", Protox.Encode.encode_string(msg.partnerDeepLinkToken)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:partnerDeepLinkToken, "invalid field value"),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -1593,6 +1607,11 @@ defmodule WAWebProtobufsE2E.ContextInfo do
               {value, rest} = Protox.Decode.parse_uint32(bytes)
               {[experienceIDs: msg.experienceIDs ++ [value]], rest}
 
+            {83, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[partnerDeepLinkToken: Protox.Decode.validate_string!(delimited)], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -1754,7 +1773,8 @@ defmodule WAWebProtobufsE2E.ContextInfo do
           {:instagramThreadLink, {:scalar, nil},
            {:message, WAWebProtobufsE2E.ContextInfo.InstagramThreadLink}},
         81 => {:aiProvenance, {:scalar, nil}, {:message, WAWebProtobufsAICommon.AIProvenance}},
-        82 => {:experienceIDs, :packed, :uint32}
+        82 => {:experienceIDs, :packed, :uint32},
+        83 => {:partnerDeepLinkToken, {:scalar, ""}, :string}
       }
     end
 
@@ -1827,6 +1847,7 @@ defmodule WAWebProtobufsE2E.ContextInfo do
         partiallySelectedContent:
           {75, {:scalar, nil}, {:message, WAWebProtobufsE2E.ContextInfo.PartiallySelectedContent}},
         participant: {2, {:scalar, ""}, :string},
+        partnerDeepLinkToken: {83, {:scalar, ""}, :string},
         placeholderKey: {24, {:scalar, nil}, {:message, WACommon.MessageKey}},
         posterStatusID: {79, {:scalar, ""}, :string},
         questionReplyQuotedMessage:
@@ -2443,6 +2464,15 @@ defmodule WAWebProtobufsE2E.ContextInfo do
           name: :experienceIDs,
           tag: 82,
           type: :uint32
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "partnerDeepLinkToken",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :partnerDeepLinkToken,
+          tag: 83,
+          type: :string
         }
       ]
     end
@@ -4334,6 +4364,35 @@ defmodule WAWebProtobufsE2E.ContextInfo do
 
         []
       ),
+      (
+        def field_def(:partnerDeepLinkToken) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "partnerDeepLinkToken",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :partnerDeepLinkToken,
+             tag: 83,
+             type: :string
+           }}
+        end
+
+        def field_def("partnerDeepLinkToken") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "partnerDeepLinkToken",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :partnerDeepLinkToken,
+             tag: 83,
+             type: :string
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -4567,6 +4626,9 @@ defmodule WAWebProtobufsE2E.ContextInfo do
     end,
     def default(:experienceIDs) do
       {:error, :no_default_value}
+    end,
+    def default(:partnerDeepLinkToken) do
+      {:ok, ""}
     end,
     def default(_) do
       {:error, :no_such_field}

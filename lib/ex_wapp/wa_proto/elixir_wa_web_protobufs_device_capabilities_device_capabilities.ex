@@ -10,6 +10,9 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
             aiFbidMigration: nil,
             bizAiSettingsSync: nil,
             contactRefresh: nil,
+            reverseHistorySync: nil,
+            newsletterChatsMigration: nil,
+            hostWriteMutationSupport: nil,
             __uf__: []
 
   (
@@ -35,6 +38,9 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
         |> encode_aiFbidMigration(msg)
         |> encode_bizAiSettingsSync(msg)
         |> encode_contactRefresh(msg)
+        |> encode_reverseHistorySync(msg)
+        |> encode_newsletterChatsMigration(msg)
+        |> encode_hostWriteMutationSupport(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -163,6 +169,42 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:contactRefresh, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_reverseHistorySync(acc, msg) do
+        try do
+          case msg.reverseHistorySync do
+            nil -> acc
+            _ -> [acc, "R", Protox.Encode.encode_message(msg.reverseHistorySync)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:reverseHistorySync, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_newsletterChatsMigration(acc, msg) do
+        try do
+          case msg.newsletterChatsMigration do
+            nil -> acc
+            _ -> [acc, "Z", Protox.Encode.encode_message(msg.newsletterChatsMigration)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:newsletterChatsMigration, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_hostWriteMutationSupport(acc, msg) do
+        try do
+          case msg.hostWriteMutationSupport do
+            nil -> acc
+            _ -> [acc, "b", Protox.Encode.encode_message(msg.hostWriteMutationSupport)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:hostWriteMutationSupport, "invalid field value"),
                     __STACKTRACE__
         end
       end
@@ -336,6 +378,48 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
                    )
                ], rest}
 
+            {10, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 reverseHistorySync:
+                   Protox.MergeMessage.merge(
+                     msg.reverseHistorySync,
+                     WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ReverseHistorySync.decode!(
+                       delimited
+                     )
+                   )
+               ], rest}
+
+            {11, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 newsletterChatsMigration:
+                   Protox.MergeMessage.merge(
+                     msg.newsletterChatsMigration,
+                     WAWebProtobufsDeviceCapabilities.DeviceCapabilities.NewsletterChatsMigration.decode!(
+                       delimited
+                     )
+                   )
+               ], rest}
+
+            {12, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 hostWriteMutationSupport:
+                   Protox.MergeMessage.merge(
+                     msg.hostWriteMutationSupport,
+                     WAWebProtobufsDeviceCapabilities.DeviceCapabilities.HostWriteMutationSupport.decode!(
+                       delimited
+                     )
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -424,7 +508,18 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
            {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BizAiSettingsSync}},
         9 =>
           {:contactRefresh, {:scalar, nil},
-           {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ContactRefresh}}
+           {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ContactRefresh}},
+        10 =>
+          {:reverseHistorySync, {:scalar, nil},
+           {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ReverseHistorySync}},
+        11 =>
+          {:newsletterChatsMigration, {:scalar, nil},
+           {:message,
+            WAWebProtobufsDeviceCapabilities.DeviceCapabilities.NewsletterChatsMigration}},
+        12 =>
+          {:hostWriteMutationSupport, {:scalar, nil},
+           {:message,
+            WAWebProtobufsDeviceCapabilities.DeviceCapabilities.HostWriteMutationSupport}}
       }
     end
 
@@ -452,6 +547,10 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
         contactRefresh:
           {9, {:scalar, nil},
            {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ContactRefresh}},
+        hostWriteMutationSupport:
+          {12, {:scalar, nil},
+           {:message,
+            WAWebProtobufsDeviceCapabilities.DeviceCapabilities.HostWriteMutationSupport}},
         lidMigration:
           {2, {:scalar, nil},
            {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.LIDMigration}},
@@ -459,6 +558,13 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
           {5, {:scalar, :DISABLED},
            {:enum,
             WAWebProtobufsDeviceCapabilities.DeviceCapabilities.MemberNameTagPrimarySupport}},
+        newsletterChatsMigration:
+          {11, {:scalar, nil},
+           {:message,
+            WAWebProtobufsDeviceCapabilities.DeviceCapabilities.NewsletterChatsMigration}},
+        reverseHistorySync:
+          {10, {:scalar, nil},
+           {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ReverseHistorySync}},
         userHasAvatar:
           {4, {:scalar, nil},
            {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.UserHasAvatar}}
@@ -552,6 +658,37 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
           name: :contactRefresh,
           tag: 9,
           type: {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ContactRefresh}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "reverseHistorySync",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :reverseHistorySync,
+          tag: 10,
+          type: {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ReverseHistorySync}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "newsletterChatsMigration",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :newsletterChatsMigration,
+          tag: 11,
+          type:
+            {:message,
+             WAWebProtobufsDeviceCapabilities.DeviceCapabilities.NewsletterChatsMigration}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "hostWriteMutationSupport",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :hostWriteMutationSupport,
+          tag: 12,
+          type:
+            {:message,
+             WAWebProtobufsDeviceCapabilities.DeviceCapabilities.HostWriteMutationSupport}
         }
       ]
     end
@@ -829,6 +966,103 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
 
         []
       ),
+      (
+        def field_def(:reverseHistorySync) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "reverseHistorySync",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :reverseHistorySync,
+             tag: 10,
+             type:
+               {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ReverseHistorySync}
+           }}
+        end
+
+        def field_def("reverseHistorySync") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "reverseHistorySync",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :reverseHistorySync,
+             tag: 10,
+             type:
+               {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ReverseHistorySync}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:newsletterChatsMigration) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "newsletterChatsMigration",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :newsletterChatsMigration,
+             tag: 11,
+             type:
+               {:message,
+                WAWebProtobufsDeviceCapabilities.DeviceCapabilities.NewsletterChatsMigration}
+           }}
+        end
+
+        def field_def("newsletterChatsMigration") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "newsletterChatsMigration",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :newsletterChatsMigration,
+             tag: 11,
+             type:
+               {:message,
+                WAWebProtobufsDeviceCapabilities.DeviceCapabilities.NewsletterChatsMigration}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:hostWriteMutationSupport) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "hostWriteMutationSupport",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :hostWriteMutationSupport,
+             tag: 12,
+             type:
+               {:message,
+                WAWebProtobufsDeviceCapabilities.DeviceCapabilities.HostWriteMutationSupport}
+           }}
+        end
+
+        def field_def("hostWriteMutationSupport") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "hostWriteMutationSupport",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :hostWriteMutationSupport,
+             tag: 12,
+             type:
+               {:message,
+                WAWebProtobufsDeviceCapabilities.DeviceCapabilities.HostWriteMutationSupport}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -893,6 +1127,15 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
       {:ok, nil}
     end,
     def default(:contactRefresh) do
+      {:ok, nil}
+    end,
+    def default(:reverseHistorySync) do
+      {:ok, nil}
+    end,
+    def default(:newsletterChatsMigration) do
+      {:ok, nil}
+    end,
+    def default(:hostWriteMutationSupport) do
       {:ok, nil}
     end,
     def default(_) do

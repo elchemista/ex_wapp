@@ -37,6 +37,7 @@ defmodule WAWebProtobufsWa6.ClientPayload do
             processingQueueSize: nil,
             pairedPeripherals: [],
             testIsolationID: nil,
+            messageSts: nil,
             __uf__: []
 
   (
@@ -89,6 +90,7 @@ defmodule WAWebProtobufsWa6.ClientPayload do
         |> encode_processingQueueSize(msg)
         |> encode_pairedPeripherals(msg)
         |> encode_testIsolationID(msg)
+        |> encode_messageSts(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -571,6 +573,17 @@ defmodule WAWebProtobufsWa6.ClientPayload do
             reraise Protox.EncodingError.new(:testIsolationID, "invalid field value"),
                     __STACKTRACE__
         end
+      end,
+      defp encode_messageSts(acc, msg) do
+        try do
+          case msg.messageSts do
+            nil -> acc
+            _ -> [acc, "\x88\x03", Protox.Encode.encode_int64(msg.messageSts)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:messageSts, "invalid field value"), __STACKTRACE__
+        end
       end
     ]
 
@@ -843,6 +856,10 @@ defmodule WAWebProtobufsWa6.ClientPayload do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[testIsolationID: delimited], rest}
 
+            {49, _, bytes} ->
+              {value, rest} = Protox.Decode.parse_int64(bytes)
+              {[messageSts: value], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -952,7 +969,8 @@ defmodule WAWebProtobufsWa6.ClientPayload do
         45 => {:preacksCount, {:scalar, 0}, :int32},
         46 => {:processingQueueSize, {:scalar, 0}, :int32},
         47 => {:pairedPeripherals, :unpacked, :string},
-        48 => {:testIsolationID, {:scalar, ""}, :bytes}
+        48 => {:testIsolationID, {:scalar, ""}, :bytes},
+        49 => {:messageSts, {:scalar, 0}, :int64}
       }
     end
 
@@ -987,6 +1005,7 @@ defmodule WAWebProtobufsWa6.ClientPayload do
         lc: {24, {:scalar, 0}, :int32},
         lidDbMigrated: {41, {:scalar, false}, :bool},
         memClass: {37, {:scalar, 0}, :int32},
+        messageSts: {49, {:scalar, 0}, :int64},
         oc: {23, {:scalar, false}, :bool},
         paaLink: {44, {:scalar, false}, :bool},
         paddingBytes: {34, {:scalar, ""}, :bytes},
@@ -1338,6 +1357,15 @@ defmodule WAWebProtobufsWa6.ClientPayload do
           name: :testIsolationID,
           tag: 48,
           type: :bytes
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "messageSts",
+          kind: {:scalar, 0},
+          label: :optional,
+          name: :messageSts,
+          tag: 49,
+          type: :int64
         }
       ]
     end
@@ -2388,6 +2416,35 @@ defmodule WAWebProtobufsWa6.ClientPayload do
 
         []
       ),
+      (
+        def field_def(:messageSts) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "messageSts",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :messageSts,
+             tag: 49,
+             type: :int64
+           }}
+        end
+
+        def field_def("messageSts") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "messageSts",
+             kind: {:scalar, 0},
+             label: :optional,
+             name: :messageSts,
+             tag: 49,
+             type: :int64
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -2534,6 +2591,9 @@ defmodule WAWebProtobufsWa6.ClientPayload do
     end,
     def default(:testIsolationID) do
       {:ok, ""}
+    end,
+    def default(:messageSts) do
+      {:ok, 0}
     end,
     def default(_) do
       {:error, :no_such_field}

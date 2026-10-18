@@ -2082,6 +2082,321 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
         def encode("CTWA_CONSUMER_DISCLOSURE") do
           230
         end
+      ),
+      (
+        def encode(:CHANGE_ACP2_SETTING) do
+          240
+        end
+
+        def encode("CHANGE_ACP2_SETTING") do
+          240
+        end
+      ),
+      (
+        def encode(:BIZ_CALLBACK_DISABLED) do
+          244
+        end
+
+        def encode("BIZ_CALLBACK_DISABLED") do
+          244
+        end
+      ),
+      (
+        def encode(:BIZ_CALLBACK_ENABLED) do
+          247
+        end
+
+        def encode("BIZ_CALLBACK_ENABLED") do
+          247
+        end
+      ),
+      (
+        def encode(:EPHEMERAL_CHANGED_FOR_COEX) do
+          248
+        end
+
+        def encode("EPHEMERAL_CHANGED_FOR_COEX") do
+          248
+        end
+      ),
+      (
+        def encode(:UGC_BOT_PROFILE_UPDATED) do
+          249
+        end
+
+        def encode("UGC_BOT_PROFILE_UPDATED") do
+          249
+        end
+      ),
+      (
+        def encode(:ORDER_EPHEMERAL_EXEMPTION) do
+          250
+        end
+
+        def encode("ORDER_EPHEMERAL_EXEMPTION") do
+          250
+        end
+      ),
+      (
+        def encode(:GROUP_DEFAULT_SUB_GROUP_DEMOTE) do
+          251
+        end
+
+        def encode("GROUP_DEFAULT_SUB_GROUP_DEMOTE") do
+          251
+        end
+      ),
+      (
+        def encode(:BIZ_BUSINESS_BROADCAST_ENTRY_POINT) do
+          252
+        end
+
+        def encode("BIZ_BUSINESS_BROADCAST_ENTRY_POINT") do
+          252
+        end
+      ),
+      (
+        def encode(:BOT_INLINE_TOS_CHAT) do
+          253
+        end
+
+        def encode("BOT_INLINE_TOS_CHAT") do
+          253
+        end
+      ),
+      (
+        def encode(:CAMEO_CHAT_CREATED) do
+          254
+        end
+
+        def encode("CAMEO_CHAT_CREATED") do
+          254
+        end
+      ),
+      (
+        def encode(:SENDER_SIDE_CONTACT_INFO) do
+          255
+        end
+
+        def encode("SENDER_SIDE_CONTACT_INFO") do
+          255
+        end
+      ),
+      (
+        def encode(:CAMEO_TRANSITIONED) do
+          256
+        end
+
+        def encode("CAMEO_TRANSITIONED") do
+          256
+        end
+      ),
+      (
+        def encode(:CAMEO_REGISTERED_WITH_NEW_CHAT) do
+          257
+        end
+
+        def encode("CAMEO_REGISTERED_WITH_NEW_CHAT") do
+          257
+        end
+      ),
+      (
+        def encode(:PRIVACY_SYSTEM_MESSAGE) do
+          258
+        end
+
+        def encode("PRIVACY_SYSTEM_MESSAGE") do
+          258
+        end
+      ),
+      (
+        def encode(:BIZ_AI_LEARNING_ENABLED_DISCLOSURE) do
+          259
+        end
+
+        def encode("BIZ_AI_LEARNING_ENABLED_DISCLOSURE") do
+          259
+        end
+      ),
+      (
+        def encode(:BIZ_AI_LEARNING_DISABLED_DISCLOSURE) do
+          260
+        end
+
+        def encode("BIZ_AI_LEARNING_DISABLED_DISCLOSURE") do
+          260
+        end
+      ),
+      (
+        def encode(:BIZ_AI_REPLIES_MUTED_HISTORICAL_CHAT) do
+          261
+        end
+
+        def encode("BIZ_AI_REPLIES_MUTED_HISTORICAL_CHAT") do
+          261
+        end
+      ),
+      (
+        def encode(:INVITE_FROM_IG) do
+          262
+        end
+
+        def encode("INVITE_FROM_IG") do
+          262
+        end
+      ),
+      (
+        def encode(:GROUP_ADMIN_FIRST_JOIN_VIA_LINK) do
+          263
+        end
+
+        def encode("GROUP_ADMIN_FIRST_JOIN_VIA_LINK") do
+          263
+        end
+      ),
+      (
+        def encode(:GROUP_ADMIN_FLOOD_JOIN_VIA_LINK) do
+          264
+        end
+
+        def encode("GROUP_ADMIN_FLOOD_JOIN_VIA_LINK") do
+          264
+        end
+      ),
+      (
+        def encode(:BIZ_AI_REPLIES_MUTED_IRRELEVANT_HISTORICAL_CHAT) do
+          265
+        end
+
+        def encode("BIZ_AI_REPLIES_MUTED_IRRELEVANT_HISTORICAL_CHAT") do
+          265
+        end
+      ),
+      (
+        def encode(:PENDING_INVITE_CREATED) do
+          266
+        end
+
+        def encode("PENDING_INVITE_CREATED") do
+          266
+        end
+      ),
+      (
+        def encode(:CAMEO_CHAT_EXPIRED) do
+          267
+        end
+
+        def encode("CAMEO_CHAT_EXPIRED") do
+          267
+        end
+      ),
+      (
+        def encode(:GROUP_PUSHNAME_SHARED) do
+          270
+        end
+
+        def encode("GROUP_PUSHNAME_SHARED") do
+          270
+        end
+      ),
+      (
+        def encode(:BIZ_POST_SEND_OPT_OUT) do
+          271
+        end
+
+        def encode("BIZ_POST_SEND_OPT_OUT") do
+          271
+        end
+      ),
+      (
+        def encode(:BB_PRO_BROADCAST_CHAT_CARD) do
+          272
+        end
+
+        def encode("BB_PRO_BROADCAST_CHAT_CARD") do
+          272
+        end
+      ),
+      (
+        def encode(:BOT_PROACTIVE_MESSAGE_ENABLED) do
+          273
+        end
+
+        def encode("BOT_PROACTIVE_MESSAGE_ENABLED") do
+          273
+        end
+      ),
+      (
+        def encode(:BOT_PROACTIVE_MESSAGE_DISABLED) do
+          274
+        end
+
+        def encode("BOT_PROACTIVE_MESSAGE_DISABLED") do
+          274
+        end
+      ),
+      (
+        def encode(:BOT_PROACTIVE_MESSAGE_FIRST_TIME) do
+          275
+        end
+
+        def encode("BOT_PROACTIVE_MESSAGE_FIRST_TIME") do
+          275
+        end
+      ),
+      (
+        def encode(:DYNAMIC_AUDIENCE_LIST_CREATE) do
+          276
+        end
+
+        def encode("DYNAMIC_AUDIENCE_LIST_CREATE") do
+          276
+        end
+      ),
+      (
+        def encode(:DYNAMIC_AUDIENCE_LIST_UPDATE_LINK) do
+          277
+        end
+
+        def encode("DYNAMIC_AUDIENCE_LIST_UPDATE_LINK") do
+          277
+        end
+      ),
+      (
+        def encode(:CHAT_WITH_BUSINESS_IN_DIRECTORY) do
+          283
+        end
+
+        def encode("CHAT_WITH_BUSINESS_IN_DIRECTORY") do
+          283
+        end
+      ),
+      (
+        def encode(:META_AI_THREAD_CREATED) do
+          284
+        end
+
+        def encode("META_AI_THREAD_CREATED") do
+          284
+        end
+      ),
+      (
+        def encode(:META_AI_CONNECTOR_LINKED) do
+          285
+        end
+
+        def encode("META_AI_CONNECTOR_LINKED") do
+          285
+        end
+      ),
+      (
+        def encode(:SPLIT_PAYMENT_MARKED_AS_PAID) do
+          289
+        end
+
+        def encode("SPLIT_PAYMENT_MARKED_AS_PAID") do
+          289
+        end
       )
     ]
 
@@ -2130,17 +2445,29 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       def decode(93) do
         :BLUE_MSG_SELF_FB_TO_SELF_PREMISE
       end,
+      def decode(289) do
+        :SPLIT_PAYMENT_MARKED_AS_PAID
+      end,
+      def decode(263) do
+        :GROUP_ADMIN_FIRST_JOIN_VIA_LINK
+      end,
       def decode(34) do
         :BROADCAST_CREATE
       end,
       def decode(226) do
         :IDENTITY_TRUST_MARKED
       end,
+      def decode(240) do
+        :CHANGE_ACP2_SETTING
+      end,
       def decode(211) do
         :USER_CONTROLS_SYSTEM_MESSAGE
       end,
       def decode(128) do
         :BIZ_PRIVACY_MODE_TO_FB
+      end,
+      def decode(247) do
+        :BIZ_CALLBACK_ENABLED
       end,
       def decode(194) do
         :BIZ_COEX_PRIVACY_INIT_SELF
@@ -2150,6 +2477,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       end,
       def decode(168) do
         :COMMUNITY_PARTICIPANT_ADD_RICH
+      end,
+      def decode(265) do
+        :BIZ_AI_REPLIES_MUTED_IRRELEVANT_HISTORICAL_CHAT
       end,
       def decode(132) do
         :ADMIN_REVOKE
@@ -2171,6 +2501,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       end,
       def decode(123) do
         :EPHEMERAL_SETTING_NOT_APPLIED
+      end,
+      def decode(261) do
+        :BIZ_AI_REPLIES_MUTED_HISTORICAL_CHAT
       end,
       def decode(156) do
         :CHAT_POLL_CREATION_MESSAGE
@@ -2253,11 +2586,17 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       def decode(7) do
         :VERIFIED_LOW_UNKNOWN
       end,
+      def decode(285) do
+        :META_AI_CONNECTOR_LINKED
+      end,
       def decode(90) do
         :BLUE_MSG_CONSUMER_TO_SELF_FB_UNVERIFIED
       end,
       def decode(38) do
         :E2E_IDENTITY_CHANGED
+      end,
+      def decode(284) do
+        :META_AI_THREAD_CREATED
       end,
       def decode(56) do
         :PAYMENT_ACTION_SEND_PAYMENT_INVITATION
@@ -2310,6 +2649,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       def decode(134) do
         :COMMUNITY_LINK_PARENT_GROUP
       end,
+      def decode(259) do
+        :BIZ_AI_LEARNING_ENABLED_DISCLOSURE
+      end,
       def decode(178) do
         :PAYMENT_INVITE_SETUP_INVITER
       end,
@@ -2322,6 +2664,12 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       def decode(176) do
         :COMMUNITY_ALLOW_MEMBER_ADDED_GROUPS
       end,
+      def decode(270) do
+        :GROUP_PUSHNAME_SHARED
+      end,
+      def decode(250) do
+        :ORDER_EPHEMERAL_EXEMPTION
+      end,
       def decode(147) do
         :COMMUNITY_PARTICIPANT_PROMOTE
       end,
@@ -2330,6 +2678,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       end,
       def decode(116) do
         :BLUE_MSG_SELF_FB_UNVERIFIED_TO_BSP_PREMISE_VERIFIED
+      end,
+      def decode(283) do
+        :CHAT_WITH_BUSINESS_IN_DIRECTORY
       end,
       def decode(8) do
         :VERIFIED_HIGH
@@ -2352,6 +2703,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       def decode(44) do
         :GROUP_ANNOUNCE_MODE_MESSAGE_BOUNCE
       end,
+      def decode(274) do
+        :BOT_PROACTIVE_MESSAGE_DISABLED
+      end,
       def decode(10) do
         :VERIFIED_INITIAL_LOW
       end,
@@ -2372,6 +2726,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       end,
       def decode(203) do
         :GROUP_DEACTIVATED
+      end,
+      def decode(266) do
+        :PENDING_INVITE_CREATED
       end,
       def decode(9) do
         :VERIFIED_INITIAL_UNKNOWN
@@ -2402,6 +2759,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       end,
       def decode(103) do
         :BLUE_MSG_TO_SELF_FB
+      end,
+      def decode(262) do
+        :INVITE_FROM_IG
       end,
       def decode(198) do
         :REMINDER_SETUP_MESSAGE
@@ -2451,6 +2811,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       def decode(117) do
         :BLUE_MSG_SELF_FB_VERIFIED_TO_BSP_PREMISE_UNVERIFIED
       end,
+      def decode(254) do
+        :CAMEO_CHAT_CREATED
+      end,
       def decode(180) do
         :PAYMENT_INVITE_SETUP_INVITEE_SEND_AND_RECEIVE
       end,
@@ -2460,11 +2823,17 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       def decode(35) do
         :BROADCAST_ADD
       end,
+      def decode(264) do
+        :GROUP_ADMIN_FLOOD_JOIN_VIA_LINK
+      end,
       def decode(36) do
         :BROADCAST_REMOVE
       end,
       def decode(76) do
         :BLUE_MSG_BSP_FB_TO_BSP_PREMISE
+      end,
+      def decode(260) do
+        :BIZ_AI_LEARNING_DISABLED_DISCLOSURE
       end,
       def decode(126) do
         :BIZ_PRIVACY_MODE_INIT_FB
@@ -2529,6 +2898,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       def decode(223) do
         :GROUP_TEE_BOT_ADDED
       end,
+      def decode(275) do
+        :BOT_PROACTIVE_MESSAGE_FIRST_TIME
+      end,
       def decode(200) do
         :REMINDER_CANCEL_MESSAGE
       end,
@@ -2553,8 +2925,14 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       def decode(184) do
         :SCHEDULED_CALL_CANCEL
       end,
+      def decode(255) do
+        :SENDER_SIDE_CONTACT_INFO
+      end,
       def decode(6) do
         :VERIFIED_TRANSITION
+      end,
+      def decode(272) do
+        :BB_PRO_BROADCAST_CHAT_CARD
       end,
       def decode(214) do
         :BIZ_CUSTOMER_3PD_DATA_SHARING_OPT_IN_MESSAGE
@@ -2607,11 +2985,17 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       def decode(148) do
         :COMMUNITY_PARTICIPANT_DEMOTE
       end,
+      def decode(258) do
+        :PRIVACY_SYSTEM_MESSAGE
+      end,
       def decode(167) do
         :COMMUNITY_LINK_PARENT_GROUP_RICH
       end,
       def decode(73) do
         :E2E_DEVICE_CHANGED
+      end,
+      def decode(249) do
+        :UGC_BOT_PROFILE_UPDATED
       end,
       def decode(89) do
         :BLUE_MSG_CONSUMER_TO_BSP_PREMISE_UNVERIFIED
@@ -2631,6 +3015,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       def decode(37) do
         :GENERIC_NOTIFICATION
       end,
+      def decode(277) do
+        :DYNAMIC_AUDIENCE_LIST_UPDATE_LINK
+      end,
       def decode(40) do
         :CALL_MISSED_VOICE
       end,
@@ -2639,6 +3026,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       end,
       def decode(210) do
         :STATUS_MENTION
+      end,
+      def decode(244) do
+        :BIZ_CALLBACK_DISABLED
       end,
       def decode(162) do
         :SCHEDULED_CALL_START_MESSAGE
@@ -2649,11 +3039,17 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       def decode(33) do
         :GROUP_PARTICIPANT_CHANGE_NUMBER
       end,
+      def decode(276) do
+        :DYNAMIC_AUDIENCE_LIST_CREATE
+      end,
       def decode(53) do
         :PAYMENT_TRANSACTION_STATUS_RECEIVER_SUCCESS_AFTER_HICCUP
       end,
       def decode(159) do
         :CAG_INVITE_AUTO_ADD
+      end,
+      def decode(257) do
+        :CAMEO_REGISTERED_WITH_NEW_CHAT
       end,
       def decode(206) do
         :EVENT_CANCELED
@@ -2673,6 +3069,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       def decode(173) do
         :COMMUNITY_CHANGE_DESCRIPTION
       end,
+      def decode(248) do
+        :EPHEMERAL_CHANGED_FOR_COEX
+      end,
       def decode(185) do
         :SUBGROUP_ADMIN_TRIGGERED_AUTO_ADD_RICH
       end,
@@ -2688,6 +3087,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       def decode(122) do
         :BLOCK_CONTACT
       end,
+      def decode(252) do
+        :BIZ_BUSINESS_BROADCAST_ENTRY_POINT
+      end,
       def decode(0) do
         :UNKNOWN
       end,
@@ -2697,11 +3099,17 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       def decode(27) do
         :GROUP_PARTICIPANT_ADD
       end,
+      def decode(251) do
+        :GROUP_DEFAULT_SUB_GROUP_DEMOTE
+      end,
       def decode(85) do
         :BLUE_MSG_BSP_PREMISE_UNVERIFIED_TO_SELF_PREMISE_VERIFIED
       end,
       def decode(47) do
         :PAYMENT_CIPHERTEXT
+      end,
+      def decode(256) do
+        :CAMEO_TRANSITIONED
       end,
       def decode(63) do
         :BIZ_INTRO_BOTTOM
@@ -2711,6 +3119,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       end,
       def decode(124) do
         :SYNC_FAILED
+      end,
+      def decode(273) do
+        :BOT_PROACTIVE_MESSAGE_ENABLED
       end,
       def decode(26) do
         :GROUP_CHANGE_ANNOUNCE
@@ -2763,6 +3174,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       def decode(218) do
         :BIZ_AUTOMATICALLY_LABELED_CHAT_SYSTEM_MESSAGE
       end,
+      def decode(253) do
+        :BOT_INLINE_TOS_CHAT
+      end,
       def decode(135) do
         :COMMUNITY_LINK_SIBLING_GROUP
       end,
@@ -2772,6 +3186,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       def decode(222) do
         :GROUP_OPEN_BOT_ADDED
       end,
+      def decode(271) do
+        :BIZ_POST_SEND_OPT_OUT
+      end,
       def decode(130) do
         :DISAPPEARING_MODE
       end,
@@ -2780,6 +3197,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       end,
       def decode(166) do
         :SUB_GROUP_PARTICIPANT_ADD_RICH
+      end,
+      def decode(267) do
+        :CAMEO_CHAT_EXPIRED
       end
     ]
 
@@ -3019,7 +3439,42 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
         {226, :IDENTITY_TRUST_MARKED},
         {227, :IDENTITY_TRUST_UNMARKED},
         {228, :IDENTITY_TRUST_REVOKED},
-        {230, :CTWA_CONSUMER_DISCLOSURE}
+        {230, :CTWA_CONSUMER_DISCLOSURE},
+        {240, :CHANGE_ACP2_SETTING},
+        {244, :BIZ_CALLBACK_DISABLED},
+        {247, :BIZ_CALLBACK_ENABLED},
+        {248, :EPHEMERAL_CHANGED_FOR_COEX},
+        {249, :UGC_BOT_PROFILE_UPDATED},
+        {250, :ORDER_EPHEMERAL_EXEMPTION},
+        {251, :GROUP_DEFAULT_SUB_GROUP_DEMOTE},
+        {252, :BIZ_BUSINESS_BROADCAST_ENTRY_POINT},
+        {253, :BOT_INLINE_TOS_CHAT},
+        {254, :CAMEO_CHAT_CREATED},
+        {255, :SENDER_SIDE_CONTACT_INFO},
+        {256, :CAMEO_TRANSITIONED},
+        {257, :CAMEO_REGISTERED_WITH_NEW_CHAT},
+        {258, :PRIVACY_SYSTEM_MESSAGE},
+        {259, :BIZ_AI_LEARNING_ENABLED_DISCLOSURE},
+        {260, :BIZ_AI_LEARNING_DISABLED_DISCLOSURE},
+        {261, :BIZ_AI_REPLIES_MUTED_HISTORICAL_CHAT},
+        {262, :INVITE_FROM_IG},
+        {263, :GROUP_ADMIN_FIRST_JOIN_VIA_LINK},
+        {264, :GROUP_ADMIN_FLOOD_JOIN_VIA_LINK},
+        {265, :BIZ_AI_REPLIES_MUTED_IRRELEVANT_HISTORICAL_CHAT},
+        {266, :PENDING_INVITE_CREATED},
+        {267, :CAMEO_CHAT_EXPIRED},
+        {270, :GROUP_PUSHNAME_SHARED},
+        {271, :BIZ_POST_SEND_OPT_OUT},
+        {272, :BB_PRO_BROADCAST_CHAT_CARD},
+        {273, :BOT_PROACTIVE_MESSAGE_ENABLED},
+        {274, :BOT_PROACTIVE_MESSAGE_DISABLED},
+        {275, :BOT_PROACTIVE_MESSAGE_FIRST_TIME},
+        {276, :DYNAMIC_AUDIENCE_LIST_CREATE},
+        {277, :DYNAMIC_AUDIENCE_LIST_UPDATE_LINK},
+        {283, :CHAT_WITH_BUSINESS_IN_DIRECTORY},
+        {284, :META_AI_THREAD_CREATED},
+        {285, :META_AI_CONNECTOR_LINKED},
+        {289, :SPLIT_PAYMENT_MARKED_AS_PAID}
       ]
     end
 
@@ -3714,6 +4169,111 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
           true
         end,
         def has_constant?(:CTWA_CONSUMER_DISCLOSURE) do
+          true
+        end,
+        def has_constant?(:CHANGE_ACP2_SETTING) do
+          true
+        end,
+        def has_constant?(:BIZ_CALLBACK_DISABLED) do
+          true
+        end,
+        def has_constant?(:BIZ_CALLBACK_ENABLED) do
+          true
+        end,
+        def has_constant?(:EPHEMERAL_CHANGED_FOR_COEX) do
+          true
+        end,
+        def has_constant?(:UGC_BOT_PROFILE_UPDATED) do
+          true
+        end,
+        def has_constant?(:ORDER_EPHEMERAL_EXEMPTION) do
+          true
+        end,
+        def has_constant?(:GROUP_DEFAULT_SUB_GROUP_DEMOTE) do
+          true
+        end,
+        def has_constant?(:BIZ_BUSINESS_BROADCAST_ENTRY_POINT) do
+          true
+        end,
+        def has_constant?(:BOT_INLINE_TOS_CHAT) do
+          true
+        end,
+        def has_constant?(:CAMEO_CHAT_CREATED) do
+          true
+        end,
+        def has_constant?(:SENDER_SIDE_CONTACT_INFO) do
+          true
+        end,
+        def has_constant?(:CAMEO_TRANSITIONED) do
+          true
+        end,
+        def has_constant?(:CAMEO_REGISTERED_WITH_NEW_CHAT) do
+          true
+        end,
+        def has_constant?(:PRIVACY_SYSTEM_MESSAGE) do
+          true
+        end,
+        def has_constant?(:BIZ_AI_LEARNING_ENABLED_DISCLOSURE) do
+          true
+        end,
+        def has_constant?(:BIZ_AI_LEARNING_DISABLED_DISCLOSURE) do
+          true
+        end,
+        def has_constant?(:BIZ_AI_REPLIES_MUTED_HISTORICAL_CHAT) do
+          true
+        end,
+        def has_constant?(:INVITE_FROM_IG) do
+          true
+        end,
+        def has_constant?(:GROUP_ADMIN_FIRST_JOIN_VIA_LINK) do
+          true
+        end,
+        def has_constant?(:GROUP_ADMIN_FLOOD_JOIN_VIA_LINK) do
+          true
+        end,
+        def has_constant?(:BIZ_AI_REPLIES_MUTED_IRRELEVANT_HISTORICAL_CHAT) do
+          true
+        end,
+        def has_constant?(:PENDING_INVITE_CREATED) do
+          true
+        end,
+        def has_constant?(:CAMEO_CHAT_EXPIRED) do
+          true
+        end,
+        def has_constant?(:GROUP_PUSHNAME_SHARED) do
+          true
+        end,
+        def has_constant?(:BIZ_POST_SEND_OPT_OUT) do
+          true
+        end,
+        def has_constant?(:BB_PRO_BROADCAST_CHAT_CARD) do
+          true
+        end,
+        def has_constant?(:BOT_PROACTIVE_MESSAGE_ENABLED) do
+          true
+        end,
+        def has_constant?(:BOT_PROACTIVE_MESSAGE_DISABLED) do
+          true
+        end,
+        def has_constant?(:BOT_PROACTIVE_MESSAGE_FIRST_TIME) do
+          true
+        end,
+        def has_constant?(:DYNAMIC_AUDIENCE_LIST_CREATE) do
+          true
+        end,
+        def has_constant?(:DYNAMIC_AUDIENCE_LIST_UPDATE_LINK) do
+          true
+        end,
+        def has_constant?(:CHAT_WITH_BUSINESS_IN_DIRECTORY) do
+          true
+        end,
+        def has_constant?(:META_AI_THREAD_CREATED) do
+          true
+        end,
+        def has_constant?(:META_AI_CONNECTOR_LINKED) do
+          true
+        end,
+        def has_constant?(:SPLIT_PAYMENT_MARKED_AS_PAID) do
           true
         end
       ]

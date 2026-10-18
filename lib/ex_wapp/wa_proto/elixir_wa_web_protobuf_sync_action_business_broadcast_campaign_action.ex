@@ -10,6 +10,8 @@ defmodule WAWebProtobufSyncAction.BusinessBroadcastCampaignAction do
             scheduledTimestamp: nil,
             createTimestamp: nil,
             status: nil,
+            bbProStatus: nil,
+            customAudienceFbid: nil,
             __uf__: []
 
   (
@@ -35,6 +37,8 @@ defmodule WAWebProtobufSyncAction.BusinessBroadcastCampaignAction do
         |> encode_scheduledTimestamp(msg)
         |> encode_createTimestamp(msg)
         |> encode_status(msg)
+        |> encode_bbProStatus(msg)
+        |> encode_customAudienceFbid(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -152,6 +156,38 @@ defmodule WAWebProtobufSyncAction.BusinessBroadcastCampaignAction do
           ArgumentError ->
             reraise Protox.EncodingError.new(:status, "invalid field value"), __STACKTRACE__
         end
+      end,
+      defp encode_bbProStatus(acc, msg) do
+        try do
+          case msg.bbProStatus do
+            nil ->
+              acc
+
+            _ ->
+              [
+                acc,
+                "P",
+                msg.bbProStatus
+                |> WAWebProtobufSyncAction.BusinessBroadcastCampaignBBProStatus.encode()
+                |> Protox.Encode.encode_enum()
+              ]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:bbProStatus, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_customAudienceFbid(acc, msg) do
+        try do
+          case msg.customAudienceFbid do
+            nil -> acc
+            _ -> [acc, "Z", Protox.Encode.encode_string(msg.customAudienceFbid)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:customAudienceFbid, "invalid field value"),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -252,6 +288,20 @@ defmodule WAWebProtobufSyncAction.BusinessBroadcastCampaignAction do
 
               {[status: value], rest}
 
+            {10, _, bytes} ->
+              {value, rest} =
+                Protox.Decode.parse_enum(
+                  bytes,
+                  WAWebProtobufSyncAction.BusinessBroadcastCampaignBBProStatus
+                )
+
+              {[bbProStatus: value], rest}
+
+            {11, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[customAudienceFbid: Protox.Decode.validate_string!(delimited)], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -323,7 +373,11 @@ defmodule WAWebProtobufSyncAction.BusinessBroadcastCampaignAction do
         8 => {:createTimestamp, {:scalar, 0}, :int64},
         9 =>
           {:status, {:scalar, :DRAFT},
-           {:enum, WAWebProtobufSyncAction.BusinessBroadcastCampaignStatus}}
+           {:enum, WAWebProtobufSyncAction.BusinessBroadcastCampaignStatus}},
+        10 =>
+          {:bbProStatus, {:scalar, :BB_PRO_ACTIVE},
+           {:enum, WAWebProtobufSyncAction.BusinessBroadcastCampaignBBProStatus}},
+        11 => {:customAudienceFbid, {:scalar, ""}, :string}
       }
     end
 
@@ -334,8 +388,12 @@ defmodule WAWebProtobufSyncAction.BusinessBroadcastCampaignAction do
     def defs_by_name() do
       %{
         adID: {2, {:scalar, ""}, :string},
+        bbProStatus:
+          {10, {:scalar, :BB_PRO_ACTIVE},
+           {:enum, WAWebProtobufSyncAction.BusinessBroadcastCampaignBBProStatus}},
         broadcastJID: {5, {:scalar, ""}, :string},
         createTimestamp: {8, {:scalar, 0}, :int64},
+        customAudienceFbid: {11, {:scalar, ""}, :string},
         deviceID: {1, {:scalar, 0}, :int32},
         msgID: {4, {:scalar, ""}, :string},
         name: {3, {:scalar, ""}, :string},
@@ -431,6 +489,24 @@ defmodule WAWebProtobufSyncAction.BusinessBroadcastCampaignAction do
           name: :status,
           tag: 9,
           type: {:enum, WAWebProtobufSyncAction.BusinessBroadcastCampaignStatus}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "bbProStatus",
+          kind: {:scalar, :BB_PRO_ACTIVE},
+          label: :optional,
+          name: :bbProStatus,
+          tag: 10,
+          type: {:enum, WAWebProtobufSyncAction.BusinessBroadcastCampaignBBProStatus}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "customAudienceFbid",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :customAudienceFbid,
+          tag: 11,
+          type: :string
         }
       ]
     end
@@ -698,6 +774,64 @@ defmodule WAWebProtobufSyncAction.BusinessBroadcastCampaignAction do
 
         []
       ),
+      (
+        def field_def(:bbProStatus) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "bbProStatus",
+             kind: {:scalar, :BB_PRO_ACTIVE},
+             label: :optional,
+             name: :bbProStatus,
+             tag: 10,
+             type: {:enum, WAWebProtobufSyncAction.BusinessBroadcastCampaignBBProStatus}
+           }}
+        end
+
+        def field_def("bbProStatus") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "bbProStatus",
+             kind: {:scalar, :BB_PRO_ACTIVE},
+             label: :optional,
+             name: :bbProStatus,
+             tag: 10,
+             type: {:enum, WAWebProtobufSyncAction.BusinessBroadcastCampaignBBProStatus}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:customAudienceFbid) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "customAudienceFbid",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :customAudienceFbid,
+             tag: 11,
+             type: :string
+           }}
+        end
+
+        def field_def("customAudienceFbid") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "customAudienceFbid",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :customAudienceFbid,
+             tag: 11,
+             type: :string
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -763,6 +897,12 @@ defmodule WAWebProtobufSyncAction.BusinessBroadcastCampaignAction do
     end,
     def default(:status) do
       {:ok, :DRAFT}
+    end,
+    def default(:bbProStatus) do
+      {:ok, :BB_PRO_ACTIVE}
+    end,
+    def default(:customAudienceFbid) do
+      {:ok, ""}
     end,
     def default(_) do
       {:error, :no_such_field}

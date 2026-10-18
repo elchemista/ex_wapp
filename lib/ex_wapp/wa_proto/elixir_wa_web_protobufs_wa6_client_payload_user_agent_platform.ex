@@ -381,6 +381,15 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.Platform do
         def encode("WORK_IOS") do
           40
         end
+      ),
+      (
+        def encode(:AUTOMOTIVE) do
+          41
+        end
+
+        def encode("AUTOMOTIVE") do
+          41
+        end
       )
     ]
 
@@ -404,6 +413,9 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.Platform do
       end,
       def decode(19) do
         :BLUE_IPHONE
+      end,
+      def decode(41) do
+        :AUTOMOTIVE
       end,
       def decode(29) do
         :WEAROS
@@ -562,7 +574,8 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.Platform do
         {37, :AR_WRIST},
         {38, :WAIL},
         {39, :WORK_ANDROID},
-        {40, :WORK_IOS}
+        {40, :WORK_IOS},
+        {41, :AUTOMOTIVE}
       ]
     end
 
@@ -690,6 +703,9 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.Platform do
           true
         end,
         def has_constant?(:WORK_IOS) do
+          true
+        end,
+        def has_constant?(:AUTOMOTIVE) do
           true
         end
       ]

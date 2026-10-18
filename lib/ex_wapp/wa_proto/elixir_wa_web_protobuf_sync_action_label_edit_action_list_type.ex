@@ -174,6 +174,33 @@ defmodule WAWebProtobufSyncAction.LabelEditAction.ListType do
         def encode("MENTIONS_AND_REPLIES") do
           17
         end
+      ),
+      (
+        def encode(:REQUESTS) do
+          18
+        end
+
+        def encode("REQUESTS") do
+          18
+        end
+      ),
+      (
+        def encode(:BUSINESS) do
+          19
+        end
+
+        def encode("BUSINESS") do
+          19
+        end
+      ),
+      (
+        def encode(:ONE_ON_ONE) do
+          20
+        end
+
+        def encode("ONE_ON_ONE") do
+          20
+        end
       )
     ]
 
@@ -236,6 +263,15 @@ defmodule WAWebProtobufSyncAction.LabelEditAction.ListType do
       end,
       def decode(17) do
         :MENTIONS_AND_REPLIES
+      end,
+      def decode(18) do
+        :REQUESTS
+      end,
+      def decode(19) do
+        :BUSINESS
+      end,
+      def decode(20) do
+        :ONE_ON_ONE
       end
     ]
 
@@ -263,7 +299,10 @@ defmodule WAWebProtobufSyncAction.LabelEditAction.ListType do
         {14, :INVITES},
         {15, :THIRD_PARTY},
         {16, :LEAD},
-        {17, :MENTIONS_AND_REPLIES}
+        {17, :MENTIONS_AND_REPLIES},
+        {18, :REQUESTS},
+        {19, :BUSINESS},
+        {20, :ONE_ON_ONE}
       ]
     end
 
@@ -322,6 +361,15 @@ defmodule WAWebProtobufSyncAction.LabelEditAction.ListType do
           true
         end,
         def has_constant?(:MENTIONS_AND_REPLIES) do
+          true
+        end,
+        def has_constant?(:REQUESTS) do
+          true
+        end,
+        def has_constant?(:BUSINESS) do
+          true
+        end,
+        def has_constant?(:ONE_ON_ONE) do
           true
         end
       ]

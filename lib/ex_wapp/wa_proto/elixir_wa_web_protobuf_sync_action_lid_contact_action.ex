@@ -1,7 +1,7 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufSyncAction.LidContactAction do
   @moduledoc false
-  defstruct fullName: nil, firstName: nil, username: nil, __uf__: []
+  defstruct fullName: nil, firstName: nil, username: nil, birthday: nil, __uf__: []
 
   (
     (
@@ -20,6 +20,7 @@ defmodule WAWebProtobufSyncAction.LidContactAction do
         |> encode_fullName(msg)
         |> encode_firstName(msg)
         |> encode_username(msg)
+        |> encode_birthday(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -58,6 +59,17 @@ defmodule WAWebProtobufSyncAction.LidContactAction do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:username, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_birthday(acc, msg) do
+        try do
+          case msg.birthday do
+            nil -> acc
+            _ -> [acc, "\"", Protox.Encode.encode_string(msg.birthday)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:birthday, "invalid field value"), __STACKTRACE__
         end
       end
     ]
@@ -129,6 +141,11 @@ defmodule WAWebProtobufSyncAction.LidContactAction do
               {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
               {[username: Protox.Decode.validate_string!(delimited)], rest}
 
+            {4, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+              {[birthday: Protox.Decode.validate_string!(delimited)], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -192,7 +209,8 @@ defmodule WAWebProtobufSyncAction.LidContactAction do
       %{
         1 => {:fullName, {:scalar, ""}, :string},
         2 => {:firstName, {:scalar, ""}, :string},
-        3 => {:username, {:scalar, ""}, :string}
+        3 => {:username, {:scalar, ""}, :string},
+        4 => {:birthday, {:scalar, ""}, :string}
       }
     end
 
@@ -202,6 +220,7 @@ defmodule WAWebProtobufSyncAction.LidContactAction do
           }
     def defs_by_name() do
       %{
+        birthday: {4, {:scalar, ""}, :string},
         firstName: {2, {:scalar, ""}, :string},
         fullName: {1, {:scalar, ""}, :string},
         username: {3, {:scalar, ""}, :string}
@@ -238,6 +257,15 @@ defmodule WAWebProtobufSyncAction.LidContactAction do
           label: :optional,
           name: :username,
           tag: 3,
+          type: :string
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "birthday",
+          kind: {:scalar, ""},
+          label: :optional,
+          name: :birthday,
+          tag: 4,
           type: :string
         }
       ]
@@ -332,6 +360,35 @@ defmodule WAWebProtobufSyncAction.LidContactAction do
 
         []
       ),
+      (
+        def field_def(:birthday) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "birthday",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :birthday,
+             tag: 4,
+             type: :string
+           }}
+        end
+
+        def field_def("birthday") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "birthday",
+             kind: {:scalar, ""},
+             label: :optional,
+             name: :birthday,
+             tag: 4,
+             type: :string
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -378,6 +435,9 @@ defmodule WAWebProtobufSyncAction.LidContactAction do
       {:ok, ""}
     end,
     def default(:username) do
+      {:ok, ""}
+    end,
+    def default(:birthday) do
       {:ok, ""}
     end,
     def default(_) do

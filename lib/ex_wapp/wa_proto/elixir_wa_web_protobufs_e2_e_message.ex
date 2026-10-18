@@ -113,6 +113,11 @@ defmodule WAWebProtobufsE2E.Message do
             botPlatformRegistrationSuccessMessage: nil,
             newsletterScheduledMessage: nil,
             acp2SettingMessage: nil,
+            audioStickerMessage: nil,
+            instantImageMessage: nil,
+            requestLocationMessage: nil,
+            botGroupParticipantMessage: nil,
+            requestLocationUpdateMessage: nil,
             __uf__: []
 
   (
@@ -241,6 +246,11 @@ defmodule WAWebProtobufsE2E.Message do
         |> encode_botPlatformRegistrationSuccessMessage(msg)
         |> encode_newsletterScheduledMessage(msg)
         |> encode_acp2SettingMessage(msg)
+        |> encode_audioStickerMessage(msg)
+        |> encode_instantImageMessage(msg)
+        |> encode_requestLocationMessage(msg)
+        |> encode_botGroupParticipantMessage(msg)
+        |> encode_requestLocationUpdateMessage(msg)
         |> encode_unknown_fields(msg)
       end
     )
@@ -1641,6 +1651,69 @@ defmodule WAWebProtobufsE2E.Message do
             reraise Protox.EncodingError.new(:acp2SettingMessage, "invalid field value"),
                     __STACKTRACE__
         end
+      end,
+      defp encode_audioStickerMessage(acc, msg) do
+        try do
+          case msg.audioStickerMessage do
+            nil -> acc
+            _ -> [acc, "\xB2\b", Protox.Encode.encode_message(msg.audioStickerMessage)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:audioStickerMessage, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_instantImageMessage(acc, msg) do
+        try do
+          case msg.instantImageMessage do
+            nil -> acc
+            _ -> [acc, "\xBA\b", Protox.Encode.encode_message(msg.instantImageMessage)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:instantImageMessage, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_requestLocationMessage(acc, msg) do
+        try do
+          case msg.requestLocationMessage do
+            nil -> acc
+            _ -> [acc, "\xC2\b", Protox.Encode.encode_message(msg.requestLocationMessage)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:requestLocationMessage, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_botGroupParticipantMessage(acc, msg) do
+        try do
+          case msg.botGroupParticipantMessage do
+            nil -> acc
+            _ -> [acc, "\xCA\b", Protox.Encode.encode_message(msg.botGroupParticipantMessage)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:botGroupParticipantMessage, "invalid field value"),
+                    __STACKTRACE__
+        end
+      end,
+      defp encode_requestLocationUpdateMessage(acc, msg) do
+        try do
+          case msg.requestLocationUpdateMessage do
+            nil -> acc
+            _ -> [acc, "\xD2\b", Protox.Encode.encode_message(msg.requestLocationUpdateMessage)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(
+                      :requestLocationUpdateMessage,
+                      "invalid field value"
+                    ),
+                    __STACKTRACE__
+        end
       end
     ]
 
@@ -3027,6 +3100,66 @@ defmodule WAWebProtobufsE2E.Message do
                    )
                ], rest}
 
+            {134, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 audioStickerMessage:
+                   Protox.MergeMessage.merge(
+                     msg.audioStickerMessage,
+                     WAWebProtobufsE2E.FutureProofMessage.decode!(delimited)
+                   )
+               ], rest}
+
+            {135, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 instantImageMessage:
+                   Protox.MergeMessage.merge(
+                     msg.instantImageMessage,
+                     WAWebProtobufsE2E.ImageMessage.decode!(delimited)
+                   )
+               ], rest}
+
+            {136, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 requestLocationMessage:
+                   Protox.MergeMessage.merge(
+                     msg.requestLocationMessage,
+                     WAWebProtobufsE2E.RequestLocationMessage.decode!(delimited)
+                   )
+               ], rest}
+
+            {137, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 botGroupParticipantMessage:
+                   Protox.MergeMessage.merge(
+                     msg.botGroupParticipantMessage,
+                     WAWebProtobufsE2E.FutureProofMessage.decode!(delimited)
+                   )
+               ], rest}
+
+            {138, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 requestLocationUpdateMessage:
+                   Protox.MergeMessage.merge(
+                     msg.requestLocationUpdateMessage,
+                     WAWebProtobufsE2E.RequestLocationUpdateMessage.decode!(delimited)
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -3342,7 +3475,19 @@ defmodule WAWebProtobufsE2E.Message do
           {:newsletterScheduledMessage, {:scalar, nil},
            {:message, WAWebProtobufsE2E.FutureProofMessage}},
         133 =>
-          {:acp2SettingMessage, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}}
+          {:acp2SettingMessage, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
+        134 =>
+          {:audioStickerMessage, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
+        135 => {:instantImageMessage, {:scalar, nil}, {:message, WAWebProtobufsE2E.ImageMessage}},
+        136 =>
+          {:requestLocationMessage, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.RequestLocationMessage}},
+        137 =>
+          {:botGroupParticipantMessage, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.FutureProofMessage}},
+        138 =>
+          {:requestLocationUpdateMessage, {:scalar, nil},
+           {:message, WAWebProtobufsE2E.RequestLocationUpdateMessage}}
       }
     end
 
@@ -3358,9 +3503,13 @@ defmodule WAWebProtobufsE2E.Message do
         associatedChildMessage:
           {91, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         audioMessage: {8, {:scalar, nil}, {:message, WAWebProtobufsE2E.AudioMessage}},
+        audioStickerMessage:
+          {134, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         bcallMessage: {72, {:scalar, nil}, {:message, WAWebProtobufsE2E.BCallMessage}},
         botForwardedMessage:
           {104, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
+        botGroupParticipantMessage:
+          {137, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         botInvokeMessage: {67, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
         botPlatformRegistrationSuccessMessage:
           {131, {:scalar, nil}, {:message, WAWebProtobufsE2E.FutureProofMessage}},
@@ -3415,6 +3564,7 @@ defmodule WAWebProtobufsE2E.Message do
         highlyStructuredMessage:
           {14, {:scalar, nil}, {:message, WAWebProtobufsE2E.HighlyStructuredMessage}},
         imageMessage: {3, {:scalar, nil}, {:message, WAWebProtobufsE2E.ImageMessage}},
+        instantImageMessage: {135, {:scalar, nil}, {:message, WAWebProtobufsE2E.ImageMessage}},
         interactiveMessage:
           {45, {:scalar, nil}, {:message, WAWebProtobufsE2E.InteractiveMessage}},
         interactiveResponseMessage:
@@ -3486,6 +3636,10 @@ defmodule WAWebProtobufsE2E.Message do
         questionResponseMessage:
           {107, {:scalar, nil}, {:message, WAWebProtobufsE2E.QuestionResponseMessage}},
         reactionMessage: {46, {:scalar, nil}, {:message, WAWebProtobufsE2E.ReactionMessage}},
+        requestLocationMessage:
+          {136, {:scalar, nil}, {:message, WAWebProtobufsE2E.RequestLocationMessage}},
+        requestLocationUpdateMessage:
+          {138, {:scalar, nil}, {:message, WAWebProtobufsE2E.RequestLocationUpdateMessage}},
         requestPaymentMessage:
           {22, {:scalar, nil}, {:message, WAWebProtobufsE2E.RequestPaymentMessage}},
         requestPhoneNumberMessage:
@@ -4550,6 +4704,51 @@ defmodule WAWebProtobufsE2E.Message do
           name: :acp2SettingMessage,
           tag: 133,
           type: {:message, WAWebProtobufsE2E.FutureProofMessage}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "audioStickerMessage",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :audioStickerMessage,
+          tag: 134,
+          type: {:message, WAWebProtobufsE2E.FutureProofMessage}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "instantImageMessage",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :instantImageMessage,
+          tag: 135,
+          type: {:message, WAWebProtobufsE2E.ImageMessage}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "requestLocationMessage",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :requestLocationMessage,
+          tag: 136,
+          type: {:message, WAWebProtobufsE2E.RequestLocationMessage}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "botGroupParticipantMessage",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :botGroupParticipantMessage,
+          tag: 137,
+          type: {:message, WAWebProtobufsE2E.FutureProofMessage}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "requestLocationUpdateMessage",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :requestLocationUpdateMessage,
+          tag: 138,
+          type: {:message, WAWebProtobufsE2E.RequestLocationUpdateMessage}
         }
       ]
     end
@@ -7804,6 +8003,151 @@ defmodule WAWebProtobufsE2E.Message do
 
         []
       ),
+      (
+        def field_def(:audioStickerMessage) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "audioStickerMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :audioStickerMessage,
+             tag: 134,
+             type: {:message, WAWebProtobufsE2E.FutureProofMessage}
+           }}
+        end
+
+        def field_def("audioStickerMessage") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "audioStickerMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :audioStickerMessage,
+             tag: 134,
+             type: {:message, WAWebProtobufsE2E.FutureProofMessage}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:instantImageMessage) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "instantImageMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :instantImageMessage,
+             tag: 135,
+             type: {:message, WAWebProtobufsE2E.ImageMessage}
+           }}
+        end
+
+        def field_def("instantImageMessage") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "instantImageMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :instantImageMessage,
+             tag: 135,
+             type: {:message, WAWebProtobufsE2E.ImageMessage}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:requestLocationMessage) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "requestLocationMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :requestLocationMessage,
+             tag: 136,
+             type: {:message, WAWebProtobufsE2E.RequestLocationMessage}
+           }}
+        end
+
+        def field_def("requestLocationMessage") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "requestLocationMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :requestLocationMessage,
+             tag: 136,
+             type: {:message, WAWebProtobufsE2E.RequestLocationMessage}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:botGroupParticipantMessage) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "botGroupParticipantMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :botGroupParticipantMessage,
+             tag: 137,
+             type: {:message, WAWebProtobufsE2E.FutureProofMessage}
+           }}
+        end
+
+        def field_def("botGroupParticipantMessage") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "botGroupParticipantMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :botGroupParticipantMessage,
+             tag: 137,
+             type: {:message, WAWebProtobufsE2E.FutureProofMessage}
+           }}
+        end
+
+        []
+      ),
+      (
+        def field_def(:requestLocationUpdateMessage) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "requestLocationUpdateMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :requestLocationUpdateMessage,
+             tag: 138,
+             type: {:message, WAWebProtobufsE2E.RequestLocationUpdateMessage}
+           }}
+        end
+
+        def field_def("requestLocationUpdateMessage") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "requestLocationUpdateMessage",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :requestLocationUpdateMessage,
+             tag: 138,
+             type: {:message, WAWebProtobufsE2E.RequestLocationUpdateMessage}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -8177,6 +8521,21 @@ defmodule WAWebProtobufsE2E.Message do
       {:ok, nil}
     end,
     def default(:acp2SettingMessage) do
+      {:ok, nil}
+    end,
+    def default(:audioStickerMessage) do
+      {:ok, nil}
+    end,
+    def default(:instantImageMessage) do
+      {:ok, nil}
+    end,
+    def default(:requestLocationMessage) do
+      {:ok, nil}
+    end,
+    def default(:botGroupParticipantMessage) do
+      {:ok, nil}
+    end,
+    def default(:requestLocationUpdateMessage) do
       {:ok, nil}
     end,
     def default(_) do

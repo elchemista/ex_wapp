@@ -309,6 +309,24 @@ defmodule WAWebProtobufsE2E.ProtocolMessage.Type do
         def encode("ACP2_SETTING") do
           39
         end
+      ),
+      (
+        def encode(:SHARED_DEVICE_CONTACT_HASH_KEY_SHARE) do
+          40
+        end
+
+        def encode("SHARED_DEVICE_CONTACT_HASH_KEY_SHARE") do
+          40
+        end
+      ),
+      (
+        def encode(:SHARED_DEVICE_CONTACT_HASH_KEY_REQUEST) do
+          41
+        end
+
+        def encode("SHARED_DEVICE_CONTACT_HASH_KEY_REQUEST") do
+          41
+        end
       )
     ]
 
@@ -329,6 +347,9 @@ defmodule WAWebProtobufsE2E.ProtocolMessage.Type do
       end,
       def decode(19) do
         :BOT_FEEDBACK_MESSAGE
+      end,
+      def decode(41) do
+        :SHARED_DEVICE_CONTACT_HASH_KEY_REQUEST
       end,
       def decode(29) do
         :AI_QUERY_FANOUT
@@ -383,6 +404,9 @@ defmodule WAWebProtobufsE2E.ProtocolMessage.Type do
       end,
       def decode(37) do
         :COEX_STATE_SYNC
+      end,
+      def decode(40) do
+        :SHARED_DEVICE_CONTACT_HASH_KEY_SHARE
       end,
       def decode(14) do
         :MESSAGE_EDIT
@@ -458,7 +482,9 @@ defmodule WAWebProtobufsE2E.ProtocolMessage.Type do
         {35, :AI_METADATA_OPERATION},
         {36, :MARK_AS_VERIFIED_ACTION},
         {37, :COEX_STATE_SYNC},
-        {39, :ACP2_SETTING}
+        {39, :ACP2_SETTING},
+        {40, :SHARED_DEVICE_CONTACT_HASH_KEY_SHARE},
+        {41, :SHARED_DEVICE_CONTACT_HASH_KEY_REQUEST}
       ]
     end
 
@@ -562,6 +588,12 @@ defmodule WAWebProtobufsE2E.ProtocolMessage.Type do
           true
         end,
         def has_constant?(:ACP2_SETTING) do
+          true
+        end,
+        def has_constant?(:SHARED_DEVICE_CONTACT_HASH_KEY_SHARE) do
+          true
+        end,
+        def has_constant?(:SHARED_DEVICE_CONTACT_HASH_KEY_REQUEST) do
           true
         end
       ]

@@ -1,7 +1,7 @@
 # credo:disable-for-this-file
 defmodule WAWebProtobufSyncAction.CallLogRecord.ParticipantInfo do
   @moduledoc false
-  defstruct userJID: nil, callResult: nil, __uf__: []
+  defstruct userJID: nil, callResult: nil, guestInfo: nil, __uf__: []
 
   (
     (
@@ -16,7 +16,11 @@ defmodule WAWebProtobufSyncAction.CallLogRecord.ParticipantInfo do
 
       @spec encode!(struct) :: iodata | no_return
       def encode!(msg) do
-        [] |> encode_userJID(msg) |> encode_callResult(msg) |> encode_unknown_fields(msg)
+        []
+        |> encode_userJID(msg)
+        |> encode_callResult(msg)
+        |> encode_guestInfo(msg)
+        |> encode_unknown_fields(msg)
       end
     )
 
@@ -52,6 +56,17 @@ defmodule WAWebProtobufSyncAction.CallLogRecord.ParticipantInfo do
         rescue
           ArgumentError ->
             reraise Protox.EncodingError.new(:callResult, "invalid field value"), __STACKTRACE__
+        end
+      end,
+      defp encode_guestInfo(acc, msg) do
+        try do
+          case msg.guestInfo do
+            nil -> acc
+            _ -> [acc, "\x1A", Protox.Encode.encode_message(msg.guestInfo)]
+          end
+        rescue
+          ArgumentError ->
+            reraise Protox.EncodingError.new(:guestInfo, "invalid field value"), __STACKTRACE__
         end
       end
     ]
@@ -119,6 +134,18 @@ defmodule WAWebProtobufSyncAction.CallLogRecord.ParticipantInfo do
 
               {[callResult: value], rest}
 
+            {3, _, bytes} ->
+              {len, bytes} = Protox.Varint.decode(bytes)
+              {delimited, rest} = Protox.Decode.parse_delimited(bytes, len)
+
+              {[
+                 guestInfo:
+                   Protox.MergeMessage.merge(
+                     msg.guestInfo,
+                     WAWebProtobufSyncAction.CallLogRecord.GuestInfo.decode!(delimited)
+                   )
+               ], rest}
+
             {tag, wire_type, rest} ->
               {value, rest} = Protox.Decode.parse_unknown(tag, wire_type, rest)
 
@@ -183,7 +210,10 @@ defmodule WAWebProtobufSyncAction.CallLogRecord.ParticipantInfo do
         1 => {:userJID, {:scalar, ""}, :string},
         2 =>
           {:callResult, {:scalar, :CONNECTED},
-           {:enum, WAWebProtobufSyncAction.CallLogRecord.CallResult}}
+           {:enum, WAWebProtobufSyncAction.CallLogRecord.CallResult}},
+        3 =>
+          {:guestInfo, {:scalar, nil},
+           {:message, WAWebProtobufSyncAction.CallLogRecord.GuestInfo}}
       }
     end
 
@@ -195,6 +225,8 @@ defmodule WAWebProtobufSyncAction.CallLogRecord.ParticipantInfo do
       %{
         callResult:
           {2, {:scalar, :CONNECTED}, {:enum, WAWebProtobufSyncAction.CallLogRecord.CallResult}},
+        guestInfo:
+          {3, {:scalar, nil}, {:message, WAWebProtobufSyncAction.CallLogRecord.GuestInfo}},
         userJID: {1, {:scalar, ""}, :string}
       }
     end
@@ -221,6 +253,15 @@ defmodule WAWebProtobufSyncAction.CallLogRecord.ParticipantInfo do
           name: :callResult,
           tag: 2,
           type: {:enum, WAWebProtobufSyncAction.CallLogRecord.CallResult}
+        },
+        %{
+          __struct__: Protox.Field,
+          json_name: "guestInfo",
+          kind: {:scalar, nil},
+          label: :optional,
+          name: :guestInfo,
+          tag: 3,
+          type: {:message, WAWebProtobufSyncAction.CallLogRecord.GuestInfo}
         }
       ]
     end
@@ -285,6 +326,35 @@ defmodule WAWebProtobufSyncAction.CallLogRecord.ParticipantInfo do
 
         []
       ),
+      (
+        def field_def(:guestInfo) do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "guestInfo",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :guestInfo,
+             tag: 3,
+             type: {:message, WAWebProtobufSyncAction.CallLogRecord.GuestInfo}
+           }}
+        end
+
+        def field_def("guestInfo") do
+          {:ok,
+           %{
+             __struct__: Protox.Field,
+             json_name: "guestInfo",
+             kind: {:scalar, nil},
+             label: :optional,
+             name: :guestInfo,
+             tag: 3,
+             type: {:message, WAWebProtobufSyncAction.CallLogRecord.GuestInfo}
+           }}
+        end
+
+        []
+      ),
       def field_def(_) do
         {:error, :no_such_field}
       end
@@ -329,6 +399,9 @@ defmodule WAWebProtobufSyncAction.CallLogRecord.ParticipantInfo do
     end,
     def default(:callResult) do
       {:ok, :CONNECTED}
+    end,
+    def default(:guestInfo) do
+      {:ok, nil}
     end,
     def default(_) do
       {:error, :no_such_field}

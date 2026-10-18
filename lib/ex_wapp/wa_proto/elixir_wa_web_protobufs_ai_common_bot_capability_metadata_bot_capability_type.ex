@@ -660,6 +660,105 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
         def encode("AI_RICH_RESPONSE_3P_LINKING_CARD_ENABLED") do
           71
         end
+      ),
+      (
+        def encode(:HATCH_NOTIFICATION_METADATA_EVENT_ENABLED) do
+          72
+        end
+
+        def encode("HATCH_NOTIFICATION_METADATA_EVENT_ENABLED") do
+          72
+        end
+      ),
+      (
+        def encode(:AI_SUGGESTED_REPLIES_ENABLED) do
+          73
+        end
+
+        def encode("AI_SUGGESTED_REPLIES_ENABLED") do
+          73
+        end
+      ),
+      (
+        def encode(:RICH_RESPONSE_IN_APP_SURVEY_BLOKS) do
+          74
+        end
+
+        def encode("RICH_RESPONSE_IN_APP_SURVEY_BLOKS") do
+          74
+        end
+      ),
+      (
+        def encode(:RICH_RESPONSE_IMAGE_SOURCE_ATTRIBUTION) do
+          75
+        end
+
+        def encode("RICH_RESPONSE_IMAGE_SOURCE_ATTRIBUTION") do
+          75
+        end
+      ),
+      (
+        def encode(:HATCH_CONNECTOR_ACTION_CARD_ENABLED) do
+          76
+        end
+
+        def encode("HATCH_CONNECTOR_ACTION_CARD_ENABLED") do
+          76
+        end
+      ),
+      (
+        def encode(:HATCH_SECURE_CREDENTIAL_CARD_ENABLED) do
+          77
+        end
+
+        def encode("HATCH_SECURE_CREDENTIAL_CARD_ENABLED") do
+          77
+        end
+      ),
+      (
+        def encode(:HATCH_BROWSER_TASK_CARD_ENABLED) do
+          78
+        end
+
+        def encode("HATCH_BROWSER_TASK_CARD_ENABLED") do
+          78
+        end
+      ),
+      (
+        def encode(:HATCH_ARTIFACT_CARD_ENABLED) do
+          79
+        end
+
+        def encode("HATCH_ARTIFACT_CARD_ENABLED") do
+          79
+        end
+      ),
+      (
+        def encode(:AI_STUDY_CENTER_ENABLED) do
+          80
+        end
+
+        def encode("AI_STUDY_CENTER_ENABLED") do
+          80
+        end
+      ),
+      (
+        def encode(:AI_MUSE_JARVIS_SCHEMA_ENABLED) do
+          81
+        end
+
+        def encode("AI_MUSE_JARVIS_SCHEMA_ENABLED") do
+          81
+        end
+      ),
+      (
+        def encode(:AI_STUDY_QUIZ_ENABLED) do
+          82
+        end
+
+        def encode("AI_STUDY_QUIZ_ENABLED") do
+          82
+        end
       )
     ]
 
@@ -677,6 +776,9 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       end,
       def decode(4) do
         :AI_MEMORY
+      end,
+      def decode(72) do
+        :HATCH_NOTIFICATION_METADATA_EVENT_ENABLED
       end,
       def decode(68) do
         :AI_RICH_RESPONSE_EMAIL_CALENDAR_ENABLED
@@ -750,8 +852,14 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       def decode(9) do
         :RICH_RESPONSE_INLINE_IMAGE
       end,
+      def decode(82) do
+        :AI_STUDY_QUIZ_ENABLED
+      end,
       def decode(49) do
         :RICH_RESPONSE_UR_REASONING
+      end,
+      def decode(79) do
+        :HATCH_ARTIFACT_CARD_ENABLED
       end,
       def decode(71) do
         :AI_RICH_RESPONSE_3P_LINKING_CARD_ENABLED
@@ -759,8 +867,17 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       def decode(66) do
         :RICH_RESPONSE_SPORTS_WIDGET_ENABLED
       end,
+      def decode(75) do
+        :RICH_RESPONSE_IMAGE_SOURCE_ATTRIBUTION
+      end,
       def decode(64) do
         :AI_RICH_RESPONSE_MAPS_V2_ENABLED
+      end,
+      def decode(78) do
+        :HATCH_BROWSER_TASK_CARD_ENABLED
+      end,
+      def decode(80) do
+        :AI_STUDY_CENTER_ENABLED
       end,
       def decode(15) do
         :WA_IG_1P_PLUGIN_RANKING_UPDATE_5
@@ -770,6 +887,9 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       end,
       def decode(36) do
         :SIMPLIFIED_PROFILE_PAGE
+      end,
+      def decode(76) do
+        :HATCH_CONNECTOR_ACTION_CARD_ENABLED
       end,
       def decode(32) do
         :QUERY_PLAN
@@ -803,6 +923,12 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       end,
       def decode(11) do
         :WA_IG_1P_PLUGIN_RANKING_UPDATE_1
+      end,
+      def decode(81) do
+        :AI_MUSE_JARVIS_SCHEMA_ENABLED
+      end,
+      def decode(73) do
+        :AI_SUGGESTED_REPLIES_ENABLED
       end,
       def decode(48) do
         :SESSION_TRANSPARENCY_SYSTEM_MESSAGE
@@ -849,6 +975,9 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       def decode(0) do
         :UNKNOWN
       end,
+      def decode(77) do
+        :HATCH_SECURE_CREDENTIAL_CARD_ENABLED
+      end,
       def decode(27) do
         :AGENTIC_PLANNING
       end,
@@ -881,6 +1010,9 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       end,
       def decode(59) do
         :AI_TAB_FORCE_CLIPPY
+      end,
+      def decode(74) do
+        :RICH_RESPONSE_IN_APP_SURVEY_BLOKS
       end,
       def decode(39) do
         :RICH_RESPONSE_UNIFIED_TEXT_COMPONENT
@@ -965,7 +1097,18 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
         {68, :AI_RICH_RESPONSE_EMAIL_CALENDAR_ENABLED},
         {69, :AI_RICH_RESPONSE_REMINDERS_ENABLED},
         {70, :AI_STOP_GENERATION_ENABLED},
-        {71, :AI_RICH_RESPONSE_3P_LINKING_CARD_ENABLED}
+        {71, :AI_RICH_RESPONSE_3P_LINKING_CARD_ENABLED},
+        {72, :HATCH_NOTIFICATION_METADATA_EVENT_ENABLED},
+        {73, :AI_SUGGESTED_REPLIES_ENABLED},
+        {74, :RICH_RESPONSE_IN_APP_SURVEY_BLOKS},
+        {75, :RICH_RESPONSE_IMAGE_SOURCE_ATTRIBUTION},
+        {76, :HATCH_CONNECTOR_ACTION_CARD_ENABLED},
+        {77, :HATCH_SECURE_CREDENTIAL_CARD_ENABLED},
+        {78, :HATCH_BROWSER_TASK_CARD_ENABLED},
+        {79, :HATCH_ARTIFACT_CARD_ENABLED},
+        {80, :AI_STUDY_CENTER_ENABLED},
+        {81, :AI_MUSE_JARVIS_SCHEMA_ENABLED},
+        {82, :AI_STUDY_QUIZ_ENABLED}
       ]
     end
 
@@ -1186,6 +1329,39 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
           true
         end,
         def has_constant?(:AI_RICH_RESPONSE_3P_LINKING_CARD_ENABLED) do
+          true
+        end,
+        def has_constant?(:HATCH_NOTIFICATION_METADATA_EVENT_ENABLED) do
+          true
+        end,
+        def has_constant?(:AI_SUGGESTED_REPLIES_ENABLED) do
+          true
+        end,
+        def has_constant?(:RICH_RESPONSE_IN_APP_SURVEY_BLOKS) do
+          true
+        end,
+        def has_constant?(:RICH_RESPONSE_IMAGE_SOURCE_ATTRIBUTION) do
+          true
+        end,
+        def has_constant?(:HATCH_CONNECTOR_ACTION_CARD_ENABLED) do
+          true
+        end,
+        def has_constant?(:HATCH_SECURE_CREDENTIAL_CARD_ENABLED) do
+          true
+        end,
+        def has_constant?(:HATCH_BROWSER_TASK_CARD_ENABLED) do
+          true
+        end,
+        def has_constant?(:HATCH_ARTIFACT_CARD_ENABLED) do
+          true
+        end,
+        def has_constant?(:AI_STUDY_CENTER_ENABLED) do
+          true
+        end,
+        def has_constant?(:AI_MUSE_JARVIS_SCHEMA_ENABLED) do
+          true
+        end,
+        def has_constant?(:AI_STUDY_QUIZ_ENABLED) do
           true
         end
       ]
