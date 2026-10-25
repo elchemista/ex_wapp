@@ -1,7 +1,7 @@
 defmodule ExWapp.MixProject do
   use Mix.Project
 
-  @version "0.1.4"
+  @version "0.1.5"
   @author "Yuriy Zhar"
   @source_url "https://github.com/elchemista/ex_wapp"
   @author_url "https://github.com/elchemista"

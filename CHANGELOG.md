@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.5 — 2026-10-25
 
 ### Changed
 
@@ -20,6 +20,11 @@
 
 ### Fixed
 
+- Recognize the account's paired LID when handling own-device protocol messages
+  and normalize PN/LID mappings so app-state keys and history can be ingested.
+- Preserve completed post-auth activation when prekey responses arrive late,
+  avoiding duplicate passive activation and digest requests.
+- Normalize newsletter status senders when incoming nodes contain structured JIDs.
 - Extend `download_media/3` to authenticate and decrypt history-sync blobs with
   the history-specific key derivation and media URL type. The built-in session
   downloads received chunks in supervised tasks, decompresses and imports them,
@@ -42,6 +47,8 @@
 - Compare Ed25519 1.5.2 with OTP on libsignal vectors, generated XEdDSA signatures
   and signed prekeys, both sign bits, tampering and malformed inputs. Keep the
   dependency: noncanonical `S + L` signatures and error contracts differ.
+
+[Full changes](https://github.com/elchemista/ex_wapp/compare/v0.1.4...v0.1.5)
 
 ## 0.1.4 — 2026-10-18
 
