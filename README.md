@@ -78,6 +78,22 @@ The selected module may expose `encode/1` and `decode/1` with
 module following `ExWapp.JSON.Library` and configure that module instead. A
 missing or invalid JSON configuration produces an explicit error.
 
+QR rendering and ExWapp instrumentation are also supplied by the host application;
+`qr_code` and `telemetry` are not direct dependencies of ExWapp. The currently
+locked WebSockex version depends on `telemetry` itself, so it still appears as
+a transitive dependency of that transport. ExWapp does not enable instrumentation
+just because the package is installed.
+
+Protox remains a runtime dependency: the checked-in generated modules delegate
+wire encoding and decoding to its runtime helpers.
+Only `protoc`, used when regenerating those files, is unnecessary in production.
+The Protox 2.1 runtime has no Decimal or JSON package dependency.
+
+`ed25519` is retained for the Signal/Noise verification boundary. Tests against
+OTP's Ed25519 primitive agree for valid converted XEdDSA signatures, but expose
+differences for noncanonical signatures and malformed inputs. See the
+[dependency comparison](docs/design-decisions.md) before replacing it.
+
 ## Quick start
 
 The built-in session transport provides a complete WhatsApp connection while
@@ -111,6 +127,55 @@ The client is regular data. Store the latest returned value in your GenServer,
 GenStateMachine, LiveView, job, or another application-owned process. See
 [`examples/gen_server_session.ex`](examples/gen_server_session.ex) for a
 complete wrapper.
+
+## Rendering pairing QR codes
+
+`ExWapp.pair/1` returns a raw pairing payload in `{:code, payload}`. Render that
+string with your preferred Elixir or browser library. No QR implementation is
+bundled, and an already paired session needs no renderer.
+
+For example, an application choosing the `qr_code` package adds
+`{:qr_code, "~> 3.2.0"}` to **its own** dependencies and implements:
+
+```elixir
+defmodule MyApp.QRRenderer do
+  @behaviour ExWapp.QR.Renderer
+
+  @impl true
+  def render(payload, opts) do
+    payload
+    |> QRCode.create(Keyword.get(opts, :error_correction, :high))
+    |> QRCode.render(Keyword.get(opts, :format, :svg))
+  end
+end
+
+{:ok, client, {:code, payload}} = ExWapp.pair(client)
+{:ok, svg} = MyApp.QRRenderer.render(payload, format: :svg)
+File.write!("/tmp/whatsapp.svg", svg)
+```
+
+Another library can implement the same `render/2` callback, returning
+`{:ok, binary_or_iodata}` or `{:error, reason}`. Render new payloads when QR codes
+rotate and wait for pairing/authentication to finish before sending messages.
+
+The manual IEx helper uses that same contract:
+
+```elixir
+config :ex_wapp, :qr_renderer, MyApp.QRRenderer
+
+# In IEx; qr_renderer overrides the application default when supplied.
+ExWapp.Live.run_session("account_1",
+  qr_renderer: MyApp.QRRenderer,
+  qr_options: [format: :svg, error_correction: :high],
+  qr_path: "/tmp/whatsapp.svg"
+)
+```
+
+`:qr_options` goes unchanged to the renderer. Set `:qr_path` to match its output
+format, for example `.png` for PNG. If a QR is received without a renderer, the
+helper returns `{:error, :qr_renderer_not_configured}`. Rendering and file-write
+errors are returned immediately and the helper releases its QR subscription;
+it does not log the pairing payload.
 
 ## Client API overview
 
@@ -236,6 +301,16 @@ history
 `all_messages/2` return lazy streams backed by the configured store. These are
 local-history APIs; they do not request a complete remote account export.
 
+The built-in session automatically downloads encrypted history-sync blobs sent
+by the account's own devices, checks their integrity, decompresses them, and
+imports their supported records into the same store as inline history. Downloads
+run in supervised background tasks. Session subscribers receive
+`{:ex_wapp_session, :history_sync, :completed, metadata}` after persistence, or
+`{:ex_wapp_session, :history_sync, :failed, reason, metadata}` on failure.
+Use the same history queries above after completion. `download_media/3` also
+accepts a `%ExWapp.Media.Ref{type: :history}` for fetching decrypted compressed
+bytes directly.
+
 ## Storage
 
 ExWapp ships with two stores:
@@ -338,8 +413,27 @@ integrations.
 
 ## Observability and security
 
-Telemetry events are available through `ExWapp.Telemetry`. High-level events
-can be forwarded to telemetry with `events: ExWapp.Events.Telemetry`.
+ExWapp instrumentation is disabled by default. To use the Erlang `:telemetry`
+backend, declare `{:telemetry, "~> 1.2"}` in your application's dependencies and
+enable it explicitly:
+
+```elixir
+config :ex_wapp, :telemetry_adapter, :telemetry
+```
+
+`ExWapp.Telemetry.events/0` lists the canonical events. Use
+`ExWapp.Telemetry.attach_many/3` and `detach/1` to manage their handlers.
+High-level client events can additionally be forwarded with
+`events: ExWapp.Events.Telemetry`.
+
+For another metrics system, configure a module implementing
+`ExWapp.Telemetry.Adapter` instead of `:telemetry`. Only
+`execute(event_name, measurements, metadata)` is required; it should return
+`:ok` promptly. `attach_many/4` and `detach/1` are optional. The helpers return
+an explicit error when handler management is unavailable. Event emission is
+best effort: backend errors do not interrupt sessions, sends, or persistence.
+Setting `:telemetry_adapter` to `nil` disables ExWapp instrumentation, including
+`ExWapp.Events.Telemetry`. This setting does not control WebSockex's own events.
 
 The library redacts known secrets from its own logs, but application logs,
 crash dumps, store files, and custom event handlers may still contain phone

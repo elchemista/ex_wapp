@@ -508,6 +508,7 @@ defmodule ExWapp.MessagesDomainEdgeTest do
   defp message_field(proto, field_num) do
     proto
     |> WAWebProtobufsE2E.Message.encode!()
+    |> elem(0)
     |> IO.iodata_to_binary()
     |> ld_field(field_num)
   end

@@ -159,6 +159,7 @@ defmodule ExWapp.InboundMessageContractTest do
       |> upload()
       |> Messages.build_image_proto(caption: "wrapped image")
       |> Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     wrapped_payload = encode_length_delimited(31, encode_length_delimited(2, image_payload))
@@ -172,7 +173,7 @@ defmodule ExWapp.InboundMessageContractTest do
   end
 
   defp decode_inbound(proto) do
-    payload = IO.iodata_to_binary(Message.encode!(proto))
+    payload = IO.iodata_to_binary(elem(Message.encode!(proto), 0))
     Wire.apply_media_from_plaintext(%{text: nil, media: nil}, payload)
   end
 

@@ -232,6 +232,7 @@ defmodule ExWapp.AppState.Engine.Codec do
         version: mut.version
       }
       |> SyncActionData.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     {iv, ciphertext} = Crypto.encrypt_cbc(content, keys.value_encryption)
@@ -299,6 +300,7 @@ defmodule ExWapp.AppState.Engine.Codec do
       keyID: %KeyId{ID: key_id}
     }
     |> SyncdPatch.encode!()
+    |> elem(0)
     |> IO.iodata_to_binary()
   end
 

@@ -51,6 +51,7 @@ defmodule ExWapp.InboundDeviceSessionRestoreTest do
     first_payload =
       ExWapp.Messages.build_text_proto("establish session", [])
       |> WAWebProtobufsE2E.Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     {:ok, first_ciphertext, :prekey, alice_sessions} =
@@ -84,6 +85,7 @@ defmodule ExWapp.InboundDeviceSessionRestoreTest do
     second_payload =
       ExWapp.Messages.build_text_proto("device-specific session survived restart", [])
       |> WAWebProtobufsE2E.Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     {:ok, second_ciphertext, :prekey, _alice_sessions_2} =

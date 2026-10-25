@@ -89,6 +89,7 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
       corrupt_payload =
         %HandshakeMessage{serverHello: corrupt_hello}
         |> HandshakeMessage.encode!()
+        |> elem(0)
         |> IO.iodata_to_binary()
 
       assert {:error, {:handshake_client_finish, :decrypt_failed}} =
@@ -107,11 +108,13 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
     intermediate_details =
       %Details{serial: 1, issuerSerial: @issuer_serial, key: random_bytes(32)}
       |> Details.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     leaf_details =
       %Details{serial: 2, issuerSerial: 1, key: server_static_pub}
       |> Details.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     certificate_plain =
@@ -120,6 +123,7 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
         leaf: %NoiseCertificate{details: leaf_details, signature: nil}
       }
       |> CertChain.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     handshake =
@@ -143,7 +147,8 @@ defmodule ExWapp.NoiseHandleServerHelloTest do
       payload: payload_cipher
     }
 
-    {:ok, message_io} = HandshakeMessage.encode(%HandshakeMessage{serverHello: server_hello})
+    {:ok, message_io, _size} =
+      HandshakeMessage.encode(%HandshakeMessage{serverHello: server_hello})
 
     %{
       payload: IO.iodata_to_binary(message_io),

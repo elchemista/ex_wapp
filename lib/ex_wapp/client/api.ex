@@ -469,24 +469,28 @@ defmodule ExWapp.Client.API do
 
   @spec emit_connect_start(Client.t()) :: :ok
   defp emit_connect_start(%Client{} = client) do
-    :telemetry.execute([:ex_wapp, :client, :connect, :start], %{count: 1}, %{
+    ExWapp.Telemetry.execute([:ex_wapp, :client, :connect, :start], %{count: 1}, %{
       session_id: client.session_id
     })
   end
 
   @spec emit_connect_stop(Client.t(), integer()) :: :ok
   defp emit_connect_stop(%Client{} = client, start_ms) do
-    :telemetry.execute([:ex_wapp, :client, :connect, :stop], connect_duration(start_ms), %{
+    ExWapp.Telemetry.execute([:ex_wapp, :client, :connect, :stop], connect_duration(start_ms), %{
       session_id: client.session_id
     })
   end
 
   @spec emit_connect_exception(Client.t(), integer(), term()) :: :ok
   defp emit_connect_exception(%Client{} = client, start_ms, reason) do
-    :telemetry.execute([:ex_wapp, :client, :connect, :exception], connect_duration(start_ms), %{
-      session_id: client.session_id,
-      reason: reason
-    })
+    ExWapp.Telemetry.execute(
+      [:ex_wapp, :client, :connect, :exception],
+      connect_duration(start_ms),
+      %{
+        session_id: client.session_id,
+        reason: reason
+      }
+    )
   end
 
   @spec connect_duration(integer()) :: %{duration: integer()}

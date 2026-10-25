@@ -165,8 +165,10 @@ defmodule ExWapp.NoiseCertificateTest do
     }
   end
 
-  defp encode_chain(chain), do: chain |> CertChain.encode!() |> IO.iodata_to_binary()
-  defp encode_message(message), do: message.__struct__.encode!(message) |> IO.iodata_to_binary()
+  defp encode_chain(chain), do: chain |> CertChain.encode!() |> elem(0) |> IO.iodata_to_binary()
+
+  defp encode_message(message),
+    do: message.__struct__.encode!(message) |> elem(0) |> IO.iodata_to_binary()
 
   defp flip_last_byte(binary) do
     size = byte_size(binary) - 1

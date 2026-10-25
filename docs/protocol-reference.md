@@ -399,9 +399,10 @@ version, LTHash, and mutation MAC state advance together. A mismatch triggers
 resynchronization rather than applying unauthenticated or out-of-sequence data.
 
 Inline history synchronization can ingest contacts, chats, messages, privacy
-tokens, PN/LID mappings, and call-log records. Blob-delivered chunks remain
-pending references and are not downloaded, so history is not guaranteed to be
-complete.
+tokens, PN/LID mappings, and call-log records. Blob-delivered chunks are downloaded
+in background tasks, authenticated, decompressed, and ingested through the same
+projection. Only chunks delivered by the phone are imported, so history is not
+guaranteed to be complete.
 
 ## Call signalling and call log
 

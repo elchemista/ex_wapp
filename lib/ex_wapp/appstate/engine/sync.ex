@@ -790,10 +790,6 @@ defmodule ExWapp.AppState.Engine.Sync do
     end
   end
 
-  defp maybe_resolve_external_patch_mutations(_session, %SyncdPatch{} = patch) do
-    {:ok, patch}
-  end
-
   defp download_external_blob(session, %ExternalBlobReference{} = ref) do
     timed_app_state(:external_blob, %{payload: :app_state}, %{}, fn ->
       with {:ok, direct_path} <- validate_external_direct_path(ref.directPath),

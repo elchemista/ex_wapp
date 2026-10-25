@@ -110,6 +110,7 @@ defmodule ExWapp.AppState.EngineTest do
       value =
         mutation.value
         |> SyncActionValue.encode!()
+        |> elem(0)
         |> IO.iodata_to_binary()
         |> SyncActionValue.decode!()
 
@@ -468,7 +469,7 @@ defmodule ExWapp.AppState.EngineTest do
         version: 2
       }
 
-      content = action_data |> SyncActionData.encode!() |> IO.iodata_to_binary()
+      content = action_data |> SyncActionData.encode!() |> elem(0) |> IO.iodata_to_binary()
       {iv, ciphertext} = Crypto.encrypt_cbc(content, keys.value_encryption)
       encrypted_content = iv <> ciphertext
 
@@ -508,6 +509,7 @@ defmodule ExWapp.AppState.EngineTest do
           padding: <<>>,
           version: 1
         })
+        |> elem(0)
         |> IO.iodata_to_binary()
 
       {iv, ciphertext} = Crypto.encrypt_cbc(content, keys.value_encryption)
@@ -550,6 +552,7 @@ defmodule ExWapp.AppState.EngineTest do
           padding: <<>>,
           version: 2
         })
+        |> elem(0)
         |> IO.iodata_to_binary()
 
       {iv, ciphertext} = Crypto.encrypt_cbc(content, keys.value_encryption)

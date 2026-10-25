@@ -20,6 +20,40 @@ defmodule ExWapp.PairingADVTest do
 
   test "direct signed identity fallback parses, verifies and produces device signature" do
     do_direct_adv_roundtrip(:E2EE)
+    do_direct_adv_roundtrip(:HOSTED)
+  end
+
+  test "an explicit HMAC envelope stays authenticated with mismatched or future wire fields" do
+    %{blob: blob, adv_secret: secret, identity: identity} = valid_adv_fixture(:E2EE)
+    {:ok, container} = ADVSignedDeviceIdentityHMAC.decode(blob)
+    {:ok, signed} = ADVSignedDeviceIdentity.decode(container.details)
+
+    # Tag 3 / bytes is the direct identity signature; tag 99 is a future field.
+    extra_fields = <<26, 64, signed.accountSignature::binary, 152, 6, 1>>
+    assert {:ok, _} = ADV.parse_signed_device_identity(blob <> extra_fields, secret, identity)
+
+    <<first, rest::binary>> = container."HMAC"
+
+    tampered =
+      container
+      |> Map.put(:HMAC, <<Bitwise.bxor(first, 1), rest::binary>>)
+      |> then(&encode_to_binary!(ADVSignedDeviceIdentityHMAC, &1))
+
+    assert {:error, :adv_hmac_mismatch} =
+             ADV.parse_signed_device_identity(tampered <> extra_fields, secret, identity)
+  end
+
+  test "a direct identity with an invalid signature is still rejected after wire detection" do
+    %{blob: blob, adv_secret: secret, identity: identity} = valid_adv_fixture(:E2EE)
+    {:ok, container} = ADVSignedDeviceIdentityHMAC.decode(blob)
+    {:ok, signed} = ADVSignedDeviceIdentity.decode(container.details)
+
+    tampered =
+      %{signed | accountSignature: <<0::512>>}
+      |> then(&encode_to_binary!(ADVSignedDeviceIdentity, &1))
+
+    assert {:error, :adv_invalid_account_signature} =
+             ADV.parse_signed_device_identity(tampered, secret, identity)
   end
 
   test "rejects pair-success identities without account signature" do
@@ -421,7 +455,7 @@ defmodule ExWapp.PairingADVTest do
   end
 
   defp encode_to_binary!(mod, struct) do
-    {:ok, io} = mod.encode(struct)
+    {:ok, io, _size} = mod.encode(struct)
     IO.iodata_to_binary(io)
   end
 end

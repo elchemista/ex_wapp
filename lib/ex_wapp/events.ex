@@ -47,11 +47,14 @@ end
 
 defmodule ExWapp.Events.Telemetry do
   @moduledoc """
-  Event adapter that forwards high-level ExWapp events to `:telemetry`.
+  Event adapter that forwards high-level ExWapp events to `ExWapp.Telemetry`.
 
-  Configure it with:
+  Configure the instrumentation backend with `:telemetry_adapter`, then select
+  this event adapter:
 
       ExWapp.new(events: ExWapp.Events.Telemetry, ...)
+
+  With no instrumentation backend configured, events are ignored.
   """
 
   @behaviour ExWapp.Events

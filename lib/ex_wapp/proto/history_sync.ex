@@ -14,24 +14,11 @@ defmodule ExWapp.Proto.HistorySync do
 
   WhatsApp delivers the bootstrap chunk inline (`initialHistBootstrapInlinePayload`),
   and the larger RECENT/FULL chunks as encrypted media the client is expected to
-  download. Only the inline path is implemented: the bootstrap gives roughly the
-  latest message per chat, which is enough for a chat list but not for reading
-  conversation history.
-
-  Blob chunks are **not** silently discarded — `extract_from_message/1` returns
-  `{:pending_blob, blob_ref()}` with everything a download needs, so the gap is a
-  missing consumer rather than lost data. To close it:
-
-  1. teach `ExWapp.Media.Crypto` the `:history` type — HKDF context string
-     `"WhatsApp History Keys"` (whatsmeow `download.go`), and allow it in
-     `validate_ref/1`;
-  2. hand the `blob_ref()` to the existing `ExWapp.Media.HTTP.download/3`, which
-     already resolves `media_conn` from `direct_path` and verifies the HMAC;
-  3. zlib-inflate the plaintext and feed it to `parse_history_payload/2` below —
-     the parsing and flattening already work, they are what the inline path uses.
-
-  Run the download off the inbound message path (a chunk can be megabytes);
-  whatsmeow uses a dedicated worker with an idle timeout for exactly this reason.
+  download. `extract_from_message/1` returns inline chunks immediately and
+  returns `{:pending_blob, blob_ref()}` for media-delivered chunks. The session
+  downloads those chunks in supervised background tasks and feeds the decrypted
+  compressed bytes to `parse_history_payload/2`, then uses the same projection
+  as inline history. This does not request additional history from the phone.
   """
 
   alias ExWapp.{Call, JID}
@@ -75,7 +62,7 @@ defmodule ExWapp.Proto.HistorySync do
 
   @typedoc """
   Everything needed to download and decrypt a history-sync chunk delivered as
-  media instead of inline. Kept verbatim from the notification so a future
+  media instead of inline. Kept verbatim from the notification so the background
   downloader needs no re-parse.
   """
   @type blob_ref :: %{
@@ -143,13 +130,21 @@ defmodule ExWapp.Proto.HistorySync do
   end
 
   @doc """
-  Flattens an already-inflated `HistorySync` payload into the internal contract.
+  Flattens a `HistorySync` payload into the internal contract.
 
-  The inline path calls this after inflating the bootstrap payload; a future blob
-  downloader can call it with the decrypted-and-inflated chunk instead.
+  The inline path passes already-inflated bytes. Downloaded chunks use
+  `{:compressed, bytes}` to validate zlib compression before decoding protobuf.
   """
-  @spec parse_history_payload({:ok, binary()} | binary(), term()) ::
+  @spec parse_history_payload({:ok, binary()} | {:compressed, binary()} | binary(), term()) ::
           {:ok, t()} | {:error, term()}
+  def parse_history_payload({:compressed, payload}, sync_type) when is_binary(payload) do
+    payload
+    |> :zlib.uncompress()
+    |> parse_history_payload(sync_type)
+  rescue
+    _ -> {:error, :invalid_history_compression}
+  end
+
   def parse_history_payload(payload, sync_type_from_notification) when is_binary(payload) do
     parse_history_payload({:ok, payload}, sync_type_from_notification)
   end

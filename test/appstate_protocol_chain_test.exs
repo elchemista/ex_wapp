@@ -170,6 +170,7 @@ defmodule ExWapp.AppState.ProtocolChainTest do
       second_patch
       |> Map.put(:patchMAC, flip_first(second_patch.patchMAC))
       |> SyncdPatch.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     store =

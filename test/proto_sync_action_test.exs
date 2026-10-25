@@ -27,7 +27,7 @@ defmodule ExWapp.Proto.SyncActionTest do
   }
 
   defp round_trip(module, struct) do
-    encoded = struct |> module.encode!() |> IO.iodata_to_binary()
+    encoded = struct |> module.encode!() |> elem(0) |> IO.iodata_to_binary()
     assert is_binary(encoded)
     {:ok, decoded} = module.decode(encoded)
     {encoded, decoded}

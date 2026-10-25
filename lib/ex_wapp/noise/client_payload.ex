@@ -74,7 +74,7 @@ defmodule ExWapp.Noise.ClientPayload do
       connectReason: :USER_ACTIVATED
     }
 
-    with {:ok, iodata} <- ClientPayload.encode(payload) do
+    with {:ok, iodata, _size} <- ClientPayload.encode(payload) do
       binary = IO.iodata_to_binary(iodata)
       updated_data = Map.put(data, :client_info, info)
       {:ok, binary, updated_data}
@@ -101,7 +101,7 @@ defmodule ExWapp.Noise.ClientPayload do
         connectReason: :USER_ACTIVATED
       }
 
-      with {:ok, iodata} <- ClientPayload.encode(payload) do
+      with {:ok, iodata, _size} <- ClientPayload.encode(payload) do
         binary = IO.iodata_to_binary(iodata)
 
         updated_data =
@@ -315,6 +315,7 @@ defmodule ExWapp.Noise.ClientPayload do
       historySyncConfig: build_history_sync_config(device_props)
     }
     |> CompanionDeviceProps.encode!()
+    |> elem(0)
     |> IO.iodata_to_binary()
   end
 

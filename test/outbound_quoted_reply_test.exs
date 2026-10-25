@@ -40,7 +40,7 @@ defmodule ExWapp.OutboundQuotedReplyTest do
              }
            } = proto
 
-    assert {:ok, encoded} = ProtoMessage.encode(proto)
+    assert {:ok, encoded, _size} = ProtoMessage.encode(proto)
     assert :binary.match(IO.iodata_to_binary(encoded), "3EB0QUOTED") != :nomatch
   end
 

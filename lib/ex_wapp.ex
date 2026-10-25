@@ -653,7 +653,14 @@ defmodule ExWapp do
   def send_event(session, to, name, start_time, opts),
     do: Session.send_event(session, to, name, start_time, opts)
 
-  @doc "Downloads and decrypts image, audio, or document media."
+  @doc """
+  Downloads and decrypts image, audio, document, or history-sync media.
+
+  For a `%ExWapp.Media.Ref{type: :history}`, the returned bytes are the decrypted,
+  compressed history payload. The built-in session automatically downloads,
+  decodes, and stores history chunks received from the account's own devices;
+  imported messages are available through the existing local history APIs.
+  """
   @spec download_media(
           Client.t() | GenServer.server(),
           ExWapp.Media.Ref.t(),
@@ -796,6 +803,8 @@ defmodule ExWapp do
   - `{:ex_wapp_session, :error, reason}` - session-level error event
   - `{:ex_wapp_session, :disconnected, reason}` - session disconnected
   - `{:ex_wapp_session, :terminated, reason}` - session process stopped
+  - `{:ex_wapp_session, :history_sync, :completed, metadata}` - history blob imported
+  - `{:ex_wapp_session, :history_sync, :failed, reason, metadata}` - history blob failed
   - `{:ex_wapp_health, type, metadata}` - send health/error/guard events
 
   ## Example

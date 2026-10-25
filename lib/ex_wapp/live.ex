@@ -28,7 +28,10 @@ defmodule ExWapp.Live do
 
   Options:
   - `:store_path` persisted store path (default: `#{@default_store_path}`)
-  - `:qr_path` QR svg output path (default: `#{@default_qr_path}`)
+  - `:qr_path` rendered QR output path (default: `#{@default_qr_path}`)
+  - `:qr_renderer` module implementing `ExWapp.QR.Renderer`, defaults to
+    `config :ex_wapp, :qr_renderer` (required when pairing is needed)
+  - `:qr_options` options passed to the renderer (default: `[]`)
   - `:pair_timeout_ms` QR pairing timeout (default: `#{@default_pair_timeout_ms}`)
   - `:connect_timeout_ms` connect timeout (default: `#{@default_connect_timeout_ms}`)
   - `:sync_wait_ms` wait after connect before reading chats (default: `#{@default_sync_wait_ms}`)
@@ -57,6 +60,9 @@ defmodule ExWapp.Live do
   Options:
   - `:store_path` defaults to `#{@default_multi_store_dir}/<session_id>.etf`
   - `:qr_path` defaults to `#{@default_multi_qr_dir}/<session_id>.svg`
+  - `:qr_renderer` module implementing `ExWapp.QR.Renderer`, defaults to
+    `config :ex_wapp, :qr_renderer` (required when pairing is needed)
+  - `:qr_options` options passed to the renderer (default: `[]`)
   - `:pair_timeout_ms` QR pairing timeout (default: `#{@default_pair_timeout_ms}`)
   - `:connect_timeout_ms` connect timeout (default: `#{@default_connect_timeout_ms}`)
   - `:sync_wait_ms` wait after connect before reading chats (default: `#{@default_sync_wait_ms}`)
@@ -89,7 +95,7 @@ defmodule ExWapp.Live do
          :ok <- ensure_store_path_available(store_path, session_id),
          {:ok, session} <- start_supervised_session(session_id, store_path),
          :ok <- ExWapp.connect(session),
-         :ok <- maybe_wait_for_pairing(session, qr_path, pair_timeout_ms),
+         :ok <- maybe_wait_for_pairing(session, qr_output(qr_path, opts), pair_timeout_ms),
          :ok <- wait_until_connected(session, connect_timeout_ms) do
       if sync_wait_ms > 0 do
         Process.sleep(sync_wait_ms)
@@ -143,7 +149,7 @@ defmodule ExWapp.Live do
     with :ok <- maybe_stop_existing_named_session(name, replace_existing),
          {:ok, session} <- start_live_session(store_path, name),
          :ok <- ExWapp.connect(session),
-         :ok <- maybe_wait_for_pairing(session, qr_path, pair_timeout_ms),
+         :ok <- maybe_wait_for_pairing(session, qr_output(qr_path, opts), pair_timeout_ms),
          :ok <- wait_until_connected(session, connect_timeout_ms) do
       if sync_wait_ms > 0 do
         Process.sleep(sync_wait_ms)
@@ -202,23 +208,31 @@ defmodule ExWapp.Live do
     ExWapp.get_messages(session, jid, opts)
   end
 
-  defp maybe_wait_for_pairing(session, qr_path, timeout_ms) do
+  defp qr_output(path, opts) do
+    %{
+      path: path,
+      renderer: Keyword.get(opts, :qr_renderer, Application.get_env(:ex_wapp, :qr_renderer)),
+      options: Keyword.get(opts, :qr_options, [])
+    }
+  end
+
+  defp maybe_wait_for_pairing(session, qr_output, timeout_ms) do
     if paired?(session) do
       IO.puts("Stored pairing found, skipping QR wait.")
       :ok
     else
-      wait_for_pairing(session, qr_path, timeout_ms)
+      wait_for_pairing(session, qr_output, timeout_ms)
     end
   end
 
-  defp wait_for_pairing(session, qr_path, timeout_ms) do
+  defp wait_for_pairing(session, qr_output, timeout_ms) do
     started_at = System.monotonic_time(:millisecond)
 
     session
     |> ExWapp.qr_stream()
     |> Enum.reduce_while(:waiting, fn event, _acc ->
       elapsed = System.monotonic_time(:millisecond) - started_at
-      handle_pairing_event(event, elapsed, timeout_ms, qr_path)
+      handle_pairing_event(event, elapsed, timeout_ms, qr_output)
     end)
   end
 
@@ -226,9 +240,15 @@ defmodule ExWapp.Live do
     {:halt, {:error, :pair_timeout}}
   end
 
-  defp handle_pairing_event({:code, code}, _elapsed, _timeout_ms, qr_path) do
-    log_qr_save_result(save_qr(code, qr_path), qr_path)
-    {:cont, :waiting}
+  defp handle_pairing_event({:code, code}, _elapsed, _timeout_ms, qr_output) do
+    case save_qr(code, qr_output) do
+      :ok ->
+        IO.puts("QR updated: #{qr_output.path} (exists? #{File.exists?(qr_output.path)})")
+        {:cont, :waiting}
+
+      {:error, _reason} = error ->
+        {:halt, error}
+    end
   end
 
   defp handle_pairing_event(:success, _elapsed, _timeout_ms, _qr_path) do
@@ -238,14 +258,6 @@ defmodule ExWapp.Live do
 
   defp handle_pairing_event({:error, reason}, _elapsed, _timeout_ms, _qr_path) do
     {:halt, {:error, reason}}
-  end
-
-  defp log_qr_save_result(:ok, qr_path) do
-    IO.puts("QR updated: #{qr_path} (exists? #{File.exists?(qr_path)})")
-  end
-
-  defp log_qr_save_result({:error, reason}, _qr_path) do
-    IO.puts("Failed to save QR: #{inspect(reason)}")
   end
 
   defp wait_until_connected(session, timeout_ms) do
@@ -332,20 +344,30 @@ defmodule ExWapp.Live do
     :ok
   end
 
-  defp save_qr(code, qr_path) when is_binary(code) do
-    case QRCode.create(code, :high) do
-      qr when not is_nil(qr) ->
-        case qr |> QRCode.render() |> QRCode.save(qr_path) do
-          {:ok, _path} -> :ok
-          other -> other
-        end
+  defp save_qr(_code, %{renderer: nil}), do: {:error, :qr_renderer_not_configured}
 
-      _ ->
-        {:error, :qr_create_failed}
+  defp save_qr(code, %{renderer: renderer, options: opts, path: path}) when is_binary(code) do
+    if is_atom(renderer) and Code.ensure_loaded?(renderer) and
+         function_exported?(renderer, :render, 2) do
+      write_qr(renderer.render(code, opts), path)
+    else
+      {:error, {:invalid_qr_renderer, renderer}}
     end
   rescue
-    e -> {:error, e}
+    exception -> {:error, exception}
+  catch
+    kind, reason -> {:error, {kind, reason}}
   end
+
+  defp write_qr({:ok, data}, path) do
+    binary = IO.iodata_to_binary(data)
+    File.write(path, binary)
+  rescue
+    ArgumentError -> {:error, :invalid_qr_renderer_response}
+  end
+
+  defp write_qr({:error, _reason} = error, _path), do: error
+  defp write_qr(_other, _path), do: {:error, :invalid_qr_renderer_response}
 
   defp maybe_stop_existing_named_session(name, true) when is_atom(name) do
     case Process.whereis(name) do

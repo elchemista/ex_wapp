@@ -103,5 +103,5 @@ defmodule ExWapp.WireProtocolBoundariesTest do
     assert ContentDecoder.classify_decrypted_content(encode(nested), 0) == {:user_message, nil}
   end
 
-  defp encode(message), do: message |> Message.encode!() |> IO.iodata_to_binary()
+  defp encode(message), do: message |> Message.encode!() |> elem(0) |> IO.iodata_to_binary()
 end

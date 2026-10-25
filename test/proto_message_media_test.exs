@@ -11,6 +11,7 @@ defmodule ExWapp.ProtoMessageMediaTest do
       upload
       |> Messages.build_image_proto(mimetype: "image/png", caption: "hello")
       |> Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     assert <<0x1A, _::binary>> = encoded
@@ -29,6 +30,7 @@ defmodule ExWapp.ProtoMessageMediaTest do
         duration: 7
       )
       |> Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     assert <<0x42, _::binary>> = encoded

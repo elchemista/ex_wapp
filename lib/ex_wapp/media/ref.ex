@@ -20,7 +20,7 @@ defmodule ExWapp.Media.Ref do
   ]
 
   @type t :: %__MODULE__{
-          type: ExWapp.Media.media_type(),
+          type: ExWapp.Media.download_type(),
           url: binary() | nil,
           direct_path: binary() | nil,
           media_key: binary() | nil,

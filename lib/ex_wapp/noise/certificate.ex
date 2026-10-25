@@ -35,12 +35,8 @@ defmodule ExWapp.Noise.Certificate do
     with {:ok, %CertChain{} = chain} <- CertChain.decode(cert_bytes),
          :ok <- validate_root_key(root_key),
          {:ok, intermediate_details} <-
-           verify_intermediate_certificate(chain.intermediate, root_key),
-         :ok <- verify_leaf_certificate(chain.leaf, intermediate_details, static_key) do
-      :ok
-    else
-      {:error, _} = error -> error
-      other -> {:error, other}
+           verify_intermediate_certificate(chain.intermediate, root_key) do
+      verify_leaf_certificate(chain.leaf, intermediate_details, static_key)
     end
   end
 

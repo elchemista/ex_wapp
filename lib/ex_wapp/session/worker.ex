@@ -94,6 +94,7 @@ defmodule ExWapp.Session.Worker do
   alias ExWapp.Session.{
     Account,
     AppStateSync,
+    HistorySync,
     InboundRouter,
     InitialSync,
     Options,
@@ -989,6 +990,17 @@ defmodule ExWapp.Session.Worker do
     end
   end
 
+  def handle_info(
+        {:history_sync_blob, conn, blob, from, id},
+        %__MODULE__{conn: conn} = state
+      )
+      when is_pid(conn) do
+    {:noreply, HistorySync.start(state, blob, from, id)}
+  end
+
+  def handle_info({:history_sync_blob, _conn, _blob, _from, _id}, state),
+    do: {:noreply, state}
+
   # Monitor DOWN for subscribers and ordinary send workers.
   def handle_info({:DOWN, mon, :process, _pid, reason}, state) do
     case send_worker_down(state, mon, reason) do
@@ -1684,6 +1696,7 @@ defmodule ExWapp.Session.Worker do
       {:ok, operation, coordinator} ->
         Process.demonitor(operation.monitor, [:flush])
         Connection.reply_send_caller(operation.from, result)
+        complete_history_sync(state, operation.label, result)
         {:ok, %{state | send_coordinator: coordinator}}
 
       {:error, :not_found, _coordinator} ->
@@ -1696,6 +1709,7 @@ defmodule ExWapp.Session.Worker do
       {:ok, operation, coordinator} ->
         result = {:error, {:send_worker_exited, reason}}
         Connection.reply_send_caller(operation.from, result)
+        complete_history_sync(state, operation.label, result)
 
         Logger.warning(
           "[SEND] Worker exited label=#{inspect(operation.label)} reason=#{Log.reason(reason)}"
@@ -1707,6 +1721,11 @@ defmodule ExWapp.Session.Worker do
         :not_found
     end
   end
+
+  defp complete_history_sync(state, {:history_sync, metadata}, result),
+    do: HistorySync.complete(state, metadata, result)
+
+  defp complete_history_sync(_state, _label, _result), do: :ok
 
   defp maybe_log_inbound_node(%Binary.Node{tag: tag}) when tag in ["iq", "chatstate"], do: :ok
 
@@ -1752,28 +1771,28 @@ defmodule ExWapp.Session.Worker do
 
     case reason do
       {:rate_limited, scope, retry_after_ms} ->
-        :telemetry.execute(
+        ExWapp.Telemetry.execute(
           [:ex_wapp, :rate, :limited],
           %{count: 1, retry_after_ms: retry_after_ms},
           Map.put(metadata, :scope, scope)
         )
 
       {:quota_exceeded, scope} ->
-        :telemetry.execute(
+        ExWapp.Telemetry.execute(
           [:ex_wapp, :quota, :exceeded],
           %{count: 1},
           Map.put(metadata, :scope, scope)
         )
 
       {:safety_cooloff, retry_after_ms} ->
-        :telemetry.execute(
+        ExWapp.Telemetry.execute(
           [:ex_wapp, :safety, :trip],
           %{count: 1, retry_after_ms: retry_after_ms},
           metadata
         )
 
       :forbidden_locked ->
-        :telemetry.execute([:ex_wapp, :safety, :trip], %{count: 1}, metadata)
+        ExWapp.Telemetry.execute([:ex_wapp, :safety, :trip], %{count: 1}, metadata)
     end
   rescue
     _ -> :ok

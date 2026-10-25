@@ -81,6 +81,7 @@ defmodule ExWapp.Message.Handler.Inbound.SyncTest do
     original_message =
       Messages.build_text_proto("recovered from primary", [])
       |> Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     message_key =
@@ -127,7 +128,7 @@ defmodule ExWapp.Message.Handler.Inbound.SyncTest do
              Chat.messages(store, chat_jid, limit: 1)
   end
 
-  test "reports an unhandled media-delivered history chunk at :info without touching state" do
+  test "queues a trusted history blob for background download without touching state" do
     store = Memory.new(initial_data: %{chats: %{}})
     state = %{store: store}
 
@@ -144,27 +145,28 @@ defmodule ExWapp.Message.Handler.Inbound.SyncTest do
         }
       }
       |> Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     message_data = %{message_content_type: :protocol, protocol_payload: payload}
 
-    log =
-      ExUnit.CaptureLog.capture_log([level: :info], fn ->
-        assert Sync.ingest(
-                 message_data,
-                 self(),
-                 state,
-                 "15550009999@s.whatsapp.net",
-                 "HISTORY_BLOB_1",
-                 true
-               ) == state
-      end)
+    # A foreign device cannot cause a history download or store mutation.
+    assert Sync.ingest(message_data, self(), state, "foreign@lid", "untrusted", false) == state
+    refute_received {:history_sync_blob, _, _, _, _}
 
-    # Silently dropping the chunk is the failure mode to guard against: the log
-    # must name the sync type so an incomplete history is diagnosable.
-    assert log =~ "[HISTORY_SYNC]"
-    assert log =~ "blob download not implemented"
-    assert log =~ "sync_type=:RECENT"
+    assert Sync.ingest(
+             message_data,
+             self(),
+             state,
+             "15550009999@s.whatsapp.net",
+             "HISTORY_BLOB_1",
+             true
+           ) == state
+
+    assert_receive {:history_sync_blob, nil,
+                    %{sync_type: :RECENT, chunk_order: 2, direct_path: "/v/history-chunk"},
+                    "15550009999@s.whatsapp.net", "HISTORY_BLOB_1"}
+
     assert Chat.list(store) == []
   end
 
@@ -178,6 +180,7 @@ defmodule ExWapp.Message.Handler.Inbound.SyncTest do
           2,
           Messages.build_text_proto("should not be ingested", [])
           |> Message.encode!()
+          |> elem(0)
           |> IO.iodata_to_binary()
         )
 
@@ -265,7 +268,9 @@ defmodule ExWapp.Message.Handler.Inbound.SyncTest do
           valid
         ],
         fn info ->
-          bytes = info |> WAWebProtobufsWeb.WebMessageInfo.encode!() |> IO.iodata_to_binary()
+          bytes =
+            info |> WAWebProtobufsWeb.WebMessageInfo.encode!() |> elem(0) |> IO.iodata_to_binary()
+
           length_delimited(3, length_delimited(4, length_delimited(1, bytes)))
         end
       )
