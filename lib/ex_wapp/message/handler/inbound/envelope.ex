@@ -434,6 +434,7 @@ defmodule ExWapp.Message.Handler.Inbound.Envelope do
     [
       MapPath.first(data, [["pairing", "device", "jid"], ["client_info", "jid"]]),
       MapPath.get(data, ["client_info", "wid"]),
+      MapPath.get(data, ["pairing", "device", "lid"]),
       MapPath.get(data, ["client_info", "lid"])
     ]
   rescue

@@ -8,8 +8,8 @@ defmodule ExWapp.Session.Worker.PostAuth do
 
   require Logger
 
-  alias ExWapp.{Binary, Config, Log, MapPath, Store}
-  alias ExWapp.Session.Worker
+  alias ExWapp.{Binary, Config, JID, Log, MapPath, Store}
+  alias ExWapp.Session.{JIDUtils, Worker}
   alias ExWapp.Session.Worker.Subscribers
 
   @min_prekey_threshold 5
@@ -17,8 +17,11 @@ defmodule ExWapp.Session.Worker.PostAuth do
   @doc """
   Persists the LID value from the success node and creates own PN↔LID mapping.
   """
-  @spec persist_lid_and_mapping(Worker.t(), binary() | nil) :: Worker.t()
+  @spec persist_lid_and_mapping(Worker.t(), JID.t() | binary() | nil) :: Worker.t()
   def persist_lid_and_mapping(state, nil), do: state
+
+  def persist_lid_and_mapping(state, %JID{} = lid),
+    do: persist_lid_and_mapping(state, JID.to_string(lid))
 
   def persist_lid_and_mapping(state, lid) when is_binary(lid) do
     Logger.debug("[SESSION] Persisting LID from success")
@@ -487,8 +490,8 @@ defmodule ExWapp.Session.Worker.PostAuth do
 
   defp normalize_jid_string(jid) when is_binary(jid) do
     jid
-    |> String.trim()
-    |> String.replace("@whatsapp.net", "@s.whatsapp.net")
+    |> JIDUtils.normalize_with_device()
+    |> JIDUtils.strip_device()
   end
 
   defp min_prekey_threshold(state) do
