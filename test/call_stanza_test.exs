@@ -203,4 +203,52 @@ defmodule ExWapp.CallStanzaTest do
     assert_receive {:ex_wapp_call, %Call{id: "CALL9"}}
     assert_receive {"call-stanza-test", {:ex_wapp_call, %Call{id: "CALL9"}}}
   end
+
+  test "unknown signalling and offers without IDs cannot create phantom calls" do
+    state = new_state()
+    assert {:ok, ^state} = handle(call_node("future_signalling"), state)
+    assert {:ok, ^state} = handle(call_node("offer", call_id: nil), state)
+    assert {:ok, ^state} = handle(%Node{tag: "call", content: nil}, state)
+    assert Call.list(state.store) == []
+    refute_received {:call_event, _}
+  end
+
+  test "a failed call-log write still publishes the live event and is retryable" do
+    store = ExWapp.Test.FaultStore.new()
+    state = %{store: store, runtime_cfg: %{}}
+    node = call_node("offer", children: nil)
+    ExWapp.Test.FaultStore.arm(store, :get_and_update, {:return, {:error, :disk_full}})
+    assert {:ok, ^state} = handle(node, state)
+    assert_receive {:call_event, %Call{id: "CALL1", status: :ringing}}
+    assert Call.list(store) == []
+    assert {:ok, ^state} = handle(node, state)
+    assert_receive {:call_event, %Call{id: "CALL1"}}
+    assert [%Call{id: "CALL1"}] = Call.list(store)
+  end
+
+  test "termination without a creator preserves the known outgoing direction" do
+    state = new_state()
+
+    assert {:ok, _} =
+             Call.upsert(state.store, %Call{id: "CALL1", is_incoming: false, status: :ringing})
+
+    assert {:ok, ^state} =
+             handle(call_node("terminate", creator: nil, duration: "invalid"), state)
+
+    assert_receive {:call_event, %Call{status: :cancelled, is_incoming: false, duration: nil}}
+  end
+
+  test "audio and unknown offer notices retain their media distinction without a subscriber" do
+    state = new_state()
+
+    for {media, expected} <- [{"audio", false}, {nil, nil}] do
+      node = call_node("offer_notice", call_id: "notice-#{media}", media: media, t: 1_754_000_100)
+      assert {:ok, ^state} = MessageHandler.handle_node(node, nil, state)
+      assert {:ok, call} = Call.get(state.store, "notice-#{media}")
+      assert call.is_video == expected
+      assert call.start_time == 1_754_000_100
+    end
+
+    refute_received {:call_event, _}
+  end
 end

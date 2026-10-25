@@ -1,7 +1,7 @@
 defmodule ExWapp.CallSyncRecoveryTest do
   use ExUnit.Case, async: true
   alias ExWapp.{Call, Chat, Store}
-  alias ExWapp.AppState.Engine.Dispatch
+  alias ExWapp.AppState.Engine
   alias ExWapp.Test.FaultStore
   @peer "123@s.whatsapp.net"
 
@@ -50,10 +50,10 @@ defmodule ExWapp.CallSyncRecoveryTest do
     FaultStore.arm(store, :update, {:return, {:error, :unavailable}})
 
     assert :ignored =
-             Dispatch.dispatch_mutation(store, ["delete_individual_call_log", @peer], nil)
+             Engine.dispatch_mutation(store, ["delete_individual_call_log", @peer], nil)
 
     assert {:ok, %Call{id: "saved"}} = Call.get(store, "saved")
-    assert :ok = Dispatch.dispatch_mutation(store, ["delete_individual_call_log", @peer], nil)
+    assert :ok = Engine.dispatch_mutation(store, ["delete_individual_call_log", @peer], nil)
     assert Call.list(store) == []
   end
 
@@ -73,17 +73,17 @@ defmodule ExWapp.CallSyncRecoveryTest do
           ["call_log"],
           ["delete_individual_call_log"]
         ] do
-      assert :ignored = Dispatch.dispatch_mutation(store, 0, index, nil)
+      assert :ignored = Engine.dispatch_mutation(store, 0, index, nil)
 
       if hd(index) != "contact",
-        do: assert(:ignored == Dispatch.dispatch_mutation(store, 1, index, nil))
+        do: assert(:ignored == Engine.dispatch_mutation(store, 1, index, nil))
     end
 
     assert Store.load!(store) == before
-    assert :ignored = Dispatch.dispatch_mutation(store, 0, ["pin_v1", @peer], :invalid)
+    assert :ignored = Engine.dispatch_mutation(store, 0, ["pin_v1", @peer], :invalid)
 
     assert :ok =
-             Dispatch.apply_outgoing_patch(store, ExWapp.AppState.Engine.build_pin(@peer, false))
+             Engine.apply_outgoing_patch(store, Engine.build_pin(@peer, false))
 
     assert {:ok, %{pinned: false, archived: true}} = Chat.get(store, @peer)
   end
@@ -92,10 +92,10 @@ defmodule ExWapp.CallSyncRecoveryTest do
     store = FaultStore.new()
     Chat.get_or_create(store, @peer)
     FaultStore.arm(store, :update, :raise)
-    patch = ExWapp.AppState.Engine.build_pin(@peer, true)
-    assert :ok = Dispatch.apply_outgoing_patch(store, patch)
+    patch = Engine.build_pin(@peer, true)
+    assert :ok = Engine.apply_outgoing_patch(store, patch)
     assert {:ok, %{pinned: false}} = Chat.get(store, @peer)
-    assert :ok = Dispatch.apply_outgoing_patch(store, patch)
+    assert :ok = Engine.apply_outgoing_patch(store, patch)
     assert {:ok, %{pinned: true}} = Chat.get(store, @peer)
   end
 end

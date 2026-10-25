@@ -5,6 +5,7 @@ defmodule ExWapp.Message.Handler.Status do
 
   alias ExWapp.Binary.Node
   alias ExWapp.Log
+  alias ExWapp.Message.Handler.Common
 
   @spec handle_presence(Node.t(), map()) :: {:ok, map()}
   def handle_presence(%Node{attrs: attrs}, state) do
@@ -25,7 +26,7 @@ defmodule ExWapp.Message.Handler.Status do
   """
   @spec handle_status_update(Node.t(), map()) :: {:ok, map()}
   def handle_status_update(%Node{attrs: attrs, content: content}, state) do
-    from = Map.get(attrs, "from", "")
+    from = attrs |> Map.get("from", "") |> Common.normalize_jid_with_device()
     id = Map.get(attrs, "id", "")
 
     child_tags =

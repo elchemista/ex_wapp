@@ -204,7 +204,7 @@ defmodule ExWapp.AppState.ProtocolChainTest do
     assert {:ok, patch} = SyncdPatch.decode(encoded)
 
     assert {:ok, [decoded], ^encoded_state, ^encoded_macs} =
-             Codec.decode_patch(
+             Engine.decode_patch(
                patch,
                "regular_low",
                ctx.initial_state,

@@ -95,6 +95,41 @@ defmodule ExWapp.AppState.EngineTest do
 
   # Contact mutation builders
 
+  test "chat actions preserve an explicit history boundary through protobuf encoding" do
+    timestamp = 1_754_000_100
+    jid = "1234@s.whatsapp.net"
+
+    for {patch, field} <- [
+          {Engine.build_archive(jid, true, timestamp), :archiveChatAction},
+          {Engine.build_delete_chat(jid, timestamp), :deleteChatAction},
+          {Engine.build_mark_read(jid, true, timestamp), :markChatAsReadAction},
+          {Engine.build_clear_chat(jid, timestamp), :clearChatAction}
+        ] do
+      [mutation | _] = patch.mutations
+
+      value =
+        mutation.value
+        |> SyncActionValue.encode!()
+        |> IO.iodata_to_binary()
+        |> SyncActionValue.decode!()
+
+      assert Map.fetch!(value, field).messageRange.lastMessageTimestamp == timestamp
+    end
+  end
+
+  test "resetting one collection preserves other collections and shared keys" do
+    store = app_state_store()
+    keys = ExWapp.Store.get(store, :app_state_keys)
+    hash = %{version: 7, hash: LTHash.new()}
+    macs = %{"index" => <<1::256>>}
+    assert :ok = Engine.persist_collection_state(store, "regular_low", hash, macs)
+    assert :ok = Engine.persist_collection_state(store, "critical_unblock_low", hash, macs)
+    assert :ok = Engine.reset_collection_state(store, "regular_low")
+    assert {:ok, %{version: 0}, %{}} = Engine.get_collection_state(store, "regular_low")
+    assert {:ok, ^hash, ^macs} = Engine.get_collection_state(store, "critical_unblock_low")
+    assert ExWapp.Store.get(store, :app_state_keys) == keys
+  end
+
   describe "build_contact/3" do
     test "builds a contact patch for critical_unblock_low" do
       patch = Engine.build_contact("1234@s.whatsapp.net", "John Doe", "John")
