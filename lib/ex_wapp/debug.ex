@@ -232,7 +232,7 @@ defmodule ExWapp.Debug do
         }
       }
 
-      WAWebProtobufsWa6.HandshakeMessage.encode!(msg) |> IO.iodata_to_binary()
+      WAWebProtobufsWa6.HandshakeMessage.encode!(msg) |> elem(0) |> IO.iodata_to_binary()
     end
 
     defp build_frame(header, payload) do
@@ -366,7 +366,7 @@ defmodule ExWapp.Debug do
         }
       }
 
-      {:ok, encoded} = ClientPayload.encode(payload)
+      {:ok, encoded, _size} = ClientPayload.encode(payload)
       {:ok, IO.iodata_to_binary(encoded)}
     end
   end
@@ -388,7 +388,7 @@ defmodule ExWapp.Debug do
       }
     }
 
-    client_hello = HandshakeMessage.encode!(client_hello_msg) |> IO.iodata_to_binary()
+    client_hello = HandshakeMessage.encode!(client_hello_msg) |> elem(0) |> IO.iodata_to_binary()
 
     Logger.info("ClientHello protobuf prepared (bytes=#{byte_size(client_hello)})")
 
@@ -459,7 +459,7 @@ defmodule ExWapp.Debug do
       }
     }
 
-    HandshakeMessage.encode!(msg) |> IO.iodata_to_binary()
+    HandshakeMessage.encode!(msg) |> elem(0) |> IO.iodata_to_binary()
   end
 
   defp parse_server_response(data) when byte_size(data) < 3 do

@@ -57,11 +57,16 @@ defmodule ExWapp.Proto.HistorySyncTest do
           historySyncNotification: %HistorySyncNotification{
             syncType: :INITIAL_BOOTSTRAP,
             initialHistBootstrapInlinePayload:
-              history |> HistorySyncProto.encode!() |> IO.iodata_to_binary() |> :zlib.compress()
+              history
+              |> HistorySyncProto.encode!()
+              |> elem(0)
+              |> IO.iodata_to_binary()
+              |> :zlib.compress()
           }
         }
       }
       |> Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     assert {:ok, extracted} = HistorySync.extract_from_message(payload)
@@ -116,11 +121,16 @@ defmodule ExWapp.Proto.HistorySyncTest do
           historySyncNotification: %HistorySyncNotification{
             syncType: :RECENT,
             initialHistBootstrapInlinePayload:
-              history |> HistorySyncProto.encode!() |> IO.iodata_to_binary() |> :zlib.compress()
+              history
+              |> HistorySyncProto.encode!()
+              |> elem(0)
+              |> IO.iodata_to_binary()
+              |> :zlib.compress()
           }
         }
       }
       |> Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     assert {:ok, extracted} = HistorySync.extract_from_message(payload)
@@ -179,9 +189,10 @@ defmodule ExWapp.Proto.HistorySyncTest do
         }
       }
       |> Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
-    # Downloading is not implemented, but nothing a downloader needs may be lost.
+    # Nothing the background downloader needs may be lost.
     assert {:pending_blob, blob} = HistorySync.extract_from_message(payload)
 
     assert blob == %{
@@ -204,7 +215,7 @@ defmodule ExWapp.Proto.HistorySyncTest do
       conversations: [%Conversation{ID: "15550003333@s.whatsapp.net", name: "From blob"}]
     }
 
-    inflated = history |> HistorySyncProto.encode!() |> IO.iodata_to_binary()
+    inflated = history |> HistorySyncProto.encode!() |> elem(0) |> IO.iodata_to_binary()
 
     assert {:ok, extracted} = HistorySync.parse_history_payload(inflated, :RECENT)
     assert extracted.sync_type == :RECENT
@@ -213,7 +224,10 @@ defmodule ExWapp.Proto.HistorySyncTest do
 
   test "ignores messages that are not history sync notifications" do
     payload =
-      %Message{conversation: "plain text"} |> Message.encode!() |> IO.iodata_to_binary()
+      %Message{conversation: "plain text"}
+      |> Message.encode!()
+      |> elem(0)
+      |> IO.iodata_to_binary()
 
     assert :not_history_sync = HistorySync.extract_from_message(payload)
   end

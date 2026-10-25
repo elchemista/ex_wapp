@@ -70,10 +70,7 @@ mix protox.generate \
   --multiple-files \
   "${ENTRYPOINTS[@]}"
 
-step "Declaring struct typespecs"
-# protox emits no @type t, which would make every `Module.t()` in our specs an
-# unknown type to dialyzer. Add it here rather than hand-editing the output.
-elixir scripts/add_proto_typespecs.exs "$STAGING"
+# Protox 2 emits message typespecs itself. Keep its generated definitions intact.
 
 mkdir -p "$OUT_DIR"
 rsync -a --delete "$STAGING"/ "$OUT_DIR"/

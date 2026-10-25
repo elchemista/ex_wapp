@@ -114,8 +114,13 @@ defmodule ExWapp.ProtoOctoberSnapshotTest do
   defp decode_fixture(module, hex) do
     bytes = Base.decode16!(hex)
     decoded = module.decode!(bytes)
-    # Protox writes oneofs before scalar fields; protobuf permits either order.
-    reencoded = decoded |> module.encode!() |> IO.iodata_to_binary()
+    # Protobuf permits fields in either order. Check both Protox 2 encode APIs
+    # and their byte counts against the independently generated wire fixture.
+    assert {:ok, iodata, size} = module.encode(decoded)
+    assert {^iodata, ^size} = module.encode!(decoded)
+    reencoded = IO.iodata_to_binary(iodata)
+    assert size == byte_size(reencoded)
+    assert size == byte_size(bytes)
     assert module.decode!(reencoded) == decoded
     decoded
   end

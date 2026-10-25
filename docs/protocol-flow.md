@@ -237,8 +237,10 @@ collection state. Collection version, LTHash state, and mutation MACs advance
 together. Concurrent mutations for one collection are serialized.
 
 Inline history-sync payloads are decoded and projected into the configured
-store. Blob-delivered history chunks are represented as pending blob references
-but are not downloaded yet. Consequently, local history queries do not promise
+store. Blob-delivered history chunks use supervised background downloads with
+the history media key context, integrity checks, and zlib decompression before
+the same projection. Only authenticated self-device notifications schedule these
+downloads. Disconnect cancels the tasks. Local history queries do not promise
 a complete remote account export.
 
 ## 10. Disconnect and reconnect

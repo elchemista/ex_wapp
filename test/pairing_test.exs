@@ -367,7 +367,7 @@ defmodule ExWapp.PairingTest do
   end
 
   defp encode!(module, struct) do
-    {:ok, io} = module.encode(struct)
+    {:ok, io, _size} = module.encode(struct)
     IO.iodata_to_binary(io)
   end
 end

@@ -1,6 +1,6 @@
 defmodule ExWapp.PostAuthRecoveryTest do
   use ExUnit.Case, async: true
-  alias ExWapp.{Prekeys, Store}
+  alias ExWapp.{Binary, JID, Prekeys, Store}
   alias ExWapp.Binary.Node
   alias ExWapp.Session.Worker.PostAuth
   alias ExWapp.Test.{FaultStore, SignalDevice}
@@ -39,6 +39,28 @@ defmodule ExWapp.PostAuthRecoveryTest do
     PostAuth.persist_lid_and_mapping(ctx.state, "111@lid")
     assert Store.get(ctx.store, :lid_mapping) == mappings
     assert PostAuth.persist_lid_and_mapping(ctx.state, :invalid) == ctx.state
+  end
+
+  test "wire-decoded success LID persists with account aliases independent of device", ctx do
+    pn = JID.new("15550009999", "s.whatsapp.net") |> JID.with_device(7)
+    lid = JID.new("90000000099", "lid") |> JID.with_device(7)
+    Store.put(ctx.store, :pairing, %{device: %{"jid" => pn}})
+    Store.put(ctx.store, :client_info, %{jid: pn, device_name: "test"})
+
+    success =
+      %Node{tag: "success", attrs: %{"lid" => lid}}
+      |> Binary.encode!()
+      |> Binary.decode!()
+
+    assert %JID{} = success.attrs["lid"]
+    assert PostAuth.persist_lid_and_mapping(ctx.state, success.attrs["lid"]) == ctx.state
+
+    assert %{lid: "90000000099:7@lid", device_name: "test"} =
+             Store.get(ctx.store, :client_info)
+
+    mappings = Store.get(ctx.store, :lid_mapping)
+    assert mappings[{:pn_to_lid, "15550009999@s.whatsapp.net"}] == "90000000099@lid"
+    assert mappings[{:lid_to_pn, "90000000099@lid"}] == "15550009999@s.whatsapp.net"
   end
 
   test "healthy server inventory retains unacknowledged private keys until a refill is needed",

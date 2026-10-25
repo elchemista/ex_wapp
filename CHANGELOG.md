@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.1.5 — 2026-10-25
+
+### Changed
+
+- Remove the bundled QR package and its five transitive dependencies. Applications
+  render the pairing payload themselves or provide an `ExWapp.QR.Renderer` to the
+  Live helper through `:qr_renderer` and `:qr_options`.
+- Make ExWapp instrumentation opt-in through `:telemetry_adapter`. The Erlang
+  `:telemetry` module or a custom `ExWapp.Telemetry.Adapter` can be selected.
+  ExWapp no longer declares a direct telemetry dependency; WebSockex still has
+  its own transitive dependency and emits its own events.
+- Upgrade Protox from 1.7.8 to 2.1.0 and regenerate the same 772-module WhatsApp
+  schema snapshot at whatsmeow `b2b1e71`. Adapt internal encoders to the new
+  return values and use the generator's typespecs. This removes Decimal from
+  the dependency tree without changing the client API or protocol schema.
+- Upgrade Phoenix.PubSub to 2.4.1, Ed25519 to 1.5.2, Dialyxir to 1.4.8,
+  ExDoc to 0.40.4, and Makeup to 1.2.3.
+
+### Fixed
+
+- Recognize the account's paired LID when handling own-device protocol messages
+  and normalize PN/LID mappings so app-state keys and history can be ingested.
+- Preserve completed post-auth activation when prekey responses arrive late,
+  avoiding duplicate passive activation and digest requests.
+- Normalize newsletter status senders when incoming nodes contain structured JIDs.
+- Extend `download_media/3` to authenticate and decrypt history-sync blobs with
+  the history-specific key derivation and media URL type. The built-in session
+  downloads received chunks in supervised tasks, decompresses and imports them,
+  and reports completion or failure through lifecycle events. Disconnects
+  cancel pending tasks; duplicate imports retain message IDs and newer live
+  chat timestamps.
+- Return QR rendering and file-write failures immediately, release the helper's
+  QR subscription, and avoid printing the pairing payload on failure.
+- Route client and policy metrics through the configured instrumentation adapter
+  and isolate backend failures from protocol operations.
+- Preserve direct signed-identity pairing with Protox 2's unknown-wire-field
+  behavior while still rejecting bad HMACs and invalid account signatures.
+
+### Validation
+
+- 1,204 passing tests and 91.51% maintained-code coverage on Elixir 1.20.4 /
+  OTP 29.1.1. History blob downloads, integrity failures, persistence failures,
+  disconnect cancellation, QR renderers and optional telemetry have regression
+  coverage using local peers only.
+- Compare Ed25519 1.5.2 with OTP on libsignal vectors, generated XEdDSA signatures
+  and signed prekeys, both sign bits, tampering and malformed inputs. Keep the
+  dependency: noncanonical `S + L` signatures and error contracts differ.
+
+[Full changes](https://github.com/elchemista/ex_wapp/compare/v0.1.4...v0.1.5)
+
 ## 0.1.4 — 2026-10-18
 
 ### Changed

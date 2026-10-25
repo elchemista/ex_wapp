@@ -19,7 +19,7 @@ defmodule ExWapp.WaProtoE2EParityTest do
   @jid "15550001111@s.whatsapp.net"
   @peer "15550002222@s.whatsapp.net"
 
-  defp encode(proto), do: proto |> Message.encode!() |> IO.iodata_to_binary()
+  defp encode(proto), do: proto |> Message.encode!() |> elem(0) |> IO.iodata_to_binary()
   defp roundtrip(proto), do: proto |> encode() |> Message.decode!()
 
   describe "placeholder-resend round-trip" do

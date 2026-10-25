@@ -18,7 +18,7 @@ defmodule ExWapp.PlaceholderResendTest do
         "MSG_PLACEHOLDER_1"
       )
 
-    payload = IO.iodata_to_binary(Message.encode!(proto))
+    payload = IO.iodata_to_binary(elem(Message.encode!(proto), 0))
 
     assert {:ok, [{12, 2, protocol_message}]} = decode_fields(payload)
     assert {:ok, protocol_fields} = decode_fields(protocol_message)
@@ -49,7 +49,7 @@ defmodule ExWapp.PlaceholderResendTest do
         from_me: true
       )
 
-    payload = IO.iodata_to_binary(Message.encode!(proto))
+    payload = IO.iodata_to_binary(elem(Message.encode!(proto), 0))
 
     assert {:ok, [{12, 2, protocol_message}]} = decode_fields(payload)
     assert {:ok, protocol_fields} = decode_fields(protocol_message)

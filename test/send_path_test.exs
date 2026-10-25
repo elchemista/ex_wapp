@@ -66,7 +66,7 @@ defmodule ExWapp.SendPathTest do
       }
     }
 
-    encoded = IO.iodata_to_binary(WAWebProtobufsE2E.Message.encode!(wrapped))
+    encoded = IO.iodata_to_binary(elem(WAWebProtobufsE2E.Message.encode!(wrapped), 0))
     encoded_bin = IO.iodata_to_binary(encoded)
 
     # Outer message starts with DeviceSentMessage field (31, wire type 2)
@@ -95,7 +95,7 @@ defmodule ExWapp.SendPathTest do
       }
     }
 
-    encoded = IO.iodata_to_binary(WAWebProtobufsE2E.Message.encode!(wrapped))
+    encoded = IO.iodata_to_binary(elem(WAWebProtobufsE2E.Message.encode!(wrapped), 0))
     encoded_bin = IO.iodata_to_binary(encoded)
 
     # Field 31, wire type 2 (length-delimited) = (31 << 3) | 2 = 250 = 0xFA
@@ -115,7 +115,7 @@ defmodule ExWapp.SendPathTest do
       }
     }
 
-    encoded = IO.iodata_to_binary(WAWebProtobufsE2E.Message.encode!(wrapped))
+    encoded = IO.iodata_to_binary(elem(WAWebProtobufsE2E.Message.encode!(wrapped), 0))
     encoded_bin = IO.iodata_to_binary(encoded)
 
     assert :binary.match(encoded_bin, phash) != :nomatch
@@ -259,7 +259,7 @@ defmodule ExWapp.SendPathTest do
 
     # Build two payloads: recipient (plain) and own (DeviceSentMessage wrapped)
     proto = ExWapp.Messages.build_text_proto("test message", [])
-    plain_payload = IO.iodata_to_binary(WAWebProtobufsE2E.Message.encode!(proto))
+    plain_payload = IO.iodata_to_binary(elem(WAWebProtobufsE2E.Message.encode!(proto), 0))
 
     destination_jid = "6287865904022@s.whatsapp.net"
 
@@ -271,7 +271,7 @@ defmodule ExWapp.SendPathTest do
       }
     }
 
-    own_payload = IO.iodata_to_binary(WAWebProtobufsE2E.Message.encode!(dsm_wrapped))
+    own_payload = IO.iodata_to_binary(elem(WAWebProtobufsE2E.Message.encode!(dsm_wrapped), 0))
 
     recipient_padded = ExWapp.Signal.Encryption.pad_message(plain_payload)
     own_padded = ExWapp.Signal.Encryption.pad_message(own_payload)
@@ -341,7 +341,7 @@ defmodule ExWapp.SendPathTest do
       deviceType: :E2EE
     }
 
-    {:ok, details_io} = ADVDeviceIdentity.encode(details_msg)
+    {:ok, details_io, _size} = ADVDeviceIdentity.encode(details_msg)
     details_bin = IO.iodata_to_binary(details_io)
 
     account_message = <<6, 0>> <> details_bin <> identity.public

@@ -117,7 +117,7 @@ defmodule ExWapp.Noise.Engine do
       }
     }
 
-    HandshakeMessage.encode!(msg) |> IO.iodata_to_binary()
+    HandshakeMessage.encode!(msg) |> elem(0) |> IO.iodata_to_binary()
   end
 
   defp decode_server_hello(payload) do
@@ -170,7 +170,7 @@ defmodule ExWapp.Noise.Engine do
       }
     }
 
-    HandshakeMessage.encode!(msg) |> IO.iodata_to_binary()
+    HandshakeMessage.encode!(msg) |> elem(0) |> IO.iodata_to_binary()
   end
 
   @doc false

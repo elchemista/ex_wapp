@@ -95,7 +95,7 @@ defmodule ExWapp.Test.ProtocolPeer do
     frame
   end
 
-  def encode(message), do: message.__struct__.encode!(message) |> IO.iodata_to_binary()
+  def encode(message), do: message.__struct__.encode!(message) |> elem(0) |> IO.iodata_to_binary()
 
   defp certificate(details, signer) do
     raw = encode(details)

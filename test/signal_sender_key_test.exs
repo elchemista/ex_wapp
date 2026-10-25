@@ -415,6 +415,7 @@ defmodule ExWapp.SignalSenderKeyTest do
     text_payload =
       ExWapp.Messages.build_text_proto("group message works", [])
       |> WAWebProtobufsE2E.Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     skmsg_ciphertext =

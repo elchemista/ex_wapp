@@ -172,6 +172,7 @@ defmodule ExWapp.SenderKeyMigrationTest do
             axolotlSenderKeyDistributionMessage: axolotl
           }
         })
+        |> elem(0)
         |> IO.iodata_to_binary()
 
       assert {:ok, 0} =

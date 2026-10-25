@@ -15,6 +15,9 @@ defmodule ExWapp.Media do
   """
   @type media_type :: :image | :audio | :document
 
+  @typedoc "Media kinds accepted by the download API, including history-sync blobs."
+  @type download_type :: media_type() | :history
+
   @typedoc """
   Accepted media input values when sending a message.
 

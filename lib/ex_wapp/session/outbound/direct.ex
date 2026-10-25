@@ -184,7 +184,7 @@ defmodule ExWapp.Session.Outbound.Direct do
   def build_payloads(%Message{} = proto, jid, opts)
       when is_binary(jid) and is_list(opts) do
     case Message.encode(proto) do
-      {:ok, iodata} ->
+      {:ok, iodata, _size} ->
         payload = IO.iodata_to_binary(iodata)
         recipient_payload = Encryption.pad_message(payload)
         own_device_destination = Keyword.get(opts, :own_device_destination_jid, jid)
@@ -462,7 +462,7 @@ defmodule ExWapp.Session.Outbound.Direct do
       }
     }
 
-    with {:ok, iodata} <- Message.encode(wrapped) do
+    with {:ok, iodata, _size} <- Message.encode(wrapped) do
       {:ok, IO.iodata_to_binary(iodata)}
     end
   end

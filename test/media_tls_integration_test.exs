@@ -1,7 +1,35 @@
 defmodule ExWapp.MediaTLSIntegrationTest do
   use ExUnit.Case, async: false
   alias ExWapp.Media
+  alias ExWapp.Binary.Node
+  alias ExWapp.Message.Handler.Inbound.Sync
+  alias ExWapp.Test.{FaultStore, HistoryBlob}
   @moduletag capture_log: true
+
+  defmodule MediaConnection do
+    def send_node(conn, %Node{attrs: %{"id" => id}} = node) do
+      %{session: session, host: host, owner: owner} = Agent.get(conn, & &1)
+      send(owner, {:media_conn_requested, node})
+
+      if host do
+        response = %Node{
+          tag: "iq",
+          attrs: %{"id" => id, "type" => "result"},
+          content: [
+            %Node{
+              tag: "media_conn",
+              attrs: %{"auth" => "test", "ttl" => "60"},
+              content: [%Node{tag: "host", attrs: %{"hostname" => host}}]
+            }
+          ]
+        }
+
+        send(session, {:connection_event, {:connection_message, response}})
+      end
+
+      :ok
+    end
+  end
 
   setup_all do
     dir = Path.join(System.tmp_dir!(), "ex_wapp_tls_#{System.unique_integer([:positive])}")
@@ -189,6 +217,206 @@ defmodule ExWapp.MediaTLSIntegrationTest do
              Media.HTTP.download(%{}, %Media.Ref{type: :image, direct_path: "/missing?x=1"},
                media_conn: %{hosts: [%{hostname: "localhost:#{port}"}]}
              )
+  end
+
+  test "the existing client download API supports history blobs and paths without a query", ctx do
+    {blob, body} = HistoryBlob.encrypted()
+    host = serve(ctx, 200, body)
+    %{client: client} = history_session(host)
+    ref = HistoryBlob.ref(blob)
+
+    assert {:ok, updated, %Media.Download{ref: ^ref, bytes: bytes}} =
+             ExWapp.download_media(client, ref)
+
+    assert updated.metadata.session_pid == client.metadata.session_pid
+    assert bytes == HistoryBlob.payload()
+    assert hd(updated.trace).operation == :download_media
+    assert_receive {:tls_request, :GET, path, _, ""}, 1000
+    assert URI.parse(path).path == "/history"
+    query = URI.decode_query(URI.parse(path).query)
+    assert query["mms-type"] == "md-msg-hist"
+    assert query["hash"] == Base.url_encode64(blob.file_enc_sha256)
+  end
+
+  test "history blobs are automatically imported, queryable and idempotent", ctx do
+    {blob, body} = HistoryBlob.encrypted()
+    host = serve(ctx, 200, body)
+    session_ctx = history_session(host)
+    jid = "15550001111@s.whatsapp.net"
+
+    # Live traffic can precede a slower history download.
+    :ok =
+      ExWapp.Chat.add_message(session_ctx.store, jid, %{
+        id: "live",
+        text: "latest",
+        from_me: false,
+        timestamp: 900
+      })
+
+    enqueue_history(session_ctx, blob)
+
+    assert_receive {:ex_wapp_session, :history_sync, :completed,
+                    %{sync_type: :RECENT, chunk_order: 2, conversations: 1, messages: 2}},
+                   2000
+
+    assert {:ok, [%{id: "live"}, %{id: "history-2"}, %{id: "history-1"}]} =
+             ExWapp.get_messages(session_ctx.client, jid)
+
+    assert {:ok, %{last_message_timestamp: 900}} = ExWapp.get_chat(session_ctx.client, jid)
+
+    assert ExWapp.Store.get(session_ctx.store, :lid_mapping)[{:lid_to_pn, "90000000011@lid"}] ==
+             jid
+
+    # A repeated chunk must not duplicate messages or discard newer local ones.
+    new_host = serve(ctx, 200, body)
+    Agent.update(session_ctx.conn, &%{&1 | host: new_host})
+    enqueue_history(session_ctx, blob)
+    assert_receive {:ex_wapp_session, :history_sync, :completed, _}, 2000
+
+    assert {:ok, messages} = ExWapp.get_messages(session_ctx.client, jid)
+    assert Enum.map(messages, & &1.id) == ["live", "history-2", "history-1"]
+  end
+
+  test "a corrupt history download reports failure and preserves the local messages", ctx do
+    {blob, body} = HistoryBlob.encrypted()
+    <<first, rest::binary>> = body
+    host = serve(ctx, 200, <<Bitwise.bxor(first, 1), rest::binary>>)
+    session_ctx = history_session(host)
+    enqueue_history(session_ctx, blob)
+
+    assert_receive {:ex_wapp_session, :history_sync, :failed, :invalid_media_hmac, _}, 2000
+    assert ExWapp.Chat.list(session_ctx.store) == []
+    assert ExWapp.Session.state(session_ctx.session) == :connected
+    refute_received {:ex_wapp_session, :history_sync, :completed, _}
+  end
+
+  test "history persistence errors are not reported as completed", ctx do
+    {blob, body} = HistoryBlob.encrypted()
+    host = serve(ctx, 200, body)
+    store = FaultStore.new()
+    FaultStore.arm(store, :begin_batch, {:return, {:error, :disk_full}})
+    session_ctx = history_session(host, store)
+    enqueue_history(session_ctx, blob)
+
+    assert_receive {:ex_wapp_session, :history_sync, :failed, :disk_full, _}, 2000
+    assert ExWapp.Chat.list(store) == []
+    refute_received {:ex_wapp_session, :history_sync, :completed, _}
+    stop_supervised!(:history_session)
+  end
+
+  test "a final history flush failure never emits a successful completion", ctx do
+    # No conversation batches: this failure belongs to the chunk's final flush.
+    payload =
+      %WAWebProtobufsHistorySync.HistorySync{syncType: :NON_BLOCKING_DATA}
+      |> WAWebProtobufsHistorySync.HistorySync.encode!()
+      |> elem(0)
+      |> IO.iodata_to_binary()
+      |> :zlib.compress()
+
+    {blob, body} = HistoryBlob.encrypted(payload)
+    host = serve(ctx, 200, body)
+    store = FaultStore.new()
+    FaultStore.arm(store, :finish_batch, {:return, {:error, :disk_full}})
+    session_ctx = history_session(host, store)
+    enqueue_history(session_ctx, blob)
+
+    assert_receive {:ex_wapp_session, :history_sync, :failed, :disk_full, _}, 2000
+    refute_received {:ex_wapp_session, :history_sync, :completed, _}
+    assert ExWapp.Session.state(session_ctx.session) == :connected
+    stop_supervised!(:history_session)
+  end
+
+  test "malformed downloaded history does not create local chats", ctx do
+    {blob, body} = HistoryBlob.encrypted(:zlib.compress(<<10, 255>>))
+    host = serve(ctx, 200, body)
+    session_ctx = history_session(host)
+    enqueue_history(session_ctx, blob)
+
+    assert_receive {:ex_wapp_session, :history_sync, :failed, _, _}, 2000
+    assert ExWapp.Chat.list(session_ctx.store) == []
+    refute_received {:ex_wapp_session, :history_sync, :completed, _}
+  end
+
+  test "a history task crash is observable and leaves the session usable" do
+    session_ctx = history_session(nil)
+    {blob, _} = HistoryBlob.encrypted()
+    enqueue_history(session_ctx, blob)
+    assert_receive {:media_conn_requested, _}, 1000
+    [operation] = :sys.get_state(session_ctx.session).send_coordinator.operations |> Map.values()
+    Process.exit(operation.pid, :kill)
+
+    assert_receive {:ex_wapp_session, :history_sync, :failed, {:send_worker_exited, :killed}, _},
+                   1000
+
+    assert ExWapp.Session.state(session_ctx.session) == :connected
+    assert ExWapp.Chat.list(session_ctx.store) == []
+    refute_received {:ex_wapp_session, :history_sync, :completed, _}
+  end
+
+  test "disconnect cancels a pending history task and ignores its late completion" do
+    session_ctx = history_session(nil)
+    {blob, _} = HistoryBlob.encrypted()
+    enqueue_history(session_ctx, blob)
+    assert_receive {:media_conn_requested, _}, 1000
+
+    [operation] = :sys.get_state(session_ctx.session).send_coordinator.operations |> Map.values()
+    assert {:history_sync, _} = operation.label
+    monitor = Process.monitor(operation.pid)
+
+    # The session remains responsive while the history task waits for the CDN lookup.
+    assert ExWapp.Session.state(session_ctx.session) == :connected
+    :ok = ExWapp.Session.disconnect(session_ctx.session)
+    assert_receive {:DOWN, ^monitor, :process, _, _}, 1000
+    assert ExWapp.Session.state(session_ctx.session) == :idle
+
+    send(
+      session_ctx.session,
+      {:send_worker_finished, operation.pid, {:ok, %{conversations: 99, messages: 99}}}
+    )
+
+    assert ExWapp.Session.state(session_ctx.session) == :idle
+    assert ExWapp.Chat.list(session_ctx.store) == []
+    refute_received {:ex_wapp_session, :history_sync, :completed, _}
+  end
+
+  defp history_session(host, store \\ ExWapp.Store.Memory.new()) do
+    id = "history-blob-#{System.unique_integer([:positive])}"
+    :ok = ExWapp.subscribe(id)
+
+    session =
+      start_supervised!(%{
+        id: :history_session,
+        start:
+          {ExWapp.Session, :start_link,
+           [[store: store, session_id: id, transport: MediaConnection, reconnect: false]]}
+      })
+
+    owner = self()
+    conn = start_supervised!({Agent, fn -> %{session: session, host: host, owner: owner} end})
+    :sys.replace_state(session, &%{&1 | conn: conn, status: :connected, transport_ready?: true})
+
+    client =
+      ExWapp.new(
+        store: store,
+        transport: ExWapp.Client.Transport.Session,
+        metadata: %{session_pid: session}
+      )
+
+    %{session: session, conn: conn, client: client, store: store}
+  end
+
+  defp enqueue_history(ctx, blob) do
+    message = %{message_content_type: :protocol, protocol_payload: HistoryBlob.notification(blob)}
+    state = :sys.get_state(ctx.session)
+
+    assert Sync.ingest(
+             message,
+             ctx.session,
+             state,
+             "15550009999@s.whatsapp.net",
+             "blob-notification",
+             true
+           ) == state
   end
 
   defp serve(ctx, status, response) do

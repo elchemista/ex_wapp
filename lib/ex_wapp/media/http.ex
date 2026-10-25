@@ -120,12 +120,13 @@ defmodule ExWapp.Media.HTTP do
        when is_binary(direct_path) and direct_path != "" do
     hash = Base.url_encode64(ref.file_enc_sha256 || <<>>)
     mms_type = mms_type(ref.type)
+    separator = if String.contains?(direct_path, "?"), do: "&", else: "?"
 
     # When the full CDN URL is missing, we reconstruct candidates from `media_conn`
     # hosts plus the server-provided direct path.
     urls =
       Enum.map(hosts, fn %{hostname: host} ->
-        "https://#{host}#{direct_path}&hash=#{hash}&mms-type=#{mms_type}&__wa-mms="
+        "https://#{host}#{direct_path}#{separator}hash=#{hash}&mms-type=#{mms_type}&__wa-mms="
       end)
 
     try_download_urls(urls, hosts, ref, opts)
@@ -200,10 +201,11 @@ defmodule ExWapp.Media.HTTP do
     end
   end
 
-  @spec mms_type(Media.media_type()) :: binary()
+  @spec mms_type(Media.download_type()) :: binary()
   defp mms_type(:image), do: "image"
   defp mms_type(:audio), do: "audio"
   defp mms_type(:document), do: "document"
+  defp mms_type(:history), do: "md-msg-hist"
 
   @spec uri(term()) :: binary()
   defp uri(value), do: value |> to_string() |> URI.encode_www_form()

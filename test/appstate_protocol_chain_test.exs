@@ -170,6 +170,7 @@ defmodule ExWapp.AppState.ProtocolChainTest do
       second_patch
       |> Map.put(:patchMAC, flip_first(second_patch.patchMAC))
       |> SyncdPatch.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     store =
@@ -204,7 +205,7 @@ defmodule ExWapp.AppState.ProtocolChainTest do
     assert {:ok, patch} = SyncdPatch.decode(encoded)
 
     assert {:ok, [decoded], ^encoded_state, ^encoded_macs} =
-             Codec.decode_patch(
+             Engine.decode_patch(
                patch,
                "regular_low",
                ctx.initial_state,

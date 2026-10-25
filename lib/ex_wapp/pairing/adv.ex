@@ -102,7 +102,7 @@ defmodule ExWapp.Pairing.ADV do
       end
 
     case ADVSignedDeviceIdentity.encode(payload) do
-      {:ok, iodata} -> {:ok, IO.iodata_to_binary(iodata)}
+      {:ok, iodata, _size} -> {:ok, IO.iodata_to_binary(iodata)}
       {:error, reason} -> {:error, {:adv_signed_identity_encode, reason}}
     end
   end
@@ -202,8 +202,26 @@ defmodule ExWapp.Pairing.ADV do
   @spec decode_container(binary()) :: {:ok, struct()} | {:error, {:adv_container_decode, term()}}
   defp decode_container(bytes) do
     case ADVSignedDeviceIdentityHMAC.decode(bytes) do
-      {:ok, %ADVSignedDeviceIdentityHMAC{} = container} -> {:ok, container}
-      {:error, reason} -> {:error, {:adv_container_decode, reason}}
+      {:ok, %ADVSignedDeviceIdentityHMAC{accountType: nil} = container} ->
+        # Protox 2 preserves a known tag with another wire type as unknown.
+        # Tag 3 is a bytes signature in a direct identity and an enum in an
+        # HMAC envelope. An explicit envelope accountType always wins, so a
+        # bad HMAC cannot fall back merely by appending a signature field.
+        direct_identity? =
+          Enum.any?(ADVSignedDeviceIdentityHMAC.unknown_fields(container), fn
+            {3, 2, <<_::binary-size(64)>>} -> true
+            _ -> false
+          end)
+
+        if direct_identity?,
+          do: {:error, {:adv_container_decode, :direct_signed_identity}},
+          else: {:ok, container}
+
+      {:ok, %ADVSignedDeviceIdentityHMAC{} = container} ->
+        {:ok, container}
+
+      {:error, reason} ->
+        {:error, {:adv_container_decode, reason}}
     end
   end
 

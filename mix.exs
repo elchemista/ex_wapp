@@ -1,7 +1,7 @@
 defmodule ExWapp.MixProject do
   use Mix.Project
 
-  @version "0.1.4"
+  @version "0.1.5"
   @author "Yuriy Zhar"
   @source_url "https://github.com/elchemista/ex_wapp"
   @author_url "https://github.com/elchemista"
@@ -38,15 +38,14 @@ defmodule ExWapp.MixProject do
 
   defp deps do
     [
-      {:ed25519, "~> 1.4"},
-      {:protox, "~> 1.7"},
-      {:phoenix_pubsub, "~> 2.1"},
-      {:telemetry, "~> 1.2"},
-      {:websockex, "~> 0.4"},
-      {:qr_code, "~> 3.2.0"},
-      {:credo, "~> 1.6", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.3", only: [:dev, :test], runtime: false},
-      {:ex_doc, "~> 0.38", only: :dev, runtime: false}
+      {:ed25519, "~> 1.5.2"},
+      # Generated wire modules call Protox encoders/decoders at runtime.
+      {:protox, "~> 2.1"},
+      {:phoenix_pubsub, "~> 2.4.1"},
+      {:websockex, "~> 0.5.1"},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false}
     ]
   end
 
@@ -105,6 +104,9 @@ defmodule ExWapp.MixProject do
           ExWapp.Client.Transport,
           ExWapp.Events,
           ExWapp.JSON.Library,
+          ExWapp.QR.Renderer,
+          ExWapp.Telemetry,
+          ExWapp.Telemetry.Adapter,
           ExWapp.Store
         ]
       ]

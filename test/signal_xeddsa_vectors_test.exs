@@ -1,7 +1,13 @@
 defmodule ExWapp.Signal.XEdDSAVectorsTest do
   use ExUnit.Case, async: true
 
+  import Bitwise
+
+  alias ExWapp.Noise.Certificate
   alias ExWapp.Signal.Keys
+
+  @field_prime (1 <<< 255) - 19
+  @group_order (1 <<< 252) + 27_742_317_777_372_353_535_851_937_790_883_648_493
 
   # Vectors generated with libsignal's Curve25519 signing implementation.
   # They protect the wire-level XEdDSA compatibility required by WhatsApp.
@@ -76,6 +82,95 @@ defmodule ExWapp.Signal.XEdDSAVectorsTest do
     end
   end
 
+  describe "Ed25519 library versus OTP verification" do
+    test "libsignal signatures agree after conversion for both XEdDSA sign bits" do
+      sign_bits =
+        for vector <- @libsignal_vectors do
+          %{pub: public, msg: message, sig: signature} = decode(vector)
+          {ed_public, ed_signature} = ed25519_inputs(public, signature)
+
+          # Check the test conversion against the dependency's reverse mapping.
+          assert Ed25519.to_curve25519(ed_public, :public) == public
+          assert Ed25519.valid_signature?(ed_signature, message, ed_public)
+          assert :crypto.verify(:eddsa, :none, message, ed_signature, [ed_public, :ed25519])
+          assert Keys.verify_message(public, message, signature)
+          assert Certificate.verify_signature(public, message, signature)
+
+          # The WhatsApp wire key/signature cannot be passed to Ed25519 as-is.
+          refute :crypto.verify(:eddsa, :none, message, signature, [public, :ed25519])
+          band(:binary.last(signature), 0x80)
+        end
+
+      assert Enum.sort(Enum.uniq(sign_bits)) == [0, 0x80]
+    end
+
+    test "both backends reject changed messages, scalar bytes and valid but wrong keys" do
+      for vector <- @libsignal_vectors do
+        %{pub: public, msg: message, sig: signature} = decode(vector)
+        {ed_public, ed_signature} = ed25519_inputs(public, signature)
+        <<r::binary-size(32), first_s, rest_s::binary>> = ed_signature
+        changed_signature = r <> <<bxor(first_s, 1)>> <> rest_s
+        {wrong_public, _private} = :crypto.generate_key(:eddsa, :ed25519)
+
+        for {key, msg, sig} <- [
+              {ed_public, message <> <<0>>, ed_signature},
+              {ed_public, message, changed_signature},
+              {wrong_public, message, ed_signature}
+            ] do
+          refute Ed25519.valid_signature?(sig, msg, key)
+          refute :crypto.verify(:eddsa, :none, msg, sig, [key, :ed25519])
+        end
+      end
+    end
+
+    test "noncanonical S plus the group order is accepted by the library but rejected by OTP" do
+      # This is a deliberate compatibility difference, not an equivalence claim.
+      # RFC 8032 section 5.1.7 requires S < L; ed25519 1.5.2 reduces S modulo L.
+      # https://www.rfc-editor.org/rfc/rfc8032#section-5.1.7
+      for vector <- @libsignal_vectors do
+        %{pub: public, msg: message, sig: signature} = decode(vector)
+
+        {ed_public, <<r::binary-size(32), s::little-size(256)>>} =
+          ed25519_inputs(public, signature)
+
+        assert s < @group_order
+        noncanonical = <<r::binary, s + @group_order::little-size(256)>>
+        assert Ed25519.valid_signature?(noncanonical, message, ed_public)
+        refute :crypto.verify(:eddsa, :none, message, noncanonical, [ed_public, :ed25519])
+
+        <<head::binary-size(63), last>> = noncanonical
+        sign_bit = band(:binary.last(signature), 0x80)
+        wire_signature = head <> <<bor(last, sign_bit)>>
+        assert Keys.verify_message(public, message, wire_signature)
+        assert Certificate.verify_signature(public, message, wire_signature)
+      end
+    end
+
+    test "invalid points and short keys have different raw error contracts" do
+      %{pub: public, msg: message, sig: signature} = decode(hd(@libsignal_vectors))
+
+      {ed_public, <<_r::binary-size(32), s::binary-size(32)>>} =
+        ed25519_inputs(public, signature)
+
+      invalid_point_signature = <<0::256, s::binary>>
+
+      assert_raise RuntimeError, fn ->
+        Ed25519.valid_signature?(invalid_point_signature, message, ed_public)
+      end
+
+      refute :crypto.verify(:eddsa, :none, message, invalid_point_signature, [ed_public, :ed25519])
+
+      refute Keys.verify_message(public, message, invalid_point_signature)
+
+      short_key = binary_part(ed_public, 0, 31)
+      refute Ed25519.valid_signature?(signature, message, short_key)
+
+      assert_raise ErlangError, fn ->
+        :crypto.verify(:eddsa, :none, message, signature, [short_key, :ed25519])
+      end
+    end
+  end
+
   describe "sign_message/2 interoperability" do
     test "signatures verify against the libsignal vector public keys" do
       for vector <- @libsignal_vectors do
@@ -84,6 +179,7 @@ defmodule ExWapp.Signal.XEdDSAVectorsTest do
 
         assert byte_size(signature) == 64
         assert Keys.verify_message(public, message, signature)
+        assert_otp_signature(public, message, signature)
       end
     end
 
@@ -101,6 +197,7 @@ defmodule ExWapp.Signal.XEdDSAVectorsTest do
 
         assert Keys.verify_message(key_pair.public, message, signature)
         refute Keys.verify_message(key_pair.public, message <> <<1>>, signature)
+        assert_otp_signature(key_pair.public, message, signature)
       end
     end
 
@@ -110,6 +207,31 @@ defmodule ExWapp.Signal.XEdDSAVectorsTest do
 
       assert Keys.verify(identity.public, signed_prekey.public, signed_prekey.signature)
       refute Keys.verify(identity.public, <<0::256>>, signed_prekey.signature)
+
+      assert_otp_signature(
+        identity.public,
+        <<5, signed_prekey.public::binary>>,
+        signed_prekey.signature
+      )
     end
+  end
+
+  defp assert_otp_signature(public, message, signature) do
+    {ed_public, ed_signature} = ed25519_inputs(public, signature)
+    assert :crypto.verify(:eddsa, :none, message, ed_signature, [ed_public, :ed25519])
+  end
+
+  # Test-only bridge: y = (u - 1)/(u + 1), then move the XEdDSA sign bit
+  # from the signature's final byte to the Edwards public key.
+  defp ed25519_inputs(public, <<head::binary-size(63), last>>) do
+    u = :binary.decode_unsigned(public, :little)
+
+    inverse =
+      :crypto.mod_pow(u + 1, @field_prime - 2, @field_prime)
+      |> :binary.decode_unsigned()
+
+    y = Integer.mod((u - 1) * inverse, @field_prime)
+    encoded_public = bor(y, band(last, 0x80) <<< 248)
+    {<<encoded_public::little-size(256)>>, head <> <<band(last, 0x7F)>>}
   end
 end

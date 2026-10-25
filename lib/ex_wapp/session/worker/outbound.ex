@@ -329,7 +329,7 @@ defmodule ExWapp.Session.Worker.Outbound do
              group_info.addressing_mode
            ),
          proto <- outbound_proto(text, opts),
-         {:ok, iodata} <- Message.encode(proto),
+         {:ok, iodata, _size} <- Message.encode(proto),
          payload = IO.iodata_to_binary(iodata),
          {:ok, distribution_payload, skmsg_payload} <-
            Group.build_sender_key_payloads(store, group_jid, payload),

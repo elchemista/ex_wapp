@@ -33,6 +33,58 @@ defmodule ExWapp.OutboundSessionRefreshTest do
     end
   end
 
+  test "text and peer protocol sends fail while the transport is unavailable" do
+    proto = %WAWebProtobufsE2E.Message{conversation: "must not send"}
+
+    for state <- [%{status: :disconnected}, %{status: :connected, conn: nil}] do
+      assert {:error, {:not_connected, status}} =
+               Outbound.send_text_worker(self(), state, "123@s.whatsapp.net", "text")
+
+      assert status == state.status
+
+      assert {:error, {:not_connected, ^status}} =
+               Outbound.send_peer_proto_worker(self(), state, proto)
+
+      assert {:error, {:not_connected, ^status}} =
+               Outbound.send_proto_worker(self(), state, "123@s.whatsapp.net", proto)
+    end
+
+    refute_received {:transport_send, _, _}
+  end
+
+  test "peer protocol sends without a paired account return an explicit error" do
+    store = Memory.new()
+    on_exit(fn -> Memory.stop(store) end)
+    state = %{store: store, conn: self(), status: :connected}
+
+    assert {:error, :missing_local_account_jid} =
+             Outbound.send_peer_proto_worker(self(), state, %WAWebProtobufsE2E.Message{})
+
+    refute_received {:transport_send, _, _}
+  end
+
+  test "a final batch flush failure does not turn a transmitted message into a failed send" do
+    %{store: original, local_signal: local} = build_local_store("11111111111@s.whatsapp.net")
+    store = ExWapp.Test.FaultStore.new(initial_data: ExWapp.Store.load!(original))
+    recipient = "22222222222@s.whatsapp.net"
+    bundle = build_remote_bundle(recipient)
+    sessions = build_existing_session(local, recipient, bundle)
+    session = start_supervised!({SessionSink, initial: sessions})
+
+    conn =
+      start_fake_conn(self(), %{
+        device_map: %{recipient => [recipient]},
+        prekey_bundles: %{recipient => bundle}
+      })
+
+    state = outbound_state(store, conn, sessions)
+
+    ExWapp.Test.FaultStore.arm(store, :finish_batch, {:return, {:error, :disk_full}})
+    assert {:ok, id} = Outbound.send_text_worker(session, state, recipient, "sent once")
+    assert_receive {:message_send, %Binary.Node{attrs: %{"id" => ^id}}}
+    refute_received {:message_send, _}
+  end
+
   test "recipient prekey refresh expands to all discovered recipient devices when one is stale" do
     local_jid = "11111111111@s.whatsapp.net"
     recipient_base_jid = "22222222222@s.whatsapp.net"

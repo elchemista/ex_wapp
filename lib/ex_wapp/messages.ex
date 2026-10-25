@@ -113,7 +113,7 @@ defmodule ExWapp.Messages do
 
     # Encode to protobuf binary
     case Message.encode(proto) do
-      {:ok, iodata} ->
+      {:ok, iodata, _size} ->
         payload = IO.iodata_to_binary(iodata)
 
         # Build the binary node

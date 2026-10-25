@@ -65,44 +65,16 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
        )
        when is_binary(payload) do
     case HistorySync.extract_from_message(payload) do
-      {:ok,
-       %{sync_type: sync_type, conversations: conversations, lid_mappings: lid_mappings} = parsed} ->
-        target = Common.chat_target(session, state)
-
-        history_message_count =
-          Enum.reduce(conversations, 0, fn conversation, count ->
-            count + length(Map.get(conversation, :messages, []))
-          end)
-
-        if target do
-          Enum.each(conversations, &upsert_chat_from_history_sync(target, &1))
-        end
-
-        call_log_count =
-          ingest_history_call_log(target, Map.get(parsed, :call_log_records, []), state)
-
-        persist_history_sync_lid_mappings(state, lid_mappings)
-        privacy_token_count = persist_history_sync_privacy_tokens(state, conversations)
-
-        Logger.debug(
-          "[HISTORY_SYNC] Applied protocol history sync from=#{Log.reference(from)} id=#{Log.reference(id)} sync_type=#{inspect(sync_type)} conversations=#{length(conversations)} messages=#{history_message_count} lid_mappings=#{length(lid_mappings)} privacy_tokens=#{privacy_token_count} call_log_records=#{call_log_count}"
-        )
-
-        state
+      {:ok, parsed} ->
+        apply_history_sync(parsed, session, state, from, id)
 
       :not_history_sync ->
         state
 
       {:pending_blob, blob} ->
-        # Downloading blob chunks is not implemented; log at :info (the default
-        # level) so an incomplete history is visible instead of silently missing.
-        # ExWapp.Proto.HistorySync documents what closing this needs.
-        Logger.info(
-          "[HISTORY_SYNC] Skipping chunk delivered as media (blob download not implemented) " <>
-            "sync_type=#{inspect(blob.sync_type)} chunk_order=#{inspect(blob.chunk_order)} " <>
-            "progress=#{inspect(blob.progress)} file_length=#{inspect(blob.file_length)} " <>
-            "from=#{Log.reference(from)} id=#{Log.reference(id)}"
-        )
+        if is_pid(session) do
+          send(session, {:history_sync_blob, Map.get(state, :conn), blob, from, id})
+        end
 
         state
 
@@ -134,6 +106,39 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
          _own_sender?
        ),
        do: state
+
+  @doc false
+  @spec apply_history_sync(HistorySync.t(), term(), map(), term(), term()) :: map()
+  def apply_history_sync(
+        %{sync_type: sync_type, conversations: conversations, lid_mappings: lid_mappings} = parsed,
+        session,
+        state,
+        from,
+        id
+      ) do
+    target = Common.chat_target(session, state)
+
+    history_message_count =
+      Enum.reduce(conversations, 0, fn conversation, count ->
+        count + length(Map.get(conversation, :messages, []))
+      end)
+
+    if target do
+      Enum.each(conversations, &upsert_chat_from_history_sync(target, &1))
+    end
+
+    call_log_count =
+      ingest_history_call_log(target, Map.get(parsed, :call_log_records, []), state)
+
+    persist_history_sync_lid_mappings(state, lid_mappings)
+    privacy_token_count = persist_history_sync_privacy_tokens(state, conversations)
+
+    Logger.debug(
+      "[HISTORY_SYNC] Applied protocol history sync from=#{Log.reference(from)} id=#{Log.reference(id)} sync_type=#{inspect(sync_type)} conversations=#{length(conversations)} messages=#{history_message_count} lid_mappings=#{length(lid_mappings)} privacy_tokens=#{privacy_token_count} call_log_records=#{call_log_count}"
+    )
+
+    state
+  end
 
   @spec maybe_ingest_app_state_keys(map(), term(), map(), boolean()) :: map()
   defp maybe_ingest_app_state_keys(
@@ -420,7 +425,7 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
   # persisted shape as the raw protobuf bytes it always was.
   @spec encode_key_fingerprint(struct() | nil) :: binary() | nil
   defp encode_key_fingerprint(%_{} = fingerprint),
-    do: fingerprint.__struct__.encode!(fingerprint) |> IO.iodata_to_binary()
+    do: fingerprint.__struct__.encode!(fingerprint) |> elem(0) |> IO.iodata_to_binary()
 
   defp encode_key_fingerprint(_fingerprint), do: nil
 
@@ -449,12 +454,13 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
       |> maybe_put_sync_metadata(:muted_until, Map.get(conversation, :muted_until))
       |> maybe_put_sync_metadata(:is_group, Map.get(conversation, :is_group))
 
-    Chat.merge_metadata(target, jid, metadata)
+    :ok = Chat.merge_metadata(target, jid, metadata)
 
-    conversation
-    |> Map.get(:messages, [])
-    |> history_sync_chat_messages(jid)
-    |> maybe_merge_history_sync_chat_messages(target, jid)
+    :ok =
+      conversation
+      |> Map.get(:messages, [])
+      |> history_sync_chat_messages(jid)
+      |> maybe_merge_history_sync_chat_messages(target, jid)
 
     maybe_update_history_sync_contact_name(target, jid, conversation)
   end

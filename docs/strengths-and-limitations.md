@@ -17,8 +17,8 @@ drift that compilation alone would miss.
 ### Generated protocol code has a repeatable update path
 
 The protobuf updater replaces a complete checked-in snapshot, removes stale
-files, adds required typespecs, and is expected to compile with warnings as
-errors. Generated modules are kept behind hand-written translation layers so
+files, includes the generator's typespecs, and is expected to compile with
+warnings as errors. Generated modules are kept behind hand-written translation layers so
 schema churn does not need to become application API churn.
 
 ### Failure and recovery semantics are explicit
@@ -81,9 +81,11 @@ audio/video or answering calls.
 
 ### History synchronization is partial
 
-Inline history-sync payloads can be decoded and projected, but blob-delivered
-history chunks are not downloaded yet. Local chat/message queries therefore do
-not promise a complete remote account export.
+Inline and blob-delivered history chunks are decoded and their supported records
+are projected into the local store. Blob downloads run in background tasks and
+report completion or failure to session subscribers. Local chat/message queries
+only return retained records: they do not request additional history from the
+phone or promise a complete remote account export.
 
 ### Some coordination remains process-local
 

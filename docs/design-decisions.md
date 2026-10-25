@@ -43,6 +43,16 @@ misconfiguration fails explicitly rather than corrupting persisted data.
 
 **Choice:** generated Protox modules are checked in and updated as one snapshot.
 
+Protox is a runtime dependency because the generated code delegates primitive
+encoding, decoding, and varint handling to it. The external `protoc` generator
+is only needed for regeneration. Moving Protox to `only: [:dev, :test]` would
+leave production wire operations without their implementation.
+
+The snapshot uses Protox 2.1, which supplies its own message typespecs and no
+longer depends on Decimal or a JSON codec. Generated `encode/1` returns
+`{:ok, iodata, byte_count}` and `encode!/1` returns `{iodata, byte_count}`;
+ExWapp adapts these internally without changing client API return values.
+
 **Why:** private protocol schemas drift. Deterministic generated sources make a
 release reproducible and allow reviews to see schema changes. Stale generated
 files are removed during regeneration.
@@ -50,6 +60,23 @@ files are removed during regeneration.
 **Cost:** the repository contains many generated modules. They must not be
 edited by hand, and conventional line coverage is meaningless if every schema
 module is counted as maintained application logic.
+
+## Signature verification backend
+
+The `ed25519` dependency is retained. Differential tests compare its verifier
+with OTP's `:crypto.verify(:eddsa, :none, message, signature, [key, :ed25519])`
+using the existing libsignal vectors and locally generated signed prekeys.
+Valid signatures agree after converting the Montgomery public key to Edwards
+and relocating the XEdDSA sign bit; passing WhatsApp's wire bytes directly to
+the OTP verifier does not work.
+
+They are not equivalent for every input: `ed25519` 1.5.2 accepts a signature
+with `S + L` in place of `S`, while OTP 29.1.1 / OpenSSL 3.6.5 rejects it.
+[RFC 8032 section 5.1.7](https://www.rfc-editor.org/rfc/rfc8032#section-5.1.7)
+requires `S < L`. Invalid points and key lengths also have different exception
+behavior. Replacing the dependency therefore needs an explicit compatibility
+decision and error handling; these tests do not establish a universal drop-in
+replacement. XEdDSA signing remains implemented in `ExWapp.Signal.Keys`.
 
 ## Per-key mutation serialization
 

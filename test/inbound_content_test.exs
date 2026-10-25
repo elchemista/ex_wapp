@@ -12,6 +12,7 @@ defmodule ExWapp.Message.Handler.Inbound.ContentTest do
       "hello from inbound"
       |> Messages.build_text_proto()
       |> Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     message_data = %{
@@ -52,6 +53,7 @@ defmodule ExWapp.Message.Handler.Inbound.ContentTest do
         }
       }
       |> Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     decoded =
@@ -75,6 +77,7 @@ defmodule ExWapp.Message.Handler.Inbound.ContentTest do
       "distribution"
       |> Messages.build_text_proto()
       |> Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     decoded =
@@ -120,7 +123,7 @@ defmodule ExWapp.Message.Handler.Inbound.ContentTest do
     ]
 
     Enum.each(cases, fn {proto, expected_kind, expected_media_type} ->
-      plaintext = IO.iodata_to_binary(Message.encode!(proto))
+      plaintext = IO.iodata_to_binary(elem(Message.encode!(proto), 0))
 
       decoded =
         Content.decode_decrypted(%{

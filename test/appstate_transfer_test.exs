@@ -260,7 +260,7 @@ defmodule ExWapp.AppStateTransferTest do
     [%Node{content: %Binary.Raw{data: bytes}}] = collection(retried).content
 
     assert {:ok, [mutation], next_state, _} =
-             Codec.decode_patch(
+             Engine.decode_patch(
                SyncdPatch.decode!(bytes),
                @collection,
                ctx.state1,
@@ -389,7 +389,7 @@ defmodule ExWapp.AppStateTransferTest do
         ] do
       mac = Crypto.compute_content_mac(0, encrypted, ctx.key_id, keys.value_mac)
       record = %{mutation.record | value: %{mutation.record.value | blob: encrypted <> mac}}
-      assert {:error, reason} = Codec.decode_mutations([%{mutation | record: record}], ctx.keys)
+      assert {:error, reason} = Engine.decode_mutations([%{mutation | record: record}], ctx.keys)
       assert reason == expected or (is_tuple(reason) and elem(reason, 0) == expected)
       assert {:error, :not_found} = Chat.get(ctx.store, @jid)
     end
@@ -404,22 +404,22 @@ defmodule ExWapp.AppStateTransferTest do
           {%{ctx.first | snapshotMAC: nil}, :invalid_snapshot_mac},
           {%{ctx.first | patchMAC: nil}, :invalid_patch_mac}
         ] do
-      assert {:error, ^reason} = Codec.decode_patch(patch, @collection, initial, %{}, ctx.keys)
+      assert {:error, ^reason} = Engine.decode_patch(patch, @collection, initial, %{}, ctx.keys)
     end
 
     [mutation] = ctx.first.mutations
 
     assert {:error, :invalid_key_store_or_id} =
-             Codec.decode_mutations([%{mutation | record: nil}], ctx.keys)
+             Engine.decode_mutations([%{mutation | record: nil}], ctx.keys)
 
     assert {:error, :invalid_record_value} =
-             Codec.decode_mutations(
+             Engine.decode_mutations(
                [%{mutation | record: %{mutation.record | value: nil}}],
                ctx.keys
              )
 
     bad_keys = Map.new(ctx.keys, fn {id, _} -> {id, %{data: <<1>>}} end)
-    assert {:error, {:invalid_key_entry, _}} = Codec.decode_mutations([mutation], bad_keys)
+    assert {:error, {:invalid_key_entry, _}} = Engine.decode_mutations([mutation], bad_keys)
     Store.put(ctx.store, :app_state_keys, %{"invalid-hex" => %{data: ctx.key}})
     assert {:error, {:invalid_key_id_hex, "invalid-hex"}} = Codec.latest_app_state_key(ctx.store)
   end

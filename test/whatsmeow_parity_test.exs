@@ -46,6 +46,7 @@ defmodule ExWapp.WhatsmeowParityTest do
     first_payload =
       ExWapp.Messages.build_text_proto("hello from parity test", [])
       |> WAWebProtobufsE2E.Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     {:ok, first_ciphertext, :prekey, alice_sessions} =
@@ -91,6 +92,7 @@ defmodule ExWapp.WhatsmeowParityTest do
     second_payload =
       ExWapp.Messages.build_text_proto("second message", [])
       |> WAWebProtobufsE2E.Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     {:ok, second_ciphertext, :prekey, _alice_sessions_2} =
@@ -205,6 +207,7 @@ defmodule ExWapp.WhatsmeowParityTest do
     payload =
       ExWapp.Messages.build_text_proto("second enc candidate works", [])
       |> WAWebProtobufsE2E.Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     {:ok, valid_ciphertext, :prekey, _alice_sessions} =

@@ -525,6 +525,10 @@ defmodule ExWapp.Chat do
 
   defp maybe_update_non_neg_integer(chat, field, metadata) do
     case fetch_metadata(metadata, field) do
+      {:ok, value} when field == :last_message_timestamp and is_integer(value) and value >= 0 ->
+        # An older history chunk must not move a chat behind messages received live.
+        Map.put(chat, field, max(Map.get(chat, field) || 0, value))
+
       {:ok, value} when is_integer(value) and value >= 0 ->
         Map.put(chat, field, value)
 

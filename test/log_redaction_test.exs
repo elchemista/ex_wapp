@@ -164,4 +164,59 @@ defmodule ExWapp.LogRedactionTest do
     assert log =~ "[FILTERED]"
     refute log =~ secret
   end
+
+  test "diagnostic summaries retain sizes without exposing nested or opaque values" do
+    alias ExWapp.Log
+
+    secret = "do-not-log-this"
+    assert Log.term_summary(secret) == "binary(bytes=#{byte_size(secret)})"
+    assert Log.term_summary([secret]) == "list(length=1)"
+    assert Log.term_summary(make_ref()) == "term"
+
+    nested = {:error, {:nested, {:again, {:last, {secret, self()}}}}}
+    assert {:error, {:nested, {:again, {:last, :redacted_nested_term}}}} = Log.safe_term(nested)
+
+    assert {:resources, :reference, :function, :term} ==
+             Log.safe_term({:resources, make_ref(), fn -> secret end, <<1::1>>})
+
+    assert %{
+             count: 2,
+             offline: true,
+             type: "[FILTERED]",
+             code: "[binary:65]",
+             class: "[FILTERED]"
+           } =
+             Log.attrs(%{
+               count: 2,
+               offline: true,
+               type: %{secret: secret},
+               code: String.duplicate("x", 65),
+               class: secret <> " with spaces"
+             })
+
+    assert Log.attrs([secret]) == "[FILTERED]"
+  end
+
+  test "plaintext diagnostics require an explicit opt-in and can be disabled again" do
+    alias ExWapp.Log
+    previous = Application.fetch_env(:ex_wapp, :unsafe_plaintext_logs?)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:ex_wapp, :unsafe_plaintext_logs?, value)
+        :error -> Application.delete_env(:ex_wapp, :unsafe_plaintext_logs?)
+      end
+    end)
+
+    secret = "private-diagnostic-value"
+    Application.put_env(:ex_wapp, :unsafe_plaintext_logs?, true)
+    assert Log.reference(secret) == "[plain:#{inspect(secret)}]"
+    assert Log.attrs(%{auth: secret}) == %{auth: secret}
+    assert Log.attrs([secret]) == [secret]
+
+    Application.put_env(:ex_wapp, :unsafe_plaintext_logs?, false)
+    refute Log.reference(secret) =~ secret
+    assert Log.attrs(%{auth: secret}) == %{auth: "[FILTERED]"}
+    assert Log.attrs([secret]) == "[FILTERED]"
+  end
 end

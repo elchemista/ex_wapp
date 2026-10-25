@@ -81,6 +81,7 @@ defmodule ExWapp.Message.Handler.Inbound.SyncTest do
     original_message =
       Messages.build_text_proto("recovered from primary", [])
       |> Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     message_key =
@@ -127,7 +128,7 @@ defmodule ExWapp.Message.Handler.Inbound.SyncTest do
              Chat.messages(store, chat_jid, limit: 1)
   end
 
-  test "reports an unhandled media-delivered history chunk at :info without touching state" do
+  test "queues a trusted history blob for background download without touching state" do
     store = Memory.new(initial_data: %{chats: %{}})
     state = %{store: store}
 
@@ -144,27 +145,28 @@ defmodule ExWapp.Message.Handler.Inbound.SyncTest do
         }
       }
       |> Message.encode!()
+      |> elem(0)
       |> IO.iodata_to_binary()
 
     message_data = %{message_content_type: :protocol, protocol_payload: payload}
 
-    log =
-      ExUnit.CaptureLog.capture_log([level: :info], fn ->
-        assert Sync.ingest(
-                 message_data,
-                 self(),
-                 state,
-                 "15550009999@s.whatsapp.net",
-                 "HISTORY_BLOB_1",
-                 true
-               ) == state
-      end)
+    # A foreign device cannot cause a history download or store mutation.
+    assert Sync.ingest(message_data, self(), state, "foreign@lid", "untrusted", false) == state
+    refute_received {:history_sync_blob, _, _, _, _}
 
-    # Silently dropping the chunk is the failure mode to guard against: the log
-    # must name the sync type so an incomplete history is diagnosable.
-    assert log =~ "[HISTORY_SYNC]"
-    assert log =~ "blob download not implemented"
-    assert log =~ "sync_type=:RECENT"
+    assert Sync.ingest(
+             message_data,
+             self(),
+             state,
+             "15550009999@s.whatsapp.net",
+             "HISTORY_BLOB_1",
+             true
+           ) == state
+
+    assert_receive {:history_sync_blob, nil,
+                    %{sync_type: :RECENT, chunk_order: 2, direct_path: "/v/history-chunk"},
+                    "15550009999@s.whatsapp.net", "HISTORY_BLOB_1"}
+
     assert Chat.list(store) == []
   end
 
@@ -178,6 +180,7 @@ defmodule ExWapp.Message.Handler.Inbound.SyncTest do
           2,
           Messages.build_text_proto("should not be ingested", [])
           |> Message.encode!()
+          |> elem(0)
           |> IO.iodata_to_binary()
         )
 
@@ -221,6 +224,74 @@ defmodule ExWapp.Message.Handler.Inbound.SyncTest do
       message_content_type: :protocol,
       protocol_payload: length_delimited(12, protocol_message)
     }
+  end
+
+  test "a failed key-share write cannot start sync and a redelivery recovers" do
+    store = ExWapp.Test.FaultStore.new()
+    state = %{store: store}
+    data = app_state_key_share_message(<<1, 2>>, <<7::256>>)
+
+    for failure <- [{:return, {:error, :disk_full}}, :raise] do
+      ExWapp.Test.FaultStore.arm(store, :get_and_update, failure)
+      assert Sync.ingest(data, self(), state, "70000001111@lid", "keys", true) == state
+      assert Store.get(store, :app_state_keys, %{}) == %{}
+      refute_received {:app_state_initial_sync, _}
+    end
+
+    assert Sync.ingest(data, self(), state, "70000001111@lid", "keys", true) == state
+    assert Store.get(store, :app_state_keys)["0102"].data == <<7::256>>
+    assert_receive {:app_state_initial_sync, collections}
+    assert length(collections) == 5
+  end
+
+  test "malformed placeholder entries do not prevent a valid recovered message" do
+    store = Memory.new()
+    on_exit(fn -> Memory.stop(store) end)
+    state = %{store: store}
+    jid = "15550001111@s.whatsapp.net"
+
+    valid = %WAWebProtobufsWeb.WebMessageInfo{
+      key: %WACommon.MessageKey{remoteJID: jid, ID: "recovered", fromMe: false},
+      message: %Message{conversation: "valid recovered text"},
+      messageTimestamp: 1_754_000_100
+    }
+
+    missing_id = %{valid | key: %{valid.key | ID: nil}}
+    missing_chat = %{valid | key: %{valid.key | remoteJID: nil}}
+
+    encoded_entries =
+      Enum.map(
+        [
+          %WAWebProtobufsWeb.WebMessageInfo{key: %WACommon.MessageKey{}},
+          missing_id,
+          missing_chat,
+          valid
+        ],
+        fn info ->
+          bytes =
+            info |> WAWebProtobufsWeb.WebMessageInfo.encode!() |> elem(0) |> IO.iodata_to_binary()
+
+          length_delimited(3, length_delimited(4, length_delimited(1, bytes)))
+        end
+      )
+
+    # An empty operation result and a corrupt WebMessageInfo precede the valid entry.
+    response =
+      varint_field(1, 4) <>
+        length_delimited(3, <<>>) <>
+        length_delimited(3, length_delimited(4, length_delimited(1, <<255>>))) <>
+        IO.iodata_to_binary(encoded_entries)
+
+    data = %{
+      message_content_type: :protocol,
+      protocol_payload:
+        length_delimited(12, varint_field(2, 17) <> length_delimited(17, response))
+    }
+
+    assert Sync.ingest(data, self(), state, "70000009999@lid", "placeholder", true) == state
+    assert_receive {:new_message, ^jid, %{id: "recovered", text: "valid recovered text"}}
+    refute_received {:new_message, _, _}
+    assert [%{id: "recovered"}] = Chat.messages(store, jid)
   end
 
   defp length_delimited(field_number, value)

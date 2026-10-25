@@ -8,8 +8,8 @@ defmodule ExWapp.Session.Worker.PostAuth do
 
   require Logger
 
-  alias ExWapp.{Binary, Config, Log, MapPath, Store}
-  alias ExWapp.Session.Worker
+  alias ExWapp.{Binary, Config, JID, Log, MapPath, Store}
+  alias ExWapp.Session.{JIDUtils, Worker}
   alias ExWapp.Session.Worker.Subscribers
 
   @min_prekey_threshold 5
@@ -17,8 +17,11 @@ defmodule ExWapp.Session.Worker.PostAuth do
   @doc """
   Persists the LID value from the success node and creates own PN↔LID mapping.
   """
-  @spec persist_lid_and_mapping(Worker.t(), binary() | nil) :: Worker.t()
+  @spec persist_lid_and_mapping(Worker.t(), JID.t() | binary() | nil) :: Worker.t()
   def persist_lid_and_mapping(state, nil), do: state
+
+  def persist_lid_and_mapping(state, %JID{} = lid),
+    do: persist_lid_and_mapping(state, JID.to_string(lid))
 
   def persist_lid_and_mapping(state, lid) when is_binary(lid) do
     Logger.debug("[SESSION] Persisting LID from success")
@@ -416,7 +419,7 @@ defmodule ExWapp.Session.Worker.PostAuth do
 
         next_state =
           state
-          |> Map.put(:post_auth_phase, :awaiting_prekey_upload)
+          |> put_prekey_phase(:awaiting_prekey_upload)
           |> Map.put(:prekey_upload_iq_id, request_id)
           |> Map.put(:pending_prekey_upload, prekeys)
 
@@ -445,6 +448,9 @@ defmodule ExWapp.Session.Worker.PostAuth do
     {state, []}
   end
 
+  defp maybe_send_passive_iq(%{post_auth_phase: :awaiting_digest} = state, _build_passive_iq_fun),
+    do: {state, []}
+
   defp maybe_send_passive_iq(state, build_passive_iq_fun),
     do: send_passive_iq(state, build_passive_iq_fun)
 
@@ -465,16 +471,22 @@ defmodule ExWapp.Session.Worker.PostAuth do
     {next_state, [{:send_node, passive_iq}]}
   end
 
-  defp sync_post_auth_phase_after_prekey_step(%{post_auth_phase: :complete} = state), do: state
-
   defp sync_post_auth_phase_after_prekey_step(%{passive_iq_id: passive_iq_id} = state)
        when is_binary(passive_iq_id) do
-    Map.put(state, :post_auth_phase, :awaiting_passive_ack)
+    put_prekey_phase(state, :awaiting_passive_ack)
   end
 
   defp sync_post_auth_phase_after_prekey_step(state) do
-    Map.put(state, :post_auth_phase, :idle)
+    put_prekey_phase(state, :idle)
   end
+
+  # Activation runs concurrently with the prekey query/upload. Late prekey
+  # responses must not undo an acknowledged activation or restart its digest.
+  defp put_prekey_phase(%{post_auth_phase: phase} = state, _next_phase)
+       when phase in [:complete, :awaiting_digest],
+       do: state
+
+  defp put_prekey_phase(state, phase), do: Map.put(state, :post_auth_phase, phase)
 
   defp reset_tracking(state) do
     state
@@ -487,8 +499,8 @@ defmodule ExWapp.Session.Worker.PostAuth do
 
   defp normalize_jid_string(jid) when is_binary(jid) do
     jid
-    |> String.trim()
-    |> String.replace("@whatsapp.net", "@s.whatsapp.net")
+    |> JIDUtils.normalize_with_device()
+    |> JIDUtils.strip_device()
   end
 
   defp min_prekey_threshold(state) do

@@ -102,11 +102,37 @@ The host application owns supervision and the latest client value. The built-in
 runtime owns its internal workers. A store struct created by the caller remains
 caller-owned; a store created from client options can be closed by the runtime.
 
+## Optional integrations
+
+| Integration | Host configuration | Contract |
+| --- | --- | --- |
+| JSON | `config :ex_wapp, :json_library, MyJSON` | `ExWapp.JSON.Library` |
+| QR rendering | `config :ex_wapp, :qr_renderer, MyRenderer` or the Live helper's `:qr_renderer` option | `c:ExWapp.QR.Renderer.render/2` |
+| Instrumentation | `config :ex_wapp, :telemetry_adapter, MyMetrics` | `ExWapp.Telemetry.Adapter` |
+
+Pairing exposes the raw QR payload to the application; rendering is optional
+and uses no bundled QR library. The Live helper calls the selected renderer
+with `:qr_options`, writes its returned iodata to `:qr_path`, and returns render
+or file-write failures without retaining the QR subscription. See the README
+for an application-owned `qr_code` adapter example.
+
+Instrumentation is disabled unless configured. All ExWapp metrics, including
+client connection and session policy events, pass through `ExWapp.Telemetry`.
+Backend exceptions cannot fail protocol work. Callbacks run synchronously and
+must return promptly. The Erlang `:telemetry` module can be selected directly;
+custom backends only need `execute/3`, with handler management optional.
+WebSockex currently brings its own transitive `telemetry` dependency and owns
+its own events independently of ExWapp's adapter setting.
+
 ## Generated protocol boundary
 
 Protox modules under `lib/ex_wapp/wa_proto/` are generated artifacts, not
 hand-maintained application logic. The update script replaces the complete
-snapshot, removes stale output, injects the required typespecs, compiles with
+snapshot, removes stale output, keeps the generated typespecs, compiles with
 warnings as errors, and is backed by schema, round-trip, and wire-compatibility
 tests. Hand-written modules translate between those wire structures and the
 stable client-facing model.
+
+Generated encoders and decoders call Protox runtime functions. Keeping their
+source in the repository removes the production need for the `protoc`
+generator, but not for the `protox` library itself.
