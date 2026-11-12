@@ -37,6 +37,9 @@ defmodule ExWapp.ClientTransportSessionTest do
 
     assert {:ok, ^client, ^message_id} = Session.send_message(client, message)
 
-    assert_receive {:session_send_message, ^message}
+    assert_receive {:session_send_message, forwarded}
+    assert %{forwarded | opts: message.opts} == message
+    assert Keyword.fetch!(forwarded.opts, :retry_message_id) == message_id
+    assert is_integer(Keyword.fetch!(forwarded.opts, :send_deadline))
   end
 end

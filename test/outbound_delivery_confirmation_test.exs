@@ -88,14 +88,13 @@ defmodule ExWapp.OutboundDeliveryConfirmationTest do
     end
 
     test "a rejection is recorded even when the ack family differs" do
-      # 463 is the rejection this client actually receives for a wrong-family
-      # send. Losing it is worse than losing a success: the caller cannot tell
-      # the message was refused and retries until it is rate limited.
+      # Permanent refusals must be correlated across JID families too. A 463
+      # session rejection follows the separate asynchronous repair path below.
       store = store_with_pending(@lid, ["MSG_REJECTED"])
 
       assert {:ok, _state} =
                Receipt.handle_ack(
-                 ack(%{"id" => "MSG_REJECTED", "from" => @pn, "error" => "463"}),
+                 ack(%{"id" => "MSG_REJECTED", "from" => @pn, "error" => "403"}),
                  self(),
                  %{store: store}
                )
@@ -294,6 +293,9 @@ defmodule ExWapp.OutboundDeliveryConfirmationTest do
         session_id: session_id,
         store: nil,
         send_worker_sup: sup,
+        status: :connected,
+        conn: self(),
+        safety: ExWapp.Session.Worker.Safety.new(),
         outgoing_retry_payloads: %{"MSG_RETRY" => %{jid: @lid, text: "ciao"}}
       }
 
@@ -312,6 +314,9 @@ defmodule ExWapp.OutboundDeliveryConfirmationTest do
         session_id: session_id,
         store: nil,
         send_worker_sup: sup,
+        status: :connected,
+        conn: self(),
+        safety: ExWapp.Session.Worker.Safety.new(),
         retry_counters: %{"outbound_retry|#{@lid}|MSG_SCOPED" => 1},
         outgoing_retry_payloads: %{"MSG_SCOPED" => %{jid: @lid, text: "ciao"}}
       }
@@ -340,6 +345,9 @@ defmodule ExWapp.OutboundDeliveryConfirmationTest do
         session_id: session_id,
         store: nil,
         send_worker_sup: sup,
+        status: :connected,
+        conn: self(),
+        safety: ExWapp.Session.Worker.Safety.new(),
         runtime_cfg: %{
           send: %{max_session_repair_attempts: 2, session_repair_backoff_ms: [0, 30]}
         },
@@ -373,6 +381,9 @@ defmodule ExWapp.OutboundDeliveryConfirmationTest do
         session_id: session_id,
         store: nil,
         send_worker_sup: sup,
+        status: :connected,
+        conn: self(),
+        safety: ExWapp.Session.Worker.Safety.new(),
         runtime_cfg: %{
           send: %{max_session_repair_attempts: 2, session_repair_backoff_ms: [0, 30]}
         },
@@ -400,6 +411,9 @@ defmodule ExWapp.OutboundDeliveryConfirmationTest do
         session_id: session_id,
         store: nil,
         send_worker_sup: sup,
+        status: :connected,
+        conn: self(),
+        safety: ExWapp.Session.Worker.Safety.new(),
         runtime_cfg: %{
           send: %{max_session_repair_attempts: 2, session_repair_backoff_ms: [0, 30]}
         },

@@ -19,7 +19,7 @@ defmodule WAWebProtobufSyncAction.CommunityNestingStateAction do
               WAWebProtobufSyncAction.CommunityNestingStateAction,
               :proto2,
               [
-                {:nestingState, 1, :optional, {:scalar, :NESTING_STATE_UNKNOWN},
+                {:nestingState, 1, :optional, {:scalar, :PLATFORM_DEFAULT},
                  {:enum, WAWebProtobufSyncAction.CommunityNestingStateAction.NestingState}}
               ],
               %{

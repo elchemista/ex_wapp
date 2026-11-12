@@ -41,6 +41,8 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestType do
 
   def encode(:CONTACT_REFRESH_REQUEST), do: 14
 
+  def encode(:RECENT_CONVERSATIONS_ON_DEMAND_REQUEST), do: 15
+
   def encode(x), do: x
 
   @spec decode(integer()) :: atom() | integer()
@@ -74,6 +76,8 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestType do
 
   def decode(14), do: :CONTACT_REFRESH_REQUEST
 
+  def decode(15), do: :RECENT_CONVERSATIONS_ON_DEMAND_REQUEST
+
   def decode(x), do: x
 
   @spec constants() :: [{integer(), atom()}]
@@ -93,7 +97,8 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestType do
       {11, :GALAXY_FLOW_ACTION},
       {12, :BUSINESS_BROADCAST_INSIGHTS_DELIVERED_TO},
       {13, :BUSINESS_BROADCAST_INSIGHTS_REFRESH},
-      {14, :CONTACT_REFRESH_REQUEST}
+      {14, :CONTACT_REFRESH_REQUEST},
+      {15, :RECENT_CONVERSATIONS_ON_DEMAND_REQUEST}
     ]
   end
 
@@ -128,6 +133,8 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestType do
     def has_constant?(:BUSINESS_BROADCAST_INSIGHTS_REFRESH), do: true
 
     def has_constant?(:CONTACT_REFRESH_REQUEST), do: true
+
+    def has_constant?(:RECENT_CONVERSATIONS_ON_DEMAND_REQUEST), do: true
 
     def has_constant?(_value), do: false
   )

@@ -94,6 +94,26 @@ defmodule ExWapp.Client.API do
   end
 
   @doc """
+  Sends a video message through the configured transport adapter.
+  """
+  @spec send_video(Client.t(), String.t(), ExWapp.Media.source(), keyword()) :: message_result()
+  def send_video(%Client{} = client, to, source, opts \\ []) do
+    to
+    |> Message.video(source, opts)
+    |> send_client_message(client, :send_video)
+  end
+
+  @doc """
+  Sends a sticker message through the configured transport adapter.
+  """
+  @spec send_sticker(Client.t(), String.t(), ExWapp.Media.source(), keyword()) :: message_result()
+  def send_sticker(%Client{} = client, to, source, opts \\ []) do
+    to
+    |> Message.sticker(source, opts)
+    |> send_client_message(client, :send_sticker)
+  end
+
+  @doc """
   Sends an audio message through the configured transport adapter.
   """
   @spec send_audio(Client.t(), String.t(), ExWapp.Media.source(), keyword()) :: message_result()
@@ -112,6 +132,19 @@ defmodule ExWapp.Client.API do
     to
     |> Message.document(source, opts)
     |> send_client_message(client, :send_document)
+  end
+
+  @doc "Sends or removes a reaction through the configured transport."
+  @spec send_reaction(Client.t(), String.t(), String.t(), String.t(), keyword()) ::
+          message_result()
+  def send_reaction(%Client{} = client, to, message_id, text, opts \\ []) do
+    to |> Message.reaction(message_id, text, opts) |> send_client_message(client, :send_reaction)
+  end
+
+  @doc "Requests older history from the primary device; success only confirms the request was sent."
+  @spec request_history(Client.t(), String.t(), map(), keyword()) :: message_result()
+  def request_history(%Client{} = client, to, anchor, opts \\ []) do
+    to |> Message.history_request(anchor, opts) |> send_client_message(client, :request_history)
   end
 
   @doc """

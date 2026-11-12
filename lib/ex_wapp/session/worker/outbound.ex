@@ -10,7 +10,6 @@ defmodule ExWapp.Session.Worker.Outbound do
   require Logger
 
   alias ExWapp.{Binary, Chat, Config, JID, Log, Messages, Store, Telemetry}
-  alias ExWapp.Session.Worker
   alias ExWapp.Signal.SessionStore
   alias WAWebProtobufsE2E.Message
 
@@ -31,7 +30,17 @@ defmodule ExWapp.Session.Worker.Outbound do
     Prekeys
   }
 
-  @typep worker_state :: Worker.t()
+  # Task-local context adds a deadline/router to the worker snapshot. It is an
+  # open map rather than a Worker struct with an exact set of fields.
+  @typep worker_state :: %{
+           required(:store) => Store.t() | nil,
+           required(:conn) => pid() | nil,
+           required(:transport_mod) => module(),
+           required(:runtime_cfg) => map(),
+           optional(:send_deadline) => integer() | nil,
+           optional(:outbound_iq_router) => pid() | nil,
+           optional(atom()) => term()
+         }
   @typep outbound_text :: iodata() | nil
   @doc "Sends text or an optional prebuilt protobuf payload through the session pipeline."
   @spec send_text_worker(pid(), map(), String.t(), outbound_text(), keyword()) ::
@@ -49,6 +58,7 @@ defmodule ExWapp.Session.Worker.Outbound do
   end
 
   def send_text_worker(session_pid, state, jid, text, opts) do
+    state = Map.put(state, :send_deadline, Keyword.get(opts, :send_deadline))
     normalized_jid = normalize_jid_with_device(jid)
 
     # One send touches the store on the order of twenty times — device cache,
@@ -112,14 +122,16 @@ defmodule ExWapp.Session.Worker.Outbound do
   end
 
   @doc "Sends an internal protocol message directly to the account's primary device."
-  @spec send_peer_proto_worker(pid(), map(), WAWebProtobufsE2E.Message.t()) ::
+  @spec send_peer_proto_worker(pid(), map(), WAWebProtobufsE2E.Message.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
-  def send_peer_proto_worker(_session_pid, %{status: status}, _proto)
+  def send_peer_proto_worker(session_pid, state, proto, opts \\ [])
+
+  def send_peer_proto_worker(_session_pid, %{status: status}, _proto, _opts)
       when status not in [:connected, :syncing] do
     {:error, {:not_connected, status}}
   end
 
-  def send_peer_proto_worker(_session_pid, %{status: status, conn: conn}, _proto)
+  def send_peer_proto_worker(_session_pid, %{status: status, conn: conn}, _proto, _opts)
       when not is_pid(conn) do
     {:error, {:not_connected, status}}
   end
@@ -127,8 +139,10 @@ defmodule ExWapp.Session.Worker.Outbound do
   def send_peer_proto_worker(
         session_pid,
         %{conn: conn, store: store} = state,
-        %Message{} = proto
+        %Message{} = proto,
+        opts
       ) do
+    state = Map.put(state, :send_deadline, Keyword.get(opts, :send_deadline))
     destination_jid = peer_destination_jid(store)
 
     with destination when destination != "" <- destination_jid,
@@ -154,7 +168,7 @@ defmodule ExWapp.Session.Worker.Outbound do
              prekey_bundles
            ),
          {:ok, encrypted_node} <- extract_peer_encrypted_node(participant_node),
-         message_id <- Direct.message_id([], destination),
+         message_id <- Direct.message_id(opts, destination),
          node <-
            build_peer_message_node(
              destination,
@@ -163,6 +177,7 @@ defmodule ExWapp.Session.Worker.Outbound do
              store,
              include_identity
            ),
+         node <- apply_peer_request_attributes(node, proto),
          :ok <- persist_signal_sessions(session_pid, updated_sessions, state),
          :ok <- send_transport_node(state, conn, node) do
       Logger.debug(
@@ -834,6 +849,22 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
+  defp apply_peer_request_attributes(node, %Message{
+         protocolMessage: %{
+           peerDataOperationRequestMessage: %{
+             peerDataOperationRequestType: :HISTORY_SYNC_ON_DEMAND
+           }
+         }
+       }) do
+    %{
+      node
+      | attrs:
+          Map.merge(node.attrs, %{"push_priority" => "high_force", "privacy_sensitive" => "1"})
+    }
+  end
+
+  defp apply_peer_request_attributes(node, _proto), do: node
+
   @spec peer_destination_jid(Store.t()) :: String.t()
   defp peer_destination_jid(store) do
     case Account.local_account_base_jid(store) do
@@ -970,12 +1001,30 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   @spec send_transport_node(worker_state(), pid() | nil, Binary.Node.t()) ::
           :ok | {:error, term()}
-  defp send_transport_node(%{transport_mod: transport_mod}, conn, node) when is_pid(conn) do
-    transport_mod.send_node(conn, node)
+  defp send_transport_node(%{transport_mod: transport_mod} = state, conn, node)
+       when is_pid(conn) do
+    deadline = Map.get(state, :send_deadline)
+    router = Map.get(state, :outbound_iq_router)
+    jid = Map.get(node.attrs, "to", "")
+    kind = if Map.get(node.attrs, "category") == "peer", do: :peer, else: :message
+
+    with :ok <- authorize_transport(router, jid, deadline, kind) do
+      transport_mod.send_node(conn, node)
+    end
   end
 
   defp send_transport_node(%{status: status}, _conn, _node) do
     {:error, {:not_connected, status}}
+  end
+
+  defp authorize_transport(router, jid, deadline, kind) when is_pid(router) do
+    GenServer.call(router, {:authorize_outbound, jid, deadline, kind}, 5000)
+  end
+
+  defp authorize_transport(_router, _jid, deadline, _kind) do
+    if is_integer(deadline) and System.monotonic_time(:millisecond) >= deadline,
+      do: {:error, :send_deadline_exceeded},
+      else: :ok
   end
 
   @spec persist_signal_sessions(pid(), SessionStore.t(), worker_state()) :: :ok

@@ -294,6 +294,33 @@ defmodule ExWapp.ReceiptProtocolTest do
     assert Enum.all?([first, second, third], &(&1.from == group and &1.status == :read))
   end
 
+  test "grouped receipts accept message_id and per-user types with upstream precedence" do
+    for attrs <- [
+          %{"message_id" => "MSG"},
+          %{"key" => "", "message_id" => "MSG"},
+          %{"key" => "MSG", "message_id" => "IGNORED"}
+        ] do
+      node = %Node{
+        tag: "receipt",
+        attrs: %{"from" => "123@g.us", "type" => "read"},
+        content: [
+          %Node{
+            tag: "participants",
+            attrs: attrs,
+            content:
+              for type <- [nil, "", "delivery", "played", "sender"] do
+                %Node{tag: "user", attrs: %{"jid" => "111@s.whatsapp.net", "type" => type}}
+              end
+          }
+        ]
+      }
+
+      receipts = Receipt.parse_receipts(node)
+      assert Enum.map(receipts, & &1.status) == [:read, :read, :read, :read, :sent]
+      assert Enum.all?(receipts, &(&1.message_ids == ["MSG"]))
+    end
+  end
+
   test "updates every grouped message status without emitting an empty-id ack" do
     store = Memory.new([])
     group = "120363000000002@g.us"

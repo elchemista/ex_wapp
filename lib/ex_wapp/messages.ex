@@ -28,6 +28,7 @@ defmodule ExWapp.Messages do
       )
   """
   alias ExWapp.{Binary, Chat, Conn, JID}
+  alias ExWapp.Session.JIDUtils
   alias WACommon.MessageKey
 
   alias WAWebProtobufsE2E.{
@@ -42,7 +43,10 @@ defmodule ExWapp.Messages do
     Message,
     MessageContextInfo,
     PeerDataOperationRequestMessage,
-    ProtocolMessage
+    ProtocolMessage,
+    ReactionMessage,
+    StickerMessage,
+    VideoMessage
   }
 
   @type send_opts :: [
@@ -157,6 +161,52 @@ defmodule ExWapp.Messages do
     end
   end
 
+  @doc "Builds the target key and millisecond timestamp for a reaction."
+  @spec build_reaction_proto(String.t(), String.t(), String.t(), keyword()) :: Message.t()
+  def build_reaction_proto(jid, message_id, text, opts \\ []) do
+    participant = Keyword.get(opts, :participant)
+    from_me = Keyword.get(opts, :from_me, false)
+
+    key = %MessageKey{
+      remoteJID: JIDUtils.strip_device(jid),
+      ID: message_id,
+      fromMe: from_me,
+      participant:
+        if(String.ends_with?(jid, "@g.us") and not from_me,
+          do: JIDUtils.strip_device(participant),
+          else: nil
+        )
+    }
+
+    %Message{
+      reactionMessage: %ReactionMessage{
+        key: key,
+        text: text,
+        senderTimestampMS: System.system_time(:millisecond)
+      }
+    }
+  end
+
+  @doc "Builds a peer history request. The wire timestamp field uses seconds despite its MS suffix."
+  @spec build_history_request_proto(String.t(), map(), keyword()) :: Message.t()
+  def build_history_request_proto(jid, anchor, opts \\ []) do
+    %Message{
+      protocolMessage: %ProtocolMessage{
+        type: :PEER_DATA_OPERATION_REQUEST_MESSAGE,
+        peerDataOperationRequestMessage: %PeerDataOperationRequestMessage{
+          peerDataOperationRequestType: :HISTORY_SYNC_ON_DEMAND,
+          historySyncOnDemandRequest: %PeerDataOperationRequestMessage.HistorySyncOnDemandRequest{
+            chatJID: jid,
+            oldestMsgID: anchor.id,
+            oldestMsgFromMe: anchor.from_me,
+            oldestMsgTimestampMS: anchor.timestamp,
+            onDemandMsgCount: Keyword.get(opts, :count, 50)
+          }
+        }
+      }
+    }
+  end
+
   @doc """
   Builds an image message protobuf from uploaded media metadata.
   """
@@ -178,6 +228,56 @@ defmodule ExWapp.Messages do
         JPEGThumbnail: Keyword.get(opts, :jpeg_thumbnail),
         contextInfo: build_context_info(opts),
         viewOnce: Keyword.get(opts, :view_once)
+      }
+    }
+  end
+
+  @doc """
+  Builds a video message protobuf from uploaded media metadata.
+  """
+  @spec build_video_proto(ExWapp.Media.Upload.t(), keyword()) :: Message.t()
+  def build_video_proto(%ExWapp.Media.Upload{} = upload, opts \\ []) do
+    %Message{
+      videoMessage: %VideoMessage{
+        URL: upload.url,
+        mimetype: Keyword.get(opts, :mimetype, "video/mp4"),
+        seconds: Keyword.get(opts, :seconds, Keyword.get(opts, :duration, 0)),
+        gifPlayback: Keyword.get(opts, :gif_playback, false),
+        caption: Keyword.get(opts, :caption),
+        fileSHA256: upload.file_sha256,
+        fileLength: upload.file_length || 0,
+        height: Keyword.get(opts, :height),
+        width: Keyword.get(opts, :width),
+        mediaKey: upload.media_key,
+        fileEncSHA256: upload.file_enc_sha256,
+        directPath: upload.direct_path,
+        mediaKeyTimestamp: upload.media_key_timestamp,
+        JPEGThumbnail: Keyword.get(opts, :jpeg_thumbnail),
+        contextInfo: build_context_info(opts),
+        viewOnce: Keyword.get(opts, :view_once)
+      }
+    }
+  end
+
+  @doc """
+  Builds a sticker message protobuf from uploaded media metadata.
+  """
+  @spec build_sticker_proto(ExWapp.Media.Upload.t(), keyword()) :: Message.t()
+  def build_sticker_proto(%ExWapp.Media.Upload{} = upload, opts \\ []) do
+    %Message{
+      stickerMessage: %StickerMessage{
+        URL: upload.url,
+        mimetype: Keyword.get(opts, :mimetype, "image/webp"),
+        fileSHA256: upload.file_sha256,
+        fileLength: upload.file_length || 0,
+        height: Keyword.get(opts, :height),
+        width: Keyword.get(opts, :width),
+        mediaKey: upload.media_key,
+        fileEncSHA256: upload.file_enc_sha256,
+        directPath: upload.direct_path,
+        mediaKeyTimestamp: upload.media_key_timestamp,
+        contextInfo: build_context_info(opts),
+        isAnimated: Keyword.get(opts, :animated, false)
       }
     }
   end

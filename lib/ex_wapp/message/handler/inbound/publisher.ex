@@ -73,6 +73,7 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
       location: Map.get(message_data, :location),
       contact: Map.get(message_data, :contact),
       event: Map.get(message_data, :event),
+      reaction: Map.get(message_data, :reaction),
       raw: %{
         type: type,
         attrs: attrs,
@@ -83,6 +84,7 @@ defmodule ExWapp.Message.Handler.Inbound.Publisher do
         location: Map.get(message_data, :location),
         contact: Map.get(message_data, :contact),
         event: Map.get(message_data, :event),
+        reaction: Map.get(message_data, :reaction),
         from_me: from_me
       }
     }

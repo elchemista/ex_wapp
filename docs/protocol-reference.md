@@ -9,38 +9,84 @@ Application developers should not build against the modules described here.
 The only supported application boundary is the `ExWapp` facade operating on a
 `%ExWapp.Client{}`.
 
-## Upstream snapshot: 2026-10-18
+## Upstream snapshot: 2026-11-12
 
-The default WhatsApp Web version is `2.3000.1050728964`, verified against
-[whatsmeow `b2b1e71`](https://github.com/tulir/whatsmeow/tree/b2b1e71d45e2ff171153b025b5a42f475bb30ef8)
-(commit dated 2026-10-17). The 772 generated Protox modules use that checkout.
-The [changes since the September snapshot](https://github.com/tulir/whatsmeow/compare/9ec8f76db5f17712efc34a29b684a80d2dcb4aaf...b2b1e71d45e2ff171153b025b5a42f475bb30ef8)
-include:
+The default WhatsApp Web version is `2.3000.1052556849`, verified against
+[whatsmeow `c88388f`](https://github.com/tulir/whatsmeow/tree/c88388f983b4bc43dfd0bcc2b46969fcde82d61f)
+(commit dated 2026-11-10). The 781 generated Protox modules use that checkout.
+The [changes since the October snapshot](https://github.com/tulir/whatsmeow/compare/b2b1e71d45e2ff171153b025b5a42f475bb30ef8...c88388f983b4bc43dfd0bcc2b46969fcde82d61f)
+include recent-conversation history requests, music lyrics with word timings,
+HD media auto-download settings, Hatch CVM secrets, bot interjection metadata,
+business AI onboarding capabilities, and smart display/speaker device types.
 
-- Audio stickers, instant images, location requests and cancellations, and
-  additional event invitation metadata.
-- Shared-device contact hash keys, group-history settings, community nesting,
-  business broadcast actions, contact birthdays and shared-device secrets.
-- ACP2 history restrictions, omitted conversations, favorite stickers, additional
-  device capabilities and the `AUTOMOTIVE` platform.
-- Animated chat wallpapers and ARGB wallpaper colors. Unlike the other schema
-  additions, `ChatSolidColorWallpaper` fields 1 and 2 change from strings
-  (`colorLight`/`colorDark`) to `fixed32` (`backgroundLightArgb`/
-  `backgroundDarkArgb`). These generated types are internal; ExWapp's supported
-  facade does not expose a chat-theme API. Independent protoc fixtures verify
-  the new wire representation, including unsigned 32-bit color values.
+Two schema changes need attention for users of internal generated modules:
 
-These schema updates extend encoding and decoding; they do not add public APIs
-for all the corresponding features. The binary token dictionary is unchanged.
-Labyrinth/WASM and Armadillo schema changes remain outside this client's
-entrypoints and runtime.
+- `HistorySync` fields 23/24 (`omittedConversations` and
+  `omittedConversationsProvided`) are removed. Fields 25/26 now carry
+  `omittedConversationMetadata` and `omittedConversationMetadataSnapshotID`.
+  `OmittedConversationMetadata` replaces `RecoverableHistoryConversation`.
+  October fixtures verify old fields remain preserved as unknown wire fields;
+  independent November protoc fixtures verify the new representation. The
+  public history projection did not consume the removed fields.
+- Community nesting enum numbers remain 0/1/2, but names become
+  `PLATFORM_DEFAULT`, `NESTED`, and `UNNESTED`.
 
-### Runtime fix review
+These schema updates do not introduce public APIs for every new feature.
+The binary token dictionary is unchanged. Armadillo, Labyrinth/WASM and Hatch
+attestation schemas remain outside the generated entrypoints.
+
+The external version scanners in `send_via` and `vext` both confirmed the
+whatsmeow version above. Amarula's `update_wa_version.exs --check` also read
+`2.3000.1054270628` from the live WhatsApp service worker on 2026-11-12.
+That live revision is newer than the selected whatsmeow snapshot; the default
+stays aligned with whatsmeow. The older `check-update` endpoint returned
+`2.2413.51` and was not used to downgrade the client.
+
+### Public feature additions in 0.1.6
+
+- Video and WebP sticker send/receive/download reuse the existing media and
+  Signal pipelines. Video uses `WhatsApp Video Keys` and the `video` upload
+  path; stickers use `WhatsApp Image Keys` and the `image` upload path, while
+  their encrypted stanza `mediatype` is `sticker`. This follows the pinned
+  [media mapping](https://github.com/tulir/whatsmeow/blob/c88388f983b4bc43dfd0bcc2b46969fcde82d61f/download.go).
+- Reactions preserve explicit target `fromMe` and group participant identity.
+  They use `type="reaction"`, encrypted-node `decrypt-fail="hide"`, and
+  `edit="7"` when removing a reaction with empty text. Received reactions are
+  canonical `:reaction` content and retain the target key without replacing
+  the target message. Newsletter reactions are not supported by this API.
+- `request_history/4` sends `HISTORY_SYNC_ON_DEMAND` to the primary device,
+  with `category="peer"`, `push_priority="high_force"` and
+  `privacy_sensitive="1"`. Despite its name, `oldestMsgTimestampMS` contains
+  Unix seconds, as in the pinned
+  [history request builder](https://github.com/tulir/whatsmeow/blob/c88388f983b4bc43dfd0bcc2b46969fcde82d61f/send.go).
+  The returned request ID is not a completion confirmation. Responses reuse
+  existing inline/blob history ingestion. No automatic pagination is performed.
+
+### November runtime review
+
+- Ported grouped-receipt `message_id` fallback (nonempty `key` takes priority)
+  and per-participant receipt types. Missing, empty or `delivery` types inherit
+  the outer receipt type, matching upstream. Regression coverage includes both
+  attribute names and mixed participant types.
+- Contact REMOVE mutations are already handled locally, though ExWapp deletes
+  the contact rather than only clearing the stored contact name as upstream does.
+- Follow-up: honor app-state IQ 429 `backoff` per collection. ExWapp currently
+  returns the error but does not remember the server's cooldown across fetches.
+- Follow-up: upstream accepts an LTHash mismatch only for contiguous patches
+  with nonempty local state and a valid patch MAC. ExWapp retains strict MAC
+  validation and snapshot recovery; this can cause extra resyncs. No integrity
+  check was relaxed in this update.
+- Upstream also changes Go event-buffer/ACK sequencing, unified sessions,
+  membership approval parsing, verified business names and upload helpers.
+  These are not automatically implemented by schema regeneration and should be
+  assessed separately when extending the corresponding ExWapp capabilities.
+
+### October runtime fix review
 
 | Upstream change | ExWapp result |
 | --- | --- |
 | [Stateless prekey messages](https://github.com/tulir/whatsmeow/commit/f376da2) | Ported: `pkmsg` with `state="false"` decrypts without creating, replacing or advancing stored Signal sessions or pending aliases. Authenticated one-time prekeys are still consumed; failed stateless messages do not reset existing sessions. Tested with map and ETS stores. |
-| [ACK correlation report, PR #1264](https://github.com/tulir/whatsmeow/pull/1264) | The upstream PR remains open. Local regression testing exposed an analogous stored-status bug: receipt, notification and call ACKs could update a message sharing their ID. Only `class="message"` now updates message status. This is a local fix, not an import of the Go waiter API. |
+| [ACK correlation report, PR #1264](https://github.com/tulir/whatsmeow/pull/1264) | At the October review, the upstream PR remained open. Local regression testing exposed an analogous stored-status bug: receipt, notification and call ACKs could update a message sharing their ID. Only `class="message"` now updates message status. This is a local fix, not an import of the Go waiter API. |
 | [Split frame lengths](https://github.com/tulir/whatsmeow/commit/f331563) | Already handled by `Transport.Frame`: the three-byte length prefix is excluded from payload size. Existing encrypted transport tests exercise header, length, ciphertext and coalesced-frame splits. |
 | [Malformed stanza tags](https://github.com/tulir/whatsmeow/commit/bb54a07) | Already rejected by the binary decoder. A JID token used as a stanza tag now has explicit regression coverage. |
 | [Prefer participant phone-number aliases](https://github.com/tulir/whatsmeow/commit/19c6103) | Envelope handling already accepts `participant_pn` without an addressing-mode hint. Added group LID mapping and device-candidate coverage. |
@@ -58,7 +104,7 @@ To refresh to upstream `main`, run `scripts/update_wa_protos.sh`. To reproduce
 this snapshot, run:
 
 ```bash
-UPSTREAM_REF=b2b1e71d45e2ff171153b025b5a42f475bb30ef8 scripts/update_wa_protos.sh
+UPSTREAM_REF=c88388f983b4bc43dfd0bcc2b46969fcde82d61f scripts/update_wa_protos.sh
 ```
 
 The updater preserves local upstream edits by refusing to overwrite a dirty

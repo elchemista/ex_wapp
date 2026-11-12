@@ -25,6 +25,8 @@ defmodule WAWebProtobufsHistorySync.HistorySync.HistorySyncType do
 
   def encode(:ON_DEMAND), do: 6
 
+  def encode(:RECENT_CONVERSATIONS_ON_DEMAND), do: 9
+
   def encode(x), do: x
 
   @spec decode(integer()) :: atom() | integer()
@@ -42,6 +44,8 @@ defmodule WAWebProtobufsHistorySync.HistorySync.HistorySyncType do
 
   def decode(6), do: :ON_DEMAND
 
+  def decode(9), do: :RECENT_CONVERSATIONS_ON_DEMAND
+
   def decode(x), do: x
 
   @spec constants() :: [{integer(), atom()}]
@@ -53,7 +57,8 @@ defmodule WAWebProtobufsHistorySync.HistorySync.HistorySyncType do
       {3, :RECENT},
       {4, :PUSH_NAME},
       {5, :NON_BLOCKING_DATA},
-      {6, :ON_DEMAND}
+      {6, :ON_DEMAND},
+      {9, :RECENT_CONVERSATIONS_ON_DEMAND}
     ]
   end
 
@@ -72,6 +77,8 @@ defmodule WAWebProtobufsHistorySync.HistorySync.HistorySyncType do
     def has_constant?(:NON_BLOCKING_DATA), do: true
 
     def has_constant?(:ON_DEMAND), do: true
+
+    def has_constant?(:RECENT_CONVERSATIONS_ON_DEMAND), do: true
 
     def has_constant?(_value), do: false
   )

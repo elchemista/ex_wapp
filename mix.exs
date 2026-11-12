@@ -1,7 +1,7 @@
 defmodule ExWapp.MixProject do
   use Mix.Project
 
-  @version "0.1.5"
+  @version "0.1.6"
   @author "Yuriy Zhar"
   @source_url "https://github.com/elchemista/ex_wapp"
   @author_url "https://github.com/elchemista"
@@ -15,7 +15,8 @@ defmodule ExWapp.MixProject do
       elixir: "~> 1.19",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
-      description: "Runtime-neutral WhatsApp Web client library for Elixir",
+      description:
+        "Runtime-neutral WhatsApp Web client for Elixir with persistent sessions, media, reactions and history",
       source_url: @source_url,
       homepage_url: @source_url,
       package: package(),
@@ -40,12 +41,12 @@ defmodule ExWapp.MixProject do
     [
       {:ed25519, "~> 1.5.2"},
       # Generated wire modules call Protox encoders/decoders at runtime.
-      {:protox, "~> 2.1"},
+      {:protox, "~> 2.1.0"},
       {:phoenix_pubsub, "~> 2.4.1"},
       {:websockex, "~> 0.5.1"},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:ex_doc, "~> 0.40", only: :dev, runtime: false}
+      {:credo, "~> 1.7.19", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4.9", only: [:dev, :test], runtime: false},
+      {:ex_doc, "~> 0.40.4", only: :dev, runtime: false}
     ]
   end
 
@@ -66,6 +67,8 @@ defmodule ExWapp.MixProject do
         "Author" => @author_url,
         "GitHub" => @source_url,
         "Documentation" => "https://hexdocs.pm/ex_wapp",
+        "Changelog" => "#{@source_url}/blob/v#{@version}/CHANGELOG.md",
+        "Demo" => "https://github.com/elchemista/demo_ex_wapp/tree/ex-wapp-0.1.6-suite",
         "Issue tracker" => @issues_url
       }
     ]

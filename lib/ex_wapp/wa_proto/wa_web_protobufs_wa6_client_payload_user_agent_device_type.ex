@@ -21,6 +21,10 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.DeviceType do
 
   def encode(:VR), do: 4
 
+  def encode(:SMART_DISPLAY), do: 5
+
+  def encode(:SMART_SPEAKER), do: 6
+
   def encode(x), do: x
 
   @spec decode(integer()) :: atom() | integer()
@@ -34,10 +38,24 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.DeviceType do
 
   def decode(4), do: :VR
 
+  def decode(5), do: :SMART_DISPLAY
+
+  def decode(6), do: :SMART_SPEAKER
+
   def decode(x), do: x
 
   @spec constants() :: [{integer(), atom()}]
-  def constants(), do: [{0, :PHONE}, {1, :TABLET}, {2, :DESKTOP}, {3, :WEARABLE}, {4, :VR}]
+  def constants() do
+    [
+      {0, :PHONE},
+      {1, :TABLET},
+      {2, :DESKTOP},
+      {3, :WEARABLE},
+      {4, :VR},
+      {5, :SMART_DISPLAY},
+      {6, :SMART_SPEAKER}
+    ]
+  end
 
   @spec has_constant?(any()) :: boolean()
   (
@@ -50,6 +68,10 @@ defmodule WAWebProtobufsWa6.ClientPayload.UserAgent.DeviceType do
     def has_constant?(:WEARABLE), do: true
 
     def has_constant?(:VR), do: true
+
+    def has_constant?(:SMART_DISPLAY), do: true
+
+    def has_constant?(:SMART_SPEAKER), do: true
 
     def has_constant?(_value), do: false
   )

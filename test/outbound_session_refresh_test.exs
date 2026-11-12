@@ -643,6 +643,64 @@ defmodule ExWapp.OutboundSessionRefreshTest do
     refute_receive {:prekey_request, _requested_jids}, 50
   end
 
+  test "public history request reaches the primary device encrypted with its priority and anchor" do
+    local_pn_device_jid = "19995550101:5@s.whatsapp.net"
+    local_lid_device_jid = "19995550202:5@lid"
+    local_pn_base_jid = "19995550101@s.whatsapp.net"
+    local_lid_base_jid = "19995550202@lid"
+    chat_jid = "19995550404@s.whatsapp.net"
+
+    %{store: store, local_signal: local_signal, local_bundle: local_bundle} =
+      build_local_store(local_pn_device_jid, local_lid_device_jid)
+
+    primary_device = build_remote_device(local_pn_base_jid)
+
+    {signal_sessions, primary_sessions} =
+      establish_inbound_session(
+        local_pn_device_jid,
+        local_pn_base_jid,
+        local_signal,
+        local_bundle,
+        primary_device.signal
+      )
+
+    conn =
+      start_fake_conn(self(), %{
+        device_map: %{
+          local_pn_base_jid => [local_pn_base_jid, local_pn_device_jid],
+          local_lid_base_jid => [local_lid_base_jid, local_lid_device_jid]
+        },
+        prekey_bundles: %{local_pn_base_jid => primary_device.bundle},
+        route_via_session: true
+      })
+
+    session = start_connected_session(store, conn, signal_sessions)
+
+    anchor = %{id: "OLDEST", from_me: false, timestamp: 1_800_000_000}
+    assert {:ok, request_id} = ExWapp.request_history(session, chat_jid, anchor, count: 25)
+    assert_receive {:message_send, %Binary.Node{attrs: attrs, content: content}}, 1_000
+    assert attrs["id"] == request_id
+    assert attrs["to"] == local_pn_base_jid
+    assert attrs["category"] == "peer"
+    assert attrs["push_priority"] == "high_force"
+    assert attrs["privacy_sensitive"] == "1"
+    refute Enum.any?(content, &match?(%Binary.Node{tag: "participants"}, &1))
+    enc = Enum.find(content, &match?(%Binary.Node{tag: "enc"}, &1))
+
+    plaintext =
+      decrypt_direct_payload(local_pn_device_jid, enc, primary_device.signal, primary_sessions)
+
+    proto = WAWebProtobufsE2E.Message.decode!(plaintext)
+    request = proto.protocolMessage.peerDataOperationRequestMessage
+    assert request.peerDataOperationRequestType == :HISTORY_SYNC_ON_DEMAND
+    assert request.historySyncOnDemandRequest.chatJID == chat_jid
+    assert request.historySyncOnDemandRequest.oldestMsgID == "OLDEST"
+    assert request.historySyncOnDemandRequest.oldestMsgFromMe == false
+    assert request.historySyncOnDemandRequest.oldestMsgTimestampMS == 1_800_000_000
+    assert request.historySyncOnDemandRequest.onDemandMsgCount == 25
+    assert ExWapp.Chat.messages(store, chat_jid) == []
+  end
+
   test "send_text_worker returns not_connected when the runtime is disconnected" do
     assert {:error, {:not_connected, :disconnected}} =
              Outbound.send_text_worker(

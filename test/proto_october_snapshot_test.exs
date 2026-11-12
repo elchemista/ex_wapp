@@ -85,10 +85,10 @@ defmodule ExWapp.ProtoOctoberSnapshotTest do
     assert conversation."ID" == "chat"
     assert conversation.acp2Setting.enabled
     assert conversation.acp2HistoryWithheld
-    assert history.omittedConversationsProvided
-    assert [omitted] = history.omittedConversations
-    assert omitted.historyChatID == "omitted"
-    assert omitted.accountLid == "123@lid"
+    # November removed fields 23/24; old payloads must still round-trip.
+    assert history.omittedConversationMetadata == nil
+    assert {23, 2, <<10, 7, "omitted", 18, 7, "123@lid">>} in history.__uf__
+    assert {24, 0, <<1>>} in history.__uf__
   end
 
   test "new sync actions retain independent fields and enum values" do
@@ -100,7 +100,7 @@ defmodule ExWapp.ProtoOctoberSnapshotTest do
 
     assert action.groupHistoryToggleAction.groupHistoryToggleMode == :GROUP_HISTORY_TOGGLE_MODE_ON
     assert action.bbProPendingCustomerBaseAction.pending
-    assert action.communityNestingStateAction.nestingState == :NESTING_STATE_NESTED
+    assert action.communityNestingStateAction.nestingState == :NESTED
     assert action.sharedDeviceSecretAction.secret == "secret"
     assert action.sharedDeviceSecretAction.ttlMS == 60_000
   end

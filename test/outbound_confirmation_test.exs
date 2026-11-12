@@ -2,14 +2,17 @@ defmodule ExWapp.OutboundConfirmationTest do
   use ExUnit.Case, async: true
 
   alias ExWapp.Store
+  alias ExWapp.Session.Worker
   alias ExWapp.Session.Worker.OutboundConfirmation, as: Confirmation
+  alias ExWapp.Session.Worker.Safety
 
   @pn "15550001111@s.whatsapp.net"
   @lid "70000001111@lid"
 
   setup do
     store = Store.Memory.new(initial_data: %{client_info: %{jid: @pn, lid: @lid}})
-    {:ok, state: %{store: store, outbound_confirmations: %{}}}
+    on_exit(fn -> Store.Memory.stop(store) end)
+    {:ok, state: %Worker{store: store, status: :connected, conn: self(), safety: Safety.new()}}
   end
 
   test "self-chat confirmation timers recognize both own identities and device suffixes", %{
@@ -18,7 +21,10 @@ defmodule ExWapp.OutboundConfirmationTest do
     for jid <- [@pn, @lid, "70000001111:7@lid"] do
       id = "timer-#{jid}"
       updated = Confirmation.schedule(state, jid, ["hel", "lo"], id, :normal, 0, timeout_ms: 1)
-      assert %{text: "hello", attempt: 0, timer: timer} = updated.outbound_confirmations[id]
+
+      assert %{text: "hello", attempt: 0, timer: timer} =
+               updated.pending.outbound_confirmations[id]
+
       assert is_reference(timer)
       assert_receive {:outbound_confirm_timeout, ^id}, 500
     end
@@ -77,7 +83,9 @@ defmodule ExWapp.OutboundConfirmationTest do
         {:ok, pid, Process.monitor(pid)}
       end
 
-      send_message = fn ^owner, ^state, @lid, "hello", opts ->
+      send_message = fn ^owner, context, @lid, "hello", opts ->
+        assert context.store == state.store
+        assert context.outgoing_retry_payloads == %{}
         send(owner, {:fallback_options, opts})
         result
       end
@@ -95,14 +103,19 @@ defmodule ExWapp.OutboundConfirmationTest do
         )
 
       assert {pid, monitor} = updated.worker
-      assert Store.find_message(state.store, @lid, "pending").status == :failed
-      assert_receive {:fallback_options, [self_chat_mode: :recipient_primary]}
+      assert Store.find_message(state.store, @lid, "pending").status == :pending
+      assert_receive {:"$gen_call", from, {:admit_recovery, @lid}}
+      GenServer.reply(from, :ok)
+      assert_receive {:fallback_options, opts}
+      assert opts[:self_chat_mode] == :recipient_primary
+      assert opts[:retry_message_id] == "pending"
+      assert opts[:suppress_outgoing_chat_add] == true
       assert_receive {:send_result, @lid, "hello", ^result, :fallback, 1}
       assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}
     end
   end
 
-  test "a fallback worker that cannot start still leaves the original message failed", %{
+  test "a fallback worker that cannot start leaves the original message pending", %{
     state: state
   } do
     :ok =
@@ -119,7 +132,7 @@ defmodule ExWapp.OutboundConfirmationTest do
              unexpected(4)
            ) == state
 
-    assert Store.find_message(state.store, @pn, "stuck").status == :failed
+    assert Store.find_message(state.store, @pn, "stuck").status == :pending
   end
 
   test "spent retry budget marks failure and reports a drop exactly once", %{state: state} do

@@ -159,6 +159,30 @@ defmodule ExWapp.RuntimeHardeningTest do
     assert {:error, :forbidden_locked, _} = Safety.check_send_allowed(state)
   end
 
+  test "message refusal blocks only its recipient while 429 cools off the session" do
+    state = %{runtime_cfg: Config.defaults(), safety: Safety.new()}
+    state = Safety.record_ack(state, "15550001111:7@s.whatsapp.net", "403")
+    assert {:ok, _} = Safety.check_send_allowed(state)
+    assert {:ok, _} = Safety.check_recipient(state, "15550002222@s.whatsapp.net")
+
+    assert {:error, {:recipient_cooloff, ms}, _} =
+             Safety.check_recipient(state, "15550001111@s.whatsapp.net")
+
+    assert ms > 0
+    state = Safety.record_ack(state, "15550002222@s.whatsapp.net", "429")
+    assert {:error, {:safety_cooloff, _}, _} = Safety.check_send_allowed(state)
+  end
+
+  test "the configured kill switch blocks sends even with the circuit breaker disabled" do
+    cfg =
+      Config.defaults()
+      |> put_in([:release_gates, :remote_kill_switch], true)
+      |> put_in([:safety, :enabled], false)
+
+    assert {:error, :remote_kill_switch, _} =
+             Safety.check_send_allowed(%{runtime_cfg: cfg, safety: Safety.new()})
+  end
+
   test "session exposes runtime config and policy status" do
     {:ok, session} =
       ExWapp.start_link(

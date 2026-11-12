@@ -9,6 +9,8 @@ defmodule WAWebProtobufsE2E.ContextInfo do
   end
 
   @type t :: %__MODULE__{
+          sourceExperienceIDs: [non_neg_integer()],
+          sourceExperienceID: non_neg_integer() | nil,
           partnerDeepLinkToken: String.t() | nil,
           experienceIDs: [non_neg_integer()],
           aiProvenance: WAWebProtobufsAICommon.AIProvenance.t() | nil,
@@ -82,7 +84,9 @@ defmodule WAWebProtobufsE2E.ContextInfo do
           stanzaID: String.t() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct partnerDeepLinkToken: nil,
+  defstruct sourceExperienceIDs: [],
+            sourceExperienceID: nil,
+            partnerDeepLinkToken: nil,
             experienceIDs: [],
             aiProvenance: nil,
             instagramThreadLink: nil,
@@ -235,6 +239,8 @@ defmodule WAWebProtobufsE2E.ContextInfo do
                 {:remoteJID, 4, :optional, {:scalar, ""}, :string},
                 {:smbClientCampaignID, 45, :optional, {:scalar, ""}, :string},
                 {:smbServerCampaignID, 46, :optional, {:scalar, ""}, :string},
+                {:sourceExperienceID, 84, :optional, {:scalar, 0}, :uint32},
+                {:sourceExperienceIDs, 85, :repeated, :packed, :uint32},
                 {:stanzaID, 1, :optional, {:scalar, ""}, :string},
                 {:statusAttributionType, 57, :optional, {:scalar, :NONE},
                  {:enum, WAWebProtobufsE2E.ContextInfo.StatusAttributionType}},
@@ -303,6 +309,8 @@ defmodule WAWebProtobufsE2E.ContextInfo do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_sourceExperienceIDs(msg)
+        |> encode_sourceExperienceID(msg)
         |> encode_partnerDeepLinkToken(msg)
         |> encode_experienceIDs(msg)
         |> encode_aiProvenance(msg)
@@ -372,6 +380,42 @@ defmodule WAWebProtobufsE2E.ContextInfo do
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_sourceExperienceIDs({acc, acc_size}, msg) do
+      case :erlang.map_get(:sourceExperienceIDs, msg) do
+        [] ->
+          {acc, acc_size}
+
+        values ->
+          value_bytes = Protox.Encode.encode_packed_int32(values, <<>>)
+          value_size = byte_size(value_bytes)
+          value_size_bytes = Protox.Varint.encode(value_size)
+
+          {["\xAA\x05", value_size_bytes, value_bytes | acc],
+           acc_size + 2 + value_size + byte_size(value_size_bytes)}
+      end
+    end
+
+    defp encode_sourceExperienceID({acc, acc_size}, msg) do
+      case :erlang.map_get(:sourceExperienceID, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            value = :erlang.map_get(:sourceExperienceID, msg)
+
+            value_bytes =
+              if value >= 0 do
+                Protox.Varint.encode(:erlang.band(value, 4_294_967_295))
+              else
+                Protox.Varint.encode(:erlang.band(value, 18_446_744_073_709_551_615))
+              end
+          )
+
+          {["\xA0\x05", value_bytes | acc], acc_size + 2 + byte_size(value_bytes)}
+      end
+    end
 
     defp encode_partnerDeepLinkToken({acc, acc_size}, msg) do
       case :erlang.map_get(:partnerDeepLinkToken, msg) do
@@ -1629,6 +1673,8 @@ defmodule WAWebProtobufsE2E.ContextInfo do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:sourceExperienceIDs, &encode_sourceExperienceIDs/2, nil},
+          {:sourceExperienceID, &encode_sourceExperienceID/2, nil},
           {:partnerDeepLinkToken, &encode_partnerDeepLinkToken/2, nil},
           {:experienceIDs, &encode_experienceIDs/2, nil},
           {:aiProvenance, &encode_aiProvenance/2, WAWebProtobufsAICommon.AIProvenance},
@@ -1741,6 +1787,15 @@ defmodule WAWebProtobufsE2E.ContextInfo do
       @spec parse_key_value(binary(), struct()) :: struct()
       defp parse_key_value(<<>>, msg) do
         msg =
+          case :erlang.map_get(:sourceExperienceIDs, msg) do
+            [_first, _second | _tail] = values ->
+              %{msg | sourceExperienceIDs: :lists.reverse(values)}
+
+            _empty_or_single ->
+              msg
+          end
+
+        msg =
           case :erlang.map_get(:experienceIDs, msg) do
             [_first, _second | _tail] = values -> %{msg | experienceIDs: :lists.reverse(values)}
             _empty_or_single -> msg
@@ -1789,6 +1844,50 @@ defmodule WAWebProtobufsE2E.ContextInfo do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"\xAA\x05", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | sourceExperienceIDs:
+                  Protox.Decode.parse_repeated_uint32(
+                    :erlang.map_get(:sourceExperienceIDs, msg),
+                    delimited
+                  )
+            }
+
+            parse_key_value(rest, msg)
+
+          <<"\xA8\x05", 0::1, varint_value::7, rest::binary>> ->
+            value = varint_value
+
+            msg = %{
+              msg
+              | sourceExperienceIDs: [value | :erlang.map_get(:sourceExperienceIDs, msg)]
+            }
+
+            parse_key_value(rest, msg)
+
+          <<"\xA8\x05", bytes::binary>> ->
+            {value, rest} = Protox.Decode.parse_uint32(bytes)
+
+            msg = %{
+              msg
+              | sourceExperienceIDs: [value | :erlang.map_get(:sourceExperienceIDs, msg)]
+            }
+
+            parse_key_value(rest, msg)
+
+          <<"\xA0\x05", 0::1, varint_value::7, rest::binary>> ->
+            value = varint_value
+            msg = %{msg | sourceExperienceID: value}
+            parse_key_value(rest, msg)
+
+          <<"\xA0\x05", bytes::binary>> ->
+            {value, rest} = Protox.Decode.parse_uint32(bytes)
+            msg = %{msg | sourceExperienceID: value}
+            parse_key_value(rest, msg)
 
           <<"\x9A\x05", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)

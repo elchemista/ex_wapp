@@ -9,16 +9,18 @@ defmodule WAWebProtobufsAICommon.BotMessageOrigin do
   end
 
   @type t :: %__MODULE__{
+          proactiveMessageCampaignID: String.t() | nil,
           type: atom() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct type: nil, __uf__: []
+  defstruct proactiveMessageCampaignID: nil, type: nil, __uf__: []
 
   (
     @schema Protox.MessageSchema.expand!(
               WAWebProtobufsAICommon.BotMessageOrigin,
               :proto2,
               [
+                {:proactiveMessageCampaignID, 2, :optional, {:scalar, ""}, :string},
                 {:type, 1, :optional, {:scalar, :BOT_MESSAGE_ORIGIN_TYPE_AI_INITIATED},
                  {:enum, WAWebProtobufsAICommon.BotMessageOrigin.BotMessageOriginType}}
               ],
@@ -72,8 +74,29 @@ defmodule WAWebProtobufsAICommon.BotMessageOrigin do
       end
 
       @doc false
-      def encode_internal!(msg), do: {[], 0} |> encode_type(msg) |> encode_unknown_fields(msg)
+      def encode_internal!(msg) do
+        {[], 0}
+        |> encode_proactiveMessageCampaignID(msg)
+        |> encode_type(msg)
+        |> encode_unknown_fields(msg)
+      end
     )
+
+    defp encode_proactiveMessageCampaignID({acc, acc_size}, msg) do
+      case :erlang.map_get(:proactiveMessageCampaignID, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            delimited = :erlang.map_get(:proactiveMessageCampaignID, msg)
+            delimited_prefix = Protox.Encode.encode_string_prefix(delimited)
+          )
+
+          {["\x12", delimited_prefix, delimited | acc],
+           acc_size + 1 + (byte_size(delimited_prefix) + byte_size(delimited))}
+      end
+    end
 
     defp encode_type({acc, acc_size}, msg) do
       case :erlang.map_get(:type, msg) do
@@ -101,7 +124,10 @@ defmodule WAWebProtobufsAICommon.BotMessageOrigin do
 
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
-        Protox.Encode.find_invalid_field!(msg, [{:type, &encode_type/2, nil}])
+        Protox.Encode.find_invalid_field!(msg, [
+          {:proactiveMessageCampaignID, &encode_proactiveMessageCampaignID/2, nil},
+          {:type, &encode_type/2, nil}
+        ])
       end
 
       defp encode_diagnose!(_malformed_input), do: :ok
@@ -153,6 +179,11 @@ defmodule WAWebProtobufsAICommon.BotMessageOrigin do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"\x12", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+            msg = %{msg | proactiveMessageCampaignID: Protox.Decode.validate_string!(delimited)}
+            parse_key_value(rest, msg)
 
           <<"\b", 0::1, varint_value::7, rest::binary>> ->
             value =

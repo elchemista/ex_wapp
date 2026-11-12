@@ -7,12 +7,15 @@ defmodule ExWapp.Session.Worker.Safety do
   """
 
   alias ExWapp.Config
+  alias ExWapp.Session.JIDUtils
   alias ExWapp.Session.Worker
+  alias ExWapp.Session.Worker.PolicyState
 
   @window_ms 3_600_000
 
   @type state_data :: %{
           counters: %{optional(atom()) => [integer()]},
+          recipients: %{optional(String.t()) => integer()},
           blocked_until_ms: integer() | nil,
           forbidden: boolean(),
           last_trip_reason: atom() | nil
@@ -22,6 +25,7 @@ defmodule ExWapp.Session.Worker.Safety do
   def new do
     %{
       counters: %{},
+      recipients: %{},
       blocked_until_ms: nil,
       forbidden: false,
       last_trip_reason: nil
@@ -32,6 +36,16 @@ defmodule ExWapp.Session.Worker.Safety do
   def check_send_allowed(state) when is_map(state) do
     safety_cfg = Config.get(state.runtime_cfg, [:safety], %{})
 
+    if Config.get(state.runtime_cfg, [:release_gates, :remote_kill_switch], false) do
+      {:error, :remote_kill_switch, state}
+    else
+      check_circuit(state, safety_cfg)
+    end
+  end
+
+  def check_send_allowed(state), do: {:ok, state}
+
+  defp check_circuit(state, safety_cfg) do
     if Config.get(safety_cfg, [:enabled], true) do
       safety = Map.get(state, :safety) || new()
       now_ms = now_ms()
@@ -54,7 +68,52 @@ defmodule ExWapp.Session.Worker.Safety do
     end
   end
 
-  def check_send_allowed(state), do: {:ok, state}
+  @doc false
+  @spec check_recipient(Worker.t(), String.t()) ::
+          {:ok, Worker.t()} | {:error, term(), Worker.t()}
+  def check_recipient(state, jid) do
+    if Config.get(state.runtime_cfg, [:safety, :enabled], true),
+      do: check_recipient_enabled(state, jid),
+      else: {:ok, state}
+  end
+
+  defp check_recipient_enabled(state, jid) do
+    now = now_ms()
+    safety = Map.get(state, :safety) || new()
+
+    recipients =
+      Map.reject(Map.get(safety, :recipients, %{}), fn {_jid, until} -> until <= now end)
+
+    state = %{state | safety: Map.put(safety, :recipients, recipients)}
+    key = JIDUtils.strip_device(jid)
+
+    case Map.get(recipients, key) do
+      nil -> {:ok, state}
+      until -> {:error, {:recipient_cooloff, until - now}, state}
+    end
+  end
+
+  @doc false
+  @spec record_ack(Worker.t(), String.t(), String.t()) :: Worker.t()
+  def record_ack(state, jid, code) when code in ["401", "403"] do
+    if Config.get(state.runtime_cfg, [:safety, :enabled], true),
+      do: suppress_recipient(state, jid),
+      else: state
+  end
+
+  def record_ack(state, _jid, "429"), do: record_signal(state, :rate_limited)
+  def record_ack(state, _jid, _code), do: state
+
+  defp suppress_recipient(state, jid) do
+    safety = Map.get(state, :safety) || new()
+    recipients = Map.get(safety, :recipients, %{})
+    ttl = Config.get(state.runtime_cfg, [:safety, :cooloff_on_rate_signal_ms], 900_000)
+    key = JIDUtils.strip_device(jid)
+    recipients = Map.put(recipients, key, now_ms() + ttl)
+
+    %{state | safety: Map.put(safety, :recipients, recipients)}
+    |> PolicyState.persist()
+  end
 
   @spec record_signal(Worker.t(), atom()) :: Worker.t()
   def record_signal(state, signal) when is_map(state) and is_atom(signal) do
@@ -65,19 +124,20 @@ defmodule ExWapp.Session.Worker.Safety do
       safety = Map.get(state, :safety) || new()
       current = Map.get(safety.counters, signal, [])
       recent = Enum.filter(current, fn ts -> now_ms - ts <= @window_ms end)
-      updated = [now_ms | recent]
-      counters = Map.put(safety.counters, signal, updated)
       threshold = threshold_for(signal, safety_cfg)
+      updated = Enum.take([now_ms | recent], max(threshold, 1))
+      counters = Map.put(safety.counters, signal, updated)
       reached = length(updated) >= threshold
 
       safety =
         if reached do
-          trip(safety, signal, now_ms, safety_cfg)
+          trip(%{safety | counters: counters}, signal, now_ms, safety_cfg)
         else
           %{safety | counters: counters}
         end
 
       %{state | safety: safety}
+      |> PolicyState.persist()
     else
       state
     end
@@ -93,7 +153,8 @@ defmodule ExWapp.Session.Worker.Safety do
       forbidden: safety.forbidden,
       blocked_until_ms: safety.blocked_until_ms,
       last_trip_reason: safety.last_trip_reason,
-      counters: safety.counters
+      counters: safety.counters,
+      recipient_cooloffs: Map.get(safety, :recipients, %{})
     }
   end
 

@@ -11,6 +11,7 @@ defmodule ExWapp.Session do
   alias ExWapp.Message
   alias ExWapp.Session.AppStateCommands
   alias ExWapp.Session.Options
+  alias ExWapp.Session.Outbound.Command
   alias ExWapp.Session.Worker
 
   @typedoc "Human readable events emitted during the pairing flow."
@@ -85,7 +86,35 @@ defmodule ExWapp.Session do
   @spec send_message(GenServer.server(), Message.t()) ::
           {:ok, String.t()} | {:error, term()}
   def send_message(server, %Message{} = message) do
-    GenServer.call(server, {:send_message, message}, message_timeout(message))
+    with {:ok, message} <- Command.prepare(message),
+         timeout <- message_timeout(message),
+         true <- timeout == :infinity or (is_integer(timeout) and timeout >= 0) do
+      deadline =
+        if timeout == :infinity,
+          do: :infinity,
+          else: System.monotonic_time(:millisecond) + timeout
+
+      message = %{
+        message
+        | id: message.id || ExWapp.Messages.generate_id(),
+          opts: Keyword.put(message.opts, :send_deadline, deadline)
+      }
+
+      call_send_message(server, message, timeout)
+    else
+      false -> {:error, :invalid_send_timeout}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp call_send_message(server, message, timeout) do
+    GenServer.call(
+      server,
+      {:send_message, message},
+      if(timeout == :infinity, do: :infinity, else: timeout + 1000)
+    )
+  catch
+    :exit, {:timeout, _} -> {:error, {:send_timeout, message.id}}
   end
 
   @spec send_typing(GenServer.server(), binary(), boolean()) :: :ok | {:error, term()}
@@ -98,6 +127,22 @@ defmodule ExWapp.Session do
   def send_image(server, jid, source, opts \\ []) do
     jid
     |> Message.image(source, message_options(opts))
+    |> then(&send_message(server, &1))
+  end
+
+  @spec send_video(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_video(server, jid, source, opts \\ []) do
+    jid
+    |> Message.video(source, message_options(opts))
+    |> then(&send_message(server, &1))
+  end
+
+  @spec send_sticker(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_sticker(server, jid, source, opts \\ []) do
+    jid
+    |> Message.sticker(source, message_options(opts))
     |> then(&send_message(server, &1))
   end
 
@@ -115,6 +160,18 @@ defmodule ExWapp.Session do
     jid
     |> Message.document(source, message_options(opts))
     |> then(&send_message(server, &1))
+  end
+
+  @spec send_reaction(GenServer.server(), binary(), binary(), binary(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_reaction(server, jid, message_id, text, opts \\ []) do
+    send_message(server, Message.reaction(jid, message_id, text, message_options(opts)))
+  end
+
+  @spec request_history(GenServer.server(), binary(), map(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def request_history(server, jid, anchor, opts \\ []) do
+    send_message(server, Message.history_request(jid, anchor, message_options(opts)))
   end
 
   @spec send_location(GenServer.server(), binary(), number(), number(), keyword()) ::
@@ -268,7 +325,6 @@ defmodule ExWapp.Session do
   defp media_timeout(opts), do: Keyword.get(opts, :timeout, 60_000)
 
   defp message_timeout(%Message{opts: opts}) when is_list(opts), do: media_timeout(opts)
-  defp message_timeout(%Message{}), do: 60_000
 
   defp message_options(opts) when is_list(opts) do
     case Keyword.get(opts, :retry_message_id) do

@@ -49,7 +49,7 @@ Add ExWapp and the JSON implementation of your choice to your application:
 ```elixir
 def deps do
   [
-    {:ex_wapp, "~> 0.1.5"},
+    {:ex_wapp, "~> 0.1.6"},
     {:jason, "~> 1.4"}
   ]
 end
@@ -93,6 +93,20 @@ The Protox 2.1 runtime has no Decimal or JSON package dependency.
 OTP's Ed25519 primitive agree for valid converted XEdDSA signatures, but expose
 differences for noncanonical signatures and malformed inputs. See the
 [dependency comparison](docs/design-decisions.md) before replacing it.
+
+The 0.1.6 dependency baseline was checked against Hex on 2026-11-12. All 17
+locked direct and transitive packages use their latest stable releases;
+pre-releases are excluded. Direct dependencies are:
+
+| Package | Version | Scope |
+| --- | --- | --- |
+| `ed25519` | 1.5.2 | Runtime |
+| `protox` | 2.1.0 | Runtime |
+| `phoenix_pubsub` | 2.4.1 | Runtime |
+| `websockex` | 0.5.1 | Runtime |
+| `credo` | 1.7.19 | Development/test |
+| `dialyxir` | 1.4.9 | Development/test |
+| `ex_doc` | 0.40.4 | Development |
 
 ## Quick start
 
@@ -192,11 +206,13 @@ Messages and media:
 
 - `send_message/2`
 - `send_image/4`
+- `send_video/4`, `send_sticker/4`
 - `send_audio/4`
 - `send_document/4`
 - `send_location/5`
 - `send_contact/5`
 - `send_event/5`
+- `send_reaction/5`
 - `download_media/3`
 - `receive_message/3`
 
@@ -207,6 +223,7 @@ Contacts, chats, calls, and local history:
 - `list_chats/1`, `list_groups/1`, `get_chat/2`
 - `get_messages/3`, `stream_messages/3`, `all_messages/2`
 - `delete_messages/3`
+- `request_history/4` (requests older messages from the phone)
 - `list_calls/2`, `get_call/2`
 
 Diagnostics:
@@ -311,6 +328,81 @@ Use the same history queries above after completion. `download_media/3` also
 accepts a `%ExWapp.Media.Ref{type: :history}` for fetching decrypted compressed
 bytes directly.
 
+## Video, stickers, reactions, and older history
+
+```elixir
+{:ok, client, video_id} =
+  ExWapp.send_video(client, jid, {:path, "/media/clip.mp4"},
+    caption: "A short clip", seconds: 12, width: 1280, height: 720)
+
+{:ok, client, sticker_id} =
+  ExWapp.send_sticker(client, jid, {:path, "/media/sticker.webp"}, animated: true)
+
+{:ok, client, reaction_id} = ExWapp.send_reaction(client, jid, received_message_id, "👍")
+# Empty text removes your reaction. Set from_me: true when the target was your message.
+{:ok, client, removal_id} = ExWapp.send_reaction(client, jid, received_message_id, "")
+# For someone else's group message, identify the target's sender explicitly.
+{:ok, client, group_reaction_id} =
+  ExWapp.send_reaction(client, group_jid, received_message_id, "👍", participant: sender_jid)
+```
+
+Media sources also accept `{:bytes, binary}` or an existing `%ExWapp.Media.Upload{}`.
+Supply already encoded MP4/WebP bytes; ExWapp does not transcode, generate
+thumbnails or determine dimensions/duration. `gif_playback: true` sends an MP4
+with GIF-style playback. Incoming videos and stickers expose a
+`%ExWapp.Media.Ref{type: :video | :sticker}` that works with `download_media/3`.
+Reactions arrive as messages with `content.kind == :reaction` and a `reaction`
+map containing `message_id`, `chat_jid`, `from_me`, `participant`, `text`, and
+`sender_timestamp_ms`. The key describes the target; the outer message describes
+the reactor. Empty reaction text is a removal. These events are retained
+separately; ExWapp does not aggregate reactions on the target message.
+
+To request earlier history, use an existing message as the anchor:
+
+```elixir
+{:ok, history} = ExWapp.stream_messages(client, jid) # oldest first
+
+case Enum.take(history, 1) do
+  [anchor] -> ExWapp.request_history(client, jid, anchor, count: 50)
+  [] -> {:error, :no_history_anchor}
+end
+```
+
+The anchor must contain `id`, `from_me`, and `timestamp` in Unix **seconds**.
+`count` defaults to 50, with a local bound of 1–1000. Success returns
+`{:ok, updated_client, request_id}` when the encrypted request is sent to the
+account's primary device. It does not mean the phone has returned history.
+Responses use the existing asynchronous history import path; query the store
+again after import. The phone may be offline, lack those messages, or return
+fewer records. This API does not guarantee a complete account export.
+Custom transport adapters receive `%ExWapp.Message{type: :history_request}`;
+the built-in session handles peer routing and encryption.
+
+### Validate the new APIs with the demo
+
+The companion [demo_ex_wapp](https://github.com/elchemista/demo_ex_wapp/tree/ex-wapp-0.1.6-suite)
+contains an interactive LiveView suite on `ex-wapp-0.1.6-suite`. Its Git
+dependency pins a 0.1.6 commit; Mix fetches it without a separate library checkout.
+For local library development, replace that dependency with
+`{:ex_wapp, path: "../ex_wapp"}` and use `whatsmeow-update-0.1.6`.
+
+From the demo directory, run `mix deps.get`, `mix precommit`, then
+`mix phx.server`. The automated tests run offline. In the dashboard, pair a test
+account, select a chat, and click **Run full messaging and history suite** to
+send real fixtures and request older history.
+
+| Feature | Interactive verification |
+| --- | --- |
+| Video | MP4 send, MP4 with GIF playback, inbound download and video preview |
+| Stickers | Static and animated WebP sends, inbound download and image preview |
+| Reactions | Add/remove on the same target with both server acknowledgements; decode inbound reactions/removals |
+| History | Send an anchored request; separately observe account-level `ON_DEMAND` blob import |
+
+Reply from WhatsApp to exercise inbound checks. A send acknowledgement does not
+prove recipient delivery or rendering. History import events have no request ID,
+so the demo cannot correlate a completed blob to a particular request or chat;
+the import check may remain pending even after the request was sent successfully.
+
 ## Storage
 
 ExWapp ships with two stores:
@@ -336,6 +428,43 @@ different library does not change the on-disk format.
 `ExWapp.Store.Ets` accepts `max_messages_per_chat`. Its default is unbounded;
 choose a limit large enough for resend repair, receipt tracking, and media
 retry requirements in your application.
+
+### Incremental history persistence
+
+The existing snapshot format remains the default. For a growing local archive,
+opt into incremental history:
+
+```elixir
+store: {ExWapp.Store.Ets,
+  path: "/var/lib/my_app/account.etf",
+  history_storage: :incremental}
+```
+
+This keeps cryptographic state in the main snapshot and writes changed messages
+to `account.etf.history`, with checksums, synchronous writes and periodic
+compaction. Opening an existing snapshot in this mode preserves its original
+bytes in `account.etf.pre-history` before publishing the new format. The
+incremental marker is recognized on later opens even when the option is omitted.
+A missing or corrupt history file fails explicitly; an incomplete final record
+from an interrupted append is truncated to the last complete record.
+
+Back up the main file **and** `.history` together while the session is stopped.
+The `.pre-history` file is a migration backup, not a current backup.
+If an existing migration backup differs from the source snapshot, migration stops
+with `:snapshot_backup_conflict`; inspect and archive that backup before retrying.
+Do not open an incremental store with an older ExWapp version. To return to snapshot storage,
+export with `ExWapp.Store.Ets.load_path/1` and persist the result to a **new** store
+using the default mode. Directory synchronization must be supported by the
+filesystem; initialization or writes fail if it is unavailable.
+
+The built-in adapter prevents duplicate opens of the same canonical path and
+duplicate sessions sharing one store within a BEAM node. It does not coordinate
+file access across independent BEAM nodes or machines: use a transactional
+external adapter for that deployment. Message ID lookups use a secondary index.
+
+Retention remains opt-in. `max_messages_per_chat: 5000` drops the oldest messages;
+archive them first if needed. Retention is not secure erasure of backups or old
+journal records awaiting compaction.
 
 ## Contacts, chats, and calls
 
@@ -410,6 +539,57 @@ client =
 Disabling initial app-state sync can leave contacts and chat metadata
 incomplete. It is mainly useful for send-only or externally persisted
 integrations.
+
+### Send safety and resource limits in 0.1.6
+
+- A message ACK 429 starts the configured safety cool-off. ACK 401/403 suppresses
+  that recipient temporarily; a connection-level forbidden response keeps its
+  separate account-wide lock. Safety and daily quota state survive worker restarts
+  with a persistent store.
+- Retry, session repair and self-chat fallback preserve the message ID and the
+  prepared protobuf, including quotes, mentions, media and reactions. They check
+  the current safety state and throttle before resending, without charging the
+  original message quota twice. Retained retry data is limited to 512 entries and
+  16 MiB; media bytes are not cached. Evicted non-text payloads are not retried as
+  captions.
+- `throttle.on_limit: :delay` now waits for local rate limits, bounded by
+  `max_delay_ms` and the send deadline. At most eight delayed sends / 16 MiB are
+  queued. A rejected local admission consumes neither tokens nor quota.
+- Stream replacement stops automatic reconnect. After stopping the conflicting
+  instance, an explicit connect can retry without pairing again.
+- Sends carry an absolute deadline checked immediately before transport. A
+  `{:send_timeout, message_id}` error has an **unknown delivery outcome** if the
+  transport was already invoked. Reconcile that ID before retrying; callers may
+  supply `id:` to keep their own stable identifier.
+- Stored delivered/read statuses cannot be downgraded by a late retry failure.
+  Delivery events from concurrent workers can still arrive out of order; consumers
+  should reconcile a conflicting failure event with the stored message status.
+- Each session has at most 32 operation workers, four ordinary media operations,
+  and two history-blob workers with a queue of 16 blobs. History requests have a
+  60-second cooldown per chat and a separate one-per-second request budget.
+  The phone's asynchronous history events are not correlated to a request ID.
+- Downloads require HTTPS and validated encryption metadata. Known WhatsApp/CDN
+  domains and hosts returned by authenticated `media_conn` are accepted;
+  redirects are rejected. Reads have a shared deadline (60 seconds by default,
+  connect timeout at most 10 seconds) and an actual-body cap. Local media sources
+  and plaintext downloads default to a 64 MiB cap, adjustable with `max_bytes:`.
+  Unencrypted downloads require explicit `allow_plaintext: true` and a SHA-256
+  hash. `allowed_media_origins:` is an explicit trust override for controlled
+  HTTPS endpoints, including integration fixtures.
+- History decompression stops at 128 MiB and rejects compressed inputs over
+  64 MiB. Imported messages retain media, reactions and structured content.
+  Synthetic `history-sync-...` IDs cannot be used as phone-history anchors.
+
+Incoming reaction `from_me` / `chat_jid` fields describe the target key as sent
+by the reacting device; they are not a normalized local-account direction.
+
+The configuration sections `compliance`, `adaptive_governor`, `risk`, `canary`,
+`release_gates`, `auth_guard`, `protocol_health`, `hygiene`, and `enforcement`
+are **reserved**, not additional implemented protections. Non-default values
+produce a warning. The exception is `release_gates.remote_kill_switch: true`,
+which blocks sends; the library does not fetch a remote switch service.
+These controls reduce accidental traffic and resource growth; they do not
+guarantee protection against account bans.
 
 ## Observability and security
 
@@ -489,6 +669,25 @@ local peers, exercise HTTP/HTTPS and WebSocket servers, and verify persistence
 and recovery after failures. They run without a WhatsApp account. The HTTPS
 tests require `openssl` to generate a temporary certificate authority and server
 certificate; certificate verification remains enabled.
+
+### Publishing 0.1.6 to Hex
+
+The release version is defined once in `mix.exs`; the installation example,
+changelog and documentation source links use the same `0.1.6` version.
+The Git tag `v0.1.6` must identify the source commit being published.
+After the checks above, maintainers can inspect the local package and perform
+a publish dry run before uploading the package and documentation:
+
+```bash
+mix hex.build
+mix hex.publish --dry-run
+mix hex.publish
+```
+
+The package includes source, generated protocol modules, documentation,
+the supervised-session example and license. It excludes local dependencies,
+compiled output, tests, logs and account/session stores. The generated
+`ex_wapp-0.1.6.tar` is a local build artifact and is ignored by Git.
 
 ## License
 

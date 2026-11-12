@@ -191,6 +191,35 @@ defmodule ExWapp.Session.Worker.RetryTest do
     assert updated.retry_counters == %{"outbound_retry|70000001111@lid|cached" => 1}
   end
 
+  test "cache loss cannot turn a media caption or imported history into a text retry" do
+    store = ExWapp.Store.Memory.new()
+    on_exit(fn -> ExWapp.Store.Memory.stop(store) end)
+    jid = "15550001111@s.whatsapp.net"
+    opts = retry_options([])
+    state = retry_state(store)
+
+    for {id, raw} <- [{"video", %{content_type: :video}}, {"history", %{source: :history_sync}}] do
+      ExWapp.Chat.add_message(store, jid, %{id: id, from_me: true, text: "caption", raw: raw})
+      assert Retry.maybe_retry_outgoing_message(state, jid, id, opts) == state
+    end
+
+    refute_received {:retry_send, _, _}
+  end
+
+  test "a retained sticker proto is retried with its original metadata rather than text" do
+    jid = "15550001111@s.whatsapp.net"
+
+    payload = %{
+      jid: jid,
+      proto: %WAWebProtobufsE2E.Message{stickerMessage: %WAWebProtobufsE2E.StickerMessage{}},
+      opts: [mediatype: "sticker"]
+    }
+
+    opts = retry_options(outgoing_payloads: %{"sticker" => payload})
+    Retry.maybe_retry_outgoing_message(retry_state(nil), jid, "sticker", opts)
+    assert_receive {:retry_send, ^jid, ^payload}
+  end
+
   defp retry_state(store),
     do: %{store: store, retry_counters: %{}, registered_workers: %{}, registered_monitors: %{}}
 

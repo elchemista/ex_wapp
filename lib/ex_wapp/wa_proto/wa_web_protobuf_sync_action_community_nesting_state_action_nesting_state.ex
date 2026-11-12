@@ -6,40 +6,38 @@ defmodule WAWebProtobufSyncAction.CommunityNestingStateAction.NestingState do
   defstruct []
 
   (
-    @spec default() :: :NESTING_STATE_UNKNOWN
-    def default(), do: :NESTING_STATE_UNKNOWN
+    @spec default() :: :PLATFORM_DEFAULT
+    def default(), do: :PLATFORM_DEFAULT
   )
 
   @spec encode(atom() | String.t()) :: integer() | atom()
-  def encode(:NESTING_STATE_UNKNOWN), do: 0
+  def encode(:PLATFORM_DEFAULT), do: 0
 
-  def encode(:NESTING_STATE_NESTED), do: 1
+  def encode(:NESTED), do: 1
 
-  def encode(:NESTING_STATE_UNNESTED), do: 2
+  def encode(:UNNESTED), do: 2
 
   def encode(x), do: x
 
   @spec decode(integer()) :: atom() | integer()
-  def decode(0), do: :NESTING_STATE_UNKNOWN
+  def decode(0), do: :PLATFORM_DEFAULT
 
-  def decode(1), do: :NESTING_STATE_NESTED
+  def decode(1), do: :NESTED
 
-  def decode(2), do: :NESTING_STATE_UNNESTED
+  def decode(2), do: :UNNESTED
 
   def decode(x), do: x
 
   @spec constants() :: [{integer(), atom()}]
-  def constants() do
-    [{0, :NESTING_STATE_UNKNOWN}, {1, :NESTING_STATE_NESTED}, {2, :NESTING_STATE_UNNESTED}]
-  end
+  def constants(), do: [{0, :PLATFORM_DEFAULT}, {1, :NESTED}, {2, :UNNESTED}]
 
   @spec has_constant?(any()) :: boolean()
   (
-    def has_constant?(:NESTING_STATE_UNKNOWN), do: true
+    def has_constant?(:PLATFORM_DEFAULT), do: true
 
-    def has_constant?(:NESTING_STATE_NESTED), do: true
+    def has_constant?(:NESTED), do: true
 
-    def has_constant?(:NESTING_STATE_UNNESTED), do: true
+    def has_constant?(:UNNESTED), do: true
 
     def has_constant?(_value), do: false
   )

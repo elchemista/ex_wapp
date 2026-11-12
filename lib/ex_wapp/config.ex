@@ -1,19 +1,20 @@
 defmodule ExWapp.Config do
   @moduledoc false
 
+  require Logger
   alias ExWapp.Config.Validator
 
-  @default_client_version %{primary: 2, secondary: 3000, tertiary: 1_050_728_964}
+  @default_client_version %{primary: 2, secondary: 3000, tertiary: 1_052_556_849}
 
   # WhatsApp expects a client version close to what its own web client reports,
   # and this default only ages. It cannot expire on its own, so record when it
   # was verified upstream and let `client_version_status/2` report its age — a stale
   # version fails as an unexplained refusal at connect time, which is expensive
   # to diagnose from the far end.
-  # 2.3000.1050728964 is what whatsmeow ships as of b2b1e71 (2026-10-17);
+  # 2.3000.1052556849 is what whatsmeow ships as of c88388f (2026-11-10);
   # scripts/update_wa_protos.sh refreshes that checkout, and
   # tmp/whatsmeow_upstream/store/clientpayload.go carries the current value.
-  @client_version_verified_on ~D[2026-10-18]
+  @client_version_verified_on ~D[2026-11-12]
   @client_version_stale_after_days 120
 
   @type runtime_cfg :: map()
@@ -304,12 +305,45 @@ defmodule ExWapp.Config do
       |> normalize_protocol_client_version()
 
     case Validator.validate(cfg) do
-      :ok -> {:ok, cfg}
-      {:error, _} = error -> error
+      :ok ->
+        warn_reserved_configuration(cfg)
+        {:ok, cfg}
+
+      {:error, _} = error ->
+        error
     end
   end
 
   def resolve(_), do: {:error, {:invalid_runtime_config, :opts_must_be_keyword}}
+
+  defp warn_reserved_configuration(cfg) do
+    baseline = defaults()
+
+    for key <- [
+          :compliance,
+          :adaptive_governor,
+          :risk,
+          :canary,
+          :release_gates,
+          :auth_guard,
+          :protocol_health,
+          :hygiene,
+          :enforcement
+        ] do
+      actual = Map.get(cfg, key)
+      default = Map.get(baseline, key)
+      actual = if key == :release_gates, do: Map.delete(actual, :remote_kill_switch), else: actual
+
+      default =
+        if key == :release_gates, do: Map.delete(default, :remote_kill_switch), else: default
+
+      if actual != default do
+        Logger.warning(
+          "ExWapp runtime.#{key} is reserved and does not enforce policy (except release_gates.remote_kill_switch)."
+        )
+      end
+    end
+  end
 
   @spec get(map(), [term()], term()) :: term()
   def get(cfg, path, default \\ nil)

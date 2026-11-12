@@ -70,10 +70,11 @@ offline suite.
 
 ### The high-level feature surface is intentionally incomplete
 
-The supported send API currently covers text, image, audio, document, location,
-contact, and event messages. Other protocol capabilities visible in generated
+The supported send API currently covers text, image, video, WebP sticker, audio, document,
+location, contact, event, and reaction messages. Older history can be requested
+explicitly from the phone with a known message anchor. Other protocol capabilities visible in generated
 schemas are not automatically supported public features. In particular, users
-should not assume public support for every media type, reaction, edit, poll,
+should not assume public support for every media type, edit, poll,
 channel, community, business, or calling operation.
 
 Call storage contains signalling metadata only. ExWapp does not implement VoIP
@@ -84,8 +85,9 @@ audio/video or answering calls.
 Inline and blob-delivered history chunks are decoded and their supported records
 are projected into the local store. Blob downloads run in background tasks and
 report completion or failure to session subscribers. Local chat/message queries
-only return retained records: they do not request additional history from the
-phone or promise a complete remote account export.
+only return retained records. `request_history/4` separately requests older
+messages from the primary device, which may be offline or lack the requested
+records. Neither API promises a complete remote account export.
 
 ### Some coordination remains process-local
 
@@ -96,9 +98,13 @@ apply upstream backpressure rather than allow unlimited work for one key.
 
 ### The built-in ETS store is not a universal production database
 
-It provides durable file snapshots and useful atomic operations, but large or
-multi-node installations will generally need a custom store with application-
-specific backup, replication, retention, and access controls.
+It provides durable file snapshots, optional incremental message history and
+useful atomic operations. Incremental mode reduces full-history rewrites but
+still retains messages in ETS; set retention explicitly to bound that memory.
+Its `.history` sidecar must be backed up with the main snapshot. Ownership guards
+coordinate only within one BEAM node. Large or multi-node installations will
+generally need a custom store with application-specific backup, replication,
+retention, and access controls.
 
 ### Secrets and personal data cross application-owned boundaries
 

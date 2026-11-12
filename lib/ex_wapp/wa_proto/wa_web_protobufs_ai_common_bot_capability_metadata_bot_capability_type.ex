@@ -177,12 +177,18 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
 
   def encode(:AI_STUDY_QUIZ_ENABLED), do: 82
 
+  def encode(:HATCH_CVM_ENABLED), do: 83
+
+  def encode(:RICH_RESPONSE_SOCIAL_ENTITY_PREFETCH_SCHEDULER_ENABLED), do: 84
+
   def encode(x), do: x
 
   @spec decode(integer()) :: atom() | integer()
   def decode(54), do: :AI_IMAGINE_UR_TO_NATIVE_LOADING_INDICATOR
 
   def decode(18), do: :WA_IG_1P_PLUGIN_RANKING_UPDATE_8
+
+  def decode(84), do: :RICH_RESPONSE_SOCIAL_ENTITY_PREFETCH_SCHEDULER_ENABLED
 
   def decode(4), do: :AI_MEMORY
 
@@ -277,6 +283,8 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
   def decode(20), do: :WA_IG_1P_PLUGIN_RANKING_UPDATE_10
 
   def decode(6), do: :RICH_RESPONSE_TABLE
+
+  def decode(83), do: :HATCH_CVM_ENABLED
 
   def decode(43), do: :RICH_RESPONSE_UR_INLINE_REELS_ENABLED
 
@@ -433,7 +441,9 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       {79, :HATCH_ARTIFACT_CARD_ENABLED},
       {80, :AI_STUDY_CENTER_ENABLED},
       {81, :AI_MUSE_JARVIS_SCHEMA_ENABLED},
-      {82, :AI_STUDY_QUIZ_ENABLED}
+      {82, :AI_STUDY_QUIZ_ENABLED},
+      {83, :HATCH_CVM_ENABLED},
+      {84, :RICH_RESPONSE_SOCIAL_ENTITY_PREFETCH_SCHEDULER_ENABLED}
     ]
   end
 
@@ -604,6 +614,10 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
     def has_constant?(:AI_MUSE_JARVIS_SCHEMA_ENABLED), do: true
 
     def has_constant?(:AI_STUDY_QUIZ_ENABLED), do: true
+
+    def has_constant?(:HATCH_CVM_ENABLED), do: true
+
+    def has_constant?(:RICH_RESPONSE_SOCIAL_ENTITY_PREFETCH_SCHEDULER_ENABLED), do: true
 
     def has_constant?(_value), do: false
   )

@@ -9,6 +9,7 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
   end
 
   @type t :: %__MODULE__{
+          lightE2Ee: boolean() | nil,
           acp2Setting: WACommon.ACP2Setting.t() | nil,
           teeContextAnchorMessageID: String.t() | nil,
           associatedPrimaryIdentityKey: binary() | nil,
@@ -32,7 +33,8 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
           deviceListMetadata: WAWebProtobufsE2E.DeviceListMetadata.t() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct acp2Setting: nil,
+  defstruct lightE2Ee: nil,
+            acp2Setting: nil,
             teeContextAnchorMessageID: nil,
             associatedPrimaryIdentityKey: nil,
             accountEncryptionAttestation: nil,
@@ -71,6 +73,7 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
                 {:deviceListMetadata, 1, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsE2E.DeviceListMetadata}},
                 {:deviceListMetadataVersion, 2, :optional, {:scalar, 0}, :int32},
+                {:lightE2Ee, 22, :optional, {:scalar, false}, :bool},
                 {:limitSharing, 13, :optional, {:scalar, nil}, {:message, WACommon.LimitSharing}},
                 {:limitSharingV2, 14, :optional, {:scalar, nil},
                  {:message, WACommon.LimitSharing}},
@@ -141,6 +144,7 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_lightE2Ee(msg)
         |> encode_acp2Setting(msg)
         |> encode_teeContextAnchorMessageID(msg)
         |> encode_associatedPrimaryIdentityKey(msg)
@@ -165,6 +169,17 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_lightE2Ee({acc, acc_size}, msg) do
+      case :erlang.map_get(:lightE2Ee, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          {["\xB0\x01", Protox.Encode.encode_bool(:erlang.map_get(:lightE2Ee, msg)) | acc],
+           acc_size + 2 + 1}
+      end
+    end
 
     defp encode_acp2Setting({acc, acc_size}, msg) do
       case :erlang.map_get(:acp2Setting, msg) do
@@ -566,6 +581,7 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:lightE2Ee, &encode_lightE2Ee/2, nil},
           {:acp2Setting, &encode_acp2Setting/2, WACommon.ACP2Setting},
           {:teeContextAnchorMessageID, &encode_teeContextAnchorMessageID/2, nil},
           {:associatedPrimaryIdentityKey, &encode_associatedPrimaryIdentityKey/2, nil},
@@ -648,6 +664,16 @@ defmodule WAWebProtobufsE2E.MessageContextInfo do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"\xB0\x01", 0::1, varint_value::7, rest::binary>> ->
+            value = varint_value != 0
+            msg = %{msg | lightE2Ee: value}
+            parse_key_value(rest, msg)
+
+          <<"\xB0\x01", bytes::binary>> ->
+            {value, rest} = Protox.Decode.parse_bool(bytes)
+            msg = %{msg | lightE2Ee: value}
+            parse_key_value(rest, msg)
 
           <<"\xAA\x01", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)

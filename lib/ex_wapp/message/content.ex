@@ -9,7 +9,8 @@ defmodule ExWapp.Message.Content do
 
   alias ExWapp.Media.Ref
 
-  @type kind :: :text | :media | :location | :contact | :event | :protocol | :unsupported
+  @type kind ::
+          :text | :media | :location | :contact | :event | :reaction | :protocol | :unsupported
 
   @enforce_keys [:kind]
   defstruct [
@@ -20,6 +21,7 @@ defmodule ExWapp.Message.Content do
     :location,
     :contact,
     :event,
+    :reaction,
     :protocol_payload,
     diagnostics: %{}
   ]
@@ -32,6 +34,7 @@ defmodule ExWapp.Message.Content do
           location: map() | nil,
           contact: map() | nil,
           event: map() | nil,
+          reaction: map() | nil,
           protocol_payload: binary() | nil,
           diagnostics: map()
         }
@@ -41,7 +44,16 @@ defmodule ExWapp.Message.Content do
   """
   @spec new(kind(), keyword()) :: t()
   def new(kind, attrs \\ [])
-      when kind in [:text, :media, :location, :contact, :event, :protocol, :unsupported] and
+      when kind in [
+             :text,
+             :media,
+             :location,
+             :contact,
+             :event,
+             :reaction,
+             :protocol,
+             :unsupported
+           ] and
              is_list(attrs) do
     struct!(__MODULE__, Keyword.put(attrs, :kind, kind))
   end
@@ -126,6 +138,9 @@ defmodule ExWapp.Message.Content do
           diagnostics: diagnostics
         )
 
+      is_map(Map.get(message_data, :reaction)) ->
+        new(:reaction, reaction: Map.get(message_data, :reaction), diagnostics: diagnostics)
+
       is_map(Map.get(message_data, :event)) ->
         new(:event,
           text: Map.get(message_data, :text),
@@ -185,6 +200,15 @@ defmodule ExWapp.Message.Content do
       text: content.text,
       event: content.event,
       content_type: :event,
+      message_content_type: :user_message
+    }
+  end
+
+  def to_legacy(%__MODULE__{kind: :reaction} = content) do
+    %{
+      text: nil,
+      reaction: content.reaction,
+      content_type: :reaction,
       message_content_type: :user_message
     }
   end

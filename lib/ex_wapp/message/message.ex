@@ -18,6 +18,10 @@ defmodule ExWapp.Message do
           :text
           | :typing
           | :read_receipt
+          | :video
+          | :sticker
+          | :reaction
+          | :history_request
           | :image
           | :audio
           | :document
@@ -104,6 +108,36 @@ defmodule ExWapp.Message do
   end
 
   @doc """
+  Builds a video message from bytes, a filesystem path, or a pre-uploaded reference.
+  """
+  @spec video(String.t(), Media.source(), keyword()) :: t()
+  def video(to, source, opts \\ []) when is_binary(to) do
+    %__MODULE__{
+      id: Keyword.get(opts, :id),
+      to: to,
+      type: :video,
+      body: source,
+      opts: Keyword.drop(opts, [:id, :metadata]),
+      metadata: Keyword.get(opts, :metadata, %{})
+    }
+  end
+
+  @doc """
+  Builds a sticker message from bytes, a filesystem path, or a pre-uploaded reference.
+  """
+  @spec sticker(String.t(), Media.source(), keyword()) :: t()
+  def sticker(to, source, opts \\ []) when is_binary(to) do
+    %__MODULE__{
+      id: Keyword.get(opts, :id),
+      to: to,
+      type: :sticker,
+      body: source,
+      opts: Keyword.drop(opts, [:id, :metadata]),
+      metadata: Keyword.get(opts, :metadata, %{})
+    }
+  end
+
+  @doc """
   Builds an audio message from bytes, a filesystem path, or a pre-uploaded reference.
   """
   @spec audio(String.t(), Media.source(), keyword()) :: t()
@@ -130,6 +164,32 @@ defmodule ExWapp.Message do
       body: source,
       opts: Keyword.drop(opts, [:id, :metadata]),
       metadata: Keyword.get(opts, :metadata, %{})
+    }
+  end
+
+  @doc "Builds a reaction; an empty text removes the current user's reaction."
+  @spec reaction(String.t(), String.t(), String.t(), keyword()) :: t()
+  def reaction(to, message_id, text, opts \\ []) do
+    %__MODULE__{
+      id: Keyword.get(opts, :id),
+      to: to,
+      type: :reaction,
+      body: %{message_id: message_id, text: text},
+      opts: Keyword.drop(opts, [:id, :metadata]),
+      metadata: Keyword.get(opts, :metadata, %{})
+    }
+  end
+
+  @doc "Builds a request for messages before an anchor with :id, :from_me and :timestamp (seconds)."
+  @spec history_request(String.t(), map(), keyword()) :: t()
+  def history_request(to, anchor, opts \\ []) do
+    %__MODULE__{
+      to: to,
+      type: :history_request,
+      body: anchor,
+      id: Keyword.get(opts, :id),
+      metadata: Keyword.get(opts, :metadata, %{}),
+      opts: Keyword.drop(opts, [:id, :metadata])
     }
   end
 

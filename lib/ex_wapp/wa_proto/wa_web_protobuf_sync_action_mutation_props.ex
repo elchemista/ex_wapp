@@ -199,6 +199,8 @@ defmodule WAWebProtobufSyncAction.MutationProps do
 
   def encode(:SHARED_DEVICE_SECRET_ACTION), do: 100
 
+  def encode(:HATCH_CVM_SECRET_ACTION), do: 101
+
   def encode(:SHARE_OWN_PN), do: 10001
 
   def encode(:BUSINESS_BROADCAST_ACTION), do: 10002
@@ -277,6 +279,8 @@ defmodule WAWebProtobufSyncAction.MutationProps do
   def decode(8), do: :QUICK_REPLY_ACTION
 
   def decode(44), do: :STATUS_PRIVACY
+
+  def decode(101), do: :HATCH_CVM_SECRET_ACTION
 
   def decode(23), do: :UNARCHIVE_CHATS_SETTING
 
@@ -501,6 +505,7 @@ defmodule WAWebProtobufSyncAction.MutationProps do
       {98, :BB_PRO_PENDING_CUSTOMER_BASE_ACTION},
       {99, :COMMUNITY_NESTING_STATE_ACTION},
       {100, :SHARED_DEVICE_SECRET_ACTION},
+      {101, :HATCH_CVM_SECRET_ACTION},
       {10001, :SHARE_OWN_PN},
       {10002, :BUSINESS_BROADCAST_ACTION},
       {10003, :AI_THREAD_DELETE_ACTION}
@@ -696,6 +701,8 @@ defmodule WAWebProtobufSyncAction.MutationProps do
     def has_constant?(:COMMUNITY_NESTING_STATE_ACTION), do: true
 
     def has_constant?(:SHARED_DEVICE_SECRET_ACTION), do: true
+
+    def has_constant?(:HATCH_CVM_SECRET_ACTION), do: true
 
     def has_constant?(:SHARE_OWN_PN), do: true
 

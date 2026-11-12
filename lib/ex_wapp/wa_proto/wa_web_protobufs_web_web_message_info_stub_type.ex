@@ -541,6 +541,10 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
 
   def encode(:SPLIT_PAYMENT_MARKED_AS_PAID), do: 289
 
+  def encode(:POLL_OPTIONS_REMOVED), do: 290
+
+  def encode(:POLL_ADDED_OPTION_REMOVED), do: 291
+
   def encode(x), do: x
 
   @spec decode(integer()) :: atom() | integer()
@@ -727,6 +731,8 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
   def decode(116), do: :BLUE_MSG_SELF_FB_UNVERIFIED_TO_BSP_PREMISE_VERIFIED
 
   def decode(283), do: :CHAT_WITH_BUSINESS_IN_DIRECTORY
+
+  def decode(290), do: :POLL_OPTIONS_REMOVED
 
   def decode(8), do: :VERIFIED_HIGH
 
@@ -919,6 +925,8 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
   def decode(158), do: :COMMUNITY_PARENT_GROUP_SUBJECT_CHANGED
 
   def decode(57), do: :PAYMENT_ACTION_REQUEST_DECLINED
+
+  def decode(291), do: :POLL_ADDED_OPTION_REMOVED
 
   def decode(11), do: :VERIFIED_INITIAL_HIGH
 
@@ -1343,7 +1351,9 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       {283, :CHAT_WITH_BUSINESS_IN_DIRECTORY},
       {284, :META_AI_THREAD_CREATED},
       {285, :META_AI_CONNECTOR_LINKED},
-      {289, :SPLIT_PAYMENT_MARKED_AS_PAID}
+      {289, :SPLIT_PAYMENT_MARKED_AS_PAID},
+      {290, :POLL_OPTIONS_REMOVED},
+      {291, :POLL_ADDED_OPTION_REMOVED}
     ]
   end
 
@@ -1878,6 +1888,10 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
     def has_constant?(:META_AI_CONNECTOR_LINKED), do: true
 
     def has_constant?(:SPLIT_PAYMENT_MARKED_AS_PAID), do: true
+
+    def has_constant?(:POLL_OPTIONS_REMOVED), do: true
+
+    def has_constant?(:POLL_ADDED_OPTION_REMOVED), do: true
 
     def has_constant?(_value), do: false
   )

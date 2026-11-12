@@ -98,6 +98,14 @@ state in ETS and can durably flush a versioned, gzipped JSON envelope; the
 memory adapter is intended for tests and short-lived runs. Applications may
 provide a database-backed adapter.
 
+Snapshot persistence remains the default. With `history_storage: :incremental`,
+changed message records are appended to a checksummed `.history` sidecar and
+periodically compacted, while cryptographic state remains in the main snapshot.
+Migration preserves the original snapshot in `.pre-history`. Back up the main
+file and sidecar together while the session is stopped. Built-in path and store
+ownership guards coordinate one BEAM node; multi-node writers need an external
+transactional adapter. See the README storage section for retention and recovery.
+
 The host application owns supervision and the latest client value. The built-in
 runtime owns its internal workers. A store struct created by the caller remains
 caller-owned; a store created from client options can be closed by the runtime.

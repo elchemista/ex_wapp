@@ -114,16 +114,18 @@ defmodule ExWapp.MediaRetryProtocolTest do
     store = Store.Memory.new(initial_data: %{messages: %{"peer@s.whatsapp.net" => [message]}})
     caller = {self(), make_ref()}
 
-    state = %{
+    state = %Worker{
       store: store,
-      pending_media_retries: %{
-        "MSG-4" => %{
-          from: caller,
-          timer: nil,
-          media_key: media_key,
-          ref: old_ref,
-          message: message,
-          chat_jid: "peer@s.whatsapp.net"
+      pending: %ExWapp.Session.Worker.Pending{
+        pending_media_retries: %{
+          "MSG-4" => %{
+            from: caller,
+            timer: nil,
+            media_key: media_key,
+            ref: old_ref,
+            message: message,
+            chat_jid: "peer@s.whatsapp.net"
+          }
         }
       }
     }
@@ -133,7 +135,7 @@ defmodule ExWapp.MediaRetryProtocolTest do
     assert {:ok, next_state, actions} =
              MessageHandler.handle_node(notification, self(), state)
 
-    assert next_state.pending_media_retries == %{}
+    assert next_state.pending.pending_media_retries == %{}
 
     assert [
              {:send_node, %Node{tag: "ack"}},
@@ -184,12 +186,13 @@ defmodule ExWapp.MediaRetryProtocolTest do
     request = Task.async(fn -> Session.retry_media(session, "MSG-DISCONNECT", timeout: 5_000) end)
 
     assert eventually(fn ->
-             map_size(:sys.get_state(session).pending_media_retries) == 1
+             map_size(:sys.get_state(session).pending.pending_media_retries) == 1
            end)
 
     timer =
       session
       |> :sys.get_state()
+      |> Map.fetch!(:pending)
       |> Map.fetch!(:pending_media_retries)
       |> Map.fetch!("MSG-DISCONNECT")
       |> Map.fetch!(:timer)
@@ -199,7 +202,7 @@ defmodule ExWapp.MediaRetryProtocolTest do
     assert {:error, {:disconnected, {:transport_closed, :network_lost}}} =
              Task.await(request, 1_000)
 
-    assert eventually(fn -> :sys.get_state(session).pending_media_retries == %{} end)
+    assert eventually(fn -> :sys.get_state(session).pending.pending_media_retries == %{} end)
     assert Process.read_timer(timer) == false
   end
 

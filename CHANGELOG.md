@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.1.6 — 2026-11-12
+
+### Added
+
+- `send_video/4` and `send_sticker/4`, with encrypted upload/download, typed
+  incoming media references, MP4 GIF playback and animated WebP metadata.
+- `send_reaction/5` for direct chats and groups, including removal with empty
+  text and typed incoming reaction events that preserve the target message key.
+- `request_history/4` for requesting messages preceding a known anchor from
+  the primary device. Requests use encrypted peer routing; received history is
+  imported asynchronously through the existing history pipeline.
+
+### Changed
+
+- Align the default WhatsApp Web version with whatsmeow `c88388f` at
+  `2.3000.1052556849`, verified on 2026-11-12. Regenerate 781 Protox modules.
+- Adopt the new omitted-conversation history metadata and renamed community
+  nesting enum values; preserve older history fields as unknown wire data.
+- Update Dialyxir to 1.4.9 and align direct dependency minimums with the latest
+  stable Hex releases. All 17 locked direct and transitive dependencies were
+  checked against the registry on 2026-11-12.
+
+### Fixed
+
+- Accept `message_id` in grouped receipts and honor per-participant receipt
+  types, retaining upstream precedence and inheritance behavior.
+- Preserve a delivered/read verdict when a retry fails late, and retain a
+  caller-owned ETS store when its creating process exits normally.
+
+### Hardening
+
+- Preserve original protobufs and IDs in retries and self-chat fallback; keep
+  rehydrated/history reactions and media, and reject synthetic history anchors.
+- Apply ACK-driven safety, persisted quota/cool-off state, bounded delayed sends,
+  send deadlines, retry admission, history cooldowns and operation limits.
+- Stop automatic reconnect on stream replacement; reject concurrent sessions
+  using one built-in store in the same BEAM node.
+- Bound verified HTTPS media IO and history inflation; add indexed message-ID
+  lookups and opt-in incremental history with migration backup and crash recovery.
+- Add regression cases for media validation, recovery content, history,
+  persistence, retention and safety. Update HTTPS fixture expectations.
+
+### Validation
+
+- 1,239 passing tests and 90.44% maintained-code coverage on Elixir 1.20.4 /
+  OTP 29.1.1. Generated protocol modules remain excluded from coverage; the
+  90% threshold and static-analysis checks were not relaxed.
+- Formatting, warnings-as-errors compilation, strict Credo and documentation
+  generation pass. Dialyzer reports zero errors and zero skipped warnings.
+- Public facade, client API, message builders and media helpers have documented
+  functions and type specifications. Internal helpers keep their implementation
+  API hidden and include the new type specifications.
+- Hex package construction, archive-content inspection and publish dry run pass.
+  Publishing to Hex remains a separate maintainer action.
+- The maintainer also reported a successful manual run of the companion demo
+  with no observed errors. Automated protocol tests use local peers; they do not
+  exercise a live WhatsApp account.
+
 ## 0.1.5 — 2026-10-25
 
 ### Changed

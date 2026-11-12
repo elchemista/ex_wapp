@@ -10,6 +10,7 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
 
   @type t :: %__MODULE__{
           internalMetadata: binary() | nil,
+          interjectionMetadata: WAWebProtobufsAICommon.BotInterjectionMetadata.t() | nil,
           responseStoppedByUser: boolean() | nil,
           botHistoryShareMetadata: WAWebProtobufsAICommon.BotHistoryShareMetadata.t() | nil,
           pttPromptMetadata: WAWebProtobufsAICommon.BotPttPromptMetadata.t() | nil,
@@ -61,6 +62,7 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
   defstruct internalMetadata: nil,
+            interjectionMetadata: nil,
             responseStoppedByUser: nil,
             botHistoryShareMetadata: nil,
             pttPromptMetadata: nil,
@@ -150,6 +152,8 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
                  {:message, WAWebProtobufsAICommon.BotImagineMetadata}},
                 {:inThreadSurveyMetadata, 30, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsAICommon.InThreadSurveyMetadata}},
+                {:interjectionMetadata, 45, :optional, {:scalar, nil},
+                 {:message, WAWebProtobufsAICommon.BotInterjectionMetadata}},
                 {:internalMetadata, 999, :optional, {:scalar, ""}, :bytes},
                 {:invokerJID, 5, :optional, {:scalar, ""}, :string},
                 {:memoryMetadata, 15, :optional, {:scalar, nil},
@@ -244,6 +248,7 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
       def encode_internal!(msg) do
         {[], 0}
         |> encode_internalMetadata(msg)
+        |> encode_interjectionMetadata(msg)
         |> encode_responseStoppedByUser(msg)
         |> encode_botHistoryShareMetadata(msg)
         |> encode_pttPromptMetadata(msg)
@@ -304,6 +309,27 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
 
           {["\xBA>", delimited_prefix, delimited | acc],
            acc_size + 2 + (byte_size(delimited_prefix) + byte_size(delimited))}
+      end
+    end
+
+    defp encode_interjectionMetadata({acc, acc_size}, msg) do
+      case :erlang.map_get(:interjectionMetadata, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            %{__struct__: WAWebProtobufsAICommon.BotInterjectionMetadata} =
+              child = :erlang.map_get(:interjectionMetadata, msg)
+
+            {child_bytes, child_size} =
+              WAWebProtobufsAICommon.BotInterjectionMetadata.encode_internal!(child)
+
+            child_size_bytes = Protox.Varint.encode(child_size)
+          )
+
+          {["\xEA\x02", child_size_bytes, child_bytes | acc],
+           acc_size + 2 + (byte_size(child_size_bytes) + child_size)}
       end
     end
 
@@ -1171,6 +1197,8 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
           {:internalMetadata, &encode_internalMetadata/2, nil},
+          {:interjectionMetadata, &encode_interjectionMetadata/2,
+           WAWebProtobufsAICommon.BotInterjectionMetadata},
           {:responseStoppedByUser, &encode_responseStoppedByUser/2, nil},
           {:botHistoryShareMetadata, &encode_botHistoryShareMetadata/2,
            WAWebProtobufsAICommon.BotHistoryShareMetadata},
@@ -1300,6 +1328,26 @@ defmodule WAWebProtobufsAICommon.BotMetadata do
           <<"\xBA>", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)
             msg = %{msg | internalMetadata: delimited}
+            parse_key_value(rest, msg)
+
+          <<"\xEA\x02", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | interjectionMetadata:
+                  case :erlang.map_get(:interjectionMetadata, msg) do
+                    nil ->
+                      WAWebProtobufsAICommon.BotInterjectionMetadata.decode!(delimited)
+
+                    previous_value ->
+                      Protox.MergeMessage.merge(
+                        previous_value,
+                        WAWebProtobufsAICommon.BotInterjectionMetadata.decode!(delimited)
+                      )
+                  end
+            }
+
             parse_key_value(rest, msg)
 
           <<"\xE0\x02", 0::1, varint_value::7, rest::binary>> ->

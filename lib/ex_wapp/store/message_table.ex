@@ -13,18 +13,26 @@ defmodule ExWapp.Store.MessageTable do
   """
 
   @max_timestamp 18_446_744_073_709_551_615
-  @select_chunk_size 100
   # Unbounded by default: how much history is worth keeping is the host's call,
   # not this module's, and a library that silently forgets a caller's data is
   # worse than one that costs more than it should.
   @default_max_per_chat :all
 
-  defstruct [:table, :index_table, :count_table, max_per_chat: @default_max_per_chat]
+  defstruct [
+    :table,
+    :index_table,
+    :id_index_table,
+    :dirty_table,
+    :count_table,
+    max_per_chat: @default_max_per_chat
+  ]
 
   @type order :: :newest_first | :oldest_first
   @type t :: %__MODULE__{
           table: :ets.tid(),
           index_table: :ets.tid(),
+          id_index_table: :ets.tid(),
+          dirty_table: :ets.tid() | nil,
           count_table: :ets.tid(),
           max_per_chat: pos_integer() | :all
         }
@@ -64,6 +72,13 @@ defmodule ExWapp.Store.MessageTable do
           :compressed,
           read_concurrency: true
         ]),
+      id_index_table:
+        :ets.new(:ex_wapp_message_ids, [:bag, :public, :compressed, read_concurrency: true]),
+      dirty_table:
+        if(Keyword.get(opts, :track_changes, false),
+          do: :ets.new(:ex_wapp_message_dirty, [:set, :public]),
+          else: nil
+        ),
       count_table:
         :ets.new(:ex_wapp_message_counts, [
           :set,
@@ -216,9 +231,14 @@ defmodule ExWapp.Store.MessageTable do
   """
   @spec find_by_id(t(), String.t()) :: {String.t(), map()} | nil
   def find_by_id(%__MODULE__{} = message_store, message_id) when is_binary(message_id) do
-    message_store.index_table
-    |> select_index_by_message_id(message_id)
-    |> find_by_id_from_selection(message_store.table, message_id)
+    message_store.id_index_table
+    |> :ets.lookup(message_id)
+    |> Enum.find_value(fn {^message_id, jid} ->
+      case find(message_store, jid, message_id) do
+        nil -> nil
+        message -> {jid, message}
+      end
+    end)
   end
 
   def find_by_id(%__MODULE__{}, _message_id), do: nil
@@ -238,10 +258,38 @@ defmodule ExWapp.Store.MessageTable do
     with [{{^jid, ^message_id}, key}] <-
            :ets.lookup(message_store.index_table, {jid, message_id}),
          [{^key, message}] <- :ets.lookup(message_store.table, key) do
-      :ets.insert(message_store.table, {key, Map.put(message, :status, status)})
-      1
+      update_stored_status(message_store, jid, message_id, key, message, status)
     else
       _ -> 0
+    end
+  end
+
+  defp update_stored_status(message_store, jid, message_id, key, message, status) do
+    if keep_status?(Map.get(message, :status), status) do
+      0
+    else
+      replace_status(message_store, jid, message_id, key, message, status)
+    end
+  end
+
+  defp keep_status?(current, status) do
+    current == status or
+      (current == :read and status != :read) or
+      (current in [:received, :delivered] and status in [:failed, :pending, :sent])
+  end
+
+  defp replace_status(message_store, jid, message_id, key, message, status) do
+    updated = Map.put(message, :status, status)
+    match = [{{key, :"$1"}, [{:"=:=", :"$1", {:const, message}}], [{:const, {key, updated}}]}]
+
+    case :ets.select_replace(message_store.table, match) do
+      1 ->
+        mark_dirty(message_store, jid, message_id)
+        1
+
+      0 ->
+        # Another receipt won the race; re-read before changing its verdict.
+        update_status_count(message_store, jid, message_id, status)
     end
   end
 
@@ -261,9 +309,11 @@ defmodule ExWapp.Store.MessageTable do
   @spec update_status_by_id_count(t(), String.t(), atom()) :: non_neg_integer()
   def update_status_by_id_count(%__MODULE__{} = message_store, message_id, status)
       when is_binary(message_id) do
-    message_store.index_table
-    |> select_index_by_message_id(message_id)
-    |> update_status_from_selection(message_store.table, message_id, status, 0)
+    message_store.id_index_table
+    |> :ets.lookup(message_id)
+    |> Enum.reduce(0, fn {^message_id, jid}, count ->
+      count + update_status_count(message_store, jid, message_id, status)
+    end)
   end
 
   def update_status_by_id_count(%__MODULE__{}, _message_id, _status), do: 0
@@ -288,6 +338,8 @@ defmodule ExWapp.Store.MessageTable do
       case :ets.take(message_store.index_table, {jid, message_id}) do
         [{{^jid, ^message_id}, key}] ->
           :ets.delete(message_store.table, key)
+          :ets.delete_object(message_store.id_index_table, {message_id, jid})
+          mark_dirty(message_store, jid, message_id)
           bump_count(message_store, jid, -1)
           count + 1
 
@@ -313,6 +365,11 @@ defmodule ExWapp.Store.MessageTable do
   @doc false
   @spec delete_chat_count(t(), String.t()) :: non_neg_integer()
   def delete_chat_count(%__MODULE__{} = message_store, jid) when is_binary(jid) do
+    Enum.each(stream(message_store, jid), fn message ->
+      mark_dirty(message_store, jid, message.id)
+      :ets.delete_object(message_store.id_index_table, {message.id, jid})
+    end)
+
     deleted =
       :ets.select_delete(message_store.table, [
         {{{jid, :_, :_}, :_}, [], [true]}
@@ -354,6 +411,16 @@ defmodule ExWapp.Store.MessageTable do
   """
   @spec clear(t()) :: :ok
   def clear(%__MODULE__{} = message_store) do
+    :ets.foldl(
+      fn {{jid, id}, _key}, :ok ->
+        mark_dirty(message_store, jid, id)
+        :ok
+      end,
+      :ok,
+      message_store.index_table
+    )
+
+    :ets.delete_all_objects(message_store.id_index_table)
     :ets.delete_all_objects(message_store.table)
     :ets.delete_all_objects(message_store.index_table)
     :ets.delete_all_objects(message_store.count_table)
@@ -371,6 +438,8 @@ defmodule ExWapp.Store.MessageTable do
 
         :ets.insert(message_store.table, {key, normalized_message})
         :ets.insert(message_store.index_table, {{jid, message_id}, key})
+        :ets.insert(message_store.id_index_table, {message_id, jid})
+        mark_dirty(message_store, jid, message_id)
         unless replaced?, do: bump_count(message_store, jid, 1)
         1
 
@@ -408,6 +477,8 @@ defmodule ExWapp.Store.MessageTable do
       {^jid, _timestamp, message_id} = key ->
         :ets.delete(message_store.table, key)
         :ets.delete(message_store.index_table, {jid, message_id})
+        :ets.delete_object(message_store.id_index_table, {message_id, jid})
+        mark_dirty(message_store, jid, message_id)
         bump_count(message_store, jid, -1)
         drop_oldest(message_store, jid, excess - 1)
 
@@ -459,39 +530,8 @@ defmodule ExWapp.Store.MessageTable do
   defp next_lookup(table, _jid, :oldest_first, cursor), do: :ets.next_lookup(table, cursor)
   defp next_lookup(table, _jid, :newest_first, cursor), do: :ets.prev_lookup(table, cursor)
 
-  defp select_index_by_message_id(index_table, message_id) do
-    :ets.select(index_table, [{{{:"$1", message_id}, :"$2"}, [], [:"$_"]}], @select_chunk_size)
-  end
-
-  defp find_by_id_from_selection(:"$end_of_table", _table, _message_id), do: nil
-
-  defp find_by_id_from_selection({matches, continuation}, table, message_id) do
-    Enum.find_value(matches, fn {{jid, ^message_id}, key} ->
-      case :ets.lookup(table, key) do
-        [{^key, message}] -> {jid, message}
-        _ -> nil
-      end
-    end) || find_by_id_from_selection(:ets.select(continuation), table, message_id)
-  end
-
-  defp update_status_from_selection(:"$end_of_table", _table, _message_id, _status, count),
-    do: count
-
-  defp update_status_from_selection({matches, continuation}, table, message_id, status, count) do
-    count =
-      Enum.reduce(matches, count, fn {{_jid, ^message_id}, key}, updated_count ->
-        case :ets.lookup(table, key) do
-          [{^key, message}] ->
-            :ets.insert(table, {key, Map.put(message, :status, status)})
-            updated_count + 1
-
-          _ ->
-            updated_count
-        end
-      end)
-
-    update_status_from_selection(:ets.select(continuation), table, message_id, status, count)
-  end
+  defp mark_dirty(%{dirty_table: nil}, _jid, _id), do: :ok
+  defp mark_dirty(%{dirty_table: table}, jid, id), do: :ets.insert(table, {{jid, id}})
 
   defp decrement_remaining(:all), do: :all
   defp decrement_remaining(remaining), do: remaining - 1

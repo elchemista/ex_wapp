@@ -29,6 +29,8 @@ defmodule WAWebProtobufsE2E.HistorySyncType do
 
   def encode(:MESSAGE_ACCESS_STATUS), do: 8
 
+  def encode(:RECENT_CONVERSATIONS_ON_DEMAND), do: 9
+
   def encode(x), do: x
 
   @spec decode(integer()) :: atom() | integer()
@@ -50,6 +52,8 @@ defmodule WAWebProtobufsE2E.HistorySyncType do
 
   def decode(8), do: :MESSAGE_ACCESS_STATUS
 
+  def decode(9), do: :RECENT_CONVERSATIONS_ON_DEMAND
+
   def decode(x), do: x
 
   @spec constants() :: [{integer(), atom()}]
@@ -63,7 +67,8 @@ defmodule WAWebProtobufsE2E.HistorySyncType do
       {5, :NON_BLOCKING_DATA},
       {6, :ON_DEMAND},
       {7, :NO_HISTORY},
-      {8, :MESSAGE_ACCESS_STATUS}
+      {8, :MESSAGE_ACCESS_STATUS},
+      {9, :RECENT_CONVERSATIONS_ON_DEMAND}
     ]
   end
 
@@ -86,6 +91,8 @@ defmodule WAWebProtobufsE2E.HistorySyncType do
     def has_constant?(:NO_HISTORY), do: true
 
     def has_constant?(:MESSAGE_ACCESS_STATUS), do: true
+
+    def has_constant?(:RECENT_CONVERSATIONS_ON_DEMAND), do: true
 
     def has_constant?(_value), do: false
   )

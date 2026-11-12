@@ -86,13 +86,16 @@ defmodule ExWapp.Message.Handler.Receipt do
     log_ack(class, type, id, from, to, error)
     # Receipts (including media retries), calls and notifications can reuse a
     # message ID. Only a message ACK carries a verdict for the stored message.
-    if class == "message", do: maybe_update_ack_status(target, jid, id, status)
+    repair? = session_repair_requested?(session, class, id, jid, status, error)
+    # A repairable 463 is not a final failure. Keeping a failed record here can
+    # make callers miss the withheld verdict before their subscription starts.
+    if class == "message" and not repair?, do: maybe_update_ack_status(target, jid, id, status)
 
-    if session_repair_requested?(session, class, id, jid, status, error) do
-      :ok
-    else
-      maybe_broadcast_delivery(state, class, id, jid, status, error)
+    if class == "message" and status == :failed and is_pid(session) do
+      send(session, {:message_ack_policy, jid, error})
     end
+
+    unless repair?, do: maybe_broadcast_delivery(state, class, id, jid, status, error)
 
     {:ok, state}
   end
@@ -171,7 +174,8 @@ defmodule ExWapp.Message.Handler.Receipt do
   end
 
   defp grouped_receipt(%Node{attrs: attrs, content: users}, from, status) do
-    case non_empty_binary(Map.get(attrs, "key")) do
+    case non_empty_binary(Map.get(attrs, "key")) ||
+           non_empty_binary(Map.get(attrs, "message_id")) do
       nil ->
         []
 
@@ -185,6 +189,12 @@ defmodule ExWapp.Message.Handler.Receipt do
   defp grouped_receipt(_node, _from, _status), do: []
 
   defp participant_receipt(%Node{attrs: attrs}, message_id, from, status) do
+    status =
+      case Map.get(attrs, "type") do
+        type when type in [nil, "", "delivery"] -> status
+        type -> receipt_status(type)
+      end
+
     case normalize_optional_jid(Map.get(attrs, "jid")) do
       nil ->
         []

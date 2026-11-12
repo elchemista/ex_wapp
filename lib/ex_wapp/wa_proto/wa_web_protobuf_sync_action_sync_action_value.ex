@@ -9,6 +9,7 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
   end
 
   @type t :: %__MODULE__{
+          hatchCvmSecretAction: WAWebProtobufSyncAction.HatchCVMSecretAction.t() | nil,
           sharedDeviceSecretAction: WAWebProtobufSyncAction.SharedDeviceSecretAction.t() | nil,
           communityNestingStateAction:
             WAWebProtobufSyncAction.CommunityNestingStateAction.t() | nil,
@@ -128,7 +129,8 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
           timestamp: integer() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct sharedDeviceSecretAction: nil,
+  defstruct hatchCvmSecretAction: nil,
+            sharedDeviceSecretAction: nil,
             communityNestingStateAction: nil,
             bbProPendingCustomerBaseAction: nil,
             groupHistoryToggleAction: nil,
@@ -298,6 +300,8 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
                  {:message, WAWebProtobufSyncAction.FavoritesAction}},
                 {:groupHistoryToggleAction, 97, :optional, {:scalar, nil},
                  {:message, WAWebProtobufSyncAction.GroupHistoryToggleAction}},
+                {:hatchCvmSecretAction, 101, :optional, {:scalar, nil},
+                 {:message, WAWebProtobufSyncAction.HatchCVMSecretAction}},
                 {:interactiveMessageAction, 77, :optional, {:scalar, nil},
                  {:message, WAWebProtobufSyncAction.InteractiveMessageAction}},
                 {:keyExpiration, 19, :optional, {:scalar, nil},
@@ -462,6 +466,7 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_hatchCvmSecretAction(msg)
         |> encode_sharedDeviceSecretAction(msg)
         |> encode_communityNestingStateAction(msg)
         |> encode_bbProPendingCustomerBaseAction(msg)
@@ -556,6 +561,27 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_hatchCvmSecretAction({acc, acc_size}, msg) do
+      case :erlang.map_get(:hatchCvmSecretAction, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            %{__struct__: WAWebProtobufSyncAction.HatchCVMSecretAction} =
+              child = :erlang.map_get(:hatchCvmSecretAction, msg)
+
+            {child_bytes, child_size} =
+              WAWebProtobufSyncAction.HatchCVMSecretAction.encode_internal!(child)
+
+            child_size_bytes = Protox.Varint.encode(child_size)
+          )
+
+          {["\xAA\x06", child_size_bytes, child_bytes | acc],
+           acc_size + 2 + (byte_size(child_size_bytes) + child_size)}
+      end
+    end
 
     defp encode_sharedDeviceSecretAction({acc, acc_size}, msg) do
       case :erlang.map_get(:sharedDeviceSecretAction, msg) do
@@ -2463,6 +2489,8 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:hatchCvmSecretAction, &encode_hatchCvmSecretAction/2,
+           WAWebProtobufSyncAction.HatchCVMSecretAction},
           {:sharedDeviceSecretAction, &encode_sharedDeviceSecretAction/2,
            WAWebProtobufSyncAction.SharedDeviceSecretAction},
           {:communityNestingStateAction, &encode_communityNestingStateAction/2,
@@ -2679,6 +2707,26 @@ defmodule WAWebProtobufSyncAction.SyncActionValue do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"\xAA\x06", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | hatchCvmSecretAction:
+                  case :erlang.map_get(:hatchCvmSecretAction, msg) do
+                    nil ->
+                      WAWebProtobufSyncAction.HatchCVMSecretAction.decode!(delimited)
+
+                    previous_value ->
+                      Protox.MergeMessage.merge(
+                        previous_value,
+                        WAWebProtobufSyncAction.HatchCVMSecretAction.decode!(delimited)
+                      )
+                  end
+            }
+
+            parse_key_value(rest, msg)
 
           <<"\xA2\x06", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)

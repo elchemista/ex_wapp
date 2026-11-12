@@ -9,6 +9,7 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction do
   end
 
   @type t :: %__MODULE__{
+          mediaAutoDownloadQuality: atom() | nil,
           stockWallpaperImageID: String.t() | nil,
           colorSchemeID: String.t() | nil,
           chatThemeID: String.t() | nil,
@@ -45,7 +46,8 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction do
           startAtLogin: boolean() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct stockWallpaperImageID: nil,
+  defstruct mediaAutoDownloadQuality: nil,
+            stockWallpaperImageID: nil,
             colorSchemeID: nil,
             chatThemeID: nil,
             shouldPlaySoundForCallNotification: nil,
@@ -111,6 +113,10 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction do
                 {:isTextPreviewForNotificationEnabled, 11, :optional, {:scalar, false}, :bool},
                 {:isVideosAutodownloadEnabled, 20, :optional, {:scalar, false}, :bool},
                 {:language, 3, :optional, {:scalar, ""}, :string},
+                {:mediaAutoDownloadQuality, 35, :optional,
+                 {:scalar, :MEDIA_AUTO_DOWNLOAD_QUALITY_UNKNOWN},
+                 {:enum,
+                  WAWebProtobufSyncAction.SettingsSyncAction.MediaAutoDownloadQualitySetting}},
                 {:mediaUploadQuality, 24, :optional, {:scalar, :MEDIA_QUALITY_UNKNOWN},
                  {:enum, WAWebProtobufSyncAction.SettingsSyncAction.MediaQualitySetting}},
                 {:minimizeToTray, 2, :optional, {:scalar, false}, :bool},
@@ -176,6 +182,7 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_mediaAutoDownloadQuality(msg)
         |> encode_stockWallpaperImageID(msg)
         |> encode_colorSchemeID(msg)
         |> encode_chatThemeID(msg)
@@ -213,6 +220,30 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction do
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_mediaAutoDownloadQuality({acc, acc_size}, msg) do
+      case :erlang.map_get(:mediaAutoDownloadQuality, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            value =
+              WAWebProtobufSyncAction.SettingsSyncAction.MediaAutoDownloadQualitySetting.encode(
+                :erlang.map_get(:mediaAutoDownloadQuality, msg)
+              )
+
+            value_bytes =
+              if value >= 0 do
+                Protox.Varint.encode(:erlang.band(value, 4_294_967_295))
+              else
+                Protox.Varint.encode(:erlang.band(value, 18_446_744_073_709_551_615))
+              end
+          )
+
+          {["\x98\x02", value_bytes | acc], acc_size + 2 + byte_size(value_bytes)}
+      end
+    end
 
     defp encode_stockWallpaperImageID({acc, acc_size}, msg) do
       case :erlang.map_get(:stockWallpaperImageID, msg) do
@@ -763,6 +794,7 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:mediaAutoDownloadQuality, &encode_mediaAutoDownloadQuality/2, nil},
           {:stockWallpaperImageID, &encode_stockWallpaperImageID/2, nil},
           {:colorSchemeID, &encode_colorSchemeID/2, nil},
           {:chatThemeID, &encode_chatThemeID/2, nil},
@@ -853,6 +885,25 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"\x98\x02", 0::1, varint_value::7, rest::binary>> ->
+            value =
+              WAWebProtobufSyncAction.SettingsSyncAction.MediaAutoDownloadQualitySetting.decode(
+                varint_value
+              )
+
+            msg = %{msg | mediaAutoDownloadQuality: value}
+            parse_key_value(rest, msg)
+
+          <<"\x98\x02", bytes::binary>> ->
+            {value, rest} =
+              Protox.Decode.parse_enum(
+                bytes,
+                WAWebProtobufSyncAction.SettingsSyncAction.MediaAutoDownloadQualitySetting
+              )
+
+            msg = %{msg | mediaAutoDownloadQuality: value}
+            parse_key_value(rest, msg)
 
           <<"\x92\x02", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)

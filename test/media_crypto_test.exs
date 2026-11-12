@@ -76,7 +76,7 @@ defmodule ExWapp.MediaCryptoTest do
     assert {:error, :media_too_short} = Media.Crypto.decrypt_download(<<0::80>>, ref)
 
     assert {:error, :unsupported_media_type} =
-             Media.Crypto.decrypt_download(body, %{ref | type: :video})
+             Media.Crypto.decrypt_download(body, %{ref | type: :unsupported})
 
     keys = Media.Crypto.derive_keys(upload.media_key, :image)
     ciphertext_size = byte_size(body) - 10

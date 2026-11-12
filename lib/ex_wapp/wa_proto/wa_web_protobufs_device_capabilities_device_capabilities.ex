@@ -9,6 +9,8 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
   end
 
   @type t :: %__MODULE__{
+          bizAiWebOnboarding:
+            WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BizAiWebOnboarding.t() | nil,
           hostWriteMutationSupport:
             WAWebProtobufsDeviceCapabilities.DeviceCapabilities.HostWriteMutationSupport.t() | nil,
           newsletterChatsMigration:
@@ -32,7 +34,8 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
           chatLockSupportLevel: atom() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct hostWriteMutationSupport: nil,
+  defstruct bizAiWebOnboarding: nil,
+            hostWriteMutationSupport: nil,
             newsletterChatsMigration: nil,
             reverseHistorySync: nil,
             contactRefresh: nil,
@@ -57,6 +60,9 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
                  {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.AiThread}},
                 {:bizAiSettingsSync, 8, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BizAiSettingsSync}},
+                {:bizAiWebOnboarding, 13, :optional, {:scalar, nil},
+                 {:message,
+                  WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BizAiWebOnboarding}},
                 {:businessBroadcast, 3, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BusinessBroadcast}},
                 {:chatLockSupportLevel, 1, :optional, {:scalar, :NONE},
@@ -132,6 +138,7 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_bizAiWebOnboarding(msg)
         |> encode_hostWriteMutationSupport(msg)
         |> encode_newsletterChatsMigration(msg)
         |> encode_reverseHistorySync(msg)
@@ -147,6 +154,29 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_bizAiWebOnboarding({acc, acc_size}, msg) do
+      case :erlang.map_get(:bizAiWebOnboarding, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            %{__struct__: WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BizAiWebOnboarding} =
+              child = :erlang.map_get(:bizAiWebOnboarding, msg)
+
+            {child_bytes, child_size} =
+              WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BizAiWebOnboarding.encode_internal!(
+                child
+              )
+
+            child_size_bytes = Protox.Varint.encode(child_size)
+          )
+
+          {["j", child_size_bytes, child_bytes | acc],
+           acc_size + 1 + (byte_size(child_size_bytes) + child_size)}
+      end
+    end
 
     defp encode_hostWriteMutationSupport({acc, acc_size}, msg) do
       case :erlang.map_get(:hostWriteMutationSupport, msg) do
@@ -431,6 +461,8 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:bizAiWebOnboarding, &encode_bizAiWebOnboarding/2,
+           WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BizAiWebOnboarding},
           {:hostWriteMutationSupport, &encode_hostWriteMutationSupport/2,
            WAWebProtobufsDeviceCapabilities.DeviceCapabilities.HostWriteMutationSupport},
           {:newsletterChatsMigration, &encode_newsletterChatsMigration/2,
@@ -505,6 +537,30 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"j", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | bizAiWebOnboarding:
+                  case :erlang.map_get(:bizAiWebOnboarding, msg) do
+                    nil ->
+                      WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BizAiWebOnboarding.decode!(
+                        delimited
+                      )
+
+                    previous_value ->
+                      Protox.MergeMessage.merge(
+                        previous_value,
+                        WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BizAiWebOnboarding.decode!(
+                          delimited
+                        )
+                      )
+                  end
+            }
+
+            parse_key_value(rest, msg)
 
           <<"b", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)

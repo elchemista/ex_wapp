@@ -9,8 +9,9 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
   end
 
   @type t :: %__MODULE__{
-          omittedConversationsProvided: boolean() | nil,
-          omittedConversations: [WAWebProtobufsHistorySync.RecoverableHistoryConversation.t()],
+          omittedConversationMetadataSnapshotID: String.t() | nil,
+          omittedConversationMetadata:
+            WAWebProtobufsHistorySync.OmittedConversationMetadata.t() | nil,
           favoriteStickers: [WAWebProtobufsHistorySync.StickerMetadata.t()],
           inlineContactsProvided: boolean() | nil,
           inlineContacts: [WAWebProtobufsHistorySync.InlineContact.t()],
@@ -34,8 +35,8 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
           syncType: atom() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct omittedConversationsProvided: nil,
-            omittedConversations: [],
+  defstruct omittedConversationMetadataSnapshotID: nil,
+            omittedConversationMetadata: nil,
             favoriteStickers: [],
             inlineContactsProvided: nil,
             inlineContacts: [],
@@ -82,9 +83,9 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
                  {:message, WAWebProtobufsHistorySync.InlineContact}},
                 {:inlineContactsProvided, 21, :optional, {:scalar, false}, :bool},
                 {:nctSalt, 19, :optional, {:scalar, ""}, :bytes},
-                {:omittedConversations, 23, :repeated, :unpacked,
-                 {:message, WAWebProtobufsHistorySync.RecoverableHistoryConversation}},
-                {:omittedConversationsProvided, 24, :optional, {:scalar, false}, :bool},
+                {:omittedConversationMetadata, 25, :optional, {:scalar, nil},
+                 {:message, WAWebProtobufsHistorySync.OmittedConversationMetadata}},
+                {:omittedConversationMetadataSnapshotID, 26, :optional, {:scalar, ""}, :string},
                 {:pastParticipants, 12, :repeated, :unpacked,
                  {:message, WAWebProtobufsHistorySync.PastParticipants}},
                 {:phoneNumberToLidMappings, 15, :repeated, :unpacked,
@@ -154,8 +155,8 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
-        |> encode_omittedConversationsProvided(msg)
-        |> encode_omittedConversations(msg)
+        |> encode_omittedConversationMetadataSnapshotID(msg)
+        |> encode_omittedConversationMetadata(msg)
         |> encode_favoriteStickers(msg)
         |> encode_inlineContactsProvided(msg)
         |> encode_inlineContacts(msg)
@@ -181,27 +182,40 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
       end
     )
 
-    defp encode_omittedConversationsProvided({acc, acc_size}, msg) do
-      case :erlang.map_get(:omittedConversationsProvided, msg) do
+    defp encode_omittedConversationMetadataSnapshotID({acc, acc_size}, msg) do
+      case :erlang.map_get(:omittedConversationMetadataSnapshotID, msg) do
         nil ->
           {acc, acc_size}
 
         _value ->
-          {[
-             "\xC0\x01",
-             Protox.Encode.encode_bool(:erlang.map_get(:omittedConversationsProvided, msg)) | acc
-           ], acc_size + 2 + 1}
+          (
+            delimited = :erlang.map_get(:omittedConversationMetadataSnapshotID, msg)
+            delimited_prefix = Protox.Encode.encode_string_prefix(delimited)
+          )
+
+          {["\xD2\x01", delimited_prefix, delimited | acc],
+           acc_size + 2 + (byte_size(delimited_prefix) + byte_size(delimited))}
       end
     end
 
-    defp encode_omittedConversations({acc, acc_size}, msg) do
-      case :erlang.map_get(:omittedConversations, msg) do
-        [] ->
+    defp encode_omittedConversationMetadata({acc, acc_size}, msg) do
+      case :erlang.map_get(:omittedConversationMetadata, msg) do
+        nil ->
           {acc, acc_size}
 
-        values ->
-          {value_bytes, value_size} = encode_repeated_23(values, [], 0)
-          {[value_bytes | acc], acc_size + value_size}
+        _value ->
+          (
+            %{__struct__: WAWebProtobufsHistorySync.OmittedConversationMetadata} =
+              child = :erlang.map_get(:omittedConversationMetadata, msg)
+
+            {child_bytes, child_size} =
+              WAWebProtobufsHistorySync.OmittedConversationMetadata.encode_internal!(child)
+
+            child_size_bytes = Protox.Varint.encode(child_size)
+          )
+
+          {["\xCA\x01", child_size_bytes, child_bytes | acc],
+           acc_size + 2 + (byte_size(child_size_bytes) + child_size)}
       end
     end
 
@@ -525,29 +539,6 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
     end
 
     (
-      defp encode_repeated_23([], acc, size), do: {acc, size}
-
-      defp encode_repeated_23([value | rest], acc, size) do
-        (
-          (
-            %{__struct__: WAWebProtobufsHistorySync.RecoverableHistoryConversation} =
-              child = value
-
-            {child_bytes, child_size} =
-              WAWebProtobufsHistorySync.RecoverableHistoryConversation.encode_internal!(child)
-
-            child_size_bytes = Protox.Varint.encode(child_size)
-          )
-
-          value_bytes = [child_size_bytes, child_bytes]
-          value_bytes_size = byte_size(child_size_bytes) + child_size
-        )
-
-        encode_repeated_23(rest, [acc, "\xBA\x01", value_bytes], size + 2 + value_bytes_size)
-      end
-    )
-
-    (
       defp encode_repeated_22([], acc, size), do: {acc, size}
 
       defp encode_repeated_22([value | rest], acc, size) do
@@ -761,9 +752,10 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
-          {:omittedConversationsProvided, &encode_omittedConversationsProvided/2, nil},
-          {:omittedConversations, &encode_omittedConversations/2,
-           WAWebProtobufsHistorySync.RecoverableHistoryConversation},
+          {:omittedConversationMetadataSnapshotID,
+           &encode_omittedConversationMetadataSnapshotID/2, nil},
+          {:omittedConversationMetadata, &encode_omittedConversationMetadata/2,
+           WAWebProtobufsHistorySync.OmittedConversationMetadata},
           {:favoriteStickers, &encode_favoriteStickers/2,
            WAWebProtobufsHistorySync.StickerMetadata},
           {:inlineContactsProvided, &encode_inlineContactsProvided/2, nil},
@@ -819,15 +811,6 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
     (
       @spec parse_key_value(binary(), struct()) :: struct()
       defp parse_key_value(<<>>, msg) do
-        msg =
-          case :erlang.map_get(:omittedConversations, msg) do
-            [_first, _second | _tail] = values ->
-              %{msg | omittedConversations: :lists.reverse(values)}
-
-            _empty_or_single ->
-              msg
-          end
-
         msg =
           case :erlang.map_get(:favoriteStickers, msg) do
             [_first, _second | _tail] = values ->
@@ -923,25 +906,32 @@ defmodule WAWebProtobufsHistorySync.HistorySync do
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
 
-          <<"\xC0\x01", 0::1, varint_value::7, rest::binary>> ->
-            value = varint_value != 0
-            msg = %{msg | omittedConversationsProvided: value}
-            parse_key_value(rest, msg)
-
-          <<"\xC0\x01", bytes::binary>> ->
-            {value, rest} = Protox.Decode.parse_bool(bytes)
-            msg = %{msg | omittedConversationsProvided: value}
-            parse_key_value(rest, msg)
-
-          <<"\xBA\x01", bytes::binary>> ->
+          <<"\xD2\x01", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)
 
             msg = %{
               msg
-              | omittedConversations: [
-                  WAWebProtobufsHistorySync.RecoverableHistoryConversation.decode!(delimited)
-                  | :erlang.map_get(:omittedConversations, msg)
-                ]
+              | omittedConversationMetadataSnapshotID: Protox.Decode.validate_string!(delimited)
+            }
+
+            parse_key_value(rest, msg)
+
+          <<"\xCA\x01", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | omittedConversationMetadata:
+                  case :erlang.map_get(:omittedConversationMetadata, msg) do
+                    nil ->
+                      WAWebProtobufsHistorySync.OmittedConversationMetadata.decode!(delimited)
+
+                    previous_value ->
+                      Protox.MergeMessage.merge(
+                        previous_value,
+                        WAWebProtobufsHistorySync.OmittedConversationMetadata.decode!(delimited)
+                      )
+                  end
             }
 
             parse_key_value(rest, msg)
