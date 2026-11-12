@@ -68,7 +68,7 @@ defmodule ExWapp.MixProject do
         "GitHub" => @source_url,
         "Documentation" => "https://hexdocs.pm/ex_wapp",
         "Changelog" => "#{@source_url}/blob/v#{@version}/CHANGELOG.md",
-        "Demo" => "https://github.com/elchemista/demo_ex_wapp/tree/codex/ex-wapp-0.1.6-suite",
+        "Demo" => "https://github.com/elchemista/demo_ex_wapp/tree/ex-wapp-0.1.6-suite",
         "Issue tracker" => @issues_url
       }
     ]

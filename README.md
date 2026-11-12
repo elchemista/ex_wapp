@@ -380,11 +380,11 @@ the built-in session handles peer routing and encryption.
 
 ### Validate the new APIs with the demo
 
-The companion [demo_ex_wapp](https://github.com/elchemista/demo_ex_wapp/tree/codex/ex-wapp-0.1.6-suite)
-contains an interactive LiveView suite on `codex/ex-wapp-0.1.6-suite`. Its Git
+The companion [demo_ex_wapp](https://github.com/elchemista/demo_ex_wapp/tree/ex-wapp-0.1.6-suite)
+contains an interactive LiveView suite on `ex-wapp-0.1.6-suite`. Its Git
 dependency pins a 0.1.6 commit; Mix fetches it without a separate library checkout.
 For local library development, replace that dependency with
-`{:ex_wapp, path: "../ex_wapp"}` and use `codex/whatsmeow-update-0.1.6`.
+`{:ex_wapp, path: "../ex_wapp"}` and use `whatsmeow-update-0.1.6`.
 
 From the demo directory, run `mix deps.get`, `mix precommit`, then
 `mix phx.server`. The automated tests run offline. In the dashboard, pair a test
