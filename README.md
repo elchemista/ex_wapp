@@ -380,10 +380,11 @@ the built-in session handles peer routing and encryption.
 
 ### Validate the new APIs with the demo
 
-The companion [demo_ex_wapp](https://github.com/elchemista/demo_ex_wapp) contains
-an interactive LiveView suite. For local 0.1.6 development, use the sibling
-checkouts `ex_wapp` on `codex/whatsmeow-update-0.1.6` and `demo_ex_wapp` on
-`codex/ex-wapp-0.1.6-suite`; the demo uses `{:ex_wapp, path: "../ex_wapp"}`.
+The companion [demo_ex_wapp](https://github.com/elchemista/demo_ex_wapp/tree/codex/ex-wapp-0.1.6-suite)
+contains an interactive LiveView suite on `codex/ex-wapp-0.1.6-suite`. Its Git
+dependency pins a 0.1.6 commit; Mix fetches it without a separate library checkout.
+For local library development, replace that dependency with
+`{:ex_wapp, path: "../ex_wapp"}` and use `codex/whatsmeow-update-0.1.6`.
 
 From the demo directory, run `mix deps.get`, `mix precommit`, then
 `mix phx.server`. The automated tests run offline. In the dashboard, pair a test
@@ -668,6 +669,25 @@ local peers, exercise HTTP/HTTPS and WebSocket servers, and verify persistence
 and recovery after failures. They run without a WhatsApp account. The HTTPS
 tests require `openssl` to generate a temporary certificate authority and server
 certificate; certificate verification remains enabled.
+
+### Publishing 0.1.6 to Hex
+
+The release version is defined once in `mix.exs`; the installation example,
+changelog and documentation source links use the same `0.1.6` version.
+The Git tag `v0.1.6` must identify the source commit being published.
+After the checks above, maintainers can inspect the local package and perform
+a publish dry run before uploading the package and documentation:
+
+```bash
+mix hex.build
+mix hex.publish --dry-run
+mix hex.publish
+```
+
+The package includes source, generated protocol modules, documentation,
+the supervised-session example and license. It excludes local dependencies,
+compiled output, tests, logs and account/session stores. The generated
+`ex_wapp-0.1.6.tar` is a local build artifact and is ignored by Git.
 
 ## License
 

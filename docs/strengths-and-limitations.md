@@ -98,9 +98,13 @@ apply upstream backpressure rather than allow unlimited work for one key.
 
 ### The built-in ETS store is not a universal production database
 
-It provides durable file snapshots and useful atomic operations, but large or
-multi-node installations will generally need a custom store with application-
-specific backup, replication, retention, and access controls.
+It provides durable file snapshots, optional incremental message history and
+useful atomic operations. Incremental mode reduces full-history rewrites but
+still retains messages in ETS; set retention explicitly to bound that memory.
+Its `.history` sidecar must be backed up with the main snapshot. Ownership guards
+coordinate only within one BEAM node. Large or multi-node installations will
+generally need a custom store with application-specific backup, replication,
+retention, and access controls.
 
 ### Secrets and personal data cross application-owned boundaries
 

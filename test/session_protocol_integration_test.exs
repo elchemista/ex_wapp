@@ -255,7 +255,7 @@ defmodule ExWapp.SessionProtocolIntegrationTest do
     assert_receive {:peer_node, _, %Node{tag: "receipt", attrs: %{"id" => "image"}}}, 1000
     assert {:error, :media_retry_already_pending} = ExWapp.retry_media(ctx.session, "image")
     assert {:error, :media_retry_timeout} = Task.await(task, 2000)
-    assert :sys.get_state(ctx.session).pending_media_retries == %{}
+    assert :sys.get_state(ctx.session).pending.pending_media_retries == %{}
   end
 
   test "public pause and resume commands change send policy through PID and PubSub", ctx do
@@ -514,7 +514,8 @@ defmodule ExWapp.SessionProtocolIntegrationTest do
     end
   end
 
-  test "media download worker authenticates bytes and releases its task registration", ctx do
+  test "media download worker rejects an untrusted origin and releases its task registration",
+       ctx do
     alias ExWapp.Test.LocalHTTP
     plaintext = <<0, 255, "private image">>
     {:ok, upload, encrypted} = Media.Crypto.encrypt_upload(plaintext, :image)
@@ -527,12 +528,7 @@ defmodule ExWapp.SessionProtocolIntegrationTest do
         metadata: %{caption: "caption"}
     }
 
-    assert {:ok,
-            %Media.Download{
-              bytes: ^plaintext,
-              mimetype: "image/png",
-              metadata: %{caption: "caption"}
-            }} = ExWapp.download_media(ctx.session, ref)
+    assert {:error, :untrusted_media_url} = ExWapp.download_media(ctx.session, ref)
 
     assert ExWapp.Session.SendCoordinator.operation_count(
              :sys.get_state(ctx.session).send_coordinator
@@ -1160,7 +1156,7 @@ defmodule ExWapp.SessionProtocolIntegrationTest do
              ExWapp.send_message(ctx.session, "15550002222@s.whatsapp.net", "not acknowledged")
 
     await(fn -> ExWapp.health_status(ctx.session).drops_total == 1 end)
-    assert :sys.get_state(ctx.session).outbound_confirmations == %{}
+    assert :sys.get_state(ctx.session).pending.outbound_confirmations == %{}
     assert Store.find_message(ctx.store, "15550002222@s.whatsapp.net", id).status == :failed
     send(ctx.session, {:outbound_confirm_timeout, id})
     assert ExWapp.health_status(ctx.session).drops_total == 1
@@ -1405,7 +1401,7 @@ defmodule ExWapp.SessionProtocolIntegrationTest do
     assert stored.media == refreshed
     assert stored.content.media == refreshed
     assert stored.raw.media == refreshed
-    assert :sys.get_state(ctx.session).pending_media_retries == %{}
+    assert :sys.get_state(ctx.session).pending.pending_media_retries == %{}
     assert :ok = Transport.inject(ctx.conn, node)
     assert Store.find_message(ctx.store, @jid, "reupload") == stored
     assert :ok = ExWapp.unsubscribe(ctx.session)

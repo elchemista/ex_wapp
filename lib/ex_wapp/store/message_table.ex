@@ -258,28 +258,38 @@ defmodule ExWapp.Store.MessageTable do
     with [{{^jid, ^message_id}, key}] <-
            :ets.lookup(message_store.index_table, {jid, message_id}),
          [{^key, message}] <- :ets.lookup(message_store.table, key) do
-      current = Map.get(message, :status)
-
-      if current == status or
-           (current == :read and status != :read) or
-           (current in [:received, :delivered] and status in [:failed, :pending, :sent]) do
-        0
-      else
-        updated = Map.put(message, :status, status)
-        match = [{{key, :"$1"}, [{:"=:=", :"$1", {:const, message}}], [{:const, {key, updated}}]}]
-
-        case :ets.select_replace(message_store.table, match) do
-          1 ->
-            mark_dirty(message_store, jid, message_id)
-            1
-
-          0 ->
-            # Another receipt won the race; re-read before changing its verdict.
-            update_status_count(message_store, jid, message_id, status)
-        end
-      end
+      update_stored_status(message_store, jid, message_id, key, message, status)
     else
       _ -> 0
+    end
+  end
+
+  defp update_stored_status(message_store, jid, message_id, key, message, status) do
+    if keep_status?(Map.get(message, :status), status) do
+      0
+    else
+      replace_status(message_store, jid, message_id, key, message, status)
+    end
+  end
+
+  defp keep_status?(current, status) do
+    current == status or
+      (current == :read and status != :read) or
+      (current in [:received, :delivered] and status in [:failed, :pending, :sent])
+  end
+
+  defp replace_status(message_store, jid, message_id, key, message, status) do
+    updated = Map.put(message, :status, status)
+    match = [{{key, :"$1"}, [{:"=:=", :"$1", {:const, message}}], [{:const, {key, updated}}]}]
+
+    case :ets.select_replace(message_store.table, match) do
+      1 ->
+        mark_dirty(message_store, jid, message_id)
+        1
+
+      0 ->
+        # Another receipt won the race; re-read before changing its verdict.
+        update_status_count(message_store, jid, message_id, status)
     end
   end
 

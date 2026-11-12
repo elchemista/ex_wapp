@@ -29,6 +29,8 @@ defmodule ExWapp.EtsFailureRecoveryTest do
       assert File.read!(path) == before
       assert :ok = Store.finish_batch(store, :outer)
       refute File.read!(path) == before
+      assert {:error, :batch_not_started} = Store.finish_batch(store, :outer)
+      assert :ok = Store.close(store)
       reopened = Ets.new(path: path)
 
       try do
@@ -40,8 +42,6 @@ defmodule ExWapp.EtsFailureRecoveryTest do
       after
         Store.close(reopened)
       end
-
-      assert {:error, :batch_not_started} = Store.finish_batch(store, :outer)
     after
       Store.close(store)
     end
@@ -65,9 +65,7 @@ defmodule ExWapp.EtsFailureRecoveryTest do
       Store.close(previous)
       File.rmdir!(path)
       assert :ok = Store.flush(store)
-      recovered = Ets.new(path: path)
-      assert Store.get(recovered, :value) == "new"
-      Store.close(recovered)
+      assert {:ok, %{value: "new"}} = Ets.load_path(path)
       assert Path.wildcard(path <> ".tmp*") == []
     after
       Store.close(store)

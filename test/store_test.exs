@@ -121,6 +121,7 @@ defmodule ExWapp.StoreTest do
       assert {:ok, loaded} = Store.load(store1)
       refute Map.has_key?(loaded, :chat_messages)
 
+      assert :ok = Store.close(store1)
       store2 = Store.Ets.new(path: path)
 
       assert [%{id: "persisted-message-1"}] =
@@ -154,6 +155,7 @@ defmodule ExWapp.StoreTest do
                ])
 
       assert :ok = Store.delete_chat_messages(store, jid)
+      assert :ok = Store.close(store)
     end
 
     test "status updates by ID apply across chats" do
@@ -201,6 +203,7 @@ defmodule ExWapp.StoreTest do
       assert [] = Store.list_messages(store, jid, limit: :all)
       assert [%{id: "m3"}] = Store.list_messages(store, other_jid, limit: :all)
 
+      assert :ok = Store.close(store)
       reloaded = Store.Ets.new(path: path)
       assert [] = Store.list_messages(reloaded, jid, limit: :all)
       assert [%{id: "m3"}] = Store.list_messages(reloaded, other_jid, limit: :all)
@@ -212,6 +215,7 @@ defmodule ExWapp.StoreTest do
       # First store instance
       store1 = Store.Ets.new(path: path)
       Store.persist(store1, %{key: "value"})
+      assert :ok = Store.close(store1)
 
       # Second store instance loading same file
       store2 = Store.Ets.new(path: path)
@@ -242,6 +246,7 @@ defmodule ExWapp.StoreTest do
                |> Store.load_signal_sessions()
                |> ExWapp.Signal.SessionStore.get_session(jid)
 
+      assert :ok = Store.close(store)
       reloaded = Store.Ets.new(path: path)
 
       assert {:ok, %{ratchet_counter: 2}} =
@@ -268,7 +273,8 @@ defmodule ExWapp.StoreTest do
       |> Task.await_many(10_000)
 
       assert store |> Store.get(:contacts, %{}) |> map_size() == 32
-      assert Store.Ets.new(path: path) |> Store.get(:contacts, %{}) |> map_size() == 32
+      assert {:ok, %{contacts: contacts}} = Store.Ets.load_path(path)
+      assert map_size(contacts) == 32
     end
 
     test "a caller-owned batch defers disk persistence until its final mutation" do
@@ -288,7 +294,8 @@ defmodule ExWapp.StoreTest do
       assert :ok = Store.finish_batch(store, :contact_sync)
       assert File.exists?(path)
 
-      assert Store.Ets.new(path: path) |> Store.get(:contacts, %{}) |> map_size() == 16
+      assert {:ok, %{contacts: contacts}} = Store.Ets.load_path(path)
+      assert map_size(contacts) == 16
     end
 
     test "an explicit flush persists a still-open batch" do

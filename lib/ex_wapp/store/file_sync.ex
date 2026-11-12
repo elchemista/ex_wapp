@@ -3,6 +3,7 @@ defmodule ExWapp.Store.FileSync do
 
   # A synced temporary file is not enough to publish a new filename durably.
   # Incremental mode fails explicitly if the filesystem cannot sync directories.
+  @spec directory(Path.t()) :: :ok | {:error, term()}
   def directory(path) do
     case :file.open(String.to_charlist(Path.dirname(path)), [:read, :raw, :directory]) do
       {:ok, directory} ->
@@ -17,6 +18,7 @@ defmodule ExWapp.Store.FileSync do
     end
   end
 
+  @spec preserve_snapshot(Path.t()) :: :ok | {:error, term()}
   def preserve_snapshot(path) do
     case File.read(path) do
       {:ok, data} ->

@@ -6,8 +6,9 @@ defmodule ExWapp.Store.Ets.Writer do
   require Logger
 
   alias ExWapp.Store.Ets
+  alias ExWapp.Store.PathLock
 
-  defstruct [:store, batches: %{}, dirty?: false]
+  defstruct [:store, :owner, batches: %{}, dirty?: false]
 
   @type mutation_result ::
           {:ok, :changed | :unchanged}
@@ -15,7 +16,7 @@ defmodule ExWapp.Store.Ets.Writer do
           | {:error, term()}
 
   @spec start_link(Ets.t()) :: GenServer.on_start()
-  def start_link(store), do: GenServer.start_link(__MODULE__, store)
+  def start_link(store), do: GenServer.start(__MODULE__, {store, self()})
 
   @spec mutate(pid(), (-> mutation_result())) :: :ok | {:error, term()}
   def mutate(writer, fun) when is_pid(writer) and is_function(fun, 0) do
@@ -50,9 +51,13 @@ defmodule ExWapp.Store.Ets.Writer do
   end
 
   @impl true
-  def init(store) do
+  def init({store, owner}) do
     Process.flag(:trap_exit, true)
-    {:ok, %__MODULE__{store: store}}
+    # Link before acknowledging startup, while keeping the GenServer's OTP
+    # parent separate. A creator's normal exit must not discard its handed-off
+    # store; abnormal exits retain the usual linked-process shutdown behavior.
+    Process.link(owner)
+    {:ok, %__MODULE__{store: store, owner: owner}}
   end
 
   @impl true
@@ -126,6 +131,12 @@ defmodule ExWapp.Store.Ets.Writer do
 
   @impl true
   def handle_info({:"ETS-TRANSFER", _table, _from, _gift}, state), do: {:noreply, state}
+
+  def handle_info({:EXIT, owner, :normal}, %{owner: owner} = state), do: {:noreply, state}
+
+  def handle_info({:EXIT, owner, reason}, %{owner: owner} = state),
+    do: {:stop, reason, state}
+
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
   def handle_info({:DOWN, monitor, :process, owner, _reason}, state) do
@@ -152,7 +163,7 @@ defmodule ExWapp.Store.Ets.Writer do
 
   @impl true
   def terminate(_reason, state) do
-    ExWapp.Store.PathLock.release(state.store.lock)
+    PathLock.release(state.store.lock)
     :ok
   end
 
@@ -222,7 +233,7 @@ defmodule ExWapp.Store.Ets.Writer do
         [:link, :monitor]
       )
 
-    :ok = ExWapp.Store.PathLock.watch_flush(store.lock, pid)
+    :ok = PathLock.watch_flush(store.lock, pid)
     send(pid, {:flush, result_ref})
 
     receive do

@@ -26,6 +26,8 @@
 
 - Accept `message_id` in grouped receipts and honor per-participant receipt
   types, retaining upstream precedence and inheritance behavior.
+- Preserve a delivered/read verdict when a retry fails late, and retain a
+  caller-owned ETS store when its creating process exits normally.
 
 ### Hardening
 
@@ -42,16 +44,19 @@
 
 ### Validation
 
-- The baseline before these hardening edits (`f67f837`) had 1,220 passing tests
-  and 91.50% maintained-code coverage. Strict Credo,
-  Dialyzer (zero errors and skips), formatting, warnings-as-errors compilation,
-  documentation generation and Hex package construction passed for that baseline. Coverage
-  includes TLS media upload, independent HKDF/protobuf fixtures, Signal-encrypted
-  media/reaction sends and a primary-device history request. Live interoperability
-  with a real WhatsApp account was not exercised.
-- The subsequent hardening changes were reviewed statically and syntax-checked.
-  Their new and updated tests, builds and live interoperability checks have
-  **not been run**; the baseline results do not validate these edits.
+- 1,239 passing tests and 90.44% maintained-code coverage on Elixir 1.20.4 /
+  OTP 29.1.1. Generated protocol modules remain excluded from coverage; the
+  90% threshold and static-analysis checks were not relaxed.
+- Formatting, warnings-as-errors compilation, strict Credo and documentation
+  generation pass. Dialyzer reports zero errors and zero skipped warnings.
+- Public facade, client API, message builders and media helpers have documented
+  functions and type specifications. Internal helpers keep their implementation
+  API hidden and include the new type specifications.
+- Hex package construction, archive-content inspection and publish dry run pass.
+  Publishing to Hex remains a separate maintainer action.
+- The maintainer also reported a successful manual run of the companion demo
+  with no observed errors. Automated protocol tests use local peers; they do not
+  exercise a live WhatsApp account.
 
 ## 0.1.5 — 2026-10-25
 

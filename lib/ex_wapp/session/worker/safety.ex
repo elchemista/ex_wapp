@@ -7,7 +7,9 @@ defmodule ExWapp.Session.Worker.Safety do
   """
 
   alias ExWapp.Config
+  alias ExWapp.Session.JIDUtils
   alias ExWapp.Session.Worker
+  alias ExWapp.Session.Worker.PolicyState
 
   @window_ms 3_600_000
 
@@ -66,6 +68,9 @@ defmodule ExWapp.Session.Worker.Safety do
     end
   end
 
+  @doc false
+  @spec check_recipient(Worker.t(), String.t()) ::
+          {:ok, Worker.t()} | {:error, term(), Worker.t()}
   def check_recipient(state, jid) do
     if Config.get(state.runtime_cfg, [:safety, :enabled], true),
       do: check_recipient_enabled(state, jid),
@@ -80,7 +85,7 @@ defmodule ExWapp.Session.Worker.Safety do
       Map.reject(Map.get(safety, :recipients, %{}), fn {_jid, until} -> until <= now end)
 
     state = %{state | safety: Map.put(safety, :recipients, recipients)}
-    key = ExWapp.Session.JIDUtils.strip_device(jid)
+    key = JIDUtils.strip_device(jid)
 
     case Map.get(recipients, key) do
       nil -> {:ok, state}
@@ -88,25 +93,27 @@ defmodule ExWapp.Session.Worker.Safety do
     end
   end
 
+  @doc false
+  @spec record_ack(Worker.t(), String.t(), String.t()) :: Worker.t()
   def record_ack(state, jid, code) when code in ["401", "403"] do
     if Config.get(state.runtime_cfg, [:safety, :enabled], true),
       do: suppress_recipient(state, jid),
       else: state
   end
 
+  def record_ack(state, _jid, "429"), do: record_signal(state, :rate_limited)
+  def record_ack(state, _jid, _code), do: state
+
   defp suppress_recipient(state, jid) do
     safety = Map.get(state, :safety) || new()
     recipients = Map.get(safety, :recipients, %{})
     ttl = Config.get(state.runtime_cfg, [:safety, :cooloff_on_rate_signal_ms], 900_000)
-    key = ExWapp.Session.JIDUtils.strip_device(jid)
+    key = JIDUtils.strip_device(jid)
     recipients = Map.put(recipients, key, now_ms() + ttl)
 
     %{state | safety: Map.put(safety, :recipients, recipients)}
-    |> ExWapp.Session.Worker.PolicyState.persist()
+    |> PolicyState.persist()
   end
-
-  def record_ack(state, _jid, "429"), do: record_signal(state, :rate_limited)
-  def record_ack(state, _jid, _code), do: state
 
   @spec record_signal(Worker.t(), atom()) :: Worker.t()
   def record_signal(state, signal) when is_map(state) and is_atom(signal) do
@@ -130,7 +137,7 @@ defmodule ExWapp.Session.Worker.Safety do
         end
 
       %{state | safety: safety}
-      |> ExWapp.Session.Worker.PolicyState.persist()
+      |> PolicyState.persist()
     else
       state
     end

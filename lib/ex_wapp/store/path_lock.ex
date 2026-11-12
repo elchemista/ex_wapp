@@ -5,6 +5,7 @@ defmodule ExWapp.Store.PathLock do
   # Local-node lock: use a transactional external adapter when multiple BEAM
   # nodes need the same account. Include node() to avoid locking unrelated paths
   # on other machines connected through Erlang distribution.
+  @spec canonical(Path.t()) :: Path.t()
   def canonical(path), do: canonical(Path.expand(path), 0)
 
   defp canonical(_path, depth) when depth > 40,
@@ -21,12 +22,18 @@ defmodule ExWapp.Store.PathLock do
     end)
   end
 
+  @spec start(Path.t()) :: GenServer.on_start()
   def start(path) do
     GenServer.start(__MODULE__, {path, self()}, name: {:global, {__MODULE__, node(), path}})
   end
 
+  @spec watch_flush(pid(), pid()) :: :ok
   def watch_flush(lock, pid), do: GenServer.call(lock, {:watch_flush, pid})
+
+  @spec attach(pid(), pid()) :: :ok
   def attach(lock, owner), do: GenServer.call(lock, {:attach, owner})
+
+  @spec release(pid() | nil) :: :ok
   def release(nil), do: :ok
 
   def release(lock) do

@@ -90,6 +90,7 @@ defmodule ExWapp.Session.Worker do
 
   alias ExWapp.Pairing.LinkCode
   alias ExWapp.Signal.{PrekeyFetcher, SessionStore}
+  alias ExWapp.Store.{Ets, Memory, SessionClaim}
 
   alias ExWapp.Session.{
     Account,
@@ -113,6 +114,8 @@ defmodule ExWapp.Session.Worker do
     Events,
     NodeHandler,
     OutboundConfirmation,
+    Pending,
+    PolicyState,
     PostAuth,
     Safety,
     SendHealth,
@@ -164,12 +167,7 @@ defmodule ExWapp.Session.Worker do
     signal_sessions: nil,
     retry_counters: %{},
     outgoing_retry_payloads: %{},
-    outbound_confirmations: %{},
-    pending_media_retries: %{},
-    history_requests: %{},
-    history_blob_queue: [],
-    delayed_sends: %{},
-    pending_session_repairs: %{},
+    pending: %Pending{},
     initial_sync: %InitialSync{},
     post_auth_phase: :idle,
     prekey_count_query_id: nil,
@@ -221,8 +219,7 @@ defmodule ExWapp.Session.Worker do
           digest_iq_id: binary() | nil,
           retry_counters: map(),
           outgoing_retry_payloads: map(),
-          outbound_confirmations: map(),
-          pending_media_retries: map(),
+          pending: Pending.t(),
           stats: map()
         }
 
@@ -464,7 +461,7 @@ defmodule ExWapp.Session.Worker do
       safety: Safety.new()
     }
 
-    state = ExWapp.Session.Worker.PolicyState.restore(state)
+    state = PolicyState.restore(state)
     Events.emit_telemetry(:init, %{session_id: session_id}, state)
 
     if options.auto_connect do
@@ -512,8 +509,7 @@ defmodule ExWapp.Session.Worker do
            :ok <- connected,
            {:ok, state} <- SendHealth.ensure_send_enabled(state, jid),
            {:ok, state} <- Safety.check_send_allowed(state),
-           {:ok, state} <- Safety.check_recipient(state, jid),
-           do: {:ok, state}
+           do: Safety.check_recipient(state, jid)
 
     case result do
       {:ok, state} -> {:reply, :ok, state}
@@ -627,7 +623,7 @@ defmodule ExWapp.Session.Worker do
 
   def handle_call({:retry_media, message_id, opts}, from, %{status: status} = state)
       when status in [:connected, :syncing] and is_binary(message_id) and is_list(opts) do
-    with false <- Map.has_key?(state.pending_media_retries, message_id),
+    with false <- Map.has_key?(state.pending.pending_media_retries, message_id),
          {chat_jid, message} <- Store.find_message_by_id(state.store, message_id),
          %Media.Ref{media_key: media_key} = ref <- message_media_ref(message),
          :ok <- validate_retry_media_key(media_key),
@@ -658,7 +654,11 @@ defmodule ExWapp.Session.Worker do
       OutboundQueue.enqueue_node(state.outbound_queue, receipt)
 
       {:noreply,
-       %{state | pending_media_retries: Map.put(state.pending_media_retries, message_id, pending)}}
+       Pending.put(
+         state,
+         :pending_media_retries,
+         Map.put(state.pending.pending_media_retries, message_id, pending)
+       )}
     else
       true -> {:reply, {:error, :media_retry_already_pending}, state}
       nil -> {:reply, {:error, :message_not_found}, state}
@@ -1331,13 +1331,13 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_info({:media_retry_timeout, message_id}, state) do
-    case Map.pop(state.pending_media_retries, message_id) do
+    case Map.pop(state.pending.pending_media_retries, message_id) do
       {nil, _pending} ->
         {:noreply, state}
 
       {%{from: from}, remaining} ->
         GenServer.reply(from, {:error, :media_retry_timeout})
-        {:noreply, %{state | pending_media_retries: remaining}}
+        {:noreply, Pending.put(state, :pending_media_retries, remaining)}
     end
   end
 
@@ -1352,26 +1352,21 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_info({:delayed_send_due, token}, state) do
-    case Map.pop(state.delayed_sends, token) do
+    case Map.pop(state.pending.delayed_sends, token) do
       {nil, _} ->
         {:noreply, state}
 
       {pending, rest} ->
-        state = %{state | delayed_sends: rest}
+        state = Pending.put(state, :delayed_sends, rest)
 
         case dispatch_outbound_message(state, pending.message, pending.from) do
           {:ok, state} ->
             {:noreply, state}
 
           {:error, {:rate_limited, _, _} = reason, state} ->
-            case delay_limited_send(state, pending.message, pending.from, reason, pending.expires) do
-              {:noreply, state} ->
-                {:noreply, state}
-
-              {:reply, result, state} ->
-                GenServer.reply(pending.from, result)
-                {:noreply, state}
-            end
+            state
+            |> delay_limited_send(pending.message, pending.from, reason, pending.expires)
+            |> finish_delayed_admission(pending.from)
 
           {:error, reason, state} ->
             GenServer.reply(pending.from, {:error, reason})
@@ -1410,12 +1405,12 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_info({:session_repair_due, message_id, jid, ack}, state) do
-    case Map.pop(state.pending_session_repairs, message_id) do
+    case Map.pop(state.pending.pending_session_repairs, message_id) do
       {nil, _} ->
         {:noreply, state}
 
       {_timer, pending} ->
-        state = %{state | pending_session_repairs: pending}
+        state = Pending.put(state, :pending_session_repairs, pending)
         attempts = SendRecovery.session_repair_attempts(state, message_id)
         max_attempts = Config.get(state.runtime_cfg, [:send, :max_session_repair_attempts], 2)
 
@@ -1448,12 +1443,12 @@ defmodule ExWapp.Session.Worker do
   end
 
   def handle_info({:outbound_confirm_timeout, message_id}, state) do
-    case Map.pop(state.outbound_confirmations, message_id) do
+    case Map.pop(state.pending.outbound_confirmations, message_id) do
       {nil, _} ->
         {:noreply, state}
 
       {confirmation, confirmations} ->
-        state = %{state | outbound_confirmations: confirmations}
+        state = Pending.put(state, :outbound_confirmations, confirmations)
 
         new_state =
           OutboundConfirmation.handle_timeout(
@@ -1619,7 +1614,7 @@ defmodule ExWapp.Session.Worker do
               from
             )
             |> Events.update_stats(:messages_sent)
-            |> ExWapp.Session.Worker.PolicyState.persist()
+            |> PolicyState.persist()
 
           {:ok, new_state}
 
@@ -1891,12 +1886,12 @@ defmodule ExWapp.Session.Worker do
     )
   end
 
-  defp claim_session_store(%ExWapp.Store.Ets{writer: writer}), do: claim_store_owner(writer)
-  defp claim_session_store(%ExWapp.Store.Memory{agent: owner}), do: claim_store_owner(owner)
+  defp claim_session_store(%Ets{writer: writer}), do: claim_store_owner(writer)
+  defp claim_session_store(%Memory{agent: owner}), do: claim_store_owner(owner)
   defp claim_session_store(_store), do: :ok
 
   defp claim_store_owner(owner) do
-    ExWapp.Store.SessionClaim.claim(owner)
+    SessionClaim.claim(owner)
   end
 
   defp authorize_operation(state, caller) do
@@ -1919,19 +1914,29 @@ defmodule ExWapp.Session.Worker do
 
     bytes =
       :erlang.external_size(message) +
-        Enum.reduce(state.delayed_sends, 0, fn {_, item}, acc ->
+        Enum.reduce(state.pending.delayed_sends, 0, fn {_, item}, acc ->
           acc + :erlang.external_size(item.message)
         end)
 
     if Config.get(state.runtime_cfg, [:throttle, :on_limit], :delay) == :delay and
-         now + delay < expires and map_size(state.delayed_sends) < 8 and bytes <= 16 * 1024 * 1024 do
+         now + delay < expires and map_size(state.pending.delayed_sends) < 8 and
+         bytes <= 16 * 1024 * 1024 do
       token = make_ref()
       timer = Process.send_after(self(), {:delayed_send_due, token}, delay)
       pending = %{message: message, from: from, timer: timer, expires: expires}
-      {:noreply, %{state | delayed_sends: Map.put(state.delayed_sends, token, pending)}}
+
+      {:noreply,
+       Pending.put(state, :delayed_sends, Map.put(state.pending.delayed_sends, token, pending))}
     else
       {:reply, {:error, reason}, state}
     end
+  end
+
+  defp finish_delayed_admission({:noreply, state}, _from), do: {:noreply, state}
+
+  defp finish_delayed_admission({:reply, result, state}, from) do
+    GenServer.reply(from, result)
+    {:noreply, state}
   end
 
   defp ensure_worker_capacity(state, type) do
@@ -1955,7 +1960,7 @@ defmodule ExWapp.Session.Worker do
 
   defp enforce_message_policies(state, %Message{type: :history_request, to: jid}) do
     now = System.monotonic_time(:millisecond)
-    requests = Map.reject(state.history_requests, fn {_jid, until} -> until <= now end)
+    requests = Map.reject(state.pending.history_requests, fn {_jid, until} -> until <= now end)
     key = JIDUtils.strip_device(jid)
 
     active? =
@@ -1979,7 +1984,7 @@ defmodule ExWapp.Session.Worker do
           {:error, {:history_request_cooldown, 1000}, state}
 
         true ->
-          {:ok, %{state | history_requests: Map.put(requests, key, now + 60_000)}}
+          {:ok, Pending.put(state, :history_requests, Map.put(requests, key, now + 60_000))}
       end
     end
   end

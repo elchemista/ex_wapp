@@ -7,7 +7,7 @@ defmodule ExWapp.Session.HistorySync do
   alias ExWapp.Message.Handler.Inbound.Sync
   alias ExWapp.Proto.HistorySync, as: Proto
   alias ExWapp.Session.Worker
-  alias ExWapp.Session.Worker.{Events, SendRecovery, Subscribers}
+  alias ExWapp.Session.Worker.{Events, Pending, SendRecovery, Subscribers}
 
   @spec start(Worker.t(), Proto.blob_ref(), term(), term()) :: Worker.t()
   def start(state, blob, from, id) do
@@ -21,7 +21,9 @@ defmodule ExWapp.Session.HistorySync do
 
     duplicate? =
       Enum.any?(active, fn %{label: {:history_sync, meta}} -> meta[:blob_key] == key end) or
-        Enum.any?(state.history_blob_queue, fn {queued, _, _} -> queued.file_enc_sha256 == key end)
+        Enum.any?(state.pending.history_blob_queue, fn {queued, _, _} ->
+          queued.file_enc_sha256 == key
+        end)
 
     cond do
       duplicate? ->
@@ -30,8 +32,12 @@ defmodule ExWapp.Session.HistorySync do
       length(active) < 2 and map_size(state.send_coordinator.operations) < 32 ->
         start_now(state, blob, from, id)
 
-      length(state.history_blob_queue) < 16 ->
-        %{state | history_blob_queue: state.history_blob_queue ++ [{blob, from, id}]}
+      length(state.pending.history_blob_queue) < 16 ->
+        Pending.put(
+          state,
+          :history_blob_queue,
+          state.pending.history_blob_queue ++ [{blob, from, id}]
+        )
 
       true ->
         complete(
@@ -44,11 +50,12 @@ defmodule ExWapp.Session.HistorySync do
     end
   end
 
-  def drain(%{history_blob_queue: []} = state), do: state
+  @spec drain(Worker.t()) :: Worker.t()
+  def drain(%{pending: %{history_blob_queue: []}} = state), do: state
 
   def drain(state) do
-    [{blob, from, id} | rest] = state.history_blob_queue
-    start(%{state | history_blob_queue: rest}, blob, from, id)
+    [{blob, from, id} | rest] = state.pending.history_blob_queue
+    start(Pending.put(state, :history_blob_queue, rest), blob, from, id)
   end
 
   defp start_now(state, blob, from, id) do

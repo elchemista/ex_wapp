@@ -3,8 +3,10 @@ defmodule ExWapp.Proto.BoundedInflate do
   @max_compressed_bytes 64 * 1024 * 1024
   @max_plain_bytes 128 * 1024 * 1024
 
+  @spec max_plain_bytes() :: pos_integer()
   def max_plain_bytes, do: @max_plain_bytes
 
+  @spec inflate(binary()) :: {:ok, binary()} | {:error, atom()}
   def inflate(data) when byte_size(data) > @max_compressed_bytes,
     do: {:error, :history_payload_too_large}
 
@@ -28,6 +30,8 @@ defmodule ExWapp.Proto.BoundedInflate do
     end
   end
 
+  @spec drain(reference(), term(), [iodata()], non_neg_integer()) ::
+          {:ok, [iodata()]} | {:error, atom()}
   defp drain(z, {status, output}, chunks, size) when status in [:continue, :finished] do
     size = size + IO.iodata_length(output)
 

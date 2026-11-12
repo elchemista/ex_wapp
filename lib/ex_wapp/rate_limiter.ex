@@ -55,14 +55,18 @@ defmodule ExWapp.RateLimiter do
     # Per-recipient buckets have a one-minute capacity/refill horizon. After
     # that idle period a missing bucket is equivalent to a fully refilled one.
     if map_size(limiter.per_jid) + map_size(limiter.per_group) >= 256 do
-      prune = fn buckets ->
-        Map.reject(buckets, fn {_jid, bucket} -> now - bucket.last_ms >= 60_000 end)
-      end
-
-      %{limiter | per_jid: prune.(limiter.per_jid), per_group: prune.(limiter.per_group)}
+      %{
+        limiter
+        | per_jid: prune_buckets(limiter.per_jid, now),
+          per_group: prune_buckets(limiter.per_group, now)
+      }
     else
       limiter
     end
+  end
+
+  defp prune_buckets(buckets, now) do
+    Map.reject(buckets, fn {_jid, bucket} -> now - bucket.last_ms >= 60_000 end)
   end
 
   defp enforce_global(limiter, runtime_cfg, now_ms) do

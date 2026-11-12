@@ -15,7 +15,8 @@ defmodule ExWapp.MixProject do
       elixir: "~> 1.19",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
-      description: "Runtime-neutral WhatsApp Web client library for Elixir",
+      description:
+        "Runtime-neutral WhatsApp Web client for Elixir with persistent sessions, media, reactions and history",
       source_url: @source_url,
       homepage_url: @source_url,
       package: package(),
@@ -66,6 +67,8 @@ defmodule ExWapp.MixProject do
         "Author" => @author_url,
         "GitHub" => @source_url,
         "Documentation" => "https://hexdocs.pm/ex_wapp",
+        "Changelog" => "#{@source_url}/blob/v#{@version}/CHANGELOG.md",
+        "Demo" => "https://github.com/elchemista/demo_ex_wapp/tree/codex/ex-wapp-0.1.6-suite",
         "Issue tracker" => @issues_url
       }
     ]

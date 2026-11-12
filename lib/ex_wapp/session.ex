@@ -11,6 +11,7 @@ defmodule ExWapp.Session do
   alias ExWapp.Message
   alias ExWapp.Session.AppStateCommands
   alias ExWapp.Session.Options
+  alias ExWapp.Session.Outbound.Command
   alias ExWapp.Session.Worker
 
   @typedoc "Human readable events emitted during the pairing flow."
@@ -85,7 +86,7 @@ defmodule ExWapp.Session do
   @spec send_message(GenServer.server(), Message.t()) ::
           {:ok, String.t()} | {:error, term()}
   def send_message(server, %Message{} = message) do
-    with {:ok, message} <- ExWapp.Session.Outbound.Command.prepare(message),
+    with {:ok, message} <- Command.prepare(message),
          timeout <- message_timeout(message),
          true <- timeout == :infinity or (is_integer(timeout) and timeout >= 0) do
       deadline =
@@ -324,7 +325,6 @@ defmodule ExWapp.Session do
   defp media_timeout(opts), do: Keyword.get(opts, :timeout, 60_000)
 
   defp message_timeout(%Message{opts: opts}) when is_list(opts), do: media_timeout(opts)
-  defp message_timeout(%Message{}), do: 60_000
 
   defp message_options(opts) when is_list(opts) do
     case Keyword.get(opts, :retry_message_id) do

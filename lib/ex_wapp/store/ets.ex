@@ -40,7 +40,7 @@ defmodule ExWapp.Store.Ets do
   alias ExWapp.Signal.SessionStore
   alias ExWapp.Store.Codec
   alias ExWapp.Store.Ets.Writer
-  alias ExWapp.Store.{HistoryLog, MessageTable, PathLock}
+  alias ExWapp.Store.{FileSync, HistoryLog, MessageTable, PathLock}
   alias ExWapp.Telemetry
 
   defstruct [
@@ -156,32 +156,43 @@ defmodule ExWapp.Store.Ets do
       writer: nil
     }
 
-    if separate? do
-      message_table = store_without_writer.message_table
-
-      if persisted_history? do
-        :ok = HistoryLog.load(history_path, message_table)
-
-        if message_table.max_per_chat != :all do
-          # Loading with retention is a real deletion, not just an ETS view.
-          {:ok, baseline} = HistoryLog.compact(history_path, message_table)
-          :ets.insert(table, {:_history_checkpoint_bytes, baseline})
-        end
-      else
-        :ok = ExWapp.Store.FileSync.preserve_snapshot(path)
-        {:ok, baseline} = HistoryLog.compact(history_path, message_table)
-        :ets.insert(table, {:_history_checkpoint_bytes, baseline})
-      end
-
-      :ets.delete_all_objects(message_table.dirty_table)
-      # Commit the marker only after the complete history is durably stored.
-      :ok = flush_snapshot(store_without_writer)
-    end
+    :ok = initialize_history(store_without_writer, persisted_history?)
 
     {:ok, writer} = Writer.start_link(store_without_writer)
     :ok = PathLock.attach(lock, writer)
     transfer_tables(store_without_writer, writer)
     %{store_without_writer | writer: writer}
+  end
+
+  defp initialize_history(%{history_path: nil}, _persisted?), do: :ok
+
+  defp initialize_history(store, persisted?) do
+    :ok = prepare_history(store, persisted?)
+    :ets.delete_all_objects(store.message_table.dirty_table)
+    # Commit the marker only after the complete history is durably stored.
+    flush_snapshot(store)
+  end
+
+  defp prepare_history(store, true) do
+    :ok = HistoryLog.load(store.history_path, store.message_table)
+
+    if store.message_table.max_per_chat != :all do
+      # Loading with retention is a real deletion, not just an ETS view.
+      checkpoint_history(store)
+    else
+      :ok
+    end
+  end
+
+  defp prepare_history(store, false) do
+    :ok = FileSync.preserve_snapshot(store.path)
+    checkpoint_history(store)
+  end
+
+  defp checkpoint_history(store) do
+    {:ok, baseline} = HistoryLog.compact(store.history_path, store.message_table)
+    :ets.insert(store.table, {:_history_checkpoint_bytes, baseline})
+    :ok
   end
 
   @doc """
@@ -535,21 +546,7 @@ defmodule ExWapp.Store.Ets do
     encoded = Codec.encode(merged_snapshot(store))
     encode_duration = System.monotonic_time() - encode_started_at
 
-    {result, bytes, write_duration} =
-      case encoded do
-        {:ok, blob} ->
-          write_started_at = System.monotonic_time()
-
-          result =
-            with :ok <- atomic_write(store.path, blob) do
-              if store.history_path, do: ExWapp.Store.FileSync.directory(store.path), else: :ok
-            end
-
-          {result, byte_size(blob), System.monotonic_time() - write_started_at}
-
-        {:error, _reason} = error ->
-          {error, 0, 0}
-      end
+    {result, bytes, write_duration} = write_encoded_snapshot(store, encoded)
 
     duration = System.monotonic_time() - started_at
 
@@ -574,6 +571,17 @@ defmodule ExWapp.Store.Ets do
   catch
     kind, reason -> {:error, {:snapshot_flush_failed, {kind, reason}}}
   end
+
+  defp write_encoded_snapshot(store, {:ok, blob}) do
+    started_at = System.monotonic_time()
+    result = with :ok <- atomic_write(store.path, blob), do: sync_history_directory(store)
+    {result, byte_size(blob), System.monotonic_time() - started_at}
+  end
+
+  defp write_encoded_snapshot(_store, {:error, _reason} = error), do: {error, 0, 0}
+
+  defp sync_history_directory(%{history_path: nil}), do: :ok
+  defp sync_history_directory(store), do: FileSync.directory(store.path)
 
   defp put_initial_messages(message_table, messages) when is_map(messages) do
     Enum.each(messages, fn {jid, chat_messages} ->

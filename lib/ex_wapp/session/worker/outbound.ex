@@ -10,7 +10,6 @@ defmodule ExWapp.Session.Worker.Outbound do
   require Logger
 
   alias ExWapp.{Binary, Chat, Config, JID, Log, Messages, Store, Telemetry}
-  alias ExWapp.Session.Worker
   alias ExWapp.Signal.SessionStore
   alias WAWebProtobufsE2E.Message
 
@@ -31,7 +30,17 @@ defmodule ExWapp.Session.Worker.Outbound do
     Prekeys
   }
 
-  @typep worker_state :: Worker.t()
+  # Task-local context adds a deadline/router to the worker snapshot. It is an
+  # open map rather than a Worker struct with an exact set of fields.
+  @typep worker_state :: %{
+           required(:store) => Store.t() | nil,
+           required(:conn) => pid() | nil,
+           required(:transport_mod) => module(),
+           required(:runtime_cfg) => map(),
+           optional(:send_deadline) => integer() | nil,
+           optional(:outbound_iq_router) => pid() | nil,
+           optional(atom()) => term()
+         }
   @typep outbound_text :: iodata() | nil
   @doc "Sends text or an optional prebuilt protobuf payload through the session pipeline."
   @spec send_text_worker(pid(), map(), String.t(), outbound_text(), keyword()) ::
@@ -1004,6 +1013,10 @@ defmodule ExWapp.Session.Worker.Outbound do
     end
   end
 
+  defp send_transport_node(%{status: status}, _conn, _node) do
+    {:error, {:not_connected, status}}
+  end
+
   defp authorize_transport(router, jid, deadline, kind) when is_pid(router) do
     GenServer.call(router, {:authorize_outbound, jid, deadline, kind}, 5000)
   end
@@ -1012,10 +1025,6 @@ defmodule ExWapp.Session.Worker.Outbound do
     if is_integer(deadline) and System.monotonic_time(:millisecond) >= deadline,
       do: {:error, :send_deadline_exceeded},
       else: :ok
-  end
-
-  defp send_transport_node(%{status: status}, _conn, _node) do
-    {:error, {:not_connected, status}}
   end
 
   @spec persist_signal_sessions(pid(), SessionStore.t(), worker_state()) :: :ok

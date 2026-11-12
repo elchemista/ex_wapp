@@ -22,6 +22,9 @@ defmodule ExWapp.Proto.HistorySync do
   """
 
   alias ExWapp.{Call, JID}
+  alias ExWapp.Message.Content
+  alias ExWapp.Message.Handler.Wire.ContentDecoder
+  alias ExWapp.Proto.BoundedInflate
   alias WAWebProtobufsE2E.Message
   alias WAWebProtobufsHistorySync.{Conversation, HistorySync, PhoneNumberToLIDMapping}
   alias WAWebProtobufsWeb.WebMessageInfo
@@ -135,11 +138,14 @@ defmodule ExWapp.Proto.HistorySync do
   The inline path passes already-inflated bytes. Downloaded chunks use
   `{:compressed, bytes}` to validate zlib compression before decoding protobuf.
   """
-  @spec parse_history_payload({:ok, binary()} | {:compressed, binary()} | binary(), term()) ::
+  @spec parse_history_payload(
+          {:ok, binary()} | {:error, term()} | {:compressed, binary()} | binary(),
+          term()
+        ) ::
           {:ok, t()} | {:error, term()}
   def parse_history_payload({:compressed, payload}, sync_type) when is_binary(payload) do
     payload
-    |> ExWapp.Proto.BoundedInflate.inflate()
+    |> BoundedInflate.inflate()
     |> parse_history_payload(sync_type)
   end
 
@@ -257,8 +263,8 @@ defmodule ExWapp.Proto.HistorySync do
   end
 
   defp add_history_content(data, %Message{} = message) do
-    data = ExWapp.Message.Handler.Wire.ContentDecoder.apply_media_from_message(data, message)
-    Map.put(data, :content, ExWapp.Message.Content.from_legacy(data))
+    data = ContentDecoder.apply_media_from_message(data, message)
+    Map.put(data, :content, Content.from_legacy(data))
   end
 
   defp add_history_content(data, _), do: data
@@ -420,7 +426,7 @@ defmodule ExWapp.Proto.HistorySync do
   defp normalize_jid(_), do: ""
 
   defp inflate_history_payload(payload) when is_binary(payload) do
-    case ExWapp.Proto.BoundedInflate.inflate(payload) do
+    case BoundedInflate.inflate(payload) do
       {:error, :invalid_history_compression} -> {:ok, payload}
       result -> result
     end

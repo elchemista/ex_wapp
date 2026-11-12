@@ -27,18 +27,20 @@ defmodule ExWapp.Session.Worker.SendRecovery do
   # window where a resend is still meaningful.
   @max_outgoing_retry_payloads 512
 
-  alias ExWapp.Config
+  alias ExWapp.{Chat, Config, RateLimiter}
   alias ExWapp.Log
   alias ExWapp.Messages
   alias ExWapp.Session.JIDUtils
   alias ExWapp.Session.SendCoordinator
   alias ExWapp.Session.Worker
-  alias ExWapp.Session.Worker.Outbound
+  alias ExWapp.Session.Worker.{Connection, Outbound, Pending, Safety}
   alias ExWapp.Session.Worker.Retry
   alias ExWapp.Session.Worker.SendHealth
   alias ExWapp.Session.Worker.SignalSessions
   alias ExWapp.Session.Worker.Subscribers
 
+  @doc false
+  @spec maybe_retry_outgoing_message(Worker.t(), String.t(), String.t(), map()) :: Worker.t()
   def maybe_retry_outgoing_message(state, jid, message_id, retry_meta) do
     max_attempts = Config.get(state.runtime_cfg, [:send, :max_outgoing_retry_attempts], 2)
 
@@ -204,7 +206,7 @@ defmodule ExWapp.Session.Worker.SendRecovery do
     delay_ms = session_repair_delay_ms(state, attempts)
 
     cond do
-      Map.has_key?(state.pending_session_repairs, message_id) ->
+      Map.has_key?(state.pending.pending_session_repairs, message_id) ->
         state
 
       attempts >= max_attempts ->
@@ -222,14 +224,15 @@ defmodule ExWapp.Session.Worker.SendRecovery do
             "in #{delay_ms}ms"
         )
 
-        if map_size(state.pending_session_repairs) < 32 do
+        if map_size(state.pending.pending_session_repairs) < 32 do
           timer =
             Process.send_after(self(), {:session_repair_due, message_id, jid, ack}, delay_ms)
 
-          %{
-            state
-            | pending_session_repairs: Map.put(state.pending_session_repairs, message_id, timer)
-          }
+          Pending.put(
+            state,
+            :pending_session_repairs,
+            Map.put(state.pending.pending_session_repairs, message_id, timer)
+          )
         else
           report_session_rejection(state, message_id, jid, ack, "repair queue full")
         end
@@ -270,9 +273,11 @@ defmodule ExWapp.Session.Worker.SendRecovery do
     end
   end
 
+  @doc false
+  @spec report_final_failure(Worker.t(), String.t(), String.t(), term()) :: :ok
   def report_final_failure(state, id, jid, error) do
     unless confirmed_delivery?(state.store, id) do
-      if state.store, do: ExWapp.Chat.update_message_status_by_id(state.store, id, :failed)
+      if state.store, do: Chat.update_message_status_by_id(state.store, id, :failed)
       # Built-in stores preserve successful verdicts atomically in their status
       # update; check again in case a receipt overtook this recovery result.
       unless confirmed_delivery?(state.store, id) do
@@ -286,7 +291,7 @@ defmodule ExWapp.Session.Worker.SendRecovery do
   defp confirmed_delivery?(nil, _id), do: false
 
   defp confirmed_delivery?(store, id) do
-    case ExWapp.Chat.find_message_by_id(store, id) do
+    case Chat.find_message_by_id(store, id) do
       {_jid, %{status: status}} when status in [:delivered, :read, :received] -> true
       _ -> false
     end
@@ -436,6 +441,8 @@ defmodule ExWapp.Session.Worker.SendRecovery do
 
   defp maybe_put_retry_own_device_destination(opts, _retry_meta), do: opts
 
+  @doc false
+  @spec worker_context(map()) :: Worker.t()
   def worker_context(state) do
     # Keep the struct contract used by outbound helpers, without copying caches,
     # caller monitors, retry payloads, quotas or UI subscriptions to each task.
@@ -454,12 +461,15 @@ defmodule ExWapp.Session.Worker.SendRecovery do
     )
   end
 
+  @doc false
+  @spec admit_recovery(Worker.t(), String.t()) :: {:ok, Worker.t()} | {:error, term(), Worker.t()}
   def admit_recovery(state, jid) do
     with {:ok, state} <- check_recovery(state, jid),
-         {:ok, state} <- ExWapp.RateLimiter.check_and_update(state, jid),
-         do: {:ok, state}
+         do: RateLimiter.check_and_update(state, jid)
   end
 
+  @doc false
+  @spec await_recovery_admission(pid(), String.t()) :: :ok | {:error, term()}
   def await_recovery_admission(session, jid) do
     await_recovery_admission(session, jid, System.monotonic_time(:millisecond) + 30_000)
   end
@@ -479,11 +489,13 @@ defmodule ExWapp.Session.Worker.SendRecovery do
     end
   end
 
+  @doc false
+  @spec check_recovery(Worker.t(), String.t()) :: {:ok, Worker.t()} | {:error, term(), Worker.t()}
   def check_recovery(state, jid) do
     with {:ok, state} <- SendHealth.ensure_send_enabled(state, jid),
-         :ok <- ExWapp.Session.Worker.Connection.ensure_connected_for_send(state),
-         {:ok, state} <- ExWapp.Session.Worker.Safety.check_send_allowed(state),
-         {:ok, state} <- ExWapp.Session.Worker.Safety.check_recipient(state, jid) do
+         :ok <- Connection.ensure_connected_for_send(state),
+         {:ok, state} <- Safety.check_send_allowed(state),
+         {:ok, state} <- Safety.check_recipient(state, jid) do
       {:ok, state}
     else
       {:error, reason, state} -> {:error, reason, state}
@@ -491,6 +503,9 @@ defmodule ExWapp.Session.Worker.SendRecovery do
     end
   end
 
+  @doc false
+  @spec remember_outgoing_proto(Worker.t(), String.t(), String.t(), map(), keyword()) ::
+          Worker.t()
   def remember_outgoing_proto(state, jid, id, proto, opts) do
     # Media bodies are already uploaded: only the bounded protobuf reference is
     # retained, never the original bytes or source path.

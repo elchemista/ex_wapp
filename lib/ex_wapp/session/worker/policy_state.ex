@@ -5,6 +5,7 @@ defmodule ExWapp.Session.Worker.PolicyState do
 
   # Monotonic timestamps are VM-local. Store absolute expiry times, then convert
   # back on restore so a worker/VM restart cannot reset an active cool-off.
+  @spec restore(state) :: state when state: map()
   def restore(state) do
     case Store.get(state.store, :outbound_policy) do
       %{version: 1, safety: safety, quota: quota} when is_map(safety) and is_map(quota) ->
@@ -16,6 +17,7 @@ defmodule ExWapp.Session.Worker.PolicyState do
     end
   end
 
+  @spec persist(state) :: state when state: map()
   def persist(state) when not is_map_key(state, :store), do: state
   def persist(%{store: nil} = state), do: state
 

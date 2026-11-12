@@ -2,6 +2,7 @@ defmodule ExWapp.Store.SessionClaim do
   @moduledoc false
   use GenServer
 
+  @spec claim(pid()) :: :ok
   def claim(store_owner), do: claim(store_owner, 3)
 
   defp claim(store_owner, attempts) do

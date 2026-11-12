@@ -15,6 +15,7 @@ defmodule ExWapp.Message.Handler.Notification do
   alias ExWapp.Message.Handler.{Ack, Common}
   alias ExWapp.Pairing.LinkCode
   alias ExWapp.Session.{Account, DeviceCache, JIDUtils}
+  alias ExWapp.Session.Worker.Pending
   alias ExWapp.Signal.SessionStore
 
   @spec handle_notification(Node.t(), pid(), map()) :: {:ok, map()} | {:ok, map(), [term()]}
@@ -394,7 +395,7 @@ defmodule ExWapp.Message.Handler.Notification do
 
   defp handle_media_retry_notification(attrs, content, state) do
     msg_id = Map.get(attrs, "id", "")
-    pending_retries = Map.get(state, :pending_media_retries, %{})
+    pending_retries = Pending.get(state, :pending_media_retries)
 
     case Map.pop(pending_retries, msg_id) do
       {nil, _pending} ->
@@ -409,7 +410,7 @@ defmodule ExWapp.Message.Handler.Notification do
           |> MediaRetry.decode_notification(Map.fetch!(pending, :media_key))
           |> finalize_media_retry(pending, state)
 
-        next_state = Map.put(state, :pending_media_retries, remaining)
+        next_state = Pending.put(state, :pending_media_retries, remaining)
         {:ok, next_state, [{:resolve_media_retry, Map.fetch!(pending, :from), result}]}
     end
   end

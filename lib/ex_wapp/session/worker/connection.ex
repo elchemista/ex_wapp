@@ -28,6 +28,7 @@ defmodule ExWapp.Session.Worker.Connection do
   alias ExWapp.Session.Worker
   alias ExWapp.Session.Worker.Events
   alias ExWapp.Session.Worker.NodeHandler
+  alias ExWapp.Session.Worker.Pending
   alias ExWapp.Session.Worker.Resilience
   alias ExWapp.Session.Worker.SignalSessions
   alias ExWapp.Session.Worker.Subscribers
@@ -491,9 +492,11 @@ defmodule ExWapp.Session.Worker.Connection do
   defp maybe_set_conn(_outbound_queue, _state), do: :ok
 
   def fail_all_send_workers(state, reason) do
-    Enum.each(state.pending_session_repairs, fn {_id, timer} -> Process.cancel_timer(timer) end)
+    Enum.each(state.pending.pending_session_repairs, fn {_id, timer} ->
+      Process.cancel_timer(timer)
+    end)
 
-    Enum.each(state.delayed_sends, fn {_token, pending} ->
+    Enum.each(state.pending.delayed_sends, fn {_token, pending} ->
       Process.cancel_timer(pending.timer)
       reply_send_caller(pending.from, {:error, reason})
     end)
@@ -515,13 +518,10 @@ defmodule ExWapp.Session.Worker.Connection do
       if Process.alive?(worker_pid), do: send(worker_pid, {:prekey_error, iq_id, reason})
     end)
 
-    %{
-      state
-      | send_coordinator: coordinator,
-        delayed_sends: %{},
-        pending_session_repairs: %{},
-        history_blob_queue: []
-    }
+    %{state | send_coordinator: coordinator}
+    |> Pending.put(:delayed_sends, %{})
+    |> Pending.put(:pending_session_repairs, %{})
+    |> Pending.put(:history_blob_queue, [])
   end
 
   def reply_send_caller(nil, _result), do: :ok
@@ -530,14 +530,14 @@ defmodule ExWapp.Session.Worker.Connection do
 
   defp clear_pending_requests(state, reason) do
     Enum.each(state.pending_iqs, &cancel_pending_call(&1, reason))
-    Enum.each(state.outbound_confirmations, &cancel_pending_timer/1)
-    Enum.each(state.pending_media_retries, &cancel_pending_call(&1, reason))
+    Enum.each(state.pending.outbound_confirmations, &cancel_pending_timer/1)
+    Enum.each(state.pending.pending_media_retries, &cancel_pending_call(&1, reason))
 
     state
     |> fail_all_send_workers({:disconnected, reason})
     |> Map.put(:pending_iqs, %{})
-    |> Map.put(:outbound_confirmations, %{})
-    |> Map.put(:pending_media_retries, %{})
+    |> Pending.put(:outbound_confirmations, %{})
+    |> Pending.put(:pending_media_retries, %{})
   end
 
   defp cancel_session_tasks(state, reason) do

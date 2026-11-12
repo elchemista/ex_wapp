@@ -8,6 +8,7 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
 
   alias ExWapp.{Chat, Log}
   alias ExWapp.Session.{Account, JIDUtils}
+  alias ExWapp.Session.Worker.{Pending, SendRecovery}
 
   @default_max_silent_drop_fallback_attempts 1
 
@@ -45,8 +46,8 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
         timer: timer
       }
 
-      confirmations = Map.put(state.outbound_confirmations, message_id, confirmation)
-      %{state | outbound_confirmations: confirmations}
+      confirmations = Map.put(state.pending.outbound_confirmations, message_id, confirmation)
+      Pending.put(state, :outbound_confirmations, confirmations)
     else
       state
     end
@@ -145,7 +146,7 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
          send_fn,
          register_fn
        ) do
-    case ExWapp.Session.Worker.SendRecovery.check_recovery(state, jid) do
+    case SendRecovery.check_recovery(state, jid) do
       {:ok, state} ->
         do_start_silent_drop_fallback(
           state,
@@ -174,7 +175,7 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
          register_fn
        ) do
     session_pid = self()
-    context = ExWapp.Session.Worker.SendRecovery.worker_context(state)
+    context = SendRecovery.worker_context(state)
     retained = Map.take(state.outgoing_retry_payloads, [previous_message_id])
     context = %{context | outgoing_retry_payloads: retained}
 
@@ -211,7 +212,7 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
          send_fn
        ) do
     result =
-      with :ok <- ExWapp.Session.Worker.SendRecovery.await_recovery_admission(session_pid, jid) do
+      with :ok <- SendRecovery.await_recovery_admission(session_pid, jid) do
         retained = Map.get(state.outgoing_retry_payloads, previous_message_id, %{})
 
         opts =
@@ -272,8 +273,7 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
          nil <- find_outgoing_message_any_chat(store, message_id) do
       :unknown
     else
-      %{status: status} when is_atom(status) -> status
-      _ -> :unknown
+      %{status: status} -> status
     end
   end
 

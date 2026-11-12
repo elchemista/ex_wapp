@@ -2,11 +2,12 @@ defmodule ExWapp.Media do
   @moduledoc """
   Public media helpers shared by send and receive flows.
 
-  The media domain is split into smaller files under `lib/ex_wapp/domains/media/`
+  The media domain is split into smaller files under `lib/ex_wapp/media/`
   so the public API stays easy to find while crypto, HTTP, and source-handling
   details live in focused modules.
   """
 
+  alias ExWapp.Binary.Node
   alias ExWapp.Domains.Media.Source
   alias ExWapp.Media.Retry
 
@@ -33,8 +34,12 @@ defmodule ExWapp.Media do
   This is the boundary between the user-facing send API and the upload
   pipeline. Existing `%Upload{}` values are rejected because they already
   represent uploaded server-side media rather than local plaintext bytes.
+
+  `:max_bytes` bounds both byte inputs and file reads, including files that grow
+  during a read. It defaults to 64 MiB and must be a positive integer.
   """
   @spec read_source(source()) :: {:ok, binary()} | {:error, term()}
+  @spec read_source(source(), keyword()) :: {:ok, binary()} | {:error, term()}
   def read_source(source, opts \\ []), do: Source.read(source, opts)
 
   @doc """
@@ -60,6 +65,15 @@ defmodule ExWapp.Media do
   end
 
   @doc "Builds the authenticated `server-error` receipt used to re-request expired media."
+  @spec build_retry_receipt(
+          String.t(),
+          String.t(),
+          String.t(),
+          boolean(),
+          String.t() | nil,
+          binary()
+        ) ::
+          Node.t()
   defdelegate build_retry_receipt(
                 msg_id,
                 own_jid,
@@ -72,10 +86,13 @@ defmodule ExWapp.Media do
               as: :build_receipt
 
   @doc "Decrypts a `mediaretry` notification with the original message media key."
+  @spec decode_retry_notification(Node.t(), binary()) ::
+          {:ok, String.t()} | {:error, term()}
   defdelegate decode_retry_notification(node, media_key),
     to: Retry,
     as: :decode_notification
 
   @doc "Derives the media-retry wrapping key from a media key."
+  @spec retry_key(binary()) :: binary()
   defdelegate retry_key(media_key), to: Retry
 end

@@ -3,9 +3,21 @@ defmodule ExWapp.Media.BoundedHTTP do
   alias ExWapp.Transport.TLS
   @header_limit 32_768
 
+  @typep headers :: [{String.t(), String.t()}]
+  @typep result :: {:ok, binary()} | {:error, term()}
+  @typep socket :: :ssl.sslsocket()
+
   # One verified TLS connection per bounded request. Passive reads and a shared
   # absolute deadline bound successful bodies AND HTTP error bodies; redirects
   # are never followed. No connection is returned to a pool with unread bytes.
+  @spec request(
+          :get | :post,
+          String.t(),
+          [{String.t() | charlist(), String.t() | charlist()}],
+          binary(),
+          pos_integer(),
+          integer()
+        ) :: {:ok, non_neg_integer(), binary()} | {:error, term()}
   def request(method, url, headers, body, max_bytes, deadline) do
     uri = URI.parse(url)
     timeout = min(remaining(deadline), 10_000)
@@ -60,9 +72,12 @@ defmodule ExWapp.Media.BoundedHTTP do
     _ -> {:error, :invalid_http_response}
   end
 
+  @spec accepted_status(non_neg_integer()) :: :ok | {:error, {:http_status, non_neg_integer()}}
   defp accepted_status(status) when status in 200..299, do: :ok
   defp accepted_status(status), do: {:error, {:http_status, status}}
 
+  @spec response_head(socket(), integer(), non_neg_integer()) ::
+          {:ok, non_neg_integer(), headers()} | {:error, term()}
   defp response_head(_socket, _deadline, count) when count > 4,
     do: {:error, :too_many_interim_responses}
 
@@ -78,6 +93,8 @@ defmodule ExWapp.Media.BoundedHTTP do
     end
   end
 
+  @spec read_headers(socket(), integer(), headers(), non_neg_integer()) ::
+          {:ok, headers()} | {:error, term()}
   defp read_headers(socket, deadline, headers, size) do
     case recv(socket, 0, deadline) do
       {:ok, :http_eoh} ->
@@ -100,6 +117,7 @@ defmodule ExWapp.Media.BoundedHTTP do
     end
   end
 
+  @spec read_body(socket(), headers(), pos_integer(), integer()) :: result()
   defp read_body(socket, headers, max_bytes, deadline) do
     transfer = values(headers, "transfer-encoding")
     lengths = values(headers, "content-length")
@@ -107,60 +125,74 @@ defmodule ExWapp.Media.BoundedHTTP do
 
     with true <- encoding in [[], ["identity"]],
          :ok <- :ssl.setopts(socket, packet: :raw) do
-      cond do
-        transfer == ["chunked"] ->
-          read_chunks(socket, max_bytes, deadline, [], 0)
-
-        transfer != [] ->
-          {:error, :unsupported_transfer_encoding}
-
-        lengths == [] ->
-          read_until_closed(socket, max_bytes, deadline, [], 0)
-
-        length(Enum.uniq(lengths)) != 1 ->
-          {:error, :invalid_content_length}
-
-        true ->
-          case Integer.parse(hd(lengths)) do
-            {size, ""} when size >= 0 and size <= max_bytes -> read_exact(socket, size, deadline)
-            {size, ""} when size > max_bytes -> {:error, :media_too_large}
-            _ -> {:error, :invalid_content_length}
-          end
-      end
+      read_response_body(socket, transfer, lengths, max_bytes, deadline)
     else
       false -> {:error, :unsupported_content_encoding}
       {:error, _} = error -> error
     end
   end
 
+  @spec read_response_body(socket(), [String.t()], [String.t()], pos_integer(), integer()) ::
+          result()
+  defp read_response_body(socket, transfer, lengths, max_bytes, deadline) do
+    cond do
+      transfer == ["chunked"] -> read_chunks(socket, max_bytes, deadline, [], 0)
+      transfer != [] -> {:error, :unsupported_transfer_encoding}
+      lengths == [] -> read_until_closed(socket, max_bytes, deadline, [], 0)
+      length(Enum.uniq(lengths)) != 1 -> {:error, :invalid_content_length}
+      true -> read_sized_body(socket, hd(lengths), max_bytes, deadline)
+    end
+  end
+
+  @spec read_sized_body(socket(), String.t(), pos_integer(), integer()) :: result()
+  defp read_sized_body(socket, length, max_bytes, deadline) do
+    case Integer.parse(length) do
+      {size, ""} when size >= 0 and size <= max_bytes -> read_exact(socket, size, deadline)
+      {size, ""} when size > max_bytes -> {:error, :media_too_large}
+      _ -> {:error, :invalid_content_length}
+    end
+  end
+
+  @spec read_chunks(socket(), pos_integer(), integer(), [binary()], non_neg_integer()) :: result()
   defp read_chunks(socket, limit, deadline, chunks, size) do
     with :ok <- :ssl.setopts(socket, packet: :line, packet_size: 8192),
          {:ok, line} <- recv(socket, 0, deadline),
          [hex | _] <- String.split(String.trim(line), ";", parts: 2),
          {length, ""} when length >= 0 <- Integer.parse(hex, 16) do
-      cond do
-        size + length > limit ->
-          {:error, :media_too_large}
-
-        length == 0 ->
-          {:ok, chunks |> Enum.reverse() |> IO.iodata_to_binary()}
-
-        true ->
-          with :ok <- :ssl.setopts(socket, packet: :raw),
-               {:ok, chunk} <- read_exact(socket, length, deadline),
-               {:ok, "\r\n"} <- read_exact(socket, 2, deadline) do
-            read_chunks(socket, limit, deadline, [chunk | chunks], size + length)
-          else
-            {:error, _} = error -> error
-            _ -> {:error, :invalid_chunk}
-          end
-      end
+      read_chunk(socket, limit, deadline, chunks, size, length)
     else
       {:error, _} = error -> error
       _ -> {:error, :invalid_chunk}
     end
   end
 
+  @spec read_chunk(
+          socket(),
+          pos_integer(),
+          integer(),
+          [binary()],
+          non_neg_integer(),
+          non_neg_integer()
+        ) :: result()
+  defp read_chunk(_socket, limit, _deadline, _chunks, size, length) when size + length > limit,
+    do: {:error, :media_too_large}
+
+  defp read_chunk(_socket, _limit, _deadline, chunks, _size, 0),
+    do: {:ok, chunks |> Enum.reverse() |> IO.iodata_to_binary()}
+
+  defp read_chunk(socket, limit, deadline, chunks, size, length) do
+    with :ok <- :ssl.setopts(socket, packet: :raw),
+         {:ok, chunk} <- read_exact(socket, length, deadline),
+         {:ok, "\r\n"} <- read_exact(socket, 2, deadline) do
+      read_chunks(socket, limit, deadline, [chunk | chunks], size + length)
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :invalid_chunk}
+    end
+  end
+
+  @spec read_until_closed(socket(), pos_integer(), integer(), [binary()], non_neg_integer()) ::
+          result()
   defp read_until_closed(socket, limit, deadline, chunks, size) do
     case recv(socket, 0, deadline) do
       {:ok, chunk} when byte_size(chunk) + size <= limit ->
@@ -177,9 +209,11 @@ defmodule ExWapp.Media.BoundedHTTP do
     end
   end
 
+  @spec read_exact(socket(), non_neg_integer(), integer()) :: result()
   defp read_exact(_socket, 0, _deadline), do: {:ok, <<>>}
   defp read_exact(socket, size, deadline), do: recv(socket, size, deadline)
 
+  @spec recv(socket(), non_neg_integer(), integer()) :: {:ok, term()} | {:error, term()}
   defp recv(socket, size, deadline) do
     case remaining(deadline) do
       0 -> {:error, :timeout}
@@ -187,8 +221,10 @@ defmodule ExWapp.Media.BoundedHTTP do
     end
   end
 
+  @spec values(headers(), String.t()) :: [String.t()]
   defp values(headers, key),
     do: for({^key, value} <- headers, do: String.downcase(String.trim(value)))
 
+  @spec remaining(integer()) :: non_neg_integer()
   defp remaining(deadline), do: max(deadline - System.monotonic_time(:millisecond), 0)
 end

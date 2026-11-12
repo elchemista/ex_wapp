@@ -8,13 +8,17 @@ defmodule ExWapp.Media.HTTP do
   """
 
   alias ExWapp.{JSON, Media}
-  alias ExWapp.Session.IQ
   alias ExWapp.Media.BoundedHTTP
+  alias ExWapp.Session.IQ
 
   @origin "https://web.whatsapp.com"
 
   @doc """
   Encrypts plaintext media and uploads it to the best available media host.
+
+  `:max_bytes` limits plaintext size (64 MiB by default). `:timeout` applies a
+  shared request deadline of at most 60 seconds; the TLS connection timeout is
+  capped at 10 seconds. `:session` supplies authenticated `media_conn` access.
   """
   @spec upload(map(), Media.media_type(), binary(), keyword()) ::
           {:ok, Media.Upload.t()} | {:error, term()}
@@ -30,6 +34,12 @@ defmodule ExWapp.Media.HTTP do
 
   @doc """
   Downloads encrypted media and returns the decrypted plaintext bytes.
+
+  Reads require HTTPS and authenticated media metadata, have a shared deadline
+  controlled by `:timeout` (at most 60 seconds), and are bounded by `:max_bytes`
+  (64 MiB by default). Known WhatsApp/CDN hosts and authenticated `media_conn`
+  hosts are trusted; `:allowed_media_origins` explicitly adds HTTPS origins.
+  Plaintext media requires `:allow_plaintext` and a valid plaintext SHA-256 hash.
   """
   @spec download(map(), Media.Ref.t(), keyword()) :: {:ok, binary()} | {:error, term()}
   def download(state, %Media.Ref{} = ref, opts \\ []) do
@@ -166,6 +176,7 @@ defmodule ExWapp.Media.HTTP do
     end
   end
 
+  @spec http_get(String.t(), keyword()) :: {:ok, binary()} | {:error, term()}
   defp http_get(url, opts) do
     headers = [{"origin", @origin}, {"referer", @origin <> "/"}]
 
@@ -186,6 +197,7 @@ defmodule ExWapp.Media.HTTP do
     end
   end
 
+  @spec request_options(keyword()) :: keyword()
   defp request_options(opts) do
     now = System.monotonic_time(:millisecond)
     timeout = Keyword.get(opts, :timeout, 60_000)
@@ -202,36 +214,52 @@ defmodule ExWapp.Media.HTTP do
     end
   end
 
+  @spec trust_media_hosts(keyword(), [map()]) :: keyword()
   defp trust_media_hosts(opts, hosts) do
     origins = Enum.map(hosts, fn %{hostname: host} -> "https://" <> host end)
     Keyword.update(opts, :allowed_media_origins, origins, &(origins ++ &1))
   end
 
+  @spec validate_download_ref(Media.Ref.t(), keyword()) :: :ok | {:error, atom()}
   defp validate_download_ref(ref, opts) do
     plaintext? =
       Keyword.get(opts, :allow_plaintext, false) == true and is_nil(ref.file_enc_sha256)
 
-    cond do
-      ref.type not in [:image, :video, :sticker, :audio, :document, :history] ->
-        {:error, :unsupported_media_type}
-
-      not plaintext? and not hash?(ref.media_key) ->
-        {:error, :invalid_media_key}
-
-      not plaintext? and not hash?(ref.file_enc_sha256) ->
-        {:error, :invalid_encrypted_media_hash}
-
-      plaintext? and not hash?(ref.file_sha256) ->
-        {:error, :invalid_media_hash}
-
-      not is_nil(ref.file_sha256) and not hash?(ref.file_sha256) ->
-        {:error, :invalid_media_hash}
-
-      true ->
-        validate_size(ref.file_length, opts)
+    with :ok <- validate_media_type(ref.type),
+         :ok <- validate_required_hashes(ref, plaintext?),
+         :ok <- validate_optional_hash(ref.file_sha256) do
+      validate_size(ref.file_length, opts)
     end
   end
 
+  @spec validate_media_type(term()) :: :ok | {:error, :unsupported_media_type}
+  defp validate_media_type(type)
+       when type in [:image, :video, :sticker, :audio, :document, :history],
+       do: :ok
+
+  defp validate_media_type(_type), do: {:error, :unsupported_media_type}
+
+  @spec validate_required_hashes(Media.Ref.t(), boolean()) :: :ok | {:error, atom()}
+  defp validate_required_hashes(ref, true) do
+    if hash?(ref.file_sha256), do: :ok, else: {:error, :invalid_media_hash}
+  end
+
+  defp validate_required_hashes(ref, false) do
+    cond do
+      not hash?(ref.media_key) -> {:error, :invalid_media_key}
+      not hash?(ref.file_enc_sha256) -> {:error, :invalid_encrypted_media_hash}
+      true -> :ok
+    end
+  end
+
+  @spec validate_optional_hash(term()) :: :ok | {:error, :invalid_media_hash}
+  defp validate_optional_hash(nil), do: :ok
+
+  defp validate_optional_hash(hash) do
+    if hash?(hash), do: :ok, else: {:error, :invalid_media_hash}
+  end
+
+  @spec validate_size(term(), keyword()) :: :ok | {:error, atom()}
   defp validate_size(nil, _opts), do: :ok
 
   defp validate_size(size, opts) when is_integer(size) and size >= 0 do
@@ -239,30 +267,19 @@ defmodule ExWapp.Media.HTTP do
   end
 
   defp validate_size(_size, _opts), do: {:error, :invalid_media_length}
+
+  @spec hash?(term()) :: boolean()
   defp hash?(hash), do: is_binary(hash) and byte_size(hash) == 32
 
+  @spec validate_url(String.t(), keyword()) :: :ok | {:error, :untrusted_media_url}
   defp validate_url(url, opts) do
     case URI.parse(url) do
       %URI{scheme: "https", host: host, port: port, userinfo: nil, fragment: nil}
       when is_binary(host) ->
         host = String.downcase(host)
 
-        known? =
-          port == 443 and
-            Enum.any?(["whatsapp.net", "whatsapp.com", "fbcdn.net"], fn suffix ->
-              host == suffix or String.ends_with?(host, "." <> suffix)
-            end)
-
-        trusted? =
-          Enum.any?(Keyword.get(opts, :allowed_media_origins, []), fn origin ->
-            case URI.parse(origin) do
-              %URI{scheme: "https", host: allowed, port: ^port} when is_binary(allowed) ->
-                String.downcase(allowed) == host
-
-              _ ->
-                false
-            end
-          end)
+        known? = known_media_host?(host, port)
+        trusted? = trusted_media_host?(host, port, opts)
 
         if (known? or trusted?) and not String.contains?(url, ["\r", "\n", "\0"]),
           do: :ok,
@@ -273,6 +290,31 @@ defmodule ExWapp.Media.HTTP do
     end
   rescue
     _ -> {:error, :untrusted_media_url}
+  end
+
+  @spec known_media_host?(String.t(), non_neg_integer() | nil) :: boolean()
+  defp known_media_host?(host, 443) do
+    Enum.any?(["whatsapp.net", "whatsapp.com", "fbcdn.net"], fn suffix ->
+      host == suffix or String.ends_with?(host, "." <> suffix)
+    end)
+  end
+
+  defp known_media_host?(_host, _port), do: false
+
+  @spec trusted_media_host?(String.t(), non_neg_integer() | nil, keyword()) :: boolean()
+  defp trusted_media_host?(host, port, opts) do
+    Enum.any?(Keyword.get(opts, :allowed_media_origins, []), &matching_origin?(&1, host, port))
+  end
+
+  @spec matching_origin?(String.t(), String.t(), non_neg_integer() | nil) :: boolean()
+  defp matching_origin?(origin, host, port) do
+    case URI.parse(origin) do
+      %URI{scheme: "https", host: allowed, port: ^port} when is_binary(allowed) ->
+        String.downcase(allowed) == host
+
+      _ ->
+        false
+    end
   end
 
   @spec parse_upload_response(binary()) :: map()

@@ -441,6 +441,13 @@ defmodule ExWapp do
   def send_message(%Client{} = client, opts) when is_list(opts),
     do: Client.API.send_message(client, opts)
 
+  @doc """
+  Sends text through the legacy session interface.
+
+  A session PID returns the transport result; a session ID broadcasts an
+  asynchronous PubSub command and returns `:ok`. Applications should use the
+  client-based `send_message/2` API for the supported public workflow.
+  """
   @spec send_message(pid() | binary(), String.t(), String.t()) ::
           {:ok, String.t()} | :ok | {:error, term()}
   def send_message(session, jid, text)
