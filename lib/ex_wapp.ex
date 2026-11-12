@@ -34,7 +34,7 @@ defmodule ExWapp do
   """
 
   alias ExWapp.AppState.Engine
-  alias ExWapp.{Call, Chat, Client, Error, Event, Messages, Session}
+  alias ExWapp.{Call, Chat, Client, Error, Event, Media, Messages, Session}
 
   @doc """
   Creates a high-level, runtime-neutral client.
@@ -654,7 +654,100 @@ defmodule ExWapp do
     do: Session.send_event(session, to, name, start_time, opts)
 
   @doc """
-  Downloads and decrypts image, audio, document, or history-sync media.
+  Sends an MP4 video from bytes, a path, or an uploaded media reference.
+
+  Options: `:mimetype` (default `video/mp4`), `:caption`, `:seconds` (or
+  `:duration`), `:width`, `:height`, `:jpeg_thumbnail`, `:gif_playback`,
+  `:quoted_id`, `:quoted_participant`, and `:mentions`. GIF playback uses an MP4
+  video, not GIF file bytes. ExWapp does not transcode or inspect the media.
+  """
+  @spec send_video(Client.t() | GenServer.server(), String.t(), Media.source(), keyword()) ::
+          {:ok, Client.t(), String.t()}
+          | {:ok, String.t()}
+          | {:error, term()}
+          | {:error, Error.t(), Client.t()}
+  def send_video(target, to, source, opts \\ [])
+
+  def send_video(%Client{} = client, to, source, opts),
+    do: Client.API.send_video(client, to, source, opts)
+
+  def send_video(session, to, source, opts), do: Session.send_video(session, to, source, opts)
+
+  @doc """
+  Sends a WebP sticker from bytes, a path, or an uploaded reference.
+
+  Options: `:animated` (default false), `:width`, `:height`, `:mimetype`
+  (default `image/webp`) and reply/mention options. Supply already encoded
+  WebP bytes; ExWapp does not convert images or generate sticker packs.
+  """
+  @spec send_sticker(Client.t() | GenServer.server(), String.t(), Media.source(), keyword()) ::
+          {:ok, Client.t(), String.t()}
+          | {:ok, String.t()}
+          | {:error, term()}
+          | {:error, Error.t(), Client.t()}
+  def send_sticker(target, to, source, opts \\ [])
+
+  def send_sticker(%Client{} = client, to, source, opts),
+    do: Client.API.send_sticker(client, to, source, opts)
+
+  def send_sticker(session, to, source, opts), do: Session.send_sticker(session, to, source, opts)
+
+  @doc """
+  Reacts to a message, or removes your reaction when `text` is empty.
+
+  `:from_me` identifies whether the target message was sent by this account
+  (default false). For another sender's group message, `:participant` must be
+  that sender's PN or LID JID. Direct chats and groups are supported; newsletters
+  use a different protocol. Incoming reactions are typed message events with a
+  `:reaction` map containing the target key, text and sender timestamp. They do
+  not replace the target message or maintain an aggregate reaction counter.
+  """
+  @spec send_reaction(
+          Client.t() | GenServer.server(),
+          String.t(),
+          String.t(),
+          String.t(),
+          keyword()
+        ) ::
+          {:ok, Client.t(), String.t()}
+          | {:ok, String.t()}
+          | {:error, term()}
+          | {:error, Error.t(), Client.t()}
+  def send_reaction(target, to, message_id, text, opts \\ [])
+
+  def send_reaction(%Client{} = client, to, message_id, text, opts),
+    do: Client.API.send_reaction(client, to, message_id, text, opts)
+
+  def send_reaction(session, to, message_id, text, opts),
+    do: Session.send_reaction(session, to, message_id, text, opts)
+
+  @doc """
+  Requests messages older than `anchor` from the account's primary device.
+
+  Pass an existing message map with `:id`, `:from_me` and `:timestamp` (Unix
+  seconds). `:count` defaults to 50 and must be between 1 and 1000 (a local
+  request bound). The returned ID identifies the peer request, not a completed
+  download. Responses arrive asynchronously through the existing history import
+  path and become available through `get_messages/3` and `stream_messages/3`.
+  Blob imports emit the existing history-sync lifecycle events. The phone must
+  be available and may return fewer messages or no history; a complete export
+  is not guaranteed. Local history queries do not automatically call this API.
+  """
+  @spec request_history(Client.t() | GenServer.server(), String.t(), map(), keyword()) ::
+          {:ok, Client.t(), String.t()}
+          | {:ok, String.t()}
+          | {:error, term()}
+          | {:error, Error.t(), Client.t()}
+  def request_history(target, to, anchor, opts \\ [])
+
+  def request_history(%Client{} = client, to, anchor, opts),
+    do: Client.API.request_history(client, to, anchor, opts)
+
+  def request_history(session, to, anchor, opts),
+    do: Session.request_history(session, to, anchor, opts)
+
+  @doc """
+  Downloads and decrypts image, video, sticker, audio, document, or history-sync media.
 
   For a `%ExWapp.Media.Ref{type: :history}`, the returned bytes are the decrypted,
   compressed history payload. The built-in session automatically downloads,

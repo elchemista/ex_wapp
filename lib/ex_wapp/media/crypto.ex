@@ -92,8 +92,9 @@ defmodule ExWapp.Media.Crypto do
   defp validate_ref(%Media.Ref{media_key: key}) when byte_size(key) != 32,
     do: {:error, :invalid_media_key}
 
-  defp validate_ref(%Media.Ref{type: type}) when type in [:image, :audio, :document, :history],
-    do: :ok
+  defp validate_ref(%Media.Ref{type: type})
+       when type in [:image, :video, :sticker, :audio, :document, :history],
+       do: :ok
 
   defp validate_ref(%Media.Ref{}), do: {:error, :unsupported_media_type}
 
@@ -102,6 +103,8 @@ defmodule ExWapp.Media.Crypto do
   """
   @spec media_info(Media.download_type()) :: binary()
   def media_info(:image), do: "WhatsApp Image Keys"
+  def media_info(:video), do: "WhatsApp Video Keys"
+  def media_info(:sticker), do: "WhatsApp Image Keys"
   def media_info(:audio), do: "WhatsApp Audio Keys"
   def media_info(:document), do: "WhatsApp Document Keys"
   def media_info(:history), do: "WhatsApp History Keys"

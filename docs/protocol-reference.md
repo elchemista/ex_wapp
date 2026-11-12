@@ -42,6 +42,26 @@ That live revision is newer than the selected whatsmeow snapshot; the default
 stays aligned with whatsmeow. The older `check-update` endpoint returned
 `2.2413.51` and was not used to downgrade the client.
 
+### Public feature additions in 0.1.6
+
+- Video and WebP sticker send/receive/download reuse the existing media and
+  Signal pipelines. Video uses `WhatsApp Video Keys` and the `video` upload
+  path; stickers use `WhatsApp Image Keys` and the `image` upload path, while
+  their encrypted stanza `mediatype` is `sticker`. This follows the pinned
+  [media mapping](https://github.com/tulir/whatsmeow/blob/c88388f983b4bc43dfd0bcc2b46969fcde82d61f/download.go).
+- Reactions preserve explicit target `fromMe` and group participant identity.
+  They use `type="reaction"`, encrypted-node `decrypt-fail="hide"`, and
+  `edit="7"` when removing a reaction with empty text. Received reactions are
+  canonical `:reaction` content and retain the target key without replacing
+  the target message. Newsletter reactions are not supported by this API.
+- `request_history/4` sends `HISTORY_SYNC_ON_DEMAND` to the primary device,
+  with `category="peer"`, `push_priority="high_force"` and
+  `privacy_sensitive="1"`. Despite its name, `oldestMsgTimestampMS` contains
+  Unix seconds, as in the pinned
+  [history request builder](https://github.com/tulir/whatsmeow/blob/c88388f983b4bc43dfd0bcc2b46969fcde82d61f/send.go).
+  The returned request ID is not a completion confirmation. Responses reuse
+  existing inline/blob history ingestion. No automatic pagination is performed.
+
 ### November runtime review
 
 - Ported grouped-receipt `message_id` fallback (nonempty `key` takes priority)

@@ -112,14 +112,16 @@ defmodule ExWapp.Session.Worker.Outbound do
   end
 
   @doc "Sends an internal protocol message directly to the account's primary device."
-  @spec send_peer_proto_worker(pid(), map(), WAWebProtobufsE2E.Message.t()) ::
+  @spec send_peer_proto_worker(pid(), map(), WAWebProtobufsE2E.Message.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
-  def send_peer_proto_worker(_session_pid, %{status: status}, _proto)
+  def send_peer_proto_worker(session_pid, state, proto, opts \\ [])
+
+  def send_peer_proto_worker(_session_pid, %{status: status}, _proto, _opts)
       when status not in [:connected, :syncing] do
     {:error, {:not_connected, status}}
   end
 
-  def send_peer_proto_worker(_session_pid, %{status: status, conn: conn}, _proto)
+  def send_peer_proto_worker(_session_pid, %{status: status, conn: conn}, _proto, _opts)
       when not is_pid(conn) do
     {:error, {:not_connected, status}}
   end
@@ -127,7 +129,8 @@ defmodule ExWapp.Session.Worker.Outbound do
   def send_peer_proto_worker(
         session_pid,
         %{conn: conn, store: store} = state,
-        %Message{} = proto
+        %Message{} = proto,
+        opts
       ) do
     destination_jid = peer_destination_jid(store)
 
@@ -154,7 +157,7 @@ defmodule ExWapp.Session.Worker.Outbound do
              prekey_bundles
            ),
          {:ok, encrypted_node} <- extract_peer_encrypted_node(participant_node),
-         message_id <- Direct.message_id([], destination),
+         message_id <- Direct.message_id(opts, destination),
          node <-
            build_peer_message_node(
              destination,
@@ -163,6 +166,7 @@ defmodule ExWapp.Session.Worker.Outbound do
              store,
              include_identity
            ),
+         node <- apply_peer_request_attributes(node, proto),
          :ok <- persist_signal_sessions(session_pid, updated_sessions, state),
          :ok <- send_transport_node(state, conn, node) do
       Logger.debug(
@@ -833,6 +837,22 @@ defmodule ExWapp.Session.Worker.Outbound do
         error
     end
   end
+
+  defp apply_peer_request_attributes(node, %Message{
+         protocolMessage: %{
+           peerDataOperationRequestMessage: %{
+             peerDataOperationRequestType: :HISTORY_SYNC_ON_DEMAND
+           }
+         }
+       }) do
+    %{
+      node
+      | attrs:
+          Map.merge(node.attrs, %{"push_priority" => "high_force", "privacy_sensitive" => "1"})
+    }
+  end
+
+  defp apply_peer_request_attributes(node, _proto), do: node
 
   @spec peer_destination_jid(Store.t()) :: String.t()
   defp peer_destination_jid(store) do

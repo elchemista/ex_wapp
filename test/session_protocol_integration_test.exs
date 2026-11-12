@@ -803,7 +803,7 @@ defmodule ExWapp.SessionProtocolIntegrationTest do
     end)
   end
 
-  for type <- [:image, :audio, :document] do
+  for type <- [:image, :video, :sticker, :audio, :document] do
     @media_type type
     test "#{type} public API preserves authenticated upload metadata through encryption", ctx do
       remote = ExWapp.Test.SignalDevice.new()
@@ -824,7 +824,13 @@ defmodule ExWapp.SessionProtocolIntegrationTest do
       media =
         Map.fetch!(
           proto,
-          %{image: :imageMessage, audio: :audioMessage, document: :documentMessage}[@media_type]
+          %{
+            image: :imageMessage,
+            video: :videoMessage,
+            sticker: :stickerMessage,
+            audio: :audioMessage,
+            document: :documentMessage
+          }[@media_type]
         )
 
       assert media.mediaKey == upload.media_key
@@ -832,6 +838,30 @@ defmodule ExWapp.SessionProtocolIntegrationTest do
       assert media.fileLength == 10
       assert Store.find_message(ctx.store, @jid, id).raw.media.media_key == upload.media_key
     end
+  end
+
+  @tag runtime: [throttle: [enabled: false]]
+  test "reactions and removals survive real Signal encryption and retain their target", ctx do
+    remote = ExWapp.Test.SignalDevice.new()
+    :ok = Transport.set_reply(ctx.conn, &ExWapp.Test.SignalDevice.reply(remote, &1))
+
+    Enum.reduce(["👍", ""], ExWapp.Signal.SessionStore.new(), fn text, receiver ->
+      assert {:ok, id} = ExWapp.send_reaction(ctx.session, @jid, "TARGET", text)
+
+      assert_receive {:peer_node, _, %Node{tag: "message", attrs: %{"id" => ^id} = attrs} = node},
+                     1000
+
+      assert attrs["id"] == id
+      assert attrs["type"] == "reaction"
+      assert attrs["edit"] == if(text == "", do: "7", else: nil)
+      {proto, receiver} = decrypt_received(node, remote, receiver)
+      assert proto.reactionMessage.key."ID" == "TARGET"
+      assert proto.reactionMessage.key.remoteJID == @jid
+      assert proto.reactionMessage.key.fromMe == false
+      assert proto.reactionMessage.text == text
+      assert Store.find_message(ctx.store, @jid, id).raw.reaction.message_id == "TARGET"
+      receiver
+    end)
   end
 
   test "invalid public content fails before discovery and does not store a pending message",

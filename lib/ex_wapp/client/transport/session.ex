@@ -88,7 +88,19 @@ defmodule ExWapp.Client.Transport.Session do
   @spec send_message(Client.t(), Message.t()) ::
           {:ok, Client.t(), String.t()} | {:error, Client.t(), term()} | {:error, term()}
   def send_message(%Client{} = client, %Message{type: type} = message)
-      when type in [:text, :image, :audio, :document, :location, :contact, :event] do
+      when type in [
+             :text,
+             :image,
+             :video,
+             :sticker,
+             :audio,
+             :document,
+             :location,
+             :contact,
+             :event,
+             :reaction,
+             :history_request
+           ] do
     with {:ok, client, session} <- ensure_session(client) do
       session
       |> Session.send_message(message)

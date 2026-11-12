@@ -13,7 +13,11 @@ defmodule ExWapp.Session.Outbound.Content do
     state = Map.put(state, :outbound_iq_router, session_pid)
 
     with {:ok, proto, send_opts} <- prepare(session_pid, state, message) do
-      Outbound.send_proto_worker(session_pid, state, jid, proto, send_opts)
+      if message.type == :history_request do
+        Outbound.send_peer_proto_worker(session_pid, state, proto, send_opts)
+      else
+        Outbound.send_proto_worker(session_pid, state, jid, proto, send_opts)
+      end
     end
   rescue
     exception -> {:error, {:content_send_exception, exception}}
@@ -36,23 +40,23 @@ defmodule ExWapp.Session.Outbound.Content do
   @doc false
   @spec validate(Message.t()) :: :ok | {:error, term()}
   def validate(%Message{type: type, body: %Media.Upload{type: type}})
-      when type in [:image, :audio, :document],
+      when type in [:image, :video, :sticker, :audio, :document],
       do: :ok
 
   def validate(%Message{type: type, body: %Media.Upload{type: other}})
-      when type in [:image, :audio, :document],
+      when type in [:image, :video, :sticker, :audio, :document],
       do: {:error, {:media_type_mismatch, type, other}}
 
   def validate(%Message{type: type, body: {:bytes, bytes}})
-      when type in [:image, :audio, :document] and is_binary(bytes),
+      when type in [:image, :video, :sticker, :audio, :document] and is_binary(bytes),
       do: :ok
 
   def validate(%Message{type: type, body: {:path, path}})
-      when type in [:image, :audio, :document] and is_binary(path),
+      when type in [:image, :video, :sticker, :audio, :document] and is_binary(path),
       do: :ok
 
   def validate(%Message{type: type, body: source})
-      when type in [:image, :audio, :document],
+      when type in [:image, :video, :sticker, :audio, :document],
       do: {:error, {:unsupported_media_source, source}}
 
   def validate(%Message{type: :location, body: body}) when is_map(body) do
@@ -84,12 +88,61 @@ defmodule ExWapp.Session.Outbound.Content do
        else: {:error, :invalid_event}
   end
 
+  def validate(%Message{
+        type: :reaction,
+        to: jid,
+        body: %{message_id: id, text: text},
+        opts: opts
+      }) do
+    from_me = Keyword.get(opts, :from_me, false)
+    participant = Keyword.get(opts, :participant)
+
+    cond do
+      not supported_chat?(jid) ->
+        {:error, :unsupported_reaction_chat}
+
+      not nonempty_string?(id) ->
+        {:error, :invalid_reaction_target}
+
+      not valid_text?(text) ->
+        {:error, :invalid_reaction_text}
+
+      not is_boolean(from_me) ->
+        {:error, :invalid_reaction_from_me}
+
+      missing_reaction_participant?(jid, from_me, participant) ->
+        {:error, :missing_reaction_participant}
+
+      true ->
+        :ok
+    end
+  end
+
+  def validate(%Message{type: :history_request, to: jid, body: anchor, opts: opts})
+      when is_map(anchor) do
+    count = Keyword.get(opts, :count, 50)
+
+    cond do
+      not supported_chat?(jid) ->
+        {:error, :unsupported_history_chat}
+
+      not valid_history_anchor?(anchor) ->
+        {:error, :invalid_history_anchor}
+
+      not valid_history_count?(count) ->
+        {:error, :invalid_history_count}
+
+      true ->
+        :ok
+    end
+  end
+
   def validate(%Message{type: :event}), do: {:error, {:invalid_content, :event}}
   def validate(%Message{type: type}), do: {:error, {:invalid_content, type}}
 
   @spec do_prepare(pid(), map(), Message.t()) :: prepared()
   defp do_prepare(session_pid, state, %Message{type: type, body: source, opts: opts})
-       when type in [:image, :audio, :document] do
+       when type in [:image, :video, :sticker, :audio, :document] do
     opts = maybe_put_document_file_name(type, source, opts)
 
     with {:ok, upload} <- prepare_media_upload(session_pid, state, type, source, opts) do
@@ -181,6 +234,64 @@ defmodule ExWapp.Session.Outbound.Content do
     end
   end
 
+  defp do_prepare(_session, _state, %Message{type: :reaction, to: jid, body: body, opts: opts}) do
+    proto = Messages.build_reaction_proto(jid, body.message_id, body.text, opts)
+
+    send_opts =
+      opts
+      |> Keyword.put(:message_node_type, "reaction")
+      |> Keyword.put(:reaction_remove, body.text == "")
+      |> Keyword.delete(:mediatype)
+      |> Keyword.put(:chat_text, nil)
+      |> Keyword.put(:outgoing_raw, %{
+        content_type: :reaction,
+        reaction: %{
+          message_id: body.message_id,
+          text: body.text,
+          from_me: proto.reactionMessage.key.fromMe,
+          chat_jid: jid,
+          participant: proto.reactionMessage.key.participant,
+          sender_timestamp_ms: proto.reactionMessage.senderTimestampMS
+        }
+      })
+
+    {:ok, proto, send_opts}
+  end
+
+  defp do_prepare(_session, _state, %Message{
+         type: :history_request,
+         to: jid,
+         body: anchor,
+         opts: opts
+       }) do
+    {:ok, Messages.build_history_request_proto(jid, anchor, opts), opts}
+  end
+
+  defp nonempty_string?(value), do: is_binary(value) and value != "" and String.valid?(value)
+  defp valid_text?(value), do: is_binary(value) and String.valid?(value)
+
+  defp missing_reaction_participant?(jid, from_me, participant),
+    do: String.ends_with?(jid, "@g.us") and not from_me and not user_jid?(participant)
+
+  defp valid_history_anchor?(%{id: id, from_me: from_me, timestamp: timestamp}),
+    do:
+      nonempty_string?(id) and is_boolean(from_me) and is_integer(timestamp) and
+        timestamp > 0 and timestamp <= 9_223_372_036_854_775_807
+
+  defp valid_history_anchor?(_), do: false
+
+  defp valid_history_count?(count), do: is_integer(count) and count in 1..1000
+
+  defp user_jid?(jid) when is_binary(jid),
+    do: String.valid?(jid) and Regex.match?(~r/^\d+(?::\d+)?@(s\.whatsapp\.net|lid)$/, jid)
+
+  defp user_jid?(_), do: false
+
+  defp supported_chat?(jid) when is_binary(jid),
+    do: String.valid?(jid) and (user_jid?(jid) or Regex.match?(~r/^\d+(?:-\d+)?@g\.us$/, jid))
+
+  defp supported_chat?(_), do: false
+
   @spec prepare_media_upload(pid(), map(), Media.media_type(), Media.source(), keyword()) ::
           {:ok, Media.Upload.t()} | {:error, term()}
   defp prepare_media_upload(
@@ -204,6 +315,8 @@ defmodule ExWapp.Session.Outbound.Content do
 
   @spec build_media_proto(Media.media_type(), Media.Upload.t(), keyword()) :: ProtoMessage.t()
   defp build_media_proto(:image, upload, opts), do: Messages.build_image_proto(upload, opts)
+  defp build_media_proto(:video, upload, opts), do: Messages.build_video_proto(upload, opts)
+  defp build_media_proto(:sticker, upload, opts), do: Messages.build_sticker_proto(upload, opts)
   defp build_media_proto(:audio, upload, opts), do: Messages.build_audio_proto(upload, opts)
   defp build_media_proto(:document, upload, opts), do: Messages.build_document_proto(upload, opts)
 
@@ -228,10 +341,17 @@ defmodule ExWapp.Session.Outbound.Content do
   @spec media_chat_text(Media.media_type(), keyword()) :: String.t() | nil
   defp media_chat_text(:image, opts), do: Keyword.get(opts, :caption)
   defp media_chat_text(:document, opts), do: Keyword.get(opts, :caption)
+  defp media_chat_text(:video, opts), do: Keyword.get(opts, :caption)
+  defp media_chat_text(:sticker, _opts), do: nil
   defp media_chat_text(:audio, _opts), do: nil
 
   @spec media_stanza_type(Media.media_type(), keyword()) :: String.t()
   defp media_stanza_type(:image, _opts), do: "image"
+
+  defp media_stanza_type(:video, opts),
+    do: if(Keyword.get(opts, :gif_playback, false), do: "gif", else: "video")
+
+  defp media_stanza_type(:sticker, _opts), do: "sticker"
   defp media_stanza_type(:document, _opts), do: "document"
 
   defp media_stanza_type(:audio, opts),

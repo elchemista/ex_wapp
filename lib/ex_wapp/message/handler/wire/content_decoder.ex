@@ -16,7 +16,9 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
     ImageMessage,
     LiveLocationMessage,
     LocationMessage,
-    Message
+    Message,
+    StickerMessage,
+    VideoMessage
   }
 
   @max_message_decode_depth 6
@@ -48,6 +50,12 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
         |> Map.put(:media_type, type)
         |> Map.put(:content_type, type)
         |> Map.put(:text, caption)
+
+      %{kind: :reaction, value: reaction} ->
+        message_data
+        |> Map.put(:reaction, reaction)
+        |> Map.put(:content_type, :reaction)
+        |> Map.put(:text, nil)
 
       %{kind: :location, value: location} ->
         message_data
@@ -142,15 +150,47 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
 
   @spec extract_supported_content_shallow(Message.t()) :: map() | nil
   defp extract_supported_content_shallow(message) do
+    extract_media_content(message) || extract_structured_content(message)
+  end
+
+  defp extract_media_content(message) do
     cond do
       match?(%ImageMessage{}, message.imageMessage) ->
         build_media_ref(:image, message.imageMessage)
+
+      match?(%VideoMessage{}, message.videoMessage) ->
+        build_media_ref(:video, message.videoMessage)
+
+      match?(%StickerMessage{}, message.stickerMessage) ->
+        build_media_ref(:sticker, message.stickerMessage)
 
       match?(%DocumentMessage{}, message.documentMessage) ->
         build_media_ref(:document, message.documentMessage)
 
       match?(%AudioMessage{}, message.audioMessage) ->
         build_media_ref(:audio, message.audioMessage)
+
+      true ->
+        nil
+    end
+  end
+
+  defp extract_structured_content(message) do
+    cond do
+      match?(%{key: %WACommon.MessageKey{}}, message.reactionMessage) ->
+        reaction = message.reactionMessage
+
+        %{
+          kind: :reaction,
+          value: %{
+            message_id: reaction.key."ID",
+            chat_jid: reaction.key.remoteJID,
+            from_me: reaction.key.fromMe,
+            participant: reaction.key.participant,
+            text: reaction.text,
+            sender_timestamp_ms: reaction.senderTimestampMS
+          }
+        }
 
       match?(%EventMessage{}, message.eventMessage) ->
         build_event(message.eventMessage)
@@ -184,7 +224,7 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
     for %{message: %Message{} = wrapped} <- wrappers, do: wrapped
   end
 
-  @spec build_media_ref(:image | :audio | :document, struct()) :: map()
+  @spec build_media_ref(ExWapp.Media.media_type(), struct()) :: map()
   defp build_media_ref(:image, %ImageMessage{} = image) do
     %{
       kind: :media,
@@ -205,6 +245,58 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
           width: image.width,
           media_key_timestamp: image.mediaKeyTimestamp,
           thumbnail: image."JPEGThumbnail"
+        }
+      }
+    }
+  end
+
+  defp build_media_ref(:video, %VideoMessage{} = video) do
+    %{
+      kind: :media,
+      type: :video,
+      caption: video.caption,
+      ref: %ExWapp.Media.Ref{
+        type: :video,
+        url: video."URL",
+        mimetype: video.mimetype,
+        file_sha256: video.fileSHA256,
+        file_length: video.fileLength,
+        media_key: video.mediaKey,
+        file_enc_sha256: video.fileEncSHA256,
+        direct_path: video.directPath,
+        media_key_timestamp: video.mediaKeyTimestamp,
+        metadata: %{
+          seconds: video.seconds,
+          gif_playback: video.gifPlayback,
+          height: video.height,
+          width: video.width,
+          media_key_timestamp: video.mediaKeyTimestamp,
+          thumbnail: video."JPEGThumbnail"
+        }
+      }
+    }
+  end
+
+  defp build_media_ref(:sticker, %StickerMessage{} = sticker) do
+    %{
+      kind: :media,
+      type: :sticker,
+      caption: nil,
+      ref: %ExWapp.Media.Ref{
+        type: :sticker,
+        url: sticker."URL",
+        mimetype: sticker.mimetype,
+        file_sha256: sticker.fileSHA256,
+        file_length: sticker.fileLength,
+        media_key: sticker.mediaKey,
+        file_enc_sha256: sticker.fileEncSHA256,
+        direct_path: sticker.directPath,
+        media_key_timestamp: sticker.mediaKeyTimestamp,
+        metadata: %{
+          height: sticker.height,
+          width: sticker.width,
+          media_key_timestamp: sticker.mediaKeyTimestamp,
+          animated: sticker.isAnimated
         }
       }
     }

@@ -203,6 +203,8 @@ defmodule ExWapp.Media.HTTP do
 
   @spec mms_type(Media.download_type()) :: binary()
   defp mms_type(:image), do: "image"
+  defp mms_type(:video), do: "video"
+  defp mms_type(:sticker), do: "image"
   defp mms_type(:audio), do: "audio"
   defp mms_type(:document), do: "document"
   defp mms_type(:history), do: "md-msg-hist"

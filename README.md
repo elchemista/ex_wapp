@@ -192,11 +192,13 @@ Messages and media:
 
 - `send_message/2`
 - `send_image/4`
+- `send_video/4`, `send_sticker/4`
 - `send_audio/4`
 - `send_document/4`
 - `send_location/5`
 - `send_contact/5`
 - `send_event/5`
+- `send_reaction/5`
 - `download_media/3`
 - `receive_message/3`
 
@@ -207,6 +209,7 @@ Contacts, chats, calls, and local history:
 - `list_chats/1`, `list_groups/1`, `get_chat/2`
 - `get_messages/3`, `stream_messages/3`, `all_messages/2`
 - `delete_messages/3`
+- `request_history/4` (requests older messages from the phone)
 - `list_calls/2`, `get_call/2`
 
 Diagnostics:
@@ -310,6 +313,56 @@ run in supervised background tasks. Session subscribers receive
 Use the same history queries above after completion. `download_media/3` also
 accepts a `%ExWapp.Media.Ref{type: :history}` for fetching decrypted compressed
 bytes directly.
+
+## Video, stickers, reactions, and older history
+
+```elixir
+{:ok, client, video_id} =
+  ExWapp.send_video(client, jid, {:path, "/media/clip.mp4"},
+    caption: "A short clip", seconds: 12, width: 1280, height: 720)
+
+{:ok, client, sticker_id} =
+  ExWapp.send_sticker(client, jid, {:path, "/media/sticker.webp"}, animated: true)
+
+{:ok, client, reaction_id} = ExWapp.send_reaction(client, jid, received_message_id, "👍")
+# Empty text removes your reaction. Set from_me: true when the target was your message.
+{:ok, client, removal_id} = ExWapp.send_reaction(client, jid, received_message_id, "")
+# For someone else's group message, identify the target's sender explicitly.
+{:ok, client, group_reaction_id} =
+  ExWapp.send_reaction(client, group_jid, received_message_id, "👍", participant: sender_jid)
+```
+
+Media sources also accept `{:bytes, binary}` or an existing `%ExWapp.Media.Upload{}`.
+Supply already encoded MP4/WebP bytes; ExWapp does not transcode, generate
+thumbnails or determine dimensions/duration. `gif_playback: true` sends an MP4
+with GIF-style playback. Incoming videos and stickers expose a
+`%ExWapp.Media.Ref{type: :video | :sticker}` that works with `download_media/3`.
+Reactions arrive as messages with `content.kind == :reaction` and a `reaction`
+map containing `message_id`, `chat_jid`, `from_me`, `participant`, `text`, and
+`sender_timestamp_ms`. The key describes the target; the outer message describes
+the reactor. Empty reaction text is a removal. These events are retained
+separately; ExWapp does not aggregate reactions on the target message.
+
+To request earlier history, use an existing message as the anchor:
+
+```elixir
+{:ok, history} = ExWapp.stream_messages(client, jid) # oldest first
+
+case Enum.take(history, 1) do
+  [anchor] -> ExWapp.request_history(client, jid, anchor, count: 50)
+  [] -> {:error, :no_history_anchor}
+end
+```
+
+The anchor must contain `id`, `from_me`, and `timestamp` in Unix **seconds**.
+`count` defaults to 50, with a local bound of 1–1000. Success returns
+`{:ok, updated_client, request_id}` when the encrypted request is sent to the
+account's primary device. It does not mean the phone has returned history.
+Responses use the existing asynchronous history import path; query the store
+again after import. The phone may be offline, lack those messages, or return
+fewer records. This API does not guarantee a complete account export.
+Custom transport adapters receive `%ExWapp.Message{type: :history_request}`;
+the built-in session handles peer routing and encryption.
 
 ## Storage
 

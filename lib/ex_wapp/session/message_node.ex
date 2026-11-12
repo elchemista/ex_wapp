@@ -114,9 +114,29 @@ defmodule ExWapp.Session.MessageNode do
     node = %{node | attrs: Map.delete(attrs, "mediatype")}
 
     node
+    |> apply_reaction_options(opts)
     |> put_encrypted_mediatype(Keyword.get(opts, :mediatype))
     |> append_additional_nodes(Keyword.get(opts, :additional_message_nodes, []))
   end
+
+  defp apply_reaction_options(%Binary.Node{attrs: %{"type" => "reaction"}} = node, opts) do
+    attrs =
+      if Keyword.get(opts, :reaction_remove, false),
+        do: Map.put(node.attrs, "edit", "7"),
+        else: node.attrs
+
+    hide_reaction_decrypt_failure(%{node | attrs: attrs})
+  end
+
+  defp apply_reaction_options(node, _opts), do: node
+
+  defp hide_reaction_decrypt_failure(%Binary.Node{tag: "enc"} = node),
+    do: %{node | attrs: Map.put(node.attrs || %{}, "decrypt-fail", "hide")}
+
+  defp hide_reaction_decrypt_failure(%Binary.Node{content: content} = node) when is_list(content),
+    do: %{node | content: Enum.map(content, &hide_reaction_decrypt_failure/1)}
+
+  defp hide_reaction_decrypt_failure(node), do: node
 
   @doc "Adds a message attribute only when its value is present."
   @spec maybe_put_message_attr(map(), String.t(), term()) :: map()

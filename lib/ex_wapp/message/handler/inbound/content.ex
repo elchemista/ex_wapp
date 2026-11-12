@@ -136,6 +136,10 @@ defmodule ExWapp.Message.Handler.Inbound.Content do
     )
   end
 
+  defp canonical_user_content(%{reaction: reaction}, _text, _fallback, diagnostics) do
+    MessageContent.new(:reaction, reaction: reaction, diagnostics: diagnostics)
+  end
+
   defp canonical_user_content(
          %{location: location} = fields,
          _decoded_text,

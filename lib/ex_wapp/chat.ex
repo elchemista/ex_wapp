@@ -41,7 +41,8 @@ defmodule ExWapp.Chat do
           optional(:media) => term(),
           optional(:location) => term(),
           optional(:contact) => term(),
-          optional(:event) => term()
+          optional(:event) => term(),
+          optional(:reaction) => term()
         }
 
   @type chat :: %__MODULE__{
@@ -597,7 +598,7 @@ defmodule ExWapp.Chat do
       }
 
       message
-      |> Map.take([:content, :media, :location, :contact, :event])
+      |> Map.take([:content, :media, :location, :contact, :event, :reaction])
       |> Map.merge(normalized)
     else
       nil

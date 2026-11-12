@@ -13,7 +13,7 @@ defmodule ExWapp.Media do
   @typedoc """
   Media kinds currently supported by the high-level API.
   """
-  @type media_type :: :image | :audio | :document
+  @type media_type :: :image | :video | :sticker | :audio | :document
 
   @typedoc "Media kinds accepted by the download API, including history-sync blobs."
   @type download_type :: media_type() | :history

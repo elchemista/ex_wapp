@@ -4,7 +4,19 @@ defmodule ExWapp.Session.Outbound.Command do
   alias ExWapp.Message
   alias ExWapp.Session.Outbound.Content
 
-  @supported_types [:text, :image, :audio, :document, :location, :contact, :event]
+  @supported_types [
+    :text,
+    :image,
+    :video,
+    :sticker,
+    :audio,
+    :document,
+    :location,
+    :contact,
+    :event,
+    :reaction,
+    :history_request
+  ]
 
   @spec prepare(Message.t()) :: {:ok, Message.t()} | {:error, term()}
   def prepare(%Message{} = message) do

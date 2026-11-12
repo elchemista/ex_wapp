@@ -101,6 +101,22 @@ defmodule ExWapp.Session do
     |> then(&send_message(server, &1))
   end
 
+  @spec send_video(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_video(server, jid, source, opts \\ []) do
+    jid
+    |> Message.video(source, message_options(opts))
+    |> then(&send_message(server, &1))
+  end
+
+  @spec send_sticker(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_sticker(server, jid, source, opts \\ []) do
+    jid
+    |> Message.sticker(source, message_options(opts))
+    |> then(&send_message(server, &1))
+  end
+
   @spec send_audio(GenServer.server(), binary(), ExWapp.Media.source(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def send_audio(server, jid, source, opts \\ []) do
@@ -115,6 +131,18 @@ defmodule ExWapp.Session do
     jid
     |> Message.document(source, message_options(opts))
     |> then(&send_message(server, &1))
+  end
+
+  @spec send_reaction(GenServer.server(), binary(), binary(), binary(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_reaction(server, jid, message_id, text, opts \\ []) do
+    send_message(server, Message.reaction(jid, message_id, text, message_options(opts)))
+  end
+
+  @spec request_history(GenServer.server(), binary(), map(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def request_history(server, jid, anchor, opts \\ []) do
+    send_message(server, Message.history_request(jid, anchor, message_options(opts)))
   end
 
   @spec send_location(GenServer.server(), binary(), number(), number(), keyword()) ::

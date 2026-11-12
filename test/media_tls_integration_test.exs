@@ -128,7 +128,7 @@ defmodule ExWapp.MediaTLSIntegrationTest do
     %{cert: cert, key: key}
   end
 
-  for type <- [:image, :audio, :document] do
+  for type <- [:image, :video, :sticker, :audio, :document] do
     @media_type type
     test "uploads #{@media_type} over verified TLS and authenticates the captured encrypted body",
          ctx do
@@ -149,7 +149,7 @@ defmodule ExWapp.MediaTLSIntegrationTest do
       assert upload.handle == "h"
       assert upload.object_id == "o"
       assert_receive {:tls_request, :POST, path, headers, encrypted}, 1000
-      assert path =~ "/mms/#{@media_type}/"
+      assert path =~ "/mms/#{if @media_type == :sticker, do: :image, else: @media_type}/"
       assert URI.decode_query(URI.parse(path).query)["auth"] == "a+b/c?"
       assert headers["content-type"] == "application/octet-stream"
       assert headers["origin"] == "https://web.whatsapp.com"

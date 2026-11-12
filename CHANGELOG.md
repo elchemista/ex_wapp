@@ -2,6 +2,16 @@
 
 ## 0.1.6 — 2026-11-12
 
+### Added
+
+- `send_video/4` and `send_sticker/4`, with encrypted upload/download, typed
+  incoming media references, MP4 GIF playback and animated WebP metadata.
+- `send_reaction/5` for direct chats and groups, including removal with empty
+  text and typed incoming reaction events that preserve the target message key.
+- `request_history/4` for requesting messages preceding a known anchor from
+  the primary device. Requests use encrypted peer routing; received history is
+  imported asynchronously through the existing history pipeline.
+
 ### Changed
 
 - Align the default WhatsApp Web version with whatsmeow `c88388f` at
@@ -16,9 +26,12 @@
 
 ### Validation
 
-- 1,207 passing tests, 91.52% maintained-code coverage, and clean strict Credo,
-  formatting and warnings-as-errors compilation. Pairing against a real account
-  was not exercised.
+- 1,220 passing tests and 91.50% maintained-code coverage. Strict Credo,
+  Dialyzer (zero errors and skips), formatting, warnings-as-errors compilation,
+  documentation generation and Hex package construction pass. New coverage
+  includes TLS media upload, independent HKDF/protobuf fixtures, Signal-encrypted
+  media/reaction sends and a primary-device history request. Live interoperability
+  with a real WhatsApp account was not exercised.
 
 ## 0.1.5 — 2026-10-25
 
