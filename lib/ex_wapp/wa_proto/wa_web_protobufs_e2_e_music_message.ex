@@ -9,6 +9,7 @@ defmodule WAWebProtobufsE2E.MusicMessage do
   end
 
   @type t :: %__MODULE__{
+          lyrics: WAWebProtobufsE2E.MusicMessage.Lyrics.t() | nil,
           contextInfo: WAWebProtobufsE2E.ContextInfo.t() | nil,
           style: integer() | nil,
           artworkUri: String.t() | nil,
@@ -16,7 +17,8 @@ defmodule WAWebProtobufsE2E.MusicMessage do
           embeddedMusic: WAWebProtobufsE2E.EmbeddedMusic.t() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct contextInfo: nil,
+  defstruct lyrics: nil,
+            contextInfo: nil,
             style: nil,
             artworkUri: nil,
             songUri: nil,
@@ -33,6 +35,8 @@ defmodule WAWebProtobufsE2E.MusicMessage do
                  {:message, WAWebProtobufsE2E.ContextInfo}},
                 {:embeddedMusic, 1, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsE2E.EmbeddedMusic}},
+                {:lyrics, 6, :optional, {:scalar, nil},
+                 {:message, WAWebProtobufsE2E.MusicMessage.Lyrics}},
                 {:songUri, 2, :optional, {:scalar, ""}, :string},
                 {:style, 4, :optional, {:scalar, 0}, :int32}
               ],
@@ -88,6 +92,7 @@ defmodule WAWebProtobufsE2E.MusicMessage do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_lyrics(msg)
         |> encode_contextInfo(msg)
         |> encode_style(msg)
         |> encode_artworkUri(msg)
@@ -96,6 +101,27 @@ defmodule WAWebProtobufsE2E.MusicMessage do
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_lyrics({acc, acc_size}, msg) do
+      case :erlang.map_get(:lyrics, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            %{__struct__: WAWebProtobufsE2E.MusicMessage.Lyrics} =
+              child = :erlang.map_get(:lyrics, msg)
+
+            {child_bytes, child_size} =
+              WAWebProtobufsE2E.MusicMessage.Lyrics.encode_internal!(child)
+
+            child_size_bytes = Protox.Varint.encode(child_size)
+          )
+
+          {["2", child_size_bytes, child_bytes | acc],
+           acc_size + 1 + (byte_size(child_size_bytes) + child_size)}
+      end
+    end
 
     defp encode_contextInfo({acc, acc_size}, msg) do
       case :erlang.map_get(:contextInfo, msg) do
@@ -191,6 +217,7 @@ defmodule WAWebProtobufsE2E.MusicMessage do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:lyrics, &encode_lyrics/2, WAWebProtobufsE2E.MusicMessage.Lyrics},
           {:contextInfo, &encode_contextInfo/2, WAWebProtobufsE2E.ContextInfo},
           {:style, &encode_style/2, nil},
           {:artworkUri, &encode_artworkUri/2, nil},
@@ -248,6 +275,26 @@ defmodule WAWebProtobufsE2E.MusicMessage do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"2", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | lyrics:
+                  case :erlang.map_get(:lyrics, msg) do
+                    nil ->
+                      WAWebProtobufsE2E.MusicMessage.Lyrics.decode!(delimited)
+
+                    previous_value ->
+                      Protox.MergeMessage.merge(
+                        previous_value,
+                        WAWebProtobufsE2E.MusicMessage.Lyrics.decode!(delimited)
+                      )
+                  end
+            }
+
+            parse_key_value(rest, msg)
 
           <<"*", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)

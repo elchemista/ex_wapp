@@ -171,7 +171,8 @@ defmodule ExWapp.Message.Handler.Receipt do
   end
 
   defp grouped_receipt(%Node{attrs: attrs, content: users}, from, status) do
-    case non_empty_binary(Map.get(attrs, "key")) do
+    case non_empty_binary(Map.get(attrs, "key")) ||
+           non_empty_binary(Map.get(attrs, "message_id")) do
       nil ->
         []
 
@@ -185,6 +186,12 @@ defmodule ExWapp.Message.Handler.Receipt do
   defp grouped_receipt(_node, _from, _status), do: []
 
   defp participant_receipt(%Node{attrs: attrs}, message_id, from, status) do
+    status =
+      case Map.get(attrs, "type") do
+        type when type in [nil, "", "delivery"] -> status
+        type -> receipt_status(type)
+      end
+
     case normalize_optional_jid(Map.get(attrs, "jid")) do
       nil ->
         []

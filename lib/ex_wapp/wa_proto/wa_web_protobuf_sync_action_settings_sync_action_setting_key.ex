@@ -81,6 +81,8 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction.SettingKey do
 
   def encode(:STOCK_WALLPAPER_IMAGE_ID), do: 34
 
+  def encode(:MEDIA_AUTO_DOWNLOAD_QUALITY), do: 35
+
   def encode(x), do: x
 
   @spec decode(integer()) :: atom() | integer()
@@ -113,6 +115,8 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction.SettingKey do
   def decode(9), do: :IS_REACTIONS_NOTIFICATION_ENABLED
 
   def decode(15), do: :WALLPAPER_ID
+
+  def decode(35), do: :MEDIA_AUTO_DOWNLOAD_QUALITY
 
   def decode(32), do: :CHAT_THEME_ID
 
@@ -193,7 +197,8 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction.SettingKey do
       {31, :SHOULD_PLAY_SOUND_FOR_CALL_NOTIFICATION},
       {32, :CHAT_THEME_ID},
       {33, :COLOR_SCHEME_ID},
-      {34, :STOCK_WALLPAPER_IMAGE_ID}
+      {34, :STOCK_WALLPAPER_IMAGE_ID},
+      {35, :MEDIA_AUTO_DOWNLOAD_QUALITY}
     ]
   end
 
@@ -268,6 +273,8 @@ defmodule WAWebProtobufSyncAction.SettingsSyncAction.SettingKey do
     def has_constant?(:COLOR_SCHEME_ID), do: true
 
     def has_constant?(:STOCK_WALLPAPER_IMAGE_ID), do: true
+
+    def has_constant?(:MEDIA_AUTO_DOWNLOAD_QUALITY), do: true
 
     def has_constant?(_value), do: false
   )

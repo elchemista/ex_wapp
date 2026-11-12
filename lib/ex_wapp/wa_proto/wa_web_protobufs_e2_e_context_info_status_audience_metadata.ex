@@ -9,12 +9,13 @@ defmodule WAWebProtobufsE2E.ContextInfo.StatusAudienceMetadata do
   end
 
   @type t :: %__MODULE__{
+          orgID: String.t() | nil,
           listEmoji: String.t() | nil,
           listName: String.t() | nil,
           audienceType: atom() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct listEmoji: nil, listName: nil, audienceType: nil, __uf__: []
+  defstruct orgID: nil, listEmoji: nil, listName: nil, audienceType: nil, __uf__: []
 
   (
     @schema Protox.MessageSchema.expand!(
@@ -24,7 +25,8 @@ defmodule WAWebProtobufsE2E.ContextInfo.StatusAudienceMetadata do
                 {:audienceType, 1, :optional, {:scalar, :UNKNOWN},
                  {:enum, WAWebProtobufsE2E.ContextInfo.StatusAudienceMetadata.AudienceType}},
                 {:listEmoji, 3, :optional, {:scalar, ""}, :string},
-                {:listName, 2, :optional, {:scalar, ""}, :string}
+                {:listName, 2, :optional, {:scalar, ""}, :string},
+                {:orgID, 4, :optional, {:scalar, ""}, :string}
               ],
               %{
                 cc_enable_arenas: nil,
@@ -78,12 +80,29 @@ defmodule WAWebProtobufsE2E.ContextInfo.StatusAudienceMetadata do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_orgID(msg)
         |> encode_listEmoji(msg)
         |> encode_listName(msg)
         |> encode_audienceType(msg)
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_orgID({acc, acc_size}, msg) do
+      case :erlang.map_get(:orgID, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            delimited = :erlang.map_get(:orgID, msg)
+            delimited_prefix = Protox.Encode.encode_string_prefix(delimited)
+          )
+
+          {["\"", delimited_prefix, delimited | acc],
+           acc_size + 1 + (byte_size(delimited_prefix) + byte_size(delimited))}
+      end
+    end
 
     defp encode_listEmoji({acc, acc_size}, msg) do
       case :erlang.map_get(:listEmoji, msg) do
@@ -144,6 +163,7 @@ defmodule WAWebProtobufsE2E.ContextInfo.StatusAudienceMetadata do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:orgID, &encode_orgID/2, nil},
           {:listEmoji, &encode_listEmoji/2, nil},
           {:listName, &encode_listName/2, nil},
           {:audienceType, &encode_audienceType/2, nil}
@@ -199,6 +219,11 @@ defmodule WAWebProtobufsE2E.ContextInfo.StatusAudienceMetadata do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"\"", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+            msg = %{msg | orgID: Protox.Decode.validate_string!(delimited)}
+            parse_key_value(rest, msg)
 
           <<"\x1A", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)

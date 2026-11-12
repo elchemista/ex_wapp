@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.6 — 2026-11-12
+
+### Changed
+
+- Align the default WhatsApp Web version with whatsmeow `c88388f` at
+  `2.3000.1052556849`, verified on 2026-11-12. Regenerate 781 Protox modules.
+- Adopt the new omitted-conversation history metadata and renamed community
+  nesting enum values; preserve older history fields as unknown wire data.
+
+### Fixed
+
+- Accept `message_id` in grouped receipts and honor per-participant receipt
+  types, retaining upstream precedence and inheritance behavior.
+
+### Validation
+
+- 1,207 passing tests, 91.52% maintained-code coverage, and clean strict Credo,
+  formatting and warnings-as-errors compilation. Pairing against a real account
+  was not exercised.
+
 ## 0.1.5 — 2026-10-25
 
 ### Changed

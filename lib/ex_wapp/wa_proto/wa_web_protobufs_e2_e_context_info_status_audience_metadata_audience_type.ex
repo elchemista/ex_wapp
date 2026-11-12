@@ -15,6 +15,10 @@ defmodule WAWebProtobufsE2E.ContextInfo.StatusAudienceMetadata.AudienceType do
 
   def encode(:CLOSE_FRIENDS), do: 1
 
+  def encode(:CUSTOM_LIST), do: 2
+
+  def encode(:ORG), do: 3
+
   def encode(x), do: x
 
   @spec decode(integer()) :: atom() | integer()
@@ -22,16 +26,24 @@ defmodule WAWebProtobufsE2E.ContextInfo.StatusAudienceMetadata.AudienceType do
 
   def decode(1), do: :CLOSE_FRIENDS
 
+  def decode(2), do: :CUSTOM_LIST
+
+  def decode(3), do: :ORG
+
   def decode(x), do: x
 
   @spec constants() :: [{integer(), atom()}]
-  def constants(), do: [{0, :UNKNOWN}, {1, :CLOSE_FRIENDS}]
+  def constants(), do: [{0, :UNKNOWN}, {1, :CLOSE_FRIENDS}, {2, :CUSTOM_LIST}, {3, :ORG}]
 
   @spec has_constant?(any()) :: boolean()
   (
     def has_constant?(:UNKNOWN), do: true
 
     def has_constant?(:CLOSE_FRIENDS), do: true
+
+    def has_constant?(:CUSTOM_LIST), do: true
+
+    def has_constant?(:ORG), do: true
 
     def has_constant?(_value), do: false
   )

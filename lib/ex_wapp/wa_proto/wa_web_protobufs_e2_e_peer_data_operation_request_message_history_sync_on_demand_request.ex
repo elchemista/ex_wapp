@@ -9,6 +9,7 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandR
   end
 
   @type t :: %__MODULE__{
+          mode: atom() | nil,
           supportInlineResponse: boolean() | nil,
           accountLid: String.t() | nil,
           oldestMsgTimestampMS: integer() | nil,
@@ -18,7 +19,8 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandR
           chatJID: String.t() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct supportInlineResponse: nil,
+  defstruct mode: nil,
+            supportInlineResponse: nil,
             accountLid: nil,
             oldestMsgTimestampMS: nil,
             onDemandMsgCount: nil,
@@ -34,6 +36,9 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandR
               [
                 {:accountLid, 6, :optional, {:scalar, ""}, :string},
                 {:chatJID, 1, :optional, {:scalar, ""}, :string},
+                {:mode, 8, :optional, {:scalar, :MODE_UNSPECIFIED},
+                 {:enum,
+                  WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandRequest.Mode}},
                 {:oldestMsgFromMe, 3, :optional, {:scalar, false}, :bool},
                 {:oldestMsgID, 2, :optional, {:scalar, ""}, :string},
                 {:oldestMsgTimestampMS, 5, :optional, {:scalar, 0}, :int64},
@@ -92,6 +97,7 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandR
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_mode(msg)
         |> encode_supportInlineResponse(msg)
         |> encode_accountLid(msg)
         |> encode_oldestMsgTimestampMS(msg)
@@ -102,6 +108,30 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandR
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_mode({acc, acc_size}, msg) do
+      case :erlang.map_get(:mode, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            value =
+              WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandRequest.Mode.encode(
+                :erlang.map_get(:mode, msg)
+              )
+
+            value_bytes =
+              if value >= 0 do
+                Protox.Varint.encode(:erlang.band(value, 4_294_967_295))
+              else
+                Protox.Varint.encode(:erlang.band(value, 18_446_744_073_709_551_615))
+              end
+          )
+
+          {["@", value_bytes | acc], acc_size + 1 + byte_size(value_bytes)}
+      end
+    end
 
     defp encode_supportInlineResponse({acc, acc_size}, msg) do
       case :erlang.map_get(:supportInlineResponse, msg) do
@@ -215,6 +245,7 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandR
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:mode, &encode_mode/2, nil},
           {:supportInlineResponse, &encode_supportInlineResponse/2, nil},
           {:accountLid, &encode_accountLid/2, nil},
           {:oldestMsgTimestampMS, &encode_oldestMsgTimestampMS/2, nil},
@@ -274,6 +305,25 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandR
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"@", 0::1, varint_value::7, rest::binary>> ->
+            value =
+              WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandRequest.Mode.decode(
+                varint_value
+              )
+
+            msg = %{msg | mode: value}
+            parse_key_value(rest, msg)
+
+          <<"@", bytes::binary>> ->
+            {value, rest} =
+              Protox.Decode.parse_enum(
+                bytes,
+                WAWebProtobufsE2E.PeerDataOperationRequestMessage.HistorySyncOnDemandRequest.Mode
+              )
+
+            msg = %{msg | mode: value}
+            parse_key_value(rest, msg)
 
           <<"8", 0::1, varint_value::7, rest::binary>> ->
             value = varint_value != 0

@@ -9,6 +9,9 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage do
   end
 
   @type t :: %__MODULE__{
+          recentConversationsOnDemandRequest:
+            WAWebProtobufsE2E.PeerDataOperationRequestMessage.RecentConversationsOnDemandRequest.t()
+            | nil,
           bizBroadcastInsightsRefreshRequest:
             WAWebProtobufsE2E.PeerDataOperationRequestMessage.BizBroadcastInsightsRefreshRequest.t()
             | nil,
@@ -43,7 +46,8 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage do
           peerDataOperationRequestType: atom() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct bizBroadcastInsightsRefreshRequest: nil,
+  defstruct recentConversationsOnDemandRequest: nil,
+            bizBroadcastInsightsRefreshRequest: nil,
             bizBroadcastInsightsContactListRequest: nil,
             companionCanonicalUserNonceFetchRequest: nil,
             galaxyFlowAction: nil,
@@ -87,6 +91,9 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage do
                 {:placeholderMessageResendRequest, 5, :repeated, :unpacked,
                  {:message,
                   WAWebProtobufsE2E.PeerDataOperationRequestMessage.PlaceholderMessageResendRequest}},
+                {:recentConversationsOnDemandRequest, 13, :optional, {:scalar, nil},
+                 {:message,
+                  WAWebProtobufsE2E.PeerDataOperationRequestMessage.RecentConversationsOnDemandRequest}},
                 {:requestStickerReupload, 2, :repeated, :unpacked,
                  {:message,
                   WAWebProtobufsE2E.PeerDataOperationRequestMessage.RequestStickerReupload}},
@@ -148,6 +155,7 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_recentConversationsOnDemandRequest(msg)
         |> encode_bizBroadcastInsightsRefreshRequest(msg)
         |> encode_bizBroadcastInsightsContactListRequest(msg)
         |> encode_companionCanonicalUserNonceFetchRequest(msg)
@@ -163,6 +171,31 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage do
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_recentConversationsOnDemandRequest({acc, acc_size}, msg) do
+      case :erlang.map_get(:recentConversationsOnDemandRequest, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            %{
+              __struct__:
+                WAWebProtobufsE2E.PeerDataOperationRequestMessage.RecentConversationsOnDemandRequest
+            } = child = :erlang.map_get(:recentConversationsOnDemandRequest, msg)
+
+            {child_bytes, child_size} =
+              WAWebProtobufsE2E.PeerDataOperationRequestMessage.RecentConversationsOnDemandRequest.encode_internal!(
+                child
+              )
+
+            child_size_bytes = Protox.Varint.encode(child_size)
+          )
+
+          {["j", child_size_bytes, child_bytes | acc],
+           acc_size + 1 + (byte_size(child_size_bytes) + child_size)}
+      end
+    end
 
     defp encode_bizBroadcastInsightsRefreshRequest({acc, acc_size}, msg) do
       case :erlang.map_get(:bizBroadcastInsightsRefreshRequest, msg) do
@@ -500,6 +533,8 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:recentConversationsOnDemandRequest, &encode_recentConversationsOnDemandRequest/2,
+           WAWebProtobufsE2E.PeerDataOperationRequestMessage.RecentConversationsOnDemandRequest},
           {:bizBroadcastInsightsRefreshRequest, &encode_bizBroadcastInsightsRefreshRequest/2,
            WAWebProtobufsE2E.PeerDataOperationRequestMessage.BizBroadcastInsightsRefreshRequest},
           {:bizBroadcastInsightsContactListRequest,
@@ -604,6 +639,30 @@ defmodule WAWebProtobufsE2E.PeerDataOperationRequestMessage do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"j", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | recentConversationsOnDemandRequest:
+                  case :erlang.map_get(:recentConversationsOnDemandRequest, msg) do
+                    nil ->
+                      WAWebProtobufsE2E.PeerDataOperationRequestMessage.RecentConversationsOnDemandRequest.decode!(
+                        delimited
+                      )
+
+                    previous_value ->
+                      Protox.MergeMessage.merge(
+                        previous_value,
+                        WAWebProtobufsE2E.PeerDataOperationRequestMessage.RecentConversationsOnDemandRequest.decode!(
+                          delimited
+                        )
+                      )
+                  end
+            }
+
+            parse_key_value(rest, msg)
 
           <<"b", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)

@@ -49,7 +49,7 @@ Add ExWapp and the JSON implementation of your choice to your application:
 ```elixir
 def deps do
   [
-    {:ex_wapp, "~> 0.1.5"},
+    {:ex_wapp, "~> 0.1.6"},
     {:jason, "~> 1.4"}
   ]
 end
