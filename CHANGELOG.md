@@ -18,20 +18,40 @@
   `2.3000.1052556849`, verified on 2026-11-12. Regenerate 781 Protox modules.
 - Adopt the new omitted-conversation history metadata and renamed community
   nesting enum values; preserve older history fields as unknown wire data.
+- Update Dialyxir to 1.4.9 and align direct dependency minimums with the latest
+  stable Hex releases. All 17 locked direct and transitive dependencies were
+  checked against the registry on 2026-11-12.
 
 ### Fixed
 
 - Accept `message_id` in grouped receipts and honor per-participant receipt
   types, retaining upstream precedence and inheritance behavior.
 
+### Hardening
+
+- Preserve original protobufs and IDs in retries and self-chat fallback; keep
+  rehydrated/history reactions and media, and reject synthetic history anchors.
+- Apply ACK-driven safety, persisted quota/cool-off state, bounded delayed sends,
+  send deadlines, retry admission, history cooldowns and operation limits.
+- Stop automatic reconnect on stream replacement; reject concurrent sessions
+  using one built-in store in the same BEAM node.
+- Bound verified HTTPS media IO and history inflation; add indexed message-ID
+  lookups and opt-in incremental history with migration backup and crash recovery.
+- Add regression cases for media validation, recovery content, history,
+  persistence, retention and safety. Update HTTPS fixture expectations.
+
 ### Validation
 
-- 1,220 passing tests and 91.50% maintained-code coverage. Strict Credo,
+- The baseline before these hardening edits (`f67f837`) had 1,220 passing tests
+  and 91.50% maintained-code coverage. Strict Credo,
   Dialyzer (zero errors and skips), formatting, warnings-as-errors compilation,
-  documentation generation and Hex package construction pass. New coverage
+  documentation generation and Hex package construction passed for that baseline. Coverage
   includes TLS media upload, independent HKDF/protobuf fixtures, Signal-encrypted
   media/reaction sends and a primary-device history request. Live interoperability
   with a real WhatsApp account was not exercised.
+- The subsequent hardening changes were reviewed statically and syntax-checked.
+  Their new and updated tests, builds and live interoperability checks have
+  **not been run**; the baseline results do not validate these edits.
 
 ## 0.1.5 — 2026-10-25
 

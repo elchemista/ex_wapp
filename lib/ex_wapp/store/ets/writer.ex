@@ -50,7 +50,10 @@ defmodule ExWapp.Store.Ets.Writer do
   end
 
   @impl true
-  def init(store), do: {:ok, %__MODULE__{store: store}}
+  def init(store) do
+    Process.flag(:trap_exit, true)
+    {:ok, %__MODULE__{store: store}}
+  end
 
   @impl true
   def handle_call({:read, fun}, _from, state) do
@@ -123,6 +126,7 @@ defmodule ExWapp.Store.Ets.Writer do
 
   @impl true
   def handle_info({:"ETS-TRANSFER", _table, _from, _gift}, state), do: {:noreply, state}
+  def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
   def handle_info({:DOWN, monitor, :process, owner, _reason}, state) do
     case Map.get(state.batches, owner) do
@@ -144,6 +148,12 @@ defmodule ExWapp.Store.Ets.Writer do
       _other ->
         {:noreply, state}
     end
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    ExWapp.Store.PathLock.release(state.store.lock)
+    :ok
   end
 
   defp run_mutation(fun) do
@@ -203,9 +213,17 @@ defmodule ExWapp.Store.Ets.Writer do
     result_ref = make_ref()
 
     {pid, monitor} =
-      spawn_monitor(fn ->
-        send(owner, {result_ref, Ets.flush_snapshot(store)})
-      end)
+      :erlang.spawn_opt(
+        fn ->
+          receive do
+            {:flush, ^result_ref} -> send(owner, {result_ref, Ets.flush_snapshot(store)})
+          end
+        end,
+        [:link, :monitor]
+      )
+
+    :ok = ExWapp.Store.PathLock.watch_flush(store.lock, pid)
+    send(pid, {:flush, result_ref})
 
     receive do
       {^result_ref, result} ->

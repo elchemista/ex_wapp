@@ -97,6 +97,7 @@ defmodule ExWapp.Session.Worker do
     HistorySync,
     InboundRouter,
     InitialSync,
+    JIDUtils,
     Options,
     OutboundQueue,
     SendCoordinator
@@ -158,12 +159,17 @@ defmodule ExWapp.Session.Worker do
     transport_ready?: false,
     server_time_offset_ms: 0,
     session_invalid: false,
+    auto_reconnect_blocked?: false,
     pending_iqs: %{},
     signal_sessions: nil,
     retry_counters: %{},
     outgoing_retry_payloads: %{},
     outbound_confirmations: %{},
     pending_media_retries: %{},
+    history_requests: %{},
+    history_blob_queue: [],
+    delayed_sends: %{},
+    pending_session_repairs: %{},
     initial_sync: %InitialSync{},
     post_auth_phase: :idle,
     prekey_count_query_id: nil,
@@ -411,6 +417,7 @@ defmodule ExWapp.Session.Worker do
     runtime_cfg = options.runtime
     store_input = options.store
     store = Store.new(store_input)
+    :ok = claim_session_store(store)
     log_store_capabilities(store)
     log_client_version_age(runtime_cfg)
     session_id = options.session_id
@@ -438,7 +445,7 @@ defmodule ExWapp.Session.Worker do
       )
 
     {:ok, inbound_router} = InboundRouter.start_link(session: self())
-    {:ok, send_worker_sup} = Task.Supervisor.start_link()
+    {:ok, send_worker_sup} = Task.Supervisor.start_link(max_children: 32)
 
     state = %__MODULE__{
       opts: options,
@@ -457,6 +464,7 @@ defmodule ExWapp.Session.Worker do
       safety: Safety.new()
     }
 
+    state = ExWapp.Session.Worker.PolicyState.restore(state)
     Events.emit_telemetry(:init, %{session_id: session_id}, state)
 
     if options.auto_connect do
@@ -467,6 +475,53 @@ defmodule ExWapp.Session.Worker do
   end
 
   @impl true
+  def handle_call({:remember_outgoing_proto, jid, id, proto, opts}, {caller, _}, state) do
+    if SendCoordinator.registered?(state.send_coordinator, caller),
+      do: {:reply, :ok, SendRecovery.remember_outgoing_proto(state, jid, id, proto, opts)},
+      else: {:reply, {:error, :stale_send_worker}, state}
+  end
+
+  def handle_call(:authorize_history_apply, {caller, _}, state) do
+    {:reply, authorize_operation(state, caller), state}
+  end
+
+  def handle_call({:admit_recovery, jid}, {caller, _}, state) do
+    result =
+      if SendCoordinator.registered?(state.send_coordinator, caller),
+        do: SendRecovery.admit_recovery(state, jid),
+        else: {:error, :stale_send_worker, state}
+
+    case result do
+      {:ok, state} -> {:reply, :ok, state}
+      {:error, reason, state} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:authorize_outbound, jid, deadline}, from, state),
+    do: handle_call({:authorize_outbound, jid, deadline, :message}, from, state)
+
+  def handle_call({:authorize_outbound, jid, deadline, kind}, {caller, _}, state) do
+    connected =
+      if kind == :peer and state.status == :syncing and is_pid(state.conn),
+        do: :ok,
+        else: Connection.ensure_connected_for_send(state)
+
+    result =
+      with :ok <- authorize_operation(state, caller),
+           :ok <- outbound_deadline(deadline),
+           :ok <- connected,
+           {:ok, state} <- SendHealth.ensure_send_enabled(state, jid),
+           {:ok, state} <- Safety.check_send_allowed(state),
+           {:ok, state} <- Safety.check_recipient(state, jid),
+           do: {:ok, state}
+
+    case result do
+      {:ok, state} -> {:reply, :ok, state}
+      {:error, reason, state} -> {:reply, {:error, reason}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
   def handle_call(:get_status, _from, state) do
     {:reply, state.status, state}
   end
@@ -527,8 +582,14 @@ defmodule ExWapp.Session.Worker do
 
   def handle_call({:send_message, %Message{} = message}, from, state) do
     case dispatch_outbound_message(state, message, from) do
-      {:ok, new_state} -> {:noreply, new_state}
-      {:error, reason, error_state} -> {:reply, {:error, reason}, error_state}
+      {:ok, new_state} ->
+        {:noreply, new_state}
+
+      {:error, {:rate_limited, _, _} = reason, error_state} ->
+        delay_limited_send(error_state, message, from, reason)
+
+      {:error, reason, error_state} ->
+        {:reply, {:error, reason}, error_state}
     end
   end
 
@@ -540,9 +601,14 @@ defmodule ExWapp.Session.Worker do
     if state.status in [:connected, :syncing] and is_pid(state.conn) do
       session_pid = self()
 
-      task = fn -> safe_download_media(session_pid, state, ref, opts) end
+      context = SendRecovery.worker_context(state)
+      task = fn -> safe_download_media(session_pid, context, ref, opts) end
 
-      case SendRecovery.start_send_worker(state, "media_download", task) do
+      result =
+        with :ok <- ensure_worker_capacity(state, :media_download),
+             do: SendRecovery.start_send_worker(state, "media_download", task)
+
+      case result do
         {:ok, worker, mon} ->
           {:noreply,
            SendRecovery.register_send_worker(state, worker, mon, "media_download", from)}
@@ -828,7 +894,7 @@ defmodule ExWapp.Session.Worker do
   def handle_cast(:connect, %__MODULE__{status: status} = state)
       when status in [:idle, :disconnected] do
     Logger.debug("[SESSION] handle_cast(:connect) - status=#{status}, scheduling connect...")
-    {:noreply, Connection.schedule_connect(state, 0)}
+    {:noreply, Connection.schedule_connect(%{state | auto_reconnect_blocked?: false}, 0)}
   end
 
   def handle_cast(:connect, state) do
@@ -915,7 +981,7 @@ defmodule ExWapp.Session.Worker do
     Logger.warning("[SESSION] send worker supervisor exited: #{Log.reason(reason)}")
     state = Connection.fail_all_send_workers(state, {:send_worker_supervisor_exited, reason})
 
-    case Task.Supervisor.start_link() do
+    case Task.Supervisor.start_link(max_children: 32) do
       {:ok, send_worker_sup} ->
         {:noreply, %{state | send_worker_sup: send_worker_sup}}
 
@@ -1285,16 +1351,77 @@ defmodule ExWapp.Session.Worker do
     {:noreply, state}
   end
 
+  def handle_info({:delayed_send_due, token}, state) do
+    case Map.pop(state.delayed_sends, token) do
+      {nil, _} ->
+        {:noreply, state}
+
+      {pending, rest} ->
+        state = %{state | delayed_sends: rest}
+
+        case dispatch_outbound_message(state, pending.message, pending.from) do
+          {:ok, state} ->
+            {:noreply, state}
+
+          {:error, {:rate_limited, _, _} = reason, state} ->
+            case delay_limited_send(state, pending.message, pending.from, reason, pending.expires) do
+              {:noreply, state} ->
+                {:noreply, state}
+
+              {:reply, result, state} ->
+                GenServer.reply(pending.from, result)
+                {:noreply, state}
+            end
+
+          {:error, reason, state} ->
+            GenServer.reply(pending.from, {:error, reason})
+            {:noreply, state}
+        end
+    end
+  end
+
+  def handle_info({:message_ack_policy, jid, code}, state) do
+    {:noreply, Safety.record_ack(state, jid, code)}
+  end
+
+  def handle_info({:content_send_result, _jid, {:ok, _id}}, state) do
+    {:noreply, SendHealth.clear_consecutive_send_errors(state)}
+  end
+
+  def handle_info({:content_send_result, jid, {:error, reason}}, state) do
+    state =
+      SendHealth.register_send_error(state, {:send_failed, reason}, %{
+        jid: jid,
+        strategy: :content
+      })
+
+    case maybe_apply_send_error_guard(state, {:send_failed, reason}) do
+      {:continue, state} -> {:noreply, state}
+      {:stop, reason, state} -> {:stop, reason, state}
+    end
+  end
+
+  def handle_info({:remember_outgoing_proto, jid, id, proto, opts}, state) do
+    {:noreply, SendRecovery.remember_outgoing_proto(state, jid, id, proto, opts)}
+  end
+
   def handle_info({:ack_session_rejection, message_id, jid, ack}, state) do
     {:noreply, SendRecovery.repair_session_and_retry(state, message_id, jid, ack)}
   end
 
   def handle_info({:session_repair_due, message_id, jid, ack}, state) do
-    attempts = SendRecovery.session_repair_attempts(state, message_id)
-    max_attempts = Config.get(state.runtime_cfg, [:send, :max_session_repair_attempts], 2)
+    case Map.pop(state.pending_session_repairs, message_id) do
+      {nil, _} ->
+        {:noreply, state}
 
-    {:noreply,
-     SendRecovery.run_session_repair(state, message_id, jid, ack, attempts, max_attempts)}
+      {_timer, pending} ->
+        state = %{state | pending_session_repairs: pending}
+        attempts = SendRecovery.session_repair_attempts(state, message_id)
+        max_attempts = Config.get(state.runtime_cfg, [:send, :max_session_repair_attempts], 2)
+
+        {:noreply,
+         SendRecovery.run_session_repair(state, message_id, jid, ack, attempts, max_attempts)}
+    end
   end
 
   def handle_info({:send_result, jid, text, {:ok, message_id}, strategy, attempt}, state) do
@@ -1474,22 +1601,30 @@ defmodule ExWapp.Session.Worker do
 
   defp dispatch_outbound_message(state, message, from) do
     with {:ok, message} <- Command.prepare(message),
+         :ok <- outbound_deadline(Keyword.get(message.opts, :send_deadline)),
+         :ok <- ensure_worker_capacity(state, message.type),
          {:ok, state} <- SendHealth.ensure_send_enabled(state, message.to),
          :ok <- Connection.ensure_connected_for_send(state),
-         {:ok, policy_state} <- enforce_send_policies(state, message.to) do
-      task = outbound_message_task(self(), policy_state, message)
+         {:ok, policy_state} <- enforce_message_policies(state, message) do
+      task = outbound_message_task(self(), SendRecovery.worker_context(policy_state), message)
 
       case SendRecovery.start_send_worker(policy_state, message.to, task) do
         {:ok, worker, mon} ->
           new_state =
             policy_state
-            |> SendRecovery.register_send_worker(worker, mon, message.to, from)
+            |> SendRecovery.register_send_worker(
+              worker,
+              mon,
+              {:send, message.type, message.to},
+              from
+            )
             |> Events.update_stats(:messages_sent)
+            |> ExWapp.Session.Worker.PolicyState.persist()
 
           {:ok, new_state}
 
         {:error, reason} ->
-          {:error, {:send_worker_start_failed, reason}, policy_state}
+          {:error, {:send_worker_start_failed, reason}, state}
       end
     else
       {:error, reason, blocked_state} -> {:error, reason, blocked_state}
@@ -1510,7 +1645,11 @@ defmodule ExWapp.Session.Worker do
          state,
          %Message{} = message
        ) do
-    fn -> Content.send(session_pid, state, message) end
+    fn ->
+      result = Content.send(session_pid, state, message)
+      send(session_pid, {:content_send_result, message.to, result})
+      result
+    end
   end
 
   # Worker function - runs in a separate process so it can wait for IQ responses
@@ -1533,6 +1672,15 @@ defmodule ExWapp.Session.Worker do
 
   defp primary_send_task_fun(session_pid, state, jid, text, strategy, attempt, opts) do
     fn ->
+      id = Keyword.get(opts, :retry_message_id) || Messages.generate_id()
+      opts = Keyword.put(opts, :retry_message_id, id)
+
+      :ok =
+        GenServer.call(
+          session_pid,
+          {:remember_outgoing_proto, jid, id, Messages.build_text_proto(text, opts), opts}
+        )
+
       result = SendRecovery.do_send_text_worker(session_pid, state, jid, text, opts)
       send(session_pid, {:send_result, jid, text, result, strategy, attempt})
       result
@@ -1697,7 +1845,8 @@ defmodule ExWapp.Session.Worker do
         Process.demonitor(operation.monitor, [:flush])
         Connection.reply_send_caller(operation.from, result)
         complete_history_sync(state, operation.label, result)
-        {:ok, %{state | send_coordinator: coordinator}}
+        complete_recovery(state, operation.label, result)
+        {:ok, HistorySync.drain(%{state | send_coordinator: coordinator})}
 
       {:error, :not_found, _coordinator} ->
         :not_found
@@ -1710,17 +1859,24 @@ defmodule ExWapp.Session.Worker do
         result = {:error, {:send_worker_exited, reason}}
         Connection.reply_send_caller(operation.from, result)
         complete_history_sync(state, operation.label, result)
+        complete_recovery(state, operation.label, result)
 
         Logger.warning(
           "[SEND] Worker exited label=#{inspect(operation.label)} reason=#{Log.reason(reason)}"
         )
 
-        {:ok, %{state | send_coordinator: coordinator}}
+        {:ok, HistorySync.drain(%{state | send_coordinator: coordinator})}
 
       {:error, :not_found, _coordinator} ->
         :not_found
     end
   end
+
+  defp complete_recovery(state, {:recovery, id, jid}, {:error, reason}) do
+    SendRecovery.report_final_failure(state, id, jid, reason)
+  end
+
+  defp complete_recovery(_state, _label, _result), do: :ok
 
   defp complete_history_sync(state, {:history_sync, metadata}, result),
     do: HistorySync.complete(state, metadata, result)
@@ -1735,10 +1891,115 @@ defmodule ExWapp.Session.Worker do
     )
   end
 
+  defp claim_session_store(%ExWapp.Store.Ets{writer: writer}), do: claim_store_owner(writer)
+  defp claim_session_store(%ExWapp.Store.Memory{agent: owner}), do: claim_store_owner(owner)
+  defp claim_session_store(_store), do: :ok
+
+  defp claim_store_owner(owner) do
+    ExWapp.Store.SessionClaim.claim(owner)
+  end
+
+  defp authorize_operation(state, caller) do
+    if SendCoordinator.registered?(state.send_coordinator, caller),
+      do: :ok,
+      else: {:error, :stale_send_worker}
+  end
+
+  defp delay_limited_send(
+         state,
+         message,
+         from,
+         {:rate_limited, _scope, delay} = reason,
+         expires \\ nil
+       ) do
+    now = System.monotonic_time(:millisecond)
+    expires = expires || now + Config.get(state.runtime_cfg, [:throttle, :max_delay_ms], 30_000)
+    deadline = Keyword.get(message.opts, :send_deadline)
+    expires = if is_integer(deadline), do: min(expires, deadline), else: expires
+
+    bytes =
+      :erlang.external_size(message) +
+        Enum.reduce(state.delayed_sends, 0, fn {_, item}, acc ->
+          acc + :erlang.external_size(item.message)
+        end)
+
+    if Config.get(state.runtime_cfg, [:throttle, :on_limit], :delay) == :delay and
+         now + delay < expires and map_size(state.delayed_sends) < 8 and bytes <= 16 * 1024 * 1024 do
+      token = make_ref()
+      timer = Process.send_after(self(), {:delayed_send_due, token}, delay)
+      pending = %{message: message, from: from, timer: timer, expires: expires}
+      {:noreply, %{state | delayed_sends: Map.put(state.delayed_sends, token, pending)}}
+    else
+      {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp ensure_worker_capacity(state, type) do
+    operations = Map.values(state.send_coordinator.operations)
+    media? = type in [:image, :video, :sticker, :audio, :document, :media_download]
+
+    media_count =
+      Enum.count(operations, fn op ->
+        case op.label do
+          {:send, type, _jid} -> type in [:image, :video, :sticker, :audio, :document]
+          "media_download" -> true
+          {:history_sync, _} -> true
+          _ -> false
+        end
+      end)
+
+    if length(operations) >= 32 or (media? and media_count >= 4),
+      do: {:error, :send_workers_busy},
+      else: :ok
+  end
+
+  defp enforce_message_policies(state, %Message{type: :history_request, to: jid}) do
+    now = System.monotonic_time(:millisecond)
+    requests = Map.reject(state.history_requests, fn {_jid, until} -> until <= now end)
+    key = JIDUtils.strip_device(jid)
+
+    active? =
+      Enum.any?(state.send_coordinator.operations, fn {_pid, operation} ->
+        case operation.label do
+          {:send, :history_request, target} -> JIDUtils.strip_device(target) == key
+          _ -> false
+        end
+      end)
+
+    with {:ok, state} <- Safety.check_send_allowed(state),
+         {:ok, state} <- Safety.check_recipient(state, jid) do
+      cond do
+        active? ->
+          {:error, :history_request_in_flight, state}
+
+        Map.has_key?(requests, key) ->
+          {:error, {:history_request_cooldown, requests[key] - now}, state}
+
+        Enum.any?(requests, fn {_jid, until} -> until - now > 59_000 end) ->
+          {:error, {:history_request_cooldown, 1000}, state}
+
+        true ->
+          {:ok, %{state | history_requests: Map.put(requests, key, now + 60_000)}}
+      end
+    end
+  end
+
+  defp enforce_message_policies(state, %Message{to: jid}), do: enforce_send_policies(state, jid)
+
+  defp outbound_deadline(nil), do: :ok
+  defp outbound_deadline(:infinity), do: :ok
+
+  defp outbound_deadline(deadline) do
+    if System.monotonic_time(:millisecond) < deadline,
+      do: :ok,
+      else: {:error, :send_deadline_exceeded}
+  end
+
   defp enforce_send_policies(state, jid) do
     with {:ok, state} <- Safety.check_send_allowed(state),
-         {:ok, state} <- Quota.check_and_increment(state, jid),
-         {:ok, state} <- RateLimiter.check_and_update(state, jid) do
+         {:ok, state} <- Safety.check_recipient(state, jid),
+         {:ok, candidate} <- RateLimiter.check_and_update(state, jid),
+         {:ok, state} <- Quota.check_and_increment(candidate, jid) do
       {:ok, state}
     else
       {:error, reason, policy_state} ->
@@ -1747,7 +2008,8 @@ defmodule ExWapp.Session.Worker do
         })
 
         emit_policy_telemetry(reason, jid, policy_state)
-        {:error, reason, policy_state}
+        # Admission is atomic: a rejected send consumes neither tokens nor quota.
+        {:error, reason, %{policy_state | rate_limiter: state.rate_limiter, quota: state.quota}}
     end
   end
 

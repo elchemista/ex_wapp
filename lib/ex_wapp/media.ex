@@ -35,7 +35,7 @@ defmodule ExWapp.Media do
   represent uploaded server-side media rather than local plaintext bytes.
   """
   @spec read_source(source()) :: {:ok, binary()} | {:error, term()}
-  def read_source(source), do: Source.read(source)
+  def read_source(source, opts \\ []), do: Source.read(source, opts)
 
   @doc """
   Converts upload metadata into a reusable download reference.

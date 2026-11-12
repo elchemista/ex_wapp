@@ -160,6 +160,55 @@ defmodule ExWapp.MediaTLSIntegrationTest do
     end
   end
 
+  test "bounded HTTPS downloads preserve binary media and authenticate tampering", ctx do
+    plaintext = <<0, 255, "image", 0, 128>>
+    {:ok, upload, body} = Media.Crypto.encrypt_upload(plaintext, :image)
+    host = serve(ctx, 200, body)
+    ref = %{Media.ref_from_upload(upload) | url: "https://#{host}/media"}
+    opts = [allowed_media_origins: ["https://#{host}"]]
+    assert {:ok, ^plaintext} = Media.HTTP.download(%{}, ref, opts)
+    assert_receive {:tls_request, :GET, "/media", headers, ""}
+    assert headers["origin"] == "https://web.whatsapp.com"
+
+    <<first, rest::binary>> = body
+    host = serve(ctx, 200, <<Bitwise.bxor(first, 1), rest::binary>>)
+    ref = %{ref | url: "https://#{host}/media"}
+
+    assert {:error, :invalid_media_hmac} =
+             Media.HTTP.download(%{}, ref, allowed_media_origins: ["https://#{host}"])
+  end
+
+  test "plaintext HTTPS media needs explicit opt-in and a verified hash", ctx do
+    body = "thumbnail"
+    host = serve(ctx, 200, body)
+
+    ref = %Media.Ref{
+      url: "https://#{host}/media",
+      type: :image,
+      file_sha256: :crypto.hash(:sha256, body)
+    }
+
+    assert {:error, :invalid_media_key} = Media.HTTP.download(%{}, ref)
+
+    assert {:ok, ^body} =
+             Media.HTTP.download(%{}, ref,
+               allow_plaintext: true,
+               allowed_media_origins: ["https://#{host}"]
+             )
+  end
+
+  test "the actual response size is bounded when the declared media length is absent", ctx do
+    {:ok, upload, body} = Media.Crypto.encrypt_upload(:binary.copy("x", 128), :image)
+    host = serve(ctx, 200, body)
+    ref = %{Media.ref_from_upload(upload) | url: "https://#{host}/media", file_length: nil}
+
+    assert {:error, :media_too_large} =
+             Media.HTTP.download(%{}, ref,
+               max_bytes: 16,
+               allowed_media_origins: ["https://#{host}"]
+             )
+  end
+
   test "upload preserves useful metadata from a malformed JSON response", ctx do
     host =
       serve(ctx, 200, ~s({"url":"https://cdn.example.test/media","direct_path":"/media", broken))
@@ -177,7 +226,7 @@ defmodule ExWapp.MediaTLSIntegrationTest do
   test "server upload rejection reports status without returning an upload", ctx do
     host = serve(ctx, 503, "unavailable")
 
-    assert {:error, {:upload_http_error, 503, 11}} =
+    assert {:error, {:upload_http_error, 503, 0}} =
              Media.HTTP.upload(%{}, :image, "body",
                media_conn: %{hosts: [%{hostname: host}], auth: "token"}
              )
@@ -213,8 +262,11 @@ defmodule ExWapp.MediaTLSIntegrationTest do
                media_conn: %{hosts: [%{hostname: "localhost:#{port}"}], auth: ""}
              )
 
+    {:ok, upload, _body} = Media.Crypto.encrypt_upload("fixture", :image)
+    ref = %{Media.ref_from_upload(upload) | direct_path: "/missing?x=1"}
+
     assert {:error, {:download_failed, _}} =
-             Media.HTTP.download(%{}, %Media.Ref{type: :image, direct_path: "/missing?x=1"},
+             Media.HTTP.download(%{}, ref,
                media_conn: %{hosts: [%{hostname: "localhost:#{port}"}]}
              )
   end

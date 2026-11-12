@@ -168,7 +168,7 @@ defmodule ExWapp.Messages do
     from_me = Keyword.get(opts, :from_me, false)
 
     key = %MessageKey{
-      remoteJID: jid,
+      remoteJID: JIDUtils.strip_device(jid),
       ID: message_id,
       fromMe: from_me,
       participant:

@@ -12,6 +12,70 @@ defmodule ExWapp.Proto.HistorySyncTest do
   alias WAWebProtobufsHistorySync.PhoneNumberToLIDMapping
   alias WAWebProtobufsWeb.WebMessageInfo
 
+  test "history decoding preserves video, sticker, and reaction content" do
+    jid = "15550001111@s.whatsapp.net"
+
+    contents = [
+      {"video",
+       %Message{
+         videoMessage: %WAWebProtobufsE2E.VideoMessage{
+           URL: "https://mmg.whatsapp.net/video",
+           caption: "clip"
+         }
+       }},
+      {"sticker",
+       %Message{
+         stickerMessage: %WAWebProtobufsE2E.StickerMessage{
+           URL: "https://mmg.whatsapp.net/sticker"
+         }
+       }},
+      {"reaction",
+       %Message{
+         reactionMessage: %WAWebProtobufsE2E.ReactionMessage{
+           key: %MessageKey{remoteJID: jid, ID: "target", fromMe: true},
+           text: "👍"
+         }
+       }}
+    ]
+
+    messages =
+      Enum.map(contents, fn {id, content} ->
+        %HistorySyncMsg{
+          message: %WebMessageInfo{
+            key: %MessageKey{ID: id, remoteJID: jid},
+            messageTimestamp: 1_700_000_000,
+            message: content
+          }
+        }
+      end)
+
+    payload =
+      %HistorySyncProto{
+        syncType: :ON_DEMAND,
+        conversations: [%Conversation{ID: jid, messages: messages}]
+      }
+      |> HistorySyncProto.encode!()
+      |> elem(0)
+      |> IO.iodata_to_binary()
+
+    assert {:ok, %{conversations: [%{messages: [video, sticker, reaction]}]}} =
+             HistorySync.parse_history_payload(payload, :ON_DEMAND)
+
+    assert video.media.type == :video
+    assert video.text == "clip"
+    assert sticker.media.type == :sticker
+    assert reaction.reaction.text == "👍"
+    assert reaction.content.kind == :reaction
+  end
+
+  test "truncated compressed history is rejected without a plaintext fallback" do
+    compressed = :zlib.compress("history")
+    truncated = binary_part(compressed, 0, byte_size(compressed) - 2)
+
+    assert {:error, :invalid_history_compression} =
+             HistorySync.parse_history_payload({:compressed, truncated}, :ON_DEMAND)
+  end
+
   test "extracts conversations, messages, and lid mappings from an inline payload" do
     history = %HistorySyncProto{
       syncType: :INITIAL_BOOTSTRAP,

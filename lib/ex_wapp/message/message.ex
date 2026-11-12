@@ -183,7 +183,14 @@ defmodule ExWapp.Message do
   @doc "Builds a request for messages before an anchor with :id, :from_me and :timestamp (seconds)."
   @spec history_request(String.t(), map(), keyword()) :: t()
   def history_request(to, anchor, opts \\ []) do
-    %__MODULE__{to: to, type: :history_request, body: anchor, opts: opts}
+    %__MODULE__{
+      to: to,
+      type: :history_request,
+      body: anchor,
+      id: Keyword.get(opts, :id),
+      metadata: Keyword.get(opts, :metadata, %{}),
+      opts: Keyword.drop(opts, [:id, :metadata])
+    }
   end
 
   @doc """

@@ -17,6 +17,7 @@ defmodule ExWapp.Session.OutboundQueue do
             transport: ExWapp.Conn,
             conn: nil,
             queue: :queue.new(),
+            queue_size: 0,
             max_size: 10_000,
             drop_policy: :reject_new,
             flush_batch_size: 100,
@@ -46,8 +47,8 @@ defmodule ExWapp.Session.OutboundQueue do
   @spec clear_conn(pid()) :: :ok
   def clear_conn(pid), do: GenServer.cast(pid, :clear_conn)
 
-  @spec enqueue_node(pid(), term()) :: :ok
-  def enqueue_node(pid, node), do: GenServer.cast(pid, {:enqueue, {:send_node, node}})
+  @spec enqueue_node(pid(), term()) :: :ok | {:error, :queue_full}
+  def enqueue_node(pid, node), do: GenServer.call(pid, {:enqueue, {:send_node, node}})
 
   @doc """
   Enqueues a protocol-critical node ahead of normal application traffic.
@@ -57,10 +58,10 @@ defmodule ExWapp.Session.OutboundQueue do
   """
   @spec enqueue_priority_node(pid(), term()) :: :ok
   def enqueue_priority_node(pid, node),
-    do: GenServer.cast(pid, {:enqueue_priority, {:send_node, node}})
+    do: GenServer.call(pid, {:enqueue_priority, {:send_node, node}})
 
-  @spec restart_stream(pid()) :: :ok
-  def restart_stream(pid), do: GenServer.cast(pid, {:enqueue, :restart_stream})
+  @spec restart_stream(pid()) :: :ok | {:error, :queue_full}
+  def restart_stream(pid), do: GenServer.call(pid, {:enqueue, :restart_stream})
 
   @impl true
   def init(opts) do
@@ -74,6 +75,20 @@ defmodule ExWapp.Session.OutboundQueue do
     }
 
     {:ok, state}
+  end
+
+  @impl true
+  def handle_call({:enqueue, item}, _from, state) do
+    full? = state.queue_size >= state.max_size and state.drop_policy == :reject_new
+    next = enqueue_item(state, item)
+    next = if is_pid(next.conn), do: schedule_flush(next), else: next
+    {:reply, if(full?, do: {:error, :queue_full}, else: :ok), next}
+  end
+
+  def handle_call({:enqueue_priority, item}, _from, state) do
+    next = enqueue_priority_item(state, item)
+    next = if is_pid(next.conn), do: schedule_flush(next), else: next
+    {:reply, :ok, next}
   end
 
   @impl true
@@ -106,7 +121,7 @@ defmodule ExWapp.Session.OutboundQueue do
   defp flush(state) do
     {state, sent_count} = flush_batch(state, state.flush_batch_size)
 
-    if sent_count >= state.flush_batch_size and :queue.len(state.queue) > 0 do
+    if sent_count >= state.flush_batch_size and state.queue_size > 0 do
       schedule_flush(state)
     else
       state
@@ -123,7 +138,7 @@ defmodule ExWapp.Session.OutboundQueue do
       {{:value, item}, rest} ->
         case dispatch(item, state) do
           :ok ->
-            next_state = %{state | queue: rest}
+            next_state = %{state | queue: rest, queue_size: state.queue_size - 1}
             {final_state, sent_rest} = flush_batch(next_state, remaining - 1)
             {final_state, sent_rest + 1}
 
@@ -143,11 +158,11 @@ defmodule ExWapp.Session.OutboundQueue do
   defp schedule_flush(state), do: state
 
   defp enqueue_item(state, item) do
-    queue_len = :queue.len(state.queue)
+    queue_len = state.queue_size
 
     cond do
       queue_len < state.max_size ->
-        %{state | queue: :queue.in(item, state.queue)}
+        %{state | queue: :queue.in(item, state.queue), queue_size: state.queue_size + 1}
 
       state.drop_policy == :drop_oldest ->
         trimmed =
@@ -166,7 +181,7 @@ defmodule ExWapp.Session.OutboundQueue do
 
   defp enqueue_priority_item(state, item) do
     queue =
-      if :queue.len(state.queue) < state.max_size do
+      if state.queue_size < state.max_size do
         state.queue
       else
         case :queue.out_r(state.queue) do
@@ -179,7 +194,11 @@ defmodule ExWapp.Session.OutboundQueue do
         end
       end
 
-    %{state | queue: :queue.in_r(item, queue)}
+    %{
+      state
+      | queue: :queue.in_r(item, queue),
+        queue_size: min(state.queue_size + 1, state.max_size)
+    }
   end
 
   defp dispatch({:send_node, node}, %{transport: transport, conn: conn}) do

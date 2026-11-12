@@ -161,6 +161,9 @@ defmodule ExWapp.Message.Handler.Wire.ContentDecoder do
       match?(%VideoMessage{}, message.videoMessage) ->
         build_media_ref(:video, message.videoMessage)
 
+      match?(%VideoMessage{}, message.ptvMessage) ->
+        build_media_ref(:video, message.ptvMessage)
+
       match?(%StickerMessage{}, message.stickerMessage) ->
         build_media_ref(:sticker, message.stickerMessage)
 

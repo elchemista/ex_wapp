@@ -139,15 +139,18 @@ defmodule ExWapp.Proto.HistorySync do
           {:ok, t()} | {:error, term()}
   def parse_history_payload({:compressed, payload}, sync_type) when is_binary(payload) do
     payload
-    |> :zlib.uncompress()
+    |> ExWapp.Proto.BoundedInflate.inflate()
     |> parse_history_payload(sync_type)
-  rescue
-    _ -> {:error, :invalid_history_compression}
   end
 
   def parse_history_payload(payload, sync_type_from_notification) when is_binary(payload) do
     parse_history_payload({:ok, payload}, sync_type_from_notification)
   end
+
+  def parse_history_payload({:error, _reason} = error, _sync_type), do: error
+
+  def parse_history_payload({:ok, payload}, _sync_type) when byte_size(payload) > 134_217_728,
+    do: {:error, :history_payload_too_large}
 
   def parse_history_payload({:ok, history_payload}, sync_type_from_notification) do
     with {:ok, %HistorySync{} = history} <- HistorySync.decode(history_payload) do
@@ -247,10 +250,18 @@ defmodule ExWapp.Proto.HistorySync do
         participant: participant,
         remote_jid: key.remote_jid
       }
+      |> add_history_content(web_message.message)
     else
       nil
     end
   end
+
+  defp add_history_content(data, %Message{} = message) do
+    data = ExWapp.Message.Handler.Wire.ContentDecoder.apply_media_from_message(data, message)
+    Map.put(data, :content, ExWapp.Message.Content.from_legacy(data))
+  end
+
+  defp add_history_content(data, _), do: data
 
   defp parse_message_key(%{} = key) do
     %{
@@ -409,12 +420,9 @@ defmodule ExWapp.Proto.HistorySync do
   defp normalize_jid(_), do: ""
 
   defp inflate_history_payload(payload) when is_binary(payload) do
-    {:ok, :zlib.uncompress(payload)}
-  rescue
-    _ ->
-      # In some edge cases this payload may already be plain protobuf bytes.
-      {:ok, payload}
-  catch
-    _, _ -> {:ok, payload}
+    case ExWapp.Proto.BoundedInflate.inflate(payload) do
+      {:error, :invalid_history_compression} -> {:ok, payload}
+      result -> result
+    end
   end
 end

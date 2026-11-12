@@ -327,11 +327,13 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
         location: Map.get(legacy, :location),
         contact: Map.get(legacy, :contact),
         event: Map.get(legacy, :event),
+        reaction: Map.get(legacy, :reaction),
         raw: %{
           type: :placeholder_resend,
           content: canonical,
           from_me: from_me,
           media: Map.get(legacy, :media),
+          reaction: Map.get(legacy, :reaction),
           media_type: Map.get(legacy, :media_type),
           content_type: Map.get(legacy, :content_type),
           push_name: Map.get(recovered, :push_name)
@@ -551,9 +553,12 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
           type: "history_sync",
           source: :history_sync,
           remote_jid: remote_jid,
-          order_id: Map.get(message, :order_id)
+          order_id: Map.get(message, :order_id),
+          content_type: Map.get(message, :content_type),
+          reaction: Map.get(message, :reaction)
         }
       }
+      |> Map.merge(Map.take(message, [:content, :media, :reaction, :location, :contact, :event]))
     else
       nil
     end
@@ -631,7 +636,7 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
         0
 
       store ->
-        lid_mapping = store |> Store.load!() |> Map.get(:lid_mapping, %{})
+        lid_mapping = Store.get(store, :lid_mapping, %{})
         token_entries = history_sync_privacy_token_entries(conversations, lid_mapping)
         store_privacy_tokens(store, token_entries)
         length(token_entries)

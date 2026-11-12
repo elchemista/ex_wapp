@@ -55,6 +55,41 @@ defmodule ExWapp.Session.Outbound.ContentTest do
              Content.prepare(self(), %{}, Message.audio(jid, upload))
   end
 
+  test "invalid video and sticker options fail before reading a source or uploading" do
+    jid = "15550001111@s.whatsapp.net"
+
+    for {type, opts, key} <- [
+          {:video, [seconds: -1], :seconds},
+          {:video, [gif_playback: "true"], :gif_playback},
+          {:sticker, [animated: 1], :animated},
+          {:video, [width: 4_294_967_296], :width}
+        ] do
+      message = %Message{to: jid, type: type, body: {:path, "/never-read-this-file"}, opts: opts}
+      assert {:error, {:invalid_media_option, ^key}} = Content.prepare(self(), %{}, message)
+    end
+  end
+
+  test "history rejects local synthetic anchors and preserves caller identity" do
+    anchor = %{id: "history-sync-local", from_me: true, timestamp: 1_700_000_000}
+
+    message =
+      Message.history_request("15550001111@s.whatsapp.net", anchor,
+        id: "request",
+        metadata: %{caller: "test"}
+      )
+
+    assert message.id == "request"
+    assert message.metadata == %{caller: "test"}
+    refute Keyword.has_key?(message.opts, :metadata)
+    assert {:error, :invalid_history_anchor} = Content.prepare(self(), %{}, message)
+  end
+
+  test "reaction keys use the base JID and accept an empty removal" do
+    proto = ExWapp.Messages.build_reaction_proto("15550001111:7@s.whatsapp.net", "original", "")
+    assert proto.reactionMessage.key.remoteJID == "15550001111@s.whatsapp.net"
+    assert proto.reactionMessage.text == ""
+  end
+
   defp upload(type) do
     %Media.Upload{
       type: type,

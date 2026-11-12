@@ -40,14 +40,27 @@ defmodule ExWapp.Store.Ets do
   alias ExWapp.Signal.SessionStore
   alias ExWapp.Store.Codec
   alias ExWapp.Store.Ets.Writer
-  alias ExWapp.Store.MessageTable
+  alias ExWapp.Store.{HistoryLog, MessageTable, PathLock}
   alias ExWapp.Telemetry
 
-  defstruct [:path, :table, :signal_table, :device_cache_table, :message_table, :writer]
+  defstruct [
+    :path,
+    :table,
+    :runtime_table,
+    :signal_table,
+    :device_cache_table,
+    :message_table,
+    :writer,
+    :history_path,
+    :lock
+  ]
 
   @type t :: %__MODULE__{
           path: Path.t(),
+          history_path: Path.t() | nil,
+          lock: pid() | nil,
           table: :ets.tid(),
+          runtime_table: :ets.tid(),
           signal_table: :ets.tid(),
           device_cache_table: :ets.tid(),
           message_table: MessageTable.t(),
@@ -61,8 +74,28 @@ defmodule ExWapp.Store.Ets do
     path =
       opts
       |> Keyword.get(:path, default_path())
-      |> Path.expand()
+      |> PathLock.canonical()
 
+    case PathLock.start(path) do
+      {:ok, lock} ->
+        try do
+          new_locked(opts, path, lock)
+        rescue
+          error ->
+            PathLock.release(lock)
+            reraise error, __STACKTRACE__
+        catch
+          kind, reason ->
+            PathLock.release(lock)
+            :erlang.raise(kind, reason, __STACKTRACE__)
+        end
+
+      {:error, reason} ->
+        raise "ExWapp store is already open: #{inspect(reason)}"
+    end
+  end
+
+  defp new_locked(opts, path, lock) do
     :ok = path |> String.to_charlist() |> :filelib.ensure_dir()
 
     table =
@@ -100,19 +133,53 @@ defmodule ExWapp.Store.Ets do
     SessionStore.replace(signal_store, signal_sessions)
     :ets.insert(device_cache_table, {:snapshot, normalize_device_cache(device_cache)})
 
+    persisted_history? = Map.get(base_data, :_history_storage) == :incremental
+
+    separate? =
+      persisted_history? or Keyword.get(opts, :history_storage, :snapshot) == :incremental
+
+    history_path = if separate?, do: path <> ".history", else: nil
+
     store_without_writer = %__MODULE__{
       path: path,
+      lock: lock,
+      history_path: history_path,
       table: table,
+      runtime_table: :ets.new(:ex_wapp_store_runtime, [:set, :public]),
       signal_table: signal_table,
       device_cache_table: device_cache_table,
       message_table:
         MessageTable.new(initial_messages,
-          max_per_chat: Keyword.get(opts, :max_messages_per_chat, :default)
+          max_per_chat: Keyword.get(opts, :max_messages_per_chat, :default),
+          track_changes: separate?
         ),
       writer: nil
     }
 
+    if separate? do
+      message_table = store_without_writer.message_table
+
+      if persisted_history? do
+        :ok = HistoryLog.load(history_path, message_table)
+
+        if message_table.max_per_chat != :all do
+          # Loading with retention is a real deletion, not just an ETS view.
+          {:ok, baseline} = HistoryLog.compact(history_path, message_table)
+          :ets.insert(table, {:_history_checkpoint_bytes, baseline})
+        end
+      else
+        :ok = ExWapp.Store.FileSync.preserve_snapshot(path)
+        {:ok, baseline} = HistoryLog.compact(history_path, message_table)
+        :ets.insert(table, {:_history_checkpoint_bytes, baseline})
+      end
+
+      :ets.delete_all_objects(message_table.dirty_table)
+      # Commit the marker only after the complete history is durably stored.
+      :ok = flush_snapshot(store_without_writer)
+    end
+
     {:ok, writer} = Writer.start_link(store_without_writer)
+    :ok = PathLock.attach(lock, writer)
     transfer_tables(store_without_writer, writer)
     %{store_without_writer | writer: writer}
   end
@@ -126,9 +193,26 @@ defmodule ExWapp.Store.Ets do
   """
   @spec load_path(Path.t()) :: {:ok, ExWapp.Store.data()} | {:error, term()}
   def load_path(path) when is_binary(path) do
-    path
-    |> Path.expand()
-    |> load_file()
+    path = Path.expand(path)
+
+    with {:ok, data} <- load_file(path) do
+      if Map.get(data, :_history_storage) == :incremental do
+        messages = MessageTable.new()
+
+        try do
+          with :ok <- HistoryLog.load(path <> ".history", messages, false) do
+            {:ok, Map.put(data, :chat_messages, MessageTable.snapshot(messages))}
+          end
+        after
+          Enum.each(
+            [messages.table, messages.index_table, messages.id_index_table, messages.count_table],
+            &:ets.delete/1
+          )
+        end
+      else
+        {:ok, data}
+      end
+    end
   end
 
   @impl true
@@ -161,6 +245,11 @@ defmodule ExWapp.Store.Ets do
       :ets.delete_all_objects(store.signal_table)
       :ets.insert(store.device_cache_table, {:snapshot, %{}})
       MessageTable.clear(store.message_table)
+
+      if store.history_path do
+        {:ok, _} = HistoryLog.compact(store.history_path, store.message_table)
+        :ets.delete_all_objects(store.message_table.dirty_table)
+      end
 
       case File.rm(store.path) do
         :ok -> :ok
@@ -386,22 +475,61 @@ defmodule ExWapp.Store.Ets do
     {:ok, :changed}
   end
 
-  defp merged_snapshot(%__MODULE__{
-         table: table,
-         signal_table: signal_table,
-         device_cache_table: device_cache_table,
-         message_table: message_table
-       }) do
-    table
-    |> base_snapshot()
-    |> Map.put(:signal_sessions, SessionStore.snapshot(SessionStore.attach(signal_table)))
-    |> Map.put(:device_cache, load_device_cache_snapshot(device_cache_table))
-    |> put_message_snapshot(MessageTable.snapshot(message_table))
+  defp merged_snapshot(
+         %__MODULE__{
+           table: table,
+           signal_table: signal_table,
+           device_cache_table: device_cache_table,
+           message_table: message_table
+         } = store
+       ) do
+    data =
+      table
+      |> base_snapshot()
+      |> Map.put(:signal_sessions, SessionStore.snapshot(SessionStore.attach(signal_table)))
+      |> Map.put(:device_cache, load_device_cache_snapshot(device_cache_table))
+
+    if store.history_path,
+      do: Map.put(data, :_history_storage, :incremental),
+      else:
+        put_message_snapshot(
+          Map.drop(data, [:_history_storage, :_history_checkpoint_bytes]),
+          MessageTable.snapshot(message_table)
+        )
   end
 
   @doc false
   @spec flush_snapshot(t()) :: :ok | {:error, term()}
   def flush_snapshot(%__MODULE__{} = store) do
+    with :ok <- flush_history(store), do: do_flush_snapshot(store)
+  end
+
+  defp flush_history(%{history_path: nil}), do: :ok
+
+  defp flush_history(store) do
+    baseline = base_get(store.table, :_history_checkpoint_bytes, 0)
+
+    case base_get(store.runtime_table, :history_write_error, nil) do
+      nil ->
+        case HistoryLog.flush(store.history_path, store.message_table, baseline) do
+          {:ok, checkpoint} ->
+            :ets.insert(store.table, {:_history_checkpoint_bytes, checkpoint})
+            :ok
+
+          {:error, {:history_rollback_failed, _} = reason} = error ->
+            :ets.insert(store.runtime_table, {:history_write_error, reason})
+            error
+
+          error ->
+            error
+        end
+
+      reason ->
+        {:error, reason}
+    end
+  end
+
+  defp do_flush_snapshot(store) do
     started_at = System.monotonic_time()
     encode_started_at = System.monotonic_time()
     encoded = Codec.encode(merged_snapshot(store))
@@ -411,7 +539,12 @@ defmodule ExWapp.Store.Ets do
       case encoded do
         {:ok, blob} ->
           write_started_at = System.monotonic_time()
-          result = atomic_write(store.path, blob)
+
+          result =
+            with :ok <- atomic_write(store.path, blob) do
+              if store.history_path, do: ExWapp.Store.FileSync.directory(store.path), else: :ok
+            end
+
           {result, byte_size(blob), System.monotonic_time() - write_started_at}
 
         {:error, _reason} = error ->
@@ -545,12 +678,16 @@ defmodule ExWapp.Store.Ets do
   defp transfer_tables(store, writer) do
     [
       store.table,
+      store.runtime_table,
       store.signal_table,
       store.device_cache_table,
       store.message_table.table,
       store.message_table.index_table,
+      store.message_table.id_index_table,
+      store.message_table.dirty_table,
       store.message_table.count_table
     ]
+    |> Enum.reject(&is_nil/1)
     |> Enum.each(&:ets.give_away(&1, writer, :ex_wapp_store))
   end
 
@@ -558,7 +695,20 @@ defmodule ExWapp.Store.Ets do
     temporary_path =
       path <> ".tmp." <> Integer.to_string(System.unique_integer([:positive, :monotonic]))
 
-    case File.write(temporary_path, blob) do
+    written =
+      File.open(temporary_path, [:write, :binary, :exclusive], fn file ->
+        with :ok <- File.chmod(temporary_path, 0o600),
+             :ok <- IO.binwrite(file, blob),
+             do: :file.sync(file)
+      end)
+
+    written =
+      case written do
+        {:ok, result} -> result
+        {:error, _} = error -> error
+      end
+
+    case written do
       :ok ->
         case File.rename(temporary_path, path) do
           :ok ->

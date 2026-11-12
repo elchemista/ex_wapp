@@ -9,7 +9,7 @@ defmodule ExWapp.Media.HTTP do
 
   alias ExWapp.{JSON, Media}
   alias ExWapp.Session.IQ
-  alias ExWapp.Transport.TLS
+  alias ExWapp.Media.BoundedHTTP
 
   @origin "https://web.whatsapp.com"
 
@@ -19,9 +19,12 @@ defmodule ExWapp.Media.HTTP do
   @spec upload(map(), Media.media_type(), binary(), keyword()) ::
           {:ok, Media.Upload.t()} | {:error, term()}
   def upload(state, type, plaintext, opts \\ []) when is_binary(plaintext) do
-    with {:ok, upload, body} <- Media.Crypto.encrypt_upload(plaintext, type),
+    opts = request_options(opts)
+
+    with :ok <- validate_size(byte_size(plaintext), opts),
+         {:ok, upload, body} <- Media.Crypto.encrypt_upload(plaintext, type),
          {:ok, media_conn} <- media_conn(state, opts) do
-      do_upload(media_conn, upload, body)
+      do_upload(media_conn, upload, body, opts)
     end
   end
 
@@ -30,8 +33,13 @@ defmodule ExWapp.Media.HTTP do
   """
   @spec download(map(), Media.Ref.t(), keyword()) :: {:ok, binary()} | {:error, term()}
   def download(state, %Media.Ref{} = ref, opts \\ []) do
-    with {:ok, body} <- fetch_encrypted_body(state, ref, opts) do
-      Media.Crypto.decrypt_download(body, ref)
+    opts = request_options(opts)
+
+    with :ok <- validate_download_ref(ref, opts),
+         {:ok, body} <- fetch_encrypted_body(state, ref, opts),
+         {:ok, plaintext} <- Media.Crypto.decrypt_download(body, ref),
+         :ok <- validate_size(byte_size(plaintext), opts) do
+      {:ok, plaintext}
     end
   end
 
@@ -39,9 +47,17 @@ defmodule ExWapp.Media.HTTP do
           {:ok, binary()} | {:error, term()}
   defp fetch_encrypted_body(state, %Media.Ref{url: url} = ref, opts)
        when is_binary(url) and url != "" do
-    case http_get(url) do
-      {:ok, body} -> {:ok, body}
-      {:error, _reason} -> fetch_from_direct_path(state, %{ref | url: nil}, opts)
+    case http_get(url, opts) do
+      {:ok, body} ->
+        {:ok, body}
+
+      {:error, reason} = error when reason in [:timeout, :media_too_large] ->
+        error
+
+      {:error, _reason} = error ->
+        if is_binary(ref.direct_path) and ref.direct_path != "",
+          do: fetch_from_direct_path(state, %{ref | url: nil}, opts),
+          else: error
     end
   end
 
@@ -62,27 +78,35 @@ defmodule ExWapp.Media.HTTP do
         {:ok, conn}
 
       _ ->
-        query_media_conn(Keyword.get(opts, :session))
+        query_media_conn(Keyword.get(opts, :session), opts[:deadline])
     end
   end
 
-  @spec query_media_conn(pid() | term()) :: {:ok, map()} | {:error, term()}
-  defp query_media_conn(session) when is_pid(session) do
+  @spec query_media_conn(pid() | term(), integer()) :: {:ok, map()} | {:error, term()}
+  defp query_media_conn(session, deadline) when is_pid(session) do
     id = ExWapp.Messages.generate_id()
     node = IQ.build_media_conn_query(id)
 
-    case GenServer.call(session, {:send_iq, node, id}, 30_000) do
+    timeout = min(max(deadline - System.monotonic_time(:millisecond), 0), 30_000)
+
+    result =
+      if timeout > 0,
+        do: GenServer.call(session, {:send_iq, node, id, timeout}, timeout),
+        else: {:error, :timeout}
+
+    case result do
       {:ok, response} -> IQ.parse_media_conn_response(response)
       {:error, reason} -> {:error, reason}
       other -> {:error, {:bad_media_conn_response, other}}
     end
   end
 
-  defp query_media_conn(_), do: {:error, :missing_session_for_media_conn}
+  defp query_media_conn(_, _deadline), do: {:error, :missing_session_for_media_conn}
 
-  @spec do_upload(map(), Media.Upload.t(), binary()) ::
+  @spec do_upload(map(), Media.Upload.t(), binary(), keyword()) ::
           {:ok, Media.Upload.t()} | {:error, term()}
-  defp do_upload(%{hosts: [%{hostname: host} | _], auth: auth}, upload, body) do
+  defp do_upload(%{hosts: [%{hostname: host} | _], auth: auth}, upload, body, opts) do
+    opts = trust_media_hosts(opts, [%{hostname: host}])
     token = Base.url_encode64(upload.file_enc_sha256)
     mms_type = mms_type(upload.type)
 
@@ -94,26 +118,22 @@ defmodule ExWapp.Media.HTTP do
       {~c"content-type", ~c"application/octet-stream"}
     ]
 
-    request = {String.to_charlist(url), headers, ~c"application/octet-stream", body}
-
-    case :httpc.request(:post, request, TLS.httpc_options(url), body_format: :binary) do
-      {:ok, {{_, status, _}, _headers, response_body}} when status in 200..299 ->
-        {:ok, struct(upload, parse_upload_response(response_body))}
-
-      {:ok, {{_, status, _}, _headers, response_body}} ->
-        {:error, {:upload_http_error, status, byte_size(response_body)}}
-
-      {:error, reason} ->
-        {:error, {:upload_failed, reason}}
+    with :ok <- validate_url(url, opts),
+         {:ok, _status, response_body} <-
+           BoundedHTTP.request(:post, url, headers, body, 1_048_576, opts[:deadline]) do
+      {:ok, struct(upload, parse_upload_response(response_body))}
+    else
+      {:error, {:http_status, status}} -> {:error, {:upload_http_error, status, 0}}
+      {:error, reason} -> {:error, {:upload_failed, reason}}
     end
   end
 
-  defp do_upload(_media_conn, _upload, _body), do: {:error, :missing_media_host}
+  defp do_upload(_media_conn, _upload, _body, _opts), do: {:error, :missing_media_host}
 
   @spec do_download(map(), Media.Ref.t(), keyword()) :: {:ok, binary()} | {:error, term()}
   defp do_download(%{hosts: hosts}, %Media.Ref{url: url} = ref, opts)
        when is_binary(url) and url != "" do
-    try_download_urls([url], hosts, ref, opts)
+    try_download_urls([url], hosts, ref, trust_media_hosts(opts, hosts))
   end
 
   defp do_download(%{hosts: hosts}, %Media.Ref{direct_path: direct_path} = ref, opts)
@@ -129,7 +149,7 @@ defmodule ExWapp.Media.HTTP do
         "https://#{host}#{direct_path}#{separator}hash=#{hash}&mms-type=#{mms_type}&__wa-mms="
       end)
 
-    try_download_urls(urls, hosts, ref, opts)
+    try_download_urls(urls, hosts, ref, trust_media_hosts(opts, hosts))
   end
 
   defp do_download(_media_conn, _ref, _opts), do: {:error, :missing_media_url}
@@ -139,32 +159,120 @@ defmodule ExWapp.Media.HTTP do
   defp try_download_urls([], _hosts, _ref, _opts), do: {:error, :media_download_failed}
 
   defp try_download_urls([url | rest], hosts, ref, opts) do
-    case http_get(url) do
+    case http_get(url, opts) do
       {:ok, body} -> {:ok, body}
       {:error, _reason} when rest != [] -> try_download_urls(rest, hosts, ref, opts)
       {:error, reason} -> {:error, reason}
     end
   end
 
-  @spec http_get(binary()) :: {:ok, binary()} | {:error, term()}
-  defp http_get(url) do
-    headers = [
-      {~c"origin", String.to_charlist(@origin)},
-      {~c"referer", String.to_charlist(@origin <> "/")}
-    ]
+  defp http_get(url, opts) do
+    headers = [{"origin", @origin}, {"referer", @origin <> "/"}]
 
-    case :httpc.request(:get, {String.to_charlist(url), headers}, TLS.httpc_options(url),
-           body_format: :binary
-         ) do
-      {:ok, {{_, status, _}, _headers, body}} when status in 200..299 ->
-        {:ok, body}
+    with :ok <- validate_url(url, opts),
+         {:ok, _status, body} <-
+           BoundedHTTP.request(:get, url, headers, <<>>, opts[:max_bytes] + 26, opts[:deadline]) do
+      {:ok, body}
+    else
+      {:error, {:http_status, status}} ->
+        {:error, {:download_http_error, status, 0}}
 
-      {:ok, {{_, status, _}, _headers, body}} ->
-        {:error, {:download_http_error, status, byte_size(body)}}
+      {:error, reason} = error
+      when reason in [:timeout, :media_too_large, :untrusted_media_url] ->
+        error
 
       {:error, reason} ->
         {:error, {:download_failed, reason}}
     end
+  end
+
+  defp request_options(opts) do
+    now = System.monotonic_time(:millisecond)
+    timeout = Keyword.get(opts, :timeout, 60_000)
+    timeout = if is_integer(timeout) and timeout > 0, do: min(timeout, 60_000), else: 60_000
+    deadline = Keyword.get(opts, :send_deadline)
+    deadline = if is_integer(deadline), do: min(deadline, now + timeout), else: now + timeout
+    max_bytes = Keyword.get(opts, :max_bytes, 64 * 1024 * 1024)
+    max_bytes = if is_integer(max_bytes) and max_bytes > 0, do: max_bytes, else: 64 * 1024 * 1024
+    opts = opts |> Keyword.put(:deadline, deadline) |> Keyword.put(:max_bytes, max_bytes)
+
+    case Keyword.get(opts, :media_conn) do
+      %{hosts: hosts} -> trust_media_hosts(opts, hosts)
+      _ -> opts
+    end
+  end
+
+  defp trust_media_hosts(opts, hosts) do
+    origins = Enum.map(hosts, fn %{hostname: host} -> "https://" <> host end)
+    Keyword.update(opts, :allowed_media_origins, origins, &(origins ++ &1))
+  end
+
+  defp validate_download_ref(ref, opts) do
+    plaintext? =
+      Keyword.get(opts, :allow_plaintext, false) == true and is_nil(ref.file_enc_sha256)
+
+    cond do
+      ref.type not in [:image, :video, :sticker, :audio, :document, :history] ->
+        {:error, :unsupported_media_type}
+
+      not plaintext? and not hash?(ref.media_key) ->
+        {:error, :invalid_media_key}
+
+      not plaintext? and not hash?(ref.file_enc_sha256) ->
+        {:error, :invalid_encrypted_media_hash}
+
+      plaintext? and not hash?(ref.file_sha256) ->
+        {:error, :invalid_media_hash}
+
+      not is_nil(ref.file_sha256) and not hash?(ref.file_sha256) ->
+        {:error, :invalid_media_hash}
+
+      true ->
+        validate_size(ref.file_length, opts)
+    end
+  end
+
+  defp validate_size(nil, _opts), do: :ok
+
+  defp validate_size(size, opts) when is_integer(size) and size >= 0 do
+    if size <= opts[:max_bytes], do: :ok, else: {:error, :media_too_large}
+  end
+
+  defp validate_size(_size, _opts), do: {:error, :invalid_media_length}
+  defp hash?(hash), do: is_binary(hash) and byte_size(hash) == 32
+
+  defp validate_url(url, opts) do
+    case URI.parse(url) do
+      %URI{scheme: "https", host: host, port: port, userinfo: nil, fragment: nil}
+      when is_binary(host) ->
+        host = String.downcase(host)
+
+        known? =
+          port == 443 and
+            Enum.any?(["whatsapp.net", "whatsapp.com", "fbcdn.net"], fn suffix ->
+              host == suffix or String.ends_with?(host, "." <> suffix)
+            end)
+
+        trusted? =
+          Enum.any?(Keyword.get(opts, :allowed_media_origins, []), fn origin ->
+            case URI.parse(origin) do
+              %URI{scheme: "https", host: allowed, port: ^port} when is_binary(allowed) ->
+                String.downcase(allowed) == host
+
+              _ ->
+                false
+            end
+          end)
+
+        if (known? or trusted?) and not String.contains?(url, ["\r", "\n", "\0"]),
+          do: :ok,
+          else: {:error, :untrusted_media_url}
+
+      _ ->
+        {:error, :untrusted_media_url}
+    end
+  rescue
+    _ -> {:error, :untrusted_media_url}
   end
 
   @spec parse_upload_response(binary()) :: map()

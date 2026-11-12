@@ -50,9 +50,23 @@ defmodule ExWapp.Store.Memory do
   def new(opts \\ []) do
     initial_data = Keyword.get(opts, :initial_data, %{})
     {base_data, messages} = MessageTable.extract(initial_data)
-    {:ok, agent} = Agent.start_link(fn -> base_data end)
+    owner = self()
+    ref = make_ref()
 
-    %__MODULE__{agent: agent, message_table: MessageTable.new(messages)}
+    {:ok, agent} =
+      Agent.start_link(fn ->
+        table =
+          MessageTable.new(messages,
+            max_per_chat: Keyword.get(opts, :max_messages_per_chat, :all)
+          )
+
+        send(owner, {ref, table})
+        base_data
+      end)
+
+    receive do
+      {^ref, table} -> %__MODULE__{agent: agent, message_table: table}
+    end
   end
 
   @impl true

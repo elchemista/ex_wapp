@@ -367,7 +367,7 @@ defmodule ExWapp.Session.Worker.NodeHandler do
          _detail,
          _first_child_tag
        ) do
-    Logger.error("[SESSION] Stream replaced by another connection, restarting transport")
+    Logger.error("[SESSION] Stream replaced by another connection; automatic reconnect stopped")
     maybe_notify_qr_error(state, :stream_replaced)
 
     state

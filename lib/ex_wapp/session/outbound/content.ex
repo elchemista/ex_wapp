@@ -16,6 +16,9 @@ defmodule ExWapp.Session.Outbound.Content do
       if message.type == :history_request do
         Outbound.send_peer_proto_worker(session_pid, state, proto, send_opts)
       else
+        id = Keyword.get(send_opts, :retry_message_id) || message.id || Messages.generate_id()
+        send_opts = Keyword.put(send_opts, :retry_message_id, id)
+        :ok = GenServer.call(session_pid, {:remember_outgoing_proto, jid, id, proto, send_opts})
         Outbound.send_proto_worker(session_pid, state, jid, proto, send_opts)
       end
     end
@@ -39,21 +42,21 @@ defmodule ExWapp.Session.Outbound.Content do
 
   @doc false
   @spec validate(Message.t()) :: :ok | {:error, term()}
-  def validate(%Message{type: type, body: %Media.Upload{type: type}})
+  def validate(%Message{type: type, body: %Media.Upload{type: type}, opts: opts})
       when type in [:image, :video, :sticker, :audio, :document],
-      do: :ok
+      do: validate_media_options(opts)
 
   def validate(%Message{type: type, body: %Media.Upload{type: other}})
       when type in [:image, :video, :sticker, :audio, :document],
       do: {:error, {:media_type_mismatch, type, other}}
 
-  def validate(%Message{type: type, body: {:bytes, bytes}})
+  def validate(%Message{type: type, body: {:bytes, bytes}, opts: opts})
       when type in [:image, :video, :sticker, :audio, :document] and is_binary(bytes),
-      do: :ok
+      do: validate_media_options(opts)
 
-  def validate(%Message{type: type, body: {:path, path}})
+  def validate(%Message{type: type, body: {:path, path}, opts: opts})
       when type in [:image, :video, :sticker, :audio, :document] and is_binary(path),
-      do: :ok
+      do: validate_media_options(opts)
 
   def validate(%Message{type: type, body: source})
       when type in [:image, :video, :sticker, :audio, :document],
@@ -267,15 +270,43 @@ defmodule ExWapp.Session.Outbound.Content do
     {:ok, Messages.build_history_request_proto(jid, anchor, opts), opts}
   end
 
+  defp validate_media_options(opts) do
+    invalid =
+      Enum.find(opts, fn
+        {key, value} when key in [:animated, :gif_playback, :ptt, :view_once] ->
+          not is_boolean(value)
+
+        {key, value} when key in [:seconds, :duration, :width, :height] ->
+          not (is_integer(value) and value >= 0 and value <= 4_294_967_295)
+
+        {key, value} when key in [:caption, :mimetype, :file_name] ->
+          not (is_binary(value) and byte_size(value) <= 65_536 and String.valid?(value))
+
+        {key, value} when key in [:jpeg_thumbnail, :waveform] ->
+          not (is_binary(value) and byte_size(value) <= 262_144)
+
+        _ ->
+          false
+      end)
+
+    case invalid do
+      nil -> :ok
+      {key, _} -> {:error, {:invalid_media_option, key}}
+    end
+  end
+
   defp nonempty_string?(value), do: is_binary(value) and value != "" and String.valid?(value)
-  defp valid_text?(value), do: is_binary(value) and String.valid?(value)
+
+  defp valid_text?(value),
+    do: is_binary(value) and byte_size(value) <= 128 and String.valid?(value)
 
   defp missing_reaction_participant?(jid, from_me, participant),
     do: String.ends_with?(jid, "@g.us") and not from_me and not user_jid?(participant)
 
   defp valid_history_anchor?(%{id: id, from_me: from_me, timestamp: timestamp}),
     do:
-      nonempty_string?(id) and is_boolean(from_me) and is_integer(timestamp) and
+      nonempty_string?(id) and not String.starts_with?(id, "history-sync-") and
+        is_boolean(from_me) and is_integer(timestamp) and
         timestamp > 0 and timestamp <= 9_223_372_036_854_775_807
 
   defp valid_history_anchor?(_), do: false
@@ -308,7 +339,7 @@ defmodule ExWapp.Session.Outbound.Content do
     do: {:error, {:media_type_mismatch, type, other}}
 
   defp prepare_media_upload(session_pid, state, type, source, opts) do
-    with {:ok, bytes} <- Media.read_source(source) do
+    with {:ok, bytes} <- Media.read_source(source, opts) do
       Media.HTTP.upload(state, type, bytes, Keyword.put(opts, :session, session_pid))
     end
   end

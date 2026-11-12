@@ -74,7 +74,9 @@ defmodule ExWapp.Session.Worker.Retry do
 
   defp spawn_retry_worker(state, jid, message_id, attempts, text, context) do
     case context.start_worker.(state, jid, fn ->
-           log_retry_result(context.send.(jid, text), message_id)
+           result = context.send.(jid, text)
+           log_retry_result(result, message_id)
+           result
          end) do
       {:ok, worker, mon} ->
         counter_key = retry_counter_key(context.counter_scope, jid, message_id)
@@ -135,6 +137,9 @@ defmodule ExWapp.Session.Worker.Retry do
   defp find_outgoing_message_in_cache(outgoing_payloads, jid, message_id)
        when is_map(outgoing_payloads) and is_binary(message_id) do
     case Map.get(outgoing_payloads, message_id) do
+      %{proto: %WAWebProtobufsE2E.Message{}} = payload ->
+        {:ok, Map.get(payload, :jid, jid), payload}
+
       %{text: text} = payload when is_binary(text) and text != "" ->
         cached_jid = Map.get(payload, :jid, "")
 
@@ -154,8 +159,8 @@ defmodule ExWapp.Session.Worker.Retry do
   defp find_outgoing_message_in_cache(_outgoing_payloads, _jid, _message_id), do: :error
 
   defp find_outgoing_message_in_chat(store, jid, message_id) do
-    store
-    |> Chat.messages(jid, limit: 500)
+    [Chat.find_message(store, jid, message_id)]
+    |> Enum.reject(&is_nil/1)
     |> find_outgoing_text_by_id(jid, message_id)
   end
 
@@ -170,7 +175,7 @@ defmodule ExWapp.Session.Worker.Retry do
     messages
     |> Enum.find_value(fn message ->
       if Map.get(message, :id) == message_id and Map.get(message, :from_me) and
-           is_binary(Map.get(message, :text)) do
+           is_binary(Map.get(message, :text)) and safe_text_fallback?(message) do
         {:ok, jid, Map.get(message, :text)}
       else
         nil
@@ -180,5 +185,15 @@ defmodule ExWapp.Session.Worker.Retry do
       nil -> {:error, :message_not_found}
       {:ok, _retry_jid, _text} = result -> result
     end
+  end
+
+  defp safe_text_fallback?(message) do
+    raw = Map.get(message, :raw) || %{}
+    content = Map.get(message, :content)
+
+    Map.get(raw, :content_type) in [nil, :text] and
+      Map.get(raw, :source) != :history_sync and
+      (is_nil(content) or Map.get(content, :kind) == :text) and
+      Enum.all?([:media, :reaction, :location, :contact, :event], &is_nil(Map.get(message, &1)))
   end
 end

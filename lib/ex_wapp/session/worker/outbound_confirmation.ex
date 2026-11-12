@@ -111,8 +111,6 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
             "[SEND] Message id=#{Log.reference(message_id)} to=#{Log.reference(jid)} remained unconfirmed; retrying with fallback self-chat strategy"
           )
 
-          mark_message_failed(state.store, message_id)
-
           start_silent_drop_fallback(
             state,
             jid,
@@ -147,12 +145,43 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
          send_fn,
          register_fn
        ) do
+    case ExWapp.Session.Worker.SendRecovery.check_recovery(state, jid) do
+      {:ok, state} ->
+        do_start_silent_drop_fallback(
+          state,
+          jid,
+          text,
+          attempt,
+          previous_message_id,
+          start_worker_fn,
+          send_fn,
+          register_fn
+        )
+
+      {:error, _reason, state} ->
+        state
+    end
+  end
+
+  defp do_start_silent_drop_fallback(
+         state,
+         jid,
+         text,
+         attempt,
+         previous_message_id,
+         start_worker_fn,
+         send_fn,
+         register_fn
+       ) do
     session_pid = self()
+    context = ExWapp.Session.Worker.SendRecovery.worker_context(state)
+    retained = Map.take(state.outgoing_retry_payloads, [previous_message_id])
+    context = %{context | outgoing_retry_payloads: retained}
 
     case start_worker_fn.(state, jid, fn ->
            run_silent_drop_fallback_send(
              session_pid,
-             state,
+             context,
              jid,
              text,
              attempt,
@@ -181,7 +210,25 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
          previous_message_id,
          send_fn
        ) do
-    result = send_fn.(session_pid, state, jid, text, self_chat_mode: :recipient_primary)
+    result =
+      with :ok <- ExWapp.Session.Worker.SendRecovery.await_recovery_admission(session_pid, jid) do
+        retained = Map.get(state.outgoing_retry_payloads, previous_message_id, %{})
+
+        opts =
+          Keyword.merge(Map.get(retained, :opts, []),
+            self_chat_mode: :recipient_primary,
+            retry_message_id: previous_message_id,
+            suppress_outgoing_chat_add: true
+          )
+
+        opts =
+          if Map.has_key?(retained, :proto),
+            do: Keyword.put(opts, :proto_message, retained.proto),
+            else: opts
+
+        send_fn.(session_pid, state, jid, text, opts)
+      end
+
     send(session_pid, {:send_result, jid, text, result, :fallback, attempt})
     log_silent_drop_fallback_result(result, jid, previous_message_id)
     result
@@ -232,11 +279,10 @@ defmodule ExWapp.Session.Worker.OutboundConfirmation do
 
   defp find_outgoing_message_in_chat(store, jid, message_id)
        when is_binary(jid) and jid != "" and is_binary(message_id) do
-    store
-    |> Chat.messages(jid, limit: 1000)
-    |> Enum.find(fn message ->
-      Map.get(message, :id) == message_id and Map.get(message, :from_me) == true
-    end)
+    case Chat.find_message(store, jid, message_id) do
+      %{from_me: true} = message -> message
+      _ -> nil
+    end
   end
 
   defp find_outgoing_message_in_chat(_store, _jid, _message_id), do: nil

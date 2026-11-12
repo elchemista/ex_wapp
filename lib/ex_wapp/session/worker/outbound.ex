@@ -49,6 +49,7 @@ defmodule ExWapp.Session.Worker.Outbound do
   end
 
   def send_text_worker(session_pid, state, jid, text, opts) do
+    state = Map.put(state, :send_deadline, Keyword.get(opts, :send_deadline))
     normalized_jid = normalize_jid_with_device(jid)
 
     # One send touches the store on the order of twenty times — device cache,
@@ -132,6 +133,7 @@ defmodule ExWapp.Session.Worker.Outbound do
         %Message{} = proto,
         opts
       ) do
+    state = Map.put(state, :send_deadline, Keyword.get(opts, :send_deadline))
     destination_jid = peer_destination_jid(store)
 
     with destination when destination != "" <- destination_jid,
@@ -990,8 +992,26 @@ defmodule ExWapp.Session.Worker.Outbound do
 
   @spec send_transport_node(worker_state(), pid() | nil, Binary.Node.t()) ::
           :ok | {:error, term()}
-  defp send_transport_node(%{transport_mod: transport_mod}, conn, node) when is_pid(conn) do
-    transport_mod.send_node(conn, node)
+  defp send_transport_node(%{transport_mod: transport_mod} = state, conn, node)
+       when is_pid(conn) do
+    deadline = Map.get(state, :send_deadline)
+    router = Map.get(state, :outbound_iq_router)
+    jid = Map.get(node.attrs, "to", "")
+    kind = if Map.get(node.attrs, "category") == "peer", do: :peer, else: :message
+
+    with :ok <- authorize_transport(router, jid, deadline, kind) do
+      transport_mod.send_node(conn, node)
+    end
+  end
+
+  defp authorize_transport(router, jid, deadline, kind) when is_pid(router) do
+    GenServer.call(router, {:authorize_outbound, jid, deadline, kind}, 5000)
+  end
+
+  defp authorize_transport(_router, _jid, deadline, _kind) do
+    if is_integer(deadline) and System.monotonic_time(:millisecond) >= deadline,
+      do: {:error, :send_deadline_exceeded},
+      else: :ok
   end
 
   defp send_transport_node(%{status: status}, _conn, _node) do

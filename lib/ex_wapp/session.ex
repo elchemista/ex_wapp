@@ -85,7 +85,35 @@ defmodule ExWapp.Session do
   @spec send_message(GenServer.server(), Message.t()) ::
           {:ok, String.t()} | {:error, term()}
   def send_message(server, %Message{} = message) do
-    GenServer.call(server, {:send_message, message}, message_timeout(message))
+    with {:ok, message} <- ExWapp.Session.Outbound.Command.prepare(message),
+         timeout <- message_timeout(message),
+         true <- timeout == :infinity or (is_integer(timeout) and timeout >= 0) do
+      deadline =
+        if timeout == :infinity,
+          do: :infinity,
+          else: System.monotonic_time(:millisecond) + timeout
+
+      message = %{
+        message
+        | id: message.id || ExWapp.Messages.generate_id(),
+          opts: Keyword.put(message.opts, :send_deadline, deadline)
+      }
+
+      call_send_message(server, message, timeout)
+    else
+      false -> {:error, :invalid_send_timeout}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp call_send_message(server, message, timeout) do
+    GenServer.call(
+      server,
+      {:send_message, message},
+      if(timeout == :infinity, do: :infinity, else: timeout + 1000)
+    )
+  catch
+    :exit, {:timeout, _} -> {:error, {:send_timeout, message.id}}
   end
 
   @spec send_typing(GenServer.server(), binary(), boolean()) :: :ok | {:error, term()}

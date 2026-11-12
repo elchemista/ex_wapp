@@ -11,8 +11,53 @@ defmodule ExWapp.Session.HistorySync do
 
   @spec start(Worker.t(), Proto.blob_ref(), term(), term()) :: Worker.t()
   def start(state, blob, from, id) do
+    active =
+      Enum.filter(
+        Map.values(state.send_coordinator.operations),
+        &match?({:history_sync, _}, &1.label)
+      )
+
+    key = blob.file_enc_sha256
+
+    duplicate? =
+      Enum.any?(active, fn %{label: {:history_sync, meta}} -> meta[:blob_key] == key end) or
+        Enum.any?(state.history_blob_queue, fn {queued, _, _} -> queued.file_enc_sha256 == key end)
+
+    cond do
+      duplicate? ->
+        state
+
+      length(active) < 2 and map_size(state.send_coordinator.operations) < 32 ->
+        start_now(state, blob, from, id)
+
+      length(state.history_blob_queue) < 16 ->
+        %{state | history_blob_queue: state.history_blob_queue ++ [{blob, from, id}]}
+
+      true ->
+        complete(
+          state,
+          Map.take(blob, [:sync_type, :chunk_order, :progress]),
+          {:error, :history_queue_full}
+        )
+
+        state
+    end
+  end
+
+  def drain(%{history_blob_queue: []} = state), do: state
+
+  def drain(state) do
+    [{blob, from, id} | rest] = state.history_blob_queue
+    start(%{state | history_blob_queue: rest}, blob, from, id)
+  end
+
+  defp start_now(state, blob, from, id) do
     session = self()
-    metadata = Map.take(blob, [:sync_type, :chunk_order, :progress])
+
+    metadata =
+      Map.take(blob, [:sync_type, :chunk_order, :progress])
+      |> Map.put(:blob_key, blob.file_enc_sha256)
+
     projection_state = Map.take(state, [:store, :session_id, :runtime_cfg])
 
     task = fn -> download_and_apply(projection_state, session, blob, from, id) end
@@ -36,6 +81,7 @@ defmodule ExWapp.Session.HistorySync do
   defp download_and_apply(state, session, blob, from, id) do
     with {:ok, bytes} <- Media.HTTP.download(%{}, media_ref(blob), session: session),
          {:ok, history} <- Proto.parse_history_payload({:compressed, bytes}, blob.sync_type),
+         :ok <- GenServer.call(session, :authorize_history_apply),
          :ok <-
            Store.batch(state.store, :history_sync, fn ->
              Sync.apply_history_sync(history, session, state, from, id)
