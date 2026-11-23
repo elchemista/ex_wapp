@@ -2,12 +2,14 @@ defmodule ExWapp.LIDSyncIntegrationTest do
   use ExUnit.Case, async: true
 
   alias ExWapp.{Binary, Chat, JID, Session, Store}
-  alias ExWapp.AppState.Engine
+  alias ExWapp.AppState.{Engine, LTHash}
+  alias ExWapp.AppState.Engine.Codec
   alias ExWapp.Binary.Node
   alias ExWapp.Signal.{Encryption, SessionStore}
   alias ExWapp.Test.{ProtocolPeer, SignalDevice}
   alias ExWapp.Test.ProtocolTransport, as: Transport
   alias WAWebProtobufsE2E.{Message, ProtocolMessage}
+  alias WAWebProtobufsServerSync.SyncdPatch
 
   @pn "15550009999:7@s.whatsapp.net"
   @lid "90000000099:7@lid"
@@ -180,6 +182,43 @@ defmodule ExWapp.LIDSyncIntegrationTest do
     refute_received {:ex_wapp_message, _, _}
   end
 
+  @tag identity_source: :pairing
+  test "an authenticated key share cannot replace the key for an existing app-state patch", ctx do
+    sender = "90000000099@lid"
+    key_id = <<1, 2, 3>>
+    original_key = <<1::256>>
+    conflicting_key = <<2::256>>
+
+    sender_sessions =
+      deliver(ctx, key_share_message(original_key), "original-share", sender, SessionStore.new())
+
+    original_keys = Store.get(ctx.store, :app_state_keys)
+    assert %{"010203" => %{data: ^original_key, timestamp: 123}} = original_keys
+
+    hash_state = %{version: 0, hash: LTHash.new()}
+    patch_info = Engine.build_archive(@chat, true, 1_754_000_100)
+    assert {:ok, encoded, _, _} = Codec.encode_patch(patch_info, key_id, original_key, hash_state)
+    patch = SyncdPatch.decode!(encoded)
+
+    assert {:ok, mutations, _, _} =
+             Codec.decode_patch(patch, patch_info.type, hash_state, %{}, original_keys)
+
+    deliver(
+      ctx,
+      key_share_message(conflicting_key, 124),
+      "conflicting-share",
+      sender,
+      sender_sessions
+    )
+
+    stored_keys = Store.get(ctx.store, :app_state_keys)
+
+    assert {:ok, ^mutations, _, _} =
+             Codec.decode_patch(patch, patch_info.type, hash_state, %{}, stored_keys)
+
+    assert stored_keys == original_keys
+  end
+
   defp deliver(ctx, message, id, sender, sender_sessions) do
     plaintext = message |> ProtocolPeer.encode() |> Encryption.pad_message()
 
@@ -212,7 +251,7 @@ defmodule ExWapp.LIDSyncIntegrationTest do
     sender_sessions
   end
 
-  defp key_share_message(key) do
+  defp key_share_message(key, timestamp \\ 123) do
     alias WAWebProtobufsE2E.{
       AppStateSyncKey,
       AppStateSyncKeyData,
@@ -227,7 +266,7 @@ defmodule ExWapp.LIDSyncIntegrationTest do
           keys: [
             %AppStateSyncKey{
               keyID: %AppStateSyncKeyId{keyID: <<1, 2, 3>>},
-              keyData: %AppStateSyncKeyData{keyData: key, timestamp: 123}
+              keyData: %AppStateSyncKeyData{keyData: key, timestamp: timestamp}
             }
           ]
         }

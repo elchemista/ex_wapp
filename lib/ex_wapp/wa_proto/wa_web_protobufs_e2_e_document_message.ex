@@ -9,6 +9,7 @@ defmodule WAWebProtobufsE2E.DocumentMessage do
   end
 
   @type t :: %__MODULE__{
+          qrURL: String.t() | nil,
           accessibilityLabel: String.t() | nil,
           caption: String.t() | nil,
           thumbnailWidth: non_neg_integer() | nil,
@@ -32,7 +33,8 @@ defmodule WAWebProtobufsE2E.DocumentMessage do
           URL: String.t() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct accessibilityLabel: nil,
+  defstruct qrURL: nil,
+            accessibilityLabel: nil,
             caption: nil,
             thumbnailWidth: nil,
             thumbnailHeight: nil,
@@ -76,6 +78,7 @@ defmodule WAWebProtobufsE2E.DocumentMessage do
                 {:mediaKeyTimestamp, 11, :optional, {:scalar, 0}, :int64},
                 {:mimetype, 2, :optional, {:scalar, ""}, :string},
                 {:pageCount, 6, :optional, {:scalar, 0}, :uint32},
+                {:qrURL, 23, :optional, {:scalar, ""}, :string},
                 {:thumbnailDirectPath, 13, :optional, {:scalar, ""}, :string},
                 {:thumbnailEncSHA256, 15, :optional, {:scalar, ""}, :bytes},
                 {:thumbnailHeight, 18, :optional, {:scalar, 0}, :uint32},
@@ -135,6 +138,7 @@ defmodule WAWebProtobufsE2E.DocumentMessage do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_qrURL(msg)
         |> encode_accessibilityLabel(msg)
         |> encode_caption(msg)
         |> encode_thumbnailWidth(msg)
@@ -159,6 +163,22 @@ defmodule WAWebProtobufsE2E.DocumentMessage do
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_qrURL({acc, acc_size}, msg) do
+      case :erlang.map_get(:qrURL, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            delimited = :erlang.map_get(:qrURL, msg)
+            delimited_prefix = Protox.Encode.encode_string_prefix(delimited)
+          )
+
+          {["\xBA\x01", delimited_prefix, delimited | acc],
+           acc_size + 2 + (byte_size(delimited_prefix) + byte_size(delimited))}
+      end
+    end
 
     defp encode_accessibilityLabel({acc, acc_size}, msg) do
       case :erlang.map_get(:accessibilityLabel, msg) do
@@ -510,6 +530,7 @@ defmodule WAWebProtobufsE2E.DocumentMessage do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:qrURL, &encode_qrURL/2, nil},
           {:accessibilityLabel, &encode_accessibilityLabel/2, nil},
           {:caption, &encode_caption/2, nil},
           {:thumbnailWidth, &encode_thumbnailWidth/2, nil},
@@ -583,6 +604,11 @@ defmodule WAWebProtobufsE2E.DocumentMessage do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"\xBA\x01", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+            msg = %{msg | qrURL: Protox.Decode.validate_string!(delimited)}
+            parse_key_value(rest, msg)
 
           <<"\xAA\x01", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)

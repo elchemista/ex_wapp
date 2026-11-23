@@ -49,7 +49,7 @@ Add ExWapp and the JSON implementation of your choice to your application:
 ```elixir
 def deps do
   [
-    {:ex_wapp, "~> 0.1.6"},
+    {:ex_wapp, "~> 0.1.7"},
     {:jason, "~> 1.4"}
   ]
 end
@@ -670,11 +670,11 @@ and recovery after failures. They run without a WhatsApp account. The HTTPS
 tests require `openssl` to generate a temporary certificate authority and server
 certificate; certificate verification remains enabled.
 
-### Publishing 0.1.6 to Hex
+### Publishing 0.1.7 to Hex
 
-The release version is defined once in `mix.exs`; the installation example,
-changelog and documentation source links use the same `0.1.6` version.
-The Git tag `v0.1.6` must identify the source commit being published.
+The release version is defined in `mix.exs`. The installation example,
+changelog and documentation source links use version `0.1.7`.
+The Git tag `v0.1.7` must identify the source commit being published.
 After the checks above, maintainers can inspect the local package and perform
 a publish dry run before uploading the package and documentation:
 
@@ -687,7 +687,7 @@ mix hex.publish
 The package includes source, generated protocol modules, documentation,
 the supervised-session example and license. It excludes local dependencies,
 compiled output, tests, logs and account/session stores. The generated
-`ex_wapp-0.1.6.tar` is a local build artifact and is ignored by Git.
+`ex_wapp-0.1.7.tar` is a local build artifact and is ignored by Git.
 
 ## License
 

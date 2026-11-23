@@ -9,11 +9,40 @@ Application developers should not build against the modules described here.
 The only supported application boundary is the `ExWapp` facade operating on a
 `%ExWapp.Client{}`.
 
-## Upstream snapshot: 2026-11-12
+## Upstream snapshot: 2026-11-23
 
-The default WhatsApp Web version is `2.3000.1052556849`, verified against
+The default WhatsApp Web version is `2.3000.1054751086`, verified against
+[whatsmeow `19d6135`](https://github.com/tulir/whatsmeow/blob/19d61352436f3aeb21ad2cf93c2e3599ac409415/store/clientpayload.go)
+(commit dated 2026-11-16). The 798 generated Protox modules use that checkout.
+The [schema changes](https://github.com/tulir/whatsmeow/compare/c88388f983b4bc43dfd0bcc2b46969fcde82d61f...19d61352436f3aeb21ad2cf93c2e3599ac409415)
+add group root-key metadata, instant video and payment details, and extend
+poll replay metadata, event RSVP metadata and the client payload. The binary
+token dictionary matches the previous snapshot.
+
+Amarula's `update_wa_version.exs --check` read `2.3000.1055865300` from the
+WhatsApp Web service worker on 2026-11-23. The built-in version follows the
+same upstream snapshot as the protobuf schemas.
+
+To refresh from upstream `main`, run `scripts/update_wa_protos.sh`. To reproduce
+this snapshot, run:
+
+```bash
+UPSTREAM_REF=19d61352436f3aeb21ad2cf93c2e3599ac409415 scripts/update_wa_protos.sh
+```
+
+The updater preserves local upstream edits by refusing to overwrite a dirty
+tracked checkout. `SKIP_FETCH=1` uses the current checkout directly. Compare
+`tmp/whatsmeow_upstream/store/clientpayload.go` with `ExWapp.Config`, then update
+the verification date. The updater runs E2E, media, history, sync-action and
+snapshot wire tests. Run the full suite and maintained-code coverage afterward.
+Live pairing requires validation against a WhatsApp account.
+
+## Upstream snapshot in ExWapp 0.1.6
+
+ExWapp 0.1.6 shipped with WhatsApp Web version `2.3000.1052556849`, verified
+on 2026-11-12 against
 [whatsmeow `c88388f`](https://github.com/tulir/whatsmeow/tree/c88388f983b4bc43dfd0bcc2b46969fcde82d61f)
-(commit dated 2026-11-10). The 781 generated Protox modules use that checkout.
+(commit dated 2026-11-10). Its 781 generated Protox modules used that checkout.
 The [changes since the October snapshot](https://github.com/tulir/whatsmeow/compare/b2b1e71d45e2ff171153b025b5a42f475bb30ef8...c88388f983b4bc43dfd0bcc2b46969fcde82d61f)
 include recent-conversation history requests, music lyrics with word timings,
 HD media auto-download settings, Hatch CVM secrets, bot interjection metadata,
@@ -38,9 +67,8 @@ attestation schemas remain outside the generated entrypoints.
 The external version scanners in `send_via` and `vext` both confirmed the
 whatsmeow version above. Amarula's `update_wa_version.exs --check` also read
 `2.3000.1054270628` from the live WhatsApp service worker on 2026-11-12.
-That live revision is newer than the selected whatsmeow snapshot; the default
-stays aligned with whatsmeow. The older `check-update` endpoint returned
-`2.2413.51` and was not used to downgrade the client.
+The release followed the whatsmeow snapshot. The older `check-update` endpoint
+returned `2.2413.51`.
 
 ### Public feature additions in 0.1.6
 
@@ -100,20 +128,11 @@ facade; protobuf regeneration does not implement them. The experimental
 [`companion_reg_refresh` notification](https://github.com/tulir/whatsmeow/commit/9ec8f76db5f17712efc34a29b684a80d2dcb4aaf)
 and ADV-secret QR rotation are still unimplemented.
 
-To refresh to upstream `main`, run `scripts/update_wa_protos.sh`. To reproduce
-this snapshot, run:
+To reproduce the ExWapp 0.1.6 snapshot, run:
 
 ```bash
 UPSTREAM_REF=c88388f983b4bc43dfd0bcc2b46969fcde82d61f scripts/update_wa_protos.sh
 ```
-
-The updater preserves local upstream edits by refusing to overwrite a dirty
-tracked checkout; `SKIP_FETCH=1` uses the current checkout directly. Compare
-`tmp/whatsmeow_upstream/store/clientpayload.go` with `ExWapp.Config`, then update
-the verification date. The updater runs E2E, media, history, sync-action and
-snapshot wire tests; run the full suite and maintained-code coverage afterward.
-Version verification records the upstream value; live pairing still requires
-validation against a WhatsApp account.
 
 ## Addressing and identity
 

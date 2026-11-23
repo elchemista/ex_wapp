@@ -9,11 +9,12 @@ defmodule WAWebProtobufsE2E.MemberLabel do
   end
 
   @type t :: %__MODULE__{
+          showAdminBadge: boolean() | nil,
           labelTimestamp: integer() | nil,
           label: String.t() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct labelTimestamp: nil, label: nil, __uf__: []
+  defstruct showAdminBadge: nil, labelTimestamp: nil, label: nil, __uf__: []
 
   (
     @schema Protox.MessageSchema.expand!(
@@ -21,7 +22,8 @@ defmodule WAWebProtobufsE2E.MemberLabel do
               :proto2,
               [
                 {:label, 1, :optional, {:scalar, ""}, :string},
-                {:labelTimestamp, 2, :optional, {:scalar, 0}, :int64}
+                {:labelTimestamp, 2, :optional, {:scalar, 0}, :int64},
+                {:showAdminBadge, 3, :optional, {:scalar, false}, :bool}
               ],
               %{
                 cc_enable_arenas: nil,
@@ -74,9 +76,24 @@ defmodule WAWebProtobufsE2E.MemberLabel do
 
       @doc false
       def encode_internal!(msg) do
-        {[], 0} |> encode_labelTimestamp(msg) |> encode_label(msg) |> encode_unknown_fields(msg)
+        {[], 0}
+        |> encode_showAdminBadge(msg)
+        |> encode_labelTimestamp(msg)
+        |> encode_label(msg)
+        |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_showAdminBadge({acc, acc_size}, msg) do
+      case :erlang.map_get(:showAdminBadge, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          {["\x18", Protox.Encode.encode_bool(:erlang.map_get(:showAdminBadge, msg)) | acc],
+           acc_size + 1 + 1}
+      end
+    end
 
     defp encode_labelTimestamp({acc, acc_size}, msg) do
       case :erlang.map_get(:labelTimestamp, msg) do
@@ -112,6 +129,7 @@ defmodule WAWebProtobufsE2E.MemberLabel do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:showAdminBadge, &encode_showAdminBadge/2, nil},
           {:labelTimestamp, &encode_labelTimestamp/2, nil},
           {:label, &encode_label/2, nil}
         ])
@@ -166,6 +184,16 @@ defmodule WAWebProtobufsE2E.MemberLabel do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"\x18", 0::1, varint_value::7, rest::binary>> ->
+            value = varint_value != 0
+            msg = %{msg | showAdminBadge: value}
+            parse_key_value(rest, msg)
+
+          <<"\x18", bytes::binary>> ->
+            {value, rest} = Protox.Decode.parse_bool(bytes)
+            msg = %{msg | showAdminBadge: value}
+            parse_key_value(rest, msg)
 
           <<"\x10", 0::1, varint_value::7, rest::binary>> ->
             value = varint_value

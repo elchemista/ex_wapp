@@ -37,6 +37,10 @@ defmodule WAWebProtobufsE2E.ContextInfo.PairedMediaType do
 
   def encode(:STREAMED_VIDEO_CHILD), do: 12
 
+  def encode(:ORIGINAL_VIDEO_CHILD), do: 13
+
+  def encode(:ORIGINAL_IMAGE_CHILD), do: 14
+
   def encode(x), do: x
 
   @spec decode(integer()) :: atom() | integer()
@@ -66,6 +70,10 @@ defmodule WAWebProtobufsE2E.ContextInfo.PairedMediaType do
 
   def decode(12), do: :STREAMED_VIDEO_CHILD
 
+  def decode(13), do: :ORIGINAL_VIDEO_CHILD
+
+  def decode(14), do: :ORIGINAL_IMAGE_CHILD
+
   def decode(x), do: x
 
   @spec constants() :: [{integer(), atom()}]
@@ -83,7 +91,9 @@ defmodule WAWebProtobufsE2E.ContextInfo.PairedMediaType do
       {9, :AV1_VIDEO_PARENT},
       {10, :AV1_VIDEO_CHILD},
       {11, :STREAMED_VIDEO_PARENT},
-      {12, :STREAMED_VIDEO_CHILD}
+      {12, :STREAMED_VIDEO_CHILD},
+      {13, :ORIGINAL_VIDEO_CHILD},
+      {14, :ORIGINAL_IMAGE_CHILD}
     ]
   end
 
@@ -114,6 +124,10 @@ defmodule WAWebProtobufsE2E.ContextInfo.PairedMediaType do
     def has_constant?(:STREAMED_VIDEO_PARENT), do: true
 
     def has_constant?(:STREAMED_VIDEO_CHILD), do: true
+
+    def has_constant?(:ORIGINAL_VIDEO_CHILD), do: true
+
+    def has_constant?(:ORIGINAL_IMAGE_CHILD), do: true
 
     def has_constant?(_value), do: false
   )

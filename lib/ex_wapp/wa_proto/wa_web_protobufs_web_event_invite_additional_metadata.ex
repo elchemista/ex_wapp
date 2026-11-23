@@ -9,16 +9,33 @@ defmodule WAWebProtobufsWeb.EventInviteAdditionalMetadata do
   end
 
   @type t :: %__MODULE__{
+          selfInviteeLastUpdatedTSUsec: integer() | nil,
+          selfAdditionalGuestCount: non_neg_integer() | nil,
+          selfRsvpStatus: atom() | nil,
+          selfAccessStatus: atom() | nil,
           isUpdated: boolean() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct isUpdated: nil, __uf__: []
+  defstruct selfInviteeLastUpdatedTSUsec: nil,
+            selfAdditionalGuestCount: nil,
+            selfRsvpStatus: nil,
+            selfAccessStatus: nil,
+            isUpdated: nil,
+            __uf__: []
 
   (
     @schema Protox.MessageSchema.expand!(
               WAWebProtobufsWeb.EventInviteAdditionalMetadata,
               :proto2,
-              [{:isUpdated, 1, :optional, {:scalar, false}, :bool}],
+              [
+                {:isUpdated, 1, :optional, {:scalar, false}, :bool},
+                {:selfAccessStatus, 2, :optional, {:scalar, :ACCESS_STATUS_UNKNOWN},
+                 {:enum, WAWebProtobufsWeb.EventInviteAdditionalMetadata.AccessStatus}},
+                {:selfAdditionalGuestCount, 4, :optional, {:scalar, 0}, :uint32},
+                {:selfInviteeLastUpdatedTSUsec, 5, :optional, {:scalar, 0}, :int64},
+                {:selfRsvpStatus, 3, :optional, {:scalar, :RSVP_STATUS_UNKNOWN},
+                 {:enum, WAWebProtobufsWeb.EventInviteAdditionalMetadata.RsvpStatus}}
+              ],
               %{
                 cc_enable_arenas: nil,
                 cc_generic_services: nil,
@@ -70,9 +87,102 @@ defmodule WAWebProtobufsWeb.EventInviteAdditionalMetadata do
 
       @doc false
       def encode_internal!(msg) do
-        {[], 0} |> encode_isUpdated(msg) |> encode_unknown_fields(msg)
+        {[], 0}
+        |> encode_selfInviteeLastUpdatedTSUsec(msg)
+        |> encode_selfAdditionalGuestCount(msg)
+        |> encode_selfRsvpStatus(msg)
+        |> encode_selfAccessStatus(msg)
+        |> encode_isUpdated(msg)
+        |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_selfInviteeLastUpdatedTSUsec({acc, acc_size}, msg) do
+      case :erlang.map_get(:selfInviteeLastUpdatedTSUsec, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          value_bytes =
+            Protox.Varint.encode(
+              :erlang.band(
+                :erlang.map_get(:selfInviteeLastUpdatedTSUsec, msg),
+                18_446_744_073_709_551_615
+              )
+            )
+
+          {["(", value_bytes | acc], acc_size + 1 + byte_size(value_bytes)}
+      end
+    end
+
+    defp encode_selfAdditionalGuestCount({acc, acc_size}, msg) do
+      case :erlang.map_get(:selfAdditionalGuestCount, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            value = :erlang.map_get(:selfAdditionalGuestCount, msg)
+
+            value_bytes =
+              if value >= 0 do
+                Protox.Varint.encode(:erlang.band(value, 4_294_967_295))
+              else
+                Protox.Varint.encode(:erlang.band(value, 18_446_744_073_709_551_615))
+              end
+          )
+
+          {[" ", value_bytes | acc], acc_size + 1 + byte_size(value_bytes)}
+      end
+    end
+
+    defp encode_selfRsvpStatus({acc, acc_size}, msg) do
+      case :erlang.map_get(:selfRsvpStatus, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            value =
+              WAWebProtobufsWeb.EventInviteAdditionalMetadata.RsvpStatus.encode(
+                :erlang.map_get(:selfRsvpStatus, msg)
+              )
+
+            value_bytes =
+              if value >= 0 do
+                Protox.Varint.encode(:erlang.band(value, 4_294_967_295))
+              else
+                Protox.Varint.encode(:erlang.band(value, 18_446_744_073_709_551_615))
+              end
+          )
+
+          {["\x18", value_bytes | acc], acc_size + 1 + byte_size(value_bytes)}
+      end
+    end
+
+    defp encode_selfAccessStatus({acc, acc_size}, msg) do
+      case :erlang.map_get(:selfAccessStatus, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            value =
+              WAWebProtobufsWeb.EventInviteAdditionalMetadata.AccessStatus.encode(
+                :erlang.map_get(:selfAccessStatus, msg)
+              )
+
+            value_bytes =
+              if value >= 0 do
+                Protox.Varint.encode(:erlang.band(value, 4_294_967_295))
+              else
+                Protox.Varint.encode(:erlang.band(value, 18_446_744_073_709_551_615))
+              end
+          )
+
+          {["\x10", value_bytes | acc], acc_size + 1 + byte_size(value_bytes)}
+      end
+    end
 
     defp encode_isUpdated({acc, acc_size}, msg) do
       case :erlang.map_get(:isUpdated, msg) do
@@ -87,7 +197,13 @@ defmodule WAWebProtobufsWeb.EventInviteAdditionalMetadata do
 
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
-        Protox.Encode.find_invalid_field!(msg, [{:isUpdated, &encode_isUpdated/2, nil}])
+        Protox.Encode.find_invalid_field!(msg, [
+          {:selfInviteeLastUpdatedTSUsec, &encode_selfInviteeLastUpdatedTSUsec/2, nil},
+          {:selfAdditionalGuestCount, &encode_selfAdditionalGuestCount/2, nil},
+          {:selfRsvpStatus, &encode_selfRsvpStatus/2, nil},
+          {:selfAccessStatus, &encode_selfAccessStatus/2, nil},
+          {:isUpdated, &encode_isUpdated/2, nil}
+        ])
       end
 
       defp encode_diagnose!(_malformed_input), do: :ok
@@ -139,6 +255,60 @@ defmodule WAWebProtobufsWeb.EventInviteAdditionalMetadata do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"(", 0::1, varint_value::7, rest::binary>> ->
+            value = varint_value
+            msg = %{msg | selfInviteeLastUpdatedTSUsec: value}
+            parse_key_value(rest, msg)
+
+          <<"(", bytes::binary>> ->
+            {value, rest} = Protox.Decode.parse_int64(bytes)
+            msg = %{msg | selfInviteeLastUpdatedTSUsec: value}
+            parse_key_value(rest, msg)
+
+          <<" ", 0::1, varint_value::7, rest::binary>> ->
+            value = varint_value
+            msg = %{msg | selfAdditionalGuestCount: value}
+            parse_key_value(rest, msg)
+
+          <<" ", bytes::binary>> ->
+            {value, rest} = Protox.Decode.parse_uint32(bytes)
+            msg = %{msg | selfAdditionalGuestCount: value}
+            parse_key_value(rest, msg)
+
+          <<"\x18", 0::1, varint_value::7, rest::binary>> ->
+            value =
+              WAWebProtobufsWeb.EventInviteAdditionalMetadata.RsvpStatus.decode(varint_value)
+
+            msg = %{msg | selfRsvpStatus: value}
+            parse_key_value(rest, msg)
+
+          <<"\x18", bytes::binary>> ->
+            {value, rest} =
+              Protox.Decode.parse_enum(
+                bytes,
+                WAWebProtobufsWeb.EventInviteAdditionalMetadata.RsvpStatus
+              )
+
+            msg = %{msg | selfRsvpStatus: value}
+            parse_key_value(rest, msg)
+
+          <<"\x10", 0::1, varint_value::7, rest::binary>> ->
+            value =
+              WAWebProtobufsWeb.EventInviteAdditionalMetadata.AccessStatus.decode(varint_value)
+
+            msg = %{msg | selfAccessStatus: value}
+            parse_key_value(rest, msg)
+
+          <<"\x10", bytes::binary>> ->
+            {value, rest} =
+              Protox.Decode.parse_enum(
+                bytes,
+                WAWebProtobufsWeb.EventInviteAdditionalMetadata.AccessStatus
+              )
+
+            msg = %{msg | selfAccessStatus: value}
+            parse_key_value(rest, msg)
 
           <<"\b", 0::1, varint_value::7, rest::binary>> ->
             value = varint_value != 0

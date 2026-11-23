@@ -4,17 +4,17 @@ defmodule ExWapp.Config do
   require Logger
   alias ExWapp.Config.Validator
 
-  @default_client_version %{primary: 2, secondary: 3000, tertiary: 1_052_556_849}
+  @default_client_version %{primary: 2, secondary: 3000, tertiary: 1_054_751_086}
 
   # WhatsApp expects a client version close to what its own web client reports,
   # and this default only ages. It cannot expire on its own, so record when it
   # was verified upstream and let `client_version_status/2` report its age — a stale
   # version fails as an unexplained refusal at connect time, which is expensive
   # to diagnose from the far end.
-  # 2.3000.1052556849 is what whatsmeow ships as of c88388f (2026-11-10);
+  # 2.3000.1054751086 is what whatsmeow ships as of 19d6135 (2026-11-16);
   # scripts/update_wa_protos.sh refreshes that checkout, and
   # tmp/whatsmeow_upstream/store/clientpayload.go carries the current value.
-  @client_version_verified_on ~D[2026-11-12]
+  @client_version_verified_on ~D[2026-11-23]
   @client_version_stale_after_days 120
 
   @type runtime_cfg :: map()

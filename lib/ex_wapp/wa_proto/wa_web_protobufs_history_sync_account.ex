@@ -9,13 +9,19 @@ defmodule WAWebProtobufsHistorySync.Account do
   end
 
   @type t :: %__MODULE__{
+          pnLearnState: atom() | nil,
           isUsernameDeleted: boolean() | nil,
           countryCode: String.t() | nil,
           username: String.t() | nil,
           lid: String.t() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct isUsernameDeleted: nil, countryCode: nil, username: nil, lid: nil, __uf__: []
+  defstruct pnLearnState: nil,
+            isUsernameDeleted: nil,
+            countryCode: nil,
+            username: nil,
+            lid: nil,
+            __uf__: []
 
   (
     @schema Protox.MessageSchema.expand!(
@@ -25,6 +31,8 @@ defmodule WAWebProtobufsHistorySync.Account do
                 {:countryCode, 3, :optional, {:scalar, ""}, :string},
                 {:isUsernameDeleted, 4, :optional, {:scalar, false}, :bool},
                 {:lid, 1, :optional, {:scalar, ""}, :string},
+                {:pnLearnState, 6, :optional, {:scalar, :UNSET},
+                 {:enum, WAWebProtobufsHistorySync.Account.PnLearnState}},
                 {:username, 2, :optional, {:scalar, ""}, :string}
               ],
               %{
@@ -79,6 +87,7 @@ defmodule WAWebProtobufsHistorySync.Account do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_pnLearnState(msg)
         |> encode_isUsernameDeleted(msg)
         |> encode_countryCode(msg)
         |> encode_username(msg)
@@ -86,6 +95,30 @@ defmodule WAWebProtobufsHistorySync.Account do
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_pnLearnState({acc, acc_size}, msg) do
+      case :erlang.map_get(:pnLearnState, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            value =
+              WAWebProtobufsHistorySync.Account.PnLearnState.encode(
+                :erlang.map_get(:pnLearnState, msg)
+              )
+
+            value_bytes =
+              if value >= 0 do
+                Protox.Varint.encode(:erlang.band(value, 4_294_967_295))
+              else
+                Protox.Varint.encode(:erlang.band(value, 18_446_744_073_709_551_615))
+              end
+          )
+
+          {["0", value_bytes | acc], acc_size + 1 + byte_size(value_bytes)}
+      end
+    end
 
     defp encode_isUsernameDeleted({acc, acc_size}, msg) do
       case :erlang.map_get(:isUsernameDeleted, msg) do
@@ -149,6 +182,7 @@ defmodule WAWebProtobufsHistorySync.Account do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:pnLearnState, &encode_pnLearnState/2, nil},
           {:isUsernameDeleted, &encode_isUsernameDeleted/2, nil},
           {:countryCode, &encode_countryCode/2, nil},
           {:username, &encode_username/2, nil},
@@ -205,6 +239,18 @@ defmodule WAWebProtobufsHistorySync.Account do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"0", 0::1, varint_value::7, rest::binary>> ->
+            value = WAWebProtobufsHistorySync.Account.PnLearnState.decode(varint_value)
+            msg = %{msg | pnLearnState: value}
+            parse_key_value(rest, msg)
+
+          <<"0", bytes::binary>> ->
+            {value, rest} =
+              Protox.Decode.parse_enum(bytes, WAWebProtobufsHistorySync.Account.PnLearnState)
+
+            msg = %{msg | pnLearnState: value}
+            parse_key_value(rest, msg)
 
           <<" ", 0::1, varint_value::7, rest::binary>> ->
             value = varint_value != 0

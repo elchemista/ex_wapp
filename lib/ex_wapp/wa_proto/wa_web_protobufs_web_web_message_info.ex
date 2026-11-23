@@ -9,6 +9,7 @@ defmodule WAWebProtobufsWeb.WebMessageInfo do
   end
 
   @type t :: %__MODULE__{
+          groupHistoryLastCountedMessageTimestamp: non_neg_integer() | nil,
           eventInviteAdditionalMetadata:
             WAWebProtobufsWeb.EventInviteAdditionalMetadata.t() | nil,
           decisionSources: [String.t()],
@@ -87,7 +88,8 @@ defmodule WAWebProtobufsWeb.WebMessageInfo do
           key: WACommon.MessageKey.t() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct eventInviteAdditionalMetadata: nil,
+  defstruct groupHistoryLastCountedMessageTimestamp: nil,
+            eventInviteAdditionalMetadata: nil,
             decisionSources: [],
             decisionID: nil,
             scheduledMessageMetadata: nil,
@@ -197,6 +199,7 @@ defmodule WAWebProtobufsWeb.WebMessageInfo do
                  {:message, WAWebProtobufsWeb.GroupHistoryBundleInfo}},
                 {:groupHistoryIndividualMessageInfo, 74, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsWeb.GroupHistoryIndividualMessageInfo}},
+                {:groupHistoryLastCountedMessageTimestamp, 85, :optional, {:scalar, 0}, :uint64},
                 {:hsmTag, 79, :optional, {:scalar, ""}, :string},
                 {:ignore, 16, :optional, {:scalar, false}, :bool},
                 {:interactiveMessageAdditionalMetadata, 76, :optional, {:scalar, nil},
@@ -323,6 +326,7 @@ defmodule WAWebProtobufsWeb.WebMessageInfo do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_groupHistoryLastCountedMessageTimestamp(msg)
         |> encode_eventInviteAdditionalMetadata(msg)
         |> encode_decisionSources(msg)
         |> encode_decisionID(msg)
@@ -399,6 +403,24 @@ defmodule WAWebProtobufsWeb.WebMessageInfo do
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_groupHistoryLastCountedMessageTimestamp({acc, acc_size}, msg) do
+      case :erlang.map_get(:groupHistoryLastCountedMessageTimestamp, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          value_bytes =
+            Protox.Varint.encode(
+              :erlang.band(
+                :erlang.map_get(:groupHistoryLastCountedMessageTimestamp, msg),
+                18_446_744_073_709_551_615
+              )
+            )
+
+          {["\xA8\x05", value_bytes | acc], acc_size + 2 + byte_size(value_bytes)}
+      end
+    end
 
     defp encode_eventInviteAdditionalMetadata({acc, acc_size}, msg) do
       case :erlang.map_get(:eventInviteAdditionalMetadata, msg) do
@@ -1785,6 +1807,8 @@ defmodule WAWebProtobufsWeb.WebMessageInfo do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:groupHistoryLastCountedMessageTimestamp,
+           &encode_groupHistoryLastCountedMessageTimestamp/2, nil},
           {:eventInviteAdditionalMetadata, &encode_eventInviteAdditionalMetadata/2,
            WAWebProtobufsWeb.EventInviteAdditionalMetadata},
           {:decisionSources, &encode_decisionSources/2, nil},
@@ -1997,6 +2021,16 @@ defmodule WAWebProtobufsWeb.WebMessageInfo do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"\xA8\x05", 0::1, varint_value::7, rest::binary>> ->
+            value = varint_value
+            msg = %{msg | groupHistoryLastCountedMessageTimestamp: value}
+            parse_key_value(rest, msg)
+
+          <<"\xA8\x05", bytes::binary>> ->
+            {value, rest} = Protox.Decode.parse_uint64(bytes)
+            msg = %{msg | groupHistoryLastCountedMessageTimestamp: value}
+            parse_key_value(rest, msg)
 
           <<"\xA2\x05", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.7 — 2026-11-23
+
+### Changed
+
+- Update the default WhatsApp Web client version to `2.3000.1054751086` and
+  regenerate 798 Protox modules from whatsmeow `19d6135`, verified on 2026-11-23.
+
+### Fixed
+
+- Preserve stored app-state keys when a key share carries different data for
+  the same key ID.
+- Preserve `hosted.lid` device addresses when converting between wire and
+  string JIDs.
+- Close the WebSocket after a 10-second socket send timeout so the session
+  can reconnect.
+
 ## 0.1.6 — 2026-11-12
 
 ### Added

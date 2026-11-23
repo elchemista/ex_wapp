@@ -545,6 +545,8 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
 
   def encode(:POLL_ADDED_OPTION_REMOVED), do: 291
 
+  def encode(:GROUP_CUSTOM_REACTIONS), do: 293
+
   def encode(x), do: x
 
   @spec decode(integer()) :: atom() | integer()
@@ -1040,6 +1042,8 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
 
   def decode(102), do: :BLUE_MSG_TO_CONSUMER
 
+  def decode(293), do: :GROUP_CUSTOM_REACTIONS
+
   def decode(22), do: :GROUP_CHANGE_ICON
 
   def decode(50), do: :PAYMENT_TRANSACTION_STATUS_UPDATE_REFUNDED
@@ -1353,7 +1357,8 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
       {285, :META_AI_CONNECTOR_LINKED},
       {289, :SPLIT_PAYMENT_MARKED_AS_PAID},
       {290, :POLL_OPTIONS_REMOVED},
-      {291, :POLL_ADDED_OPTION_REMOVED}
+      {291, :POLL_ADDED_OPTION_REMOVED},
+      {293, :GROUP_CUSTOM_REACTIONS}
     ]
   end
 
@@ -1892,6 +1897,8 @@ defmodule WAWebProtobufsWeb.WebMessageInfo.StubType do
     def has_constant?(:POLL_OPTIONS_REMOVED), do: true
 
     def has_constant?(:POLL_ADDED_OPTION_REMOVED), do: true
+
+    def has_constant?(:GROUP_CUSTOM_REACTIONS), do: true
 
     def has_constant?(_value), do: false
   )

@@ -399,11 +399,21 @@ defmodule ExWapp.Message.Handler.Inbound.Sync do
       {:ok, key_id, key_data_bin, timestamp, fingerprint} ->
         key_id_hex = Base.encode16(key_id, case: :lower)
 
-        Map.put(acc, key_id_hex, %{
-          data: key_data_bin,
-          timestamp: timestamp,
-          fingerprint: fingerprint
-        })
+        case Map.get(acc, key_id_hex) do
+          %{data: <<_::256>> = stored_key} when stored_key != key_data_bin ->
+            Logger.warning(
+              "[APP_STATE] Ignoring conflicting data for key id=#{Log.reference(key_id_hex)}"
+            )
+
+            acc
+
+          _ ->
+            Map.put(acc, key_id_hex, %{
+              data: key_data_bin,
+              timestamp: timestamp,
+              fingerprint: fingerprint
+            })
+        end
 
       :error ->
         Logger.warning("[APP_STATE] Skipping malformed key: #{Log.term_summary(key)}")
