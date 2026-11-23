@@ -78,12 +78,23 @@ defmodule ExWapp.JIDProtocolParityTest do
       assert JID.actual_agent(parsed) == 128
     end
 
-    test "uncommon hosted agent bytes survive a wire round-trip unchanged" do
-      # 129 (hosted.lid in the references) must not be rewritten into plain
-      # hosted by a decode/encode cycle.
-      decoded = JID.new_ad("1234", 129, 2)
-      assert %JID{server: "hosted", raw_agent: 129} = decoded
-      assert JID.actual_agent(decoded) == 129
+    test "hosted LID keeps agent 129 through binary and string forms" do
+      legacy_jid = %JID{user: "1234", device: 99, server: "hosted", raw_agent: 129}
+      encoded = ExWapp.Binary.encode!({"receipt", %{"from" => legacy_jid}, nil})
+      jid = ExWapp.Binary.decode!(encoded).attrs["from"]
+
+      assert %JID{user: "1234", device: 99, server: "hosted.lid", raw_agent: 0} = jid
+      assert JID.to_string(jid) == "1234:99@hosted.lid"
+      assert JID.to_string(legacy_jid) == "1234:99@hosted.lid"
+      assert {:ok, ^jid} = JID.parse("1234:99@hosted.lid")
+      assert JID.actual_agent(jid) == 129
+      assert ExWapp.Binary.encode!({"receipt", %{"from" => "1234:99@hosted.lid"}, nil}) == encoded
+    end
+
+    test "unknown agents keep their wire byte" do
+      jid = JID.new_ad("1234", 130, 2)
+      assert %JID{server: "hosted", raw_agent: 130} = jid
+      assert JID.actual_agent(jid) == 130
     end
 
     test "renders device and hosted forms deterministically" do

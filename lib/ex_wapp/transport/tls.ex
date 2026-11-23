@@ -1,11 +1,13 @@
 defmodule ExWapp.Transport.TLS do
   @moduledoc false
 
+  @websocket_write_options [send_timeout: 10_000, send_timeout_close: true]
+
   @spec websockex_options(String.t()) :: keyword()
   def websockex_options(url) when is_binary(url) do
     case ssl_options(url) do
       [] ->
-        []
+        [socket_options: @websocket_write_options]
 
       ssl_options ->
         # WebSockex defaults to no peer verification. Supplying explicit SSL
@@ -13,7 +15,7 @@ defmodule ExWapp.Transport.TLS do
         [
           insecure: false,
           cacerts: Keyword.fetch!(ssl_options, :cacerts),
-          ssl_options: ssl_options
+          ssl_options: ssl_options ++ @websocket_write_options
         ]
     end
   end

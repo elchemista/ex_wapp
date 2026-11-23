@@ -9,6 +9,8 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
   end
 
   @type t :: %__MODULE__{
+          phoneNumberSharing:
+            WAWebProtobufsDeviceCapabilities.DeviceCapabilities.PhoneNumberSharing.t() | nil,
           bizAiWebOnboarding:
             WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BizAiWebOnboarding.t() | nil,
           hostWriteMutationSupport:
@@ -34,7 +36,8 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
           chatLockSupportLevel: atom() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct bizAiWebOnboarding: nil,
+  defstruct phoneNumberSharing: nil,
+            bizAiWebOnboarding: nil,
             hostWriteMutationSupport: nil,
             newsletterChatsMigration: nil,
             reverseHistorySync: nil,
@@ -80,6 +83,9 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
                 {:newsletterChatsMigration, 11, :optional, {:scalar, nil},
                  {:message,
                   WAWebProtobufsDeviceCapabilities.DeviceCapabilities.NewsletterChatsMigration}},
+                {:phoneNumberSharing, 14, :optional, {:scalar, nil},
+                 {:message,
+                  WAWebProtobufsDeviceCapabilities.DeviceCapabilities.PhoneNumberSharing}},
                 {:reverseHistorySync, 10, :optional, {:scalar, nil},
                  {:message,
                   WAWebProtobufsDeviceCapabilities.DeviceCapabilities.ReverseHistorySync}},
@@ -138,6 +144,7 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_phoneNumberSharing(msg)
         |> encode_bizAiWebOnboarding(msg)
         |> encode_hostWriteMutationSupport(msg)
         |> encode_newsletterChatsMigration(msg)
@@ -154,6 +161,29 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_phoneNumberSharing({acc, acc_size}, msg) do
+      case :erlang.map_get(:phoneNumberSharing, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            %{__struct__: WAWebProtobufsDeviceCapabilities.DeviceCapabilities.PhoneNumberSharing} =
+              child = :erlang.map_get(:phoneNumberSharing, msg)
+
+            {child_bytes, child_size} =
+              WAWebProtobufsDeviceCapabilities.DeviceCapabilities.PhoneNumberSharing.encode_internal!(
+                child
+              )
+
+            child_size_bytes = Protox.Varint.encode(child_size)
+          )
+
+          {["r", child_size_bytes, child_bytes | acc],
+           acc_size + 1 + (byte_size(child_size_bytes) + child_size)}
+      end
+    end
 
     defp encode_bizAiWebOnboarding({acc, acc_size}, msg) do
       case :erlang.map_get(:bizAiWebOnboarding, msg) do
@@ -461,6 +491,8 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:phoneNumberSharing, &encode_phoneNumberSharing/2,
+           WAWebProtobufsDeviceCapabilities.DeviceCapabilities.PhoneNumberSharing},
           {:bizAiWebOnboarding, &encode_bizAiWebOnboarding/2,
            WAWebProtobufsDeviceCapabilities.DeviceCapabilities.BizAiWebOnboarding},
           {:hostWriteMutationSupport, &encode_hostWriteMutationSupport/2,
@@ -537,6 +569,30 @@ defmodule WAWebProtobufsDeviceCapabilities.DeviceCapabilities do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"r", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | phoneNumberSharing:
+                  case :erlang.map_get(:phoneNumberSharing, msg) do
+                    nil ->
+                      WAWebProtobufsDeviceCapabilities.DeviceCapabilities.PhoneNumberSharing.decode!(
+                        delimited
+                      )
+
+                    previous_value ->
+                      Protox.MergeMessage.merge(
+                        previous_value,
+                        WAWebProtobufsDeviceCapabilities.DeviceCapabilities.PhoneNumberSharing.decode!(
+                          delimited
+                        )
+                      )
+                  end
+            }
+
+            parse_key_value(rest, msg)
 
           <<"j", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)

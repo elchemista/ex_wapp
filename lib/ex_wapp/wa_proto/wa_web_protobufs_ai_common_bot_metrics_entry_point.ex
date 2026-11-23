@@ -113,6 +113,8 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
 
   def encode(:SHARE), do: 59
 
+  def encode(:BIRTHDAY_BANNER), do: 60
+
   def encode(x), do: x
 
   @spec decode(integer()) :: atom() | integer()
@@ -171,6 +173,8 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
   def decode(25), do: :AIVOICE_FAVICON_CALL_HISTORY
 
   def decode(28), do: :ASK_META_AI_CONTEXT_MENU_GROUP
+
+  def decode(60), do: :BIRTHDAY_BANNER
 
   def decode(20), do: :AI_DEEPLINK_IMMERSIVE
 
@@ -273,7 +277,8 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
       {56, :NEW_CHAT_LIST},
       {57, :CONTACTS_TAB},
       {58, :NEW_3P_AGENT_CREATION},
-      {59, :SHARE}
+      {59, :SHARE},
+      {60, :BIRTHDAY_BANNER}
     ]
   end
 
@@ -380,6 +385,8 @@ defmodule WAWebProtobufsAICommon.BotMetricsEntryPoint do
     def has_constant?(:NEW_3P_AGENT_CREATION), do: true
 
     def has_constant?(:SHARE), do: true
+
+    def has_constant?(:BIRTHDAY_BANNER), do: true
 
     def has_constant?(_value), do: false
   )

@@ -9,6 +9,9 @@ defmodule WAWebProtobufsE2E.Message do
   end
 
   @type t :: %__MODULE__{
+          paymentDetailsMessage: WAWebProtobufsE2E.PaymentDetailsMessage.t() | nil,
+          instantVideoMessage: WAWebProtobufsE2E.VideoMessage.t() | nil,
+          vpcRequestMessage: WAWebProtobufsE2E.VpcRequestMessage.t() | nil,
           requestLocationUpdateMessage: WAWebProtobufsE2E.RequestLocationUpdateMessage.t() | nil,
           botGroupParticipantMessage: WAWebProtobufsE2E.FutureProofMessage.t() | nil,
           requestLocationMessage: WAWebProtobufsE2E.RequestLocationMessage.t() | nil,
@@ -131,7 +134,10 @@ defmodule WAWebProtobufsE2E.Message do
           conversation: String.t() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct requestLocationUpdateMessage: nil,
+  defstruct paymentDetailsMessage: nil,
+            instantVideoMessage: nil,
+            vpcRequestMessage: nil,
+            requestLocationUpdateMessage: nil,
             botGroupParticipantMessage: nil,
             requestLocationMessage: nil,
             instantImageMessage: nil,
@@ -342,6 +348,8 @@ defmodule WAWebProtobufsE2E.Message do
                  {:message, WAWebProtobufsE2E.ImageMessage}},
                 {:instantImageMessage, 135, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsE2E.ImageMessage}},
+                {:instantVideoMessage, 140, :optional, {:scalar, nil},
+                 {:message, WAWebProtobufsE2E.VideoMessage}},
                 {:interactiveMessage, 45, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsE2E.InteractiveMessage}},
                 {:interactiveResponseMessage, 48, :optional, {:scalar, nil},
@@ -382,6 +390,8 @@ defmodule WAWebProtobufsE2E.Message do
                  {:message, WAWebProtobufsE2E.FutureProofMessage}},
                 {:orderMessage, 38, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsE2E.OrderMessage}},
+                {:paymentDetailsMessage, 141, :optional, {:scalar, nil},
+                 {:message, WAWebProtobufsE2E.PaymentDetailsMessage}},
                 {:paymentInviteMessage, 44, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsE2E.PaymentInviteMessage}},
                 {:paymentReminderMessage, 124, :optional, {:scalar, nil},
@@ -485,7 +495,9 @@ defmodule WAWebProtobufsE2E.Message do
                 {:viewOnceMessageV2, 55, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsE2E.FutureProofMessage}},
                 {:viewOnceMessageV2Extension, 59, :optional, {:scalar, nil},
-                 {:message, WAWebProtobufsE2E.FutureProofMessage}}
+                 {:message, WAWebProtobufsE2E.FutureProofMessage}},
+                {:vpcRequestMessage, 139, :optional, {:scalar, nil},
+                 {:message, WAWebProtobufsE2E.VpcRequestMessage}}
               ],
               %{
                 cc_enable_arenas: nil,
@@ -539,6 +551,9 @@ defmodule WAWebProtobufsE2E.Message do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_paymentDetailsMessage(msg)
+        |> encode_instantVideoMessage(msg)
+        |> encode_vpcRequestMessage(msg)
         |> encode_requestLocationUpdateMessage(msg)
         |> encode_botGroupParticipantMessage(msg)
         |> encode_requestLocationMessage(msg)
@@ -659,6 +674,67 @@ defmodule WAWebProtobufsE2E.Message do
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_paymentDetailsMessage({acc, acc_size}, msg) do
+      case :erlang.map_get(:paymentDetailsMessage, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            %{__struct__: WAWebProtobufsE2E.PaymentDetailsMessage} =
+              child = :erlang.map_get(:paymentDetailsMessage, msg)
+
+            {child_bytes, child_size} =
+              WAWebProtobufsE2E.PaymentDetailsMessage.encode_internal!(child)
+
+            child_size_bytes = Protox.Varint.encode(child_size)
+          )
+
+          {["\xEA\b", child_size_bytes, child_bytes | acc],
+           acc_size + 2 + (byte_size(child_size_bytes) + child_size)}
+      end
+    end
+
+    defp encode_instantVideoMessage({acc, acc_size}, msg) do
+      case :erlang.map_get(:instantVideoMessage, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            %{__struct__: WAWebProtobufsE2E.VideoMessage} =
+              child = :erlang.map_get(:instantVideoMessage, msg)
+
+            {child_bytes, child_size} = WAWebProtobufsE2E.VideoMessage.encode_internal!(child)
+            child_size_bytes = Protox.Varint.encode(child_size)
+          )
+
+          {["\xE2\b", child_size_bytes, child_bytes | acc],
+           acc_size + 2 + (byte_size(child_size_bytes) + child_size)}
+      end
+    end
+
+    defp encode_vpcRequestMessage({acc, acc_size}, msg) do
+      case :erlang.map_get(:vpcRequestMessage, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            %{__struct__: WAWebProtobufsE2E.VpcRequestMessage} =
+              child = :erlang.map_get(:vpcRequestMessage, msg)
+
+            {child_bytes, child_size} =
+              WAWebProtobufsE2E.VpcRequestMessage.encode_internal!(child)
+
+            child_size_bytes = Protox.Varint.encode(child_size)
+          )
+
+          {["\xDA\b", child_size_bytes, child_bytes | acc],
+           acc_size + 2 + (byte_size(child_size_bytes) + child_size)}
+      end
+    end
 
     defp encode_requestLocationUpdateMessage({acc, acc_size}, msg) do
       case :erlang.map_get(:requestLocationUpdateMessage, msg) do
@@ -3059,6 +3135,10 @@ defmodule WAWebProtobufsE2E.Message do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:paymentDetailsMessage, &encode_paymentDetailsMessage/2,
+           WAWebProtobufsE2E.PaymentDetailsMessage},
+          {:instantVideoMessage, &encode_instantVideoMessage/2, WAWebProtobufsE2E.VideoMessage},
+          {:vpcRequestMessage, &encode_vpcRequestMessage/2, WAWebProtobufsE2E.VpcRequestMessage},
           {:requestLocationUpdateMessage, &encode_requestLocationUpdateMessage/2,
            WAWebProtobufsE2E.RequestLocationUpdateMessage},
           {:botGroupParticipantMessage, &encode_botGroupParticipantMessage/2,
@@ -3304,6 +3384,66 @@ defmodule WAWebProtobufsE2E.Message do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"\xEA\b", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | paymentDetailsMessage:
+                  case :erlang.map_get(:paymentDetailsMessage, msg) do
+                    nil ->
+                      WAWebProtobufsE2E.PaymentDetailsMessage.decode!(delimited)
+
+                    previous_value ->
+                      Protox.MergeMessage.merge(
+                        previous_value,
+                        WAWebProtobufsE2E.PaymentDetailsMessage.decode!(delimited)
+                      )
+                  end
+            }
+
+            parse_key_value(rest, msg)
+
+          <<"\xE2\b", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | instantVideoMessage:
+                  case :erlang.map_get(:instantVideoMessage, msg) do
+                    nil ->
+                      WAWebProtobufsE2E.VideoMessage.decode!(delimited)
+
+                    previous_value ->
+                      Protox.MergeMessage.merge(
+                        previous_value,
+                        WAWebProtobufsE2E.VideoMessage.decode!(delimited)
+                      )
+                  end
+            }
+
+            parse_key_value(rest, msg)
+
+          <<"\xDA\b", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | vpcRequestMessage:
+                  case :erlang.map_get(:vpcRequestMessage, msg) do
+                    nil ->
+                      WAWebProtobufsE2E.VpcRequestMessage.decode!(delimited)
+
+                    previous_value ->
+                      Protox.MergeMessage.merge(
+                        previous_value,
+                        WAWebProtobufsE2E.VpcRequestMessage.decode!(delimited)
+                      )
+                  end
+            }
+
+            parse_key_value(rest, msg)
 
           <<"\xD2\b", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)

@@ -12,6 +12,7 @@ defmodule ExWapp.JID do
   @messenger_server "msgr"
   @interop_server "interop"
   @hosted_server "hosted"
+  @hosted_lid_server "hosted.lid"
 
   defstruct user: "", raw_agent: 0, device: 0, integrator: 0, server: @default_user_server
 
@@ -28,6 +29,7 @@ defmodule ExWapp.JID do
   def broadcast_server, do: @broadcast_server
   def hidden_user_server, do: @hidden_user_server
   def hosted_server, do: @hosted_server
+  def hosted_lid_server, do: @hosted_lid_server
   def messenger_server, do: @messenger_server
   def interop_server, do: @interop_server
 
@@ -101,12 +103,10 @@ defmodule ExWapp.JID do
       case agent do
         0 -> {@default_user_server, 0}
         1 -> {@hidden_user_server, 0}
-        # 128 is the canonical hosted domain type; folding it to 0 makes a JID
-        # decoded off the wire compare equal to the same JID parsed from a
-        # string, while actual_agent/1 restores the byte on the way out. Other
-        # values (129, ...) are preserved verbatim so re-encoding cannot
-        # silently rewrite them into plain hosted.
+        # Canonical domains match parse/1. Unknown agents retain their wire
+        # byte for re-encoding.
         128 -> {@hosted_server, 0}
+        129 -> {@hosted_lid_server, 0}
         _ -> {@hosted_server, agent}
       end
 
@@ -115,11 +115,8 @@ defmodule ExWapp.JID do
 
   def actual_agent(%__MODULE__{server: @default_user_server}), do: 0
   def actual_agent(%__MODULE__{server: @hidden_user_server}), do: 1
-  # A hosted JID that came through string form has no agent byte to carry —
-  # parse/1 has no syntax for one — yet agent 0 on the wire means
-  # s.whatsapp.net, silently rerouting the recipient to the wrong server
-  # class. 128 is the domain type WhatsApp assigns to hosted accounts.
   def actual_agent(%__MODULE__{server: @hosted_server, raw_agent: 0}), do: 128
+  def actual_agent(%__MODULE__{server: @hosted_lid_server}), do: 129
   def actual_agent(%__MODULE__{raw_agent: agent}), do: agent
 
   def with_device(%__MODULE__{} = jid, device) do
@@ -141,10 +138,13 @@ defmodule ExWapp.JID do
   end
 
   def to_string(%__MODULE__{user: user, raw_agent: agent, device: device, server: server}) do
-    # The hosted server name already encodes the agent, and parse/1 has no
-    # syntax to read one back — emitting "user.128:2@hosted" would produce a
-    # string this module cannot round-trip.
-    agent = if server == @hosted_server, do: 0, else: agent
+    # Older stores may still have a hosted JID with an explicit agent.
+    {server, agent} =
+      case {server, agent} do
+        {@hosted_server, 129} -> {@hosted_lid_server, 0}
+        {@hosted_server, _} -> {@hosted_server, 0}
+        _ -> {server, agent}
+      end
 
     cond do
       agent == 0 and device == 0 ->

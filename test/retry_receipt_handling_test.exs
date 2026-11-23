@@ -3,6 +3,7 @@ defmodule ExWapp.RetryReceiptHandlingTest do
   use ExUnit.Case, async: false
 
   alias ExWapp.Binary.Node
+  alias ExWapp.{Binary, JID}
   alias ExWapp.Message.Handler.Receipt
   alias ExWapp.MessageHandler
   alias ExWapp.Session.OutboundQueue
@@ -66,6 +67,21 @@ defmodule ExWapp.RetryReceiptHandlingTest do
                "recipient" => "15550009999@s.whatsapp.net"
              }
            } = meta.ack_node
+  end
+
+  test "hosted LID retry receipts preserve the domain in the resend and device ACK" do
+    attrs = %{
+      "from" => JID.new_ad("15550001111", 129, 99),
+      "id" => "hosted-retry",
+      "type" => "retry"
+    }
+
+    node = %Node{tag: "receipt", attrs: attrs} |> Binary.encode!() |> Binary.decode!()
+
+    assert {:ok, _, [{:retry_outgoing_message, "15550001111@hosted.lid", "hosted-retry", meta}]} =
+             Receipt.handle_receipt(node, self(), %{})
+
+    assert %Node{tag: "ack", attrs: %{"to" => "15550001111:99@hosted.lid"}} = meta.ack_node
   end
 
   test "retry child id wins over the receipt id and group retries keep the participant" do

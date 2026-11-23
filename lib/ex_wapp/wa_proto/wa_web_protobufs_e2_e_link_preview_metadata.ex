@@ -9,6 +9,7 @@ defmodule WAWebProtobufsE2E.LinkPreviewMetadata do
   end
 
   @type t :: %__MODULE__{
+          videoID: String.t() | nil,
           videoContentCaption: String.t() | nil,
           musicMetadata: WAWebProtobufsE2E.EmbeddedMusic.t() | nil,
           videoContentURL: String.t() | nil,
@@ -20,7 +21,8 @@ defmodule WAWebProtobufsE2E.LinkPreviewMetadata do
           paymentLinkMetadata: WAWebProtobufsE2E.PaymentLinkMetadata.t() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct videoContentCaption: nil,
+  defstruct videoID: nil,
+            videoContentCaption: nil,
             musicMetadata: nil,
             videoContentURL: nil,
             linkInlineVideoMuted: nil,
@@ -48,7 +50,8 @@ defmodule WAWebProtobufsE2E.LinkPreviewMetadata do
                 {:urlMetadata, 2, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsE2E.URLMetadata}},
                 {:videoContentCaption, 9, :optional, {:scalar, ""}, :string},
-                {:videoContentURL, 7, :optional, {:scalar, ""}, :string}
+                {:videoContentURL, 7, :optional, {:scalar, ""}, :string},
+                {:videoID, 10, :optional, {:scalar, ""}, :string}
               ],
               %{
                 cc_enable_arenas: nil,
@@ -102,6 +105,7 @@ defmodule WAWebProtobufsE2E.LinkPreviewMetadata do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_videoID(msg)
         |> encode_videoContentCaption(msg)
         |> encode_musicMetadata(msg)
         |> encode_videoContentURL(msg)
@@ -114,6 +118,22 @@ defmodule WAWebProtobufsE2E.LinkPreviewMetadata do
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_videoID({acc, acc_size}, msg) do
+      case :erlang.map_get(:videoID, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            delimited = :erlang.map_get(:videoID, msg)
+            delimited_prefix = Protox.Encode.encode_string_prefix(delimited)
+          )
+
+          {["R", delimited_prefix, delimited | acc],
+           acc_size + 1 + (byte_size(delimited_prefix) + byte_size(delimited))}
+      end
+    end
 
     defp encode_videoContentCaption({acc, acc_size}, msg) do
       case :erlang.map_get(:videoContentCaption, msg) do
@@ -286,6 +306,7 @@ defmodule WAWebProtobufsE2E.LinkPreviewMetadata do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:videoID, &encode_videoID/2, nil},
           {:videoContentCaption, &encode_videoContentCaption/2, nil},
           {:musicMetadata, &encode_musicMetadata/2, WAWebProtobufsE2E.EmbeddedMusic},
           {:videoContentURL, &encode_videoContentURL/2, nil},
@@ -348,6 +369,11 @@ defmodule WAWebProtobufsE2E.LinkPreviewMetadata do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"R", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+            msg = %{msg | videoID: Protox.Decode.validate_string!(delimited)}
+            parse_key_value(rest, msg)
 
           <<"J", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)

@@ -9,6 +9,10 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
   end
 
   @type t :: %__MODULE__{
+          groupRootKeyShare: WAWebProtobufsE2E.GroupRootKeyShare.t() | nil,
+          membershipFormKeyFingerprintVerification:
+            WAWebProtobufsE2E.MembershipFormKeyFingerprintVerification.t() | nil,
+          groupRootKeyRequest: WAWebProtobufsE2E.GroupRootKeyRequest.t() | nil,
           additionalPromptIDs: [String.t()],
           sharedDeviceContactHashKeyRequest:
             WAWebProtobufsE2E.SharedDeviceContactHashKeyRequest.t() | nil,
@@ -54,7 +58,10 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
           key: WACommon.MessageKey.t() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct additionalPromptIDs: [],
+  defstruct groupRootKeyShare: nil,
+            membershipFormKeyFingerprintVerification: nil,
+            groupRootKeyRequest: nil,
+            additionalPromptIDs: [],
             sharedDeviceContactHashKeyRequest: nil,
             sharedDeviceContactHashKeyShare: nil,
             acp2Setting: nil,
@@ -125,6 +132,10 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
                  {:message, WAWebProtobufsE2E.Message}},
                 {:ephemeralExpiration, 4, :optional, {:scalar, 0}, :uint32},
                 {:ephemeralSettingTimestamp, 5, :optional, {:scalar, 0}, :int64},
+                {:groupRootKeyRequest, 39, :optional, {:scalar, nil},
+                 {:message, WAWebProtobufsE2E.GroupRootKeyRequest}},
+                {:groupRootKeyShare, 41, :optional, {:scalar, nil},
+                 {:message, WAWebProtobufsE2E.GroupRootKeyShare}},
                 {:historySyncNotification, 6, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsE2E.HistorySyncNotification}},
                 {:initialSecurityNotificationSettingSync, 9, :optional, {:scalar, nil},
@@ -140,6 +151,8 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
                  {:message, WAWebProtobufsE2E.MediaNotifyMessage}},
                 {:memberLabel, 27, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsE2E.MemberLabel}},
+                {:membershipFormKeyFingerprintVerification, 40, :optional, {:scalar, nil},
+                 {:message, WAWebProtobufsE2E.MembershipFormKeyFingerprintVerification}},
                 {:peerDataOperationRequestMessage, 16, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsE2E.PeerDataOperationRequestMessage}},
                 {:peerDataOperationRequestResponseMessage, 17, :optional, {:scalar, nil},
@@ -206,6 +219,9 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_groupRootKeyShare(msg)
+        |> encode_membershipFormKeyFingerprintVerification(msg)
+        |> encode_groupRootKeyRequest(msg)
         |> encode_additionalPromptIDs(msg)
         |> encode_sharedDeviceContactHashKeyRequest(msg)
         |> encode_sharedDeviceContactHashKeyShare(msg)
@@ -243,6 +259,69 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_groupRootKeyShare({acc, acc_size}, msg) do
+      case :erlang.map_get(:groupRootKeyShare, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            %{__struct__: WAWebProtobufsE2E.GroupRootKeyShare} =
+              child = :erlang.map_get(:groupRootKeyShare, msg)
+
+            {child_bytes, child_size} =
+              WAWebProtobufsE2E.GroupRootKeyShare.encode_internal!(child)
+
+            child_size_bytes = Protox.Varint.encode(child_size)
+          )
+
+          {["\xCA\x02", child_size_bytes, child_bytes | acc],
+           acc_size + 2 + (byte_size(child_size_bytes) + child_size)}
+      end
+    end
+
+    defp encode_membershipFormKeyFingerprintVerification({acc, acc_size}, msg) do
+      case :erlang.map_get(:membershipFormKeyFingerprintVerification, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            %{__struct__: WAWebProtobufsE2E.MembershipFormKeyFingerprintVerification} =
+              child = :erlang.map_get(:membershipFormKeyFingerprintVerification, msg)
+
+            {child_bytes, child_size} =
+              WAWebProtobufsE2E.MembershipFormKeyFingerprintVerification.encode_internal!(child)
+
+            child_size_bytes = Protox.Varint.encode(child_size)
+          )
+
+          {["\xC2\x02", child_size_bytes, child_bytes | acc],
+           acc_size + 2 + (byte_size(child_size_bytes) + child_size)}
+      end
+    end
+
+    defp encode_groupRootKeyRequest({acc, acc_size}, msg) do
+      case :erlang.map_get(:groupRootKeyRequest, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            %{__struct__: WAWebProtobufsE2E.GroupRootKeyRequest} =
+              child = :erlang.map_get(:groupRootKeyRequest, msg)
+
+            {child_bytes, child_size} =
+              WAWebProtobufsE2E.GroupRootKeyRequest.encode_internal!(child)
+
+            child_size_bytes = Protox.Varint.encode(child_size)
+          )
+
+          {["\xBA\x02", child_size_bytes, child_bytes | acc],
+           acc_size + 2 + (byte_size(child_size_bytes) + child_size)}
+      end
+    end
 
     defp encode_additionalPromptIDs({acc, acc_size}, msg) do
       case :erlang.map_get(:additionalPromptIDs, msg) do
@@ -928,6 +1007,12 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:groupRootKeyShare, &encode_groupRootKeyShare/2, WAWebProtobufsE2E.GroupRootKeyShare},
+          {:membershipFormKeyFingerprintVerification,
+           &encode_membershipFormKeyFingerprintVerification/2,
+           WAWebProtobufsE2E.MembershipFormKeyFingerprintVerification},
+          {:groupRootKeyRequest, &encode_groupRootKeyRequest/2,
+           WAWebProtobufsE2E.GroupRootKeyRequest},
           {:additionalPromptIDs, &encode_additionalPromptIDs/2, nil},
           {:sharedDeviceContactHashKeyRequest, &encode_sharedDeviceContactHashKeyRequest/2,
            WAWebProtobufsE2E.SharedDeviceContactHashKeyRequest},
@@ -1042,6 +1127,70 @@ defmodule WAWebProtobufsE2E.ProtocolMessage do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"\xCA\x02", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | groupRootKeyShare:
+                  case :erlang.map_get(:groupRootKeyShare, msg) do
+                    nil ->
+                      WAWebProtobufsE2E.GroupRootKeyShare.decode!(delimited)
+
+                    previous_value ->
+                      Protox.MergeMessage.merge(
+                        previous_value,
+                        WAWebProtobufsE2E.GroupRootKeyShare.decode!(delimited)
+                      )
+                  end
+            }
+
+            parse_key_value(rest, msg)
+
+          <<"\xC2\x02", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | membershipFormKeyFingerprintVerification:
+                  case :erlang.map_get(:membershipFormKeyFingerprintVerification, msg) do
+                    nil ->
+                      WAWebProtobufsE2E.MembershipFormKeyFingerprintVerification.decode!(
+                        delimited
+                      )
+
+                    previous_value ->
+                      Protox.MergeMessage.merge(
+                        previous_value,
+                        WAWebProtobufsE2E.MembershipFormKeyFingerprintVerification.decode!(
+                          delimited
+                        )
+                      )
+                  end
+            }
+
+            parse_key_value(rest, msg)
+
+          <<"\xBA\x02", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | groupRootKeyRequest:
+                  case :erlang.map_get(:groupRootKeyRequest, msg) do
+                    nil ->
+                      WAWebProtobufsE2E.GroupRootKeyRequest.decode!(delimited)
+
+                    previous_value ->
+                      Protox.MergeMessage.merge(
+                        previous_value,
+                        WAWebProtobufsE2E.GroupRootKeyRequest.decode!(delimited)
+                      )
+                  end
+            }
+
+            parse_key_value(rest, msg)
 
           <<"\xB2\x02", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)

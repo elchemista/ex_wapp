@@ -72,6 +72,16 @@ defmodule ExWapp.Message.Handler.Inbound.SyncTest do
              Store.get(store, :app_state_keys, %{})
   end
 
+  test "fills an empty stored app-state key from a verified local sender" do
+    store = Memory.new(initial_data: %{app_state_keys: %{"0102" => %{data: <<>>}}})
+    key_data = <<7::256>>
+    message_data = app_state_key_share_message(<<1, 2>>, key_data)
+
+    Sync.ingest(message_data, nil, %{store: store}, "70000001111@lid", "fill-key", true)
+
+    assert %{"0102" => %{data: ^key_data}} = Store.get(store, :app_state_keys)
+  end
+
   test "ingests a primary-device placeholder response as the original message" do
     store = Memory.new(initial_data: %{chats: %{}})
     state = %{store: store}

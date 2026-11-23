@@ -9,6 +9,8 @@ defmodule WAWebProtobufsE2E.ContextInfo do
   end
 
   @type t :: %__MODULE__{
+          forwardReachScore: integer() | nil,
+          foaMutualsSignature: binary() | nil,
           sourceExperienceIDs: [non_neg_integer()],
           sourceExperienceID: non_neg_integer() | nil,
           partnerDeepLinkToken: String.t() | nil,
@@ -84,7 +86,9 @@ defmodule WAWebProtobufsE2E.ContextInfo do
           stanzaID: String.t() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct sourceExperienceIDs: [],
+  defstruct forwardReachScore: nil,
+            foaMutualsSignature: nil,
+            sourceExperienceIDs: [],
             sourceExperienceID: nil,
             partnerDeepLinkToken: nil,
             experienceIDs: [],
@@ -195,8 +199,10 @@ defmodule WAWebProtobufsE2E.ContextInfo do
                  {:message, WAWebProtobufsE2E.ContextInfo.ExternalAdReplyInfo}},
                 {:featureEligibilities, 49, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsE2E.ContextInfo.FeatureEligibilities}},
+                {:foaMutualsSignature, 86, :optional, {:scalar, ""}, :bytes},
                 {:forwardOrigin, 67, :optional, {:scalar, :UNKNOWN},
                  {:enum, WAWebProtobufsE2E.ContextInfo.ForwardOrigin}},
+                {:forwardReachScore, 87, :optional, {:scalar, 0}, :fixed32},
                 {:forwardedAiBotMessageInfo, 56, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsAICommon.ForwardedAIBotMessageInfo}},
                 {:forwardedNewsletterMessageInfo, 43, :optional, {:scalar, nil},
@@ -309,6 +315,8 @@ defmodule WAWebProtobufsE2E.ContextInfo do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_forwardReachScore(msg)
+        |> encode_foaMutualsSignature(msg)
         |> encode_sourceExperienceIDs(msg)
         |> encode_sourceExperienceID(msg)
         |> encode_partnerDeepLinkToken(msg)
@@ -380,6 +388,33 @@ defmodule WAWebProtobufsE2E.ContextInfo do
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_forwardReachScore({acc, acc_size}, msg) do
+      case :erlang.map_get(:forwardReachScore, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          {["\xBD\x05", <<:erlang.map_get(:forwardReachScore, msg)::little-32>> | acc],
+           acc_size + 2 + 4}
+      end
+    end
+
+    defp encode_foaMutualsSignature({acc, acc_size}, msg) do
+      case :erlang.map_get(:foaMutualsSignature, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            delimited = :erlang.map_get(:foaMutualsSignature, msg)
+            delimited_prefix = Protox.Varint.encode(byte_size(delimited))
+          )
+
+          {["\xB2\x05", delimited_prefix, delimited | acc],
+           acc_size + 2 + (byte_size(delimited_prefix) + byte_size(delimited))}
+      end
+    end
 
     defp encode_sourceExperienceIDs({acc, acc_size}, msg) do
       case :erlang.map_get(:sourceExperienceIDs, msg) do
@@ -1673,6 +1708,8 @@ defmodule WAWebProtobufsE2E.ContextInfo do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:forwardReachScore, &encode_forwardReachScore/2, nil},
+          {:foaMutualsSignature, &encode_foaMutualsSignature/2, nil},
           {:sourceExperienceIDs, &encode_sourceExperienceIDs/2, nil},
           {:sourceExperienceID, &encode_sourceExperienceID/2, nil},
           {:partnerDeepLinkToken, &encode_partnerDeepLinkToken/2, nil},
@@ -1844,6 +1881,16 @@ defmodule WAWebProtobufsE2E.ContextInfo do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"\xBD\x05", bytes::binary>> ->
+            {value, rest} = Protox.Decode.parse_fixed32(bytes)
+            msg = %{msg | forwardReachScore: value}
+            parse_key_value(rest, msg)
+
+          <<"\xB2\x05", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+            msg = %{msg | foaMutualsSignature: delimited}
+            parse_key_value(rest, msg)
 
           <<"\xAA\x05", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)

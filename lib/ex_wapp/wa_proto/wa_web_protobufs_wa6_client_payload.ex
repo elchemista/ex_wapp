@@ -9,6 +9,8 @@ defmodule WAWebProtobufsWa6.ClientPayload do
   end
 
   @type t :: %__MODULE__{
+          integrationAttestation:
+            WAWebProtobufsWa6.ClientPayload.IntegrationAttestation.t() | nil,
           messageSts: integer() | nil,
           testIsolationID: binary() | nil,
           pairedPeripherals: [String.t()],
@@ -49,7 +51,8 @@ defmodule WAWebProtobufsWa6.ClientPayload do
           username: non_neg_integer() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct messageSts: nil,
+  defstruct integrationAttestation: nil,
+            messageSts: nil,
             testIsolationID: nil,
             pairedPeripherals: [],
             processingQueueSize: nil,
@@ -110,6 +113,8 @@ defmodule WAWebProtobufsWa6.ClientPayload do
                 {:fbCat, 21, :optional, {:scalar, ""}, :bytes},
                 {:fbDeviceID, 32, :optional, {:scalar, ""}, :bytes},
                 {:fbUserAgent, 22, :optional, {:scalar, ""}, :bytes},
+                {:integrationAttestation, 50, :optional, {:scalar, nil},
+                 {:message, WAWebProtobufsWa6.ClientPayload.IntegrationAttestation}},
                 {:interopData, 38, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsWa6.ClientPayload.InteropData}},
                 {:iosAppExtension, 30, :optional, {:scalar, :SHARE_EXTENSION},
@@ -194,6 +199,7 @@ defmodule WAWebProtobufsWa6.ClientPayload do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_integrationAttestation(msg)
         |> encode_messageSts(msg)
         |> encode_testIsolationID(msg)
         |> encode_pairedPeripherals(msg)
@@ -234,6 +240,27 @@ defmodule WAWebProtobufsWa6.ClientPayload do
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_integrationAttestation({acc, acc_size}, msg) do
+      case :erlang.map_get(:integrationAttestation, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            %{__struct__: WAWebProtobufsWa6.ClientPayload.IntegrationAttestation} =
+              child = :erlang.map_get(:integrationAttestation, msg)
+
+            {child_bytes, child_size} =
+              WAWebProtobufsWa6.ClientPayload.IntegrationAttestation.encode_internal!(child)
+
+            child_size_bytes = Protox.Varint.encode(child_size)
+          )
+
+          {["\x92\x03", child_size_bytes, child_bytes | acc],
+           acc_size + 2 + (byte_size(child_size_bytes) + child_size)}
+      end
+    end
 
     defp encode_messageSts({acc, acc_size}, msg) do
       case :erlang.map_get(:messageSts, msg) do
@@ -927,6 +954,8 @@ defmodule WAWebProtobufsWa6.ClientPayload do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:integrationAttestation, &encode_integrationAttestation/2,
+           WAWebProtobufsWa6.ClientPayload.IntegrationAttestation},
           {:messageSts, &encode_messageSts/2, nil},
           {:testIsolationID, &encode_testIsolationID/2, nil},
           {:pairedPeripherals, &encode_pairedPeripherals/2, nil},
@@ -1032,6 +1061,26 @@ defmodule WAWebProtobufsWa6.ClientPayload do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"\x92\x03", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | integrationAttestation:
+                  case :erlang.map_get(:integrationAttestation, msg) do
+                    nil ->
+                      WAWebProtobufsWa6.ClientPayload.IntegrationAttestation.decode!(delimited)
+
+                    previous_value ->
+                      Protox.MergeMessage.merge(
+                        previous_value,
+                        WAWebProtobufsWa6.ClientPayload.IntegrationAttestation.decode!(delimited)
+                      )
+                  end
+            }
+
+            parse_key_value(rest, msg)
 
           <<"\x88\x03", 0::1, varint_value::7, rest::binary>> ->
             value = varint_value

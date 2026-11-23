@@ -33,6 +33,8 @@ defmodule ExWapp.WebSocketTransportTest do
     assert Keyword.fetch!(ssl_options, :verify) == :verify_peer
     assert Keyword.fetch!(ssl_options, :server_name_indication) == ~c"web.whatsapp.com"
     assert [_first_ca | _rest] = Keyword.fetch!(ssl_options, :cacerts)
+    assert ssl_options[:send_timeout] == 10_000
+    assert ssl_options[:send_timeout_close] == true
 
     assert is_function(
              ssl_options
@@ -41,7 +43,8 @@ defmodule ExWapp.WebSocketTransportTest do
            )
   end
 
-  test "plaintext websocket URLs do not receive SSL options" do
-    assert ExWapp.Transport.TLS.websockex_options("ws://localhost/socket") == []
+  test "plaintext websocket URLs bound socket writes" do
+    assert ExWapp.Transport.TLS.websockex_options("ws://localhost/socket") ==
+             [socket_options: [send_timeout: 10_000, send_timeout_close: true]]
   end
 end

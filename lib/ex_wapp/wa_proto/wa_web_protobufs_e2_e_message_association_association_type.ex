@@ -57,6 +57,10 @@ defmodule WAWebProtobufsE2E.MessageAssociation.AssociationType do
 
   def encode(:STREAMED_HD_VIDEO_DUAL_UPLOAD), do: 22
 
+  def encode(:ORIGINAL_VIDEO_DUAL_UPLOAD), do: 23
+
+  def encode(:ORIGINAL_IMAGE_DUAL_UPLOAD), do: 24
+
   def encode(x), do: x
 
   @spec decode(integer()) :: atom() | integer()
@@ -106,6 +110,10 @@ defmodule WAWebProtobufsE2E.MessageAssociation.AssociationType do
 
   def decode(22), do: :STREAMED_HD_VIDEO_DUAL_UPLOAD
 
+  def decode(23), do: :ORIGINAL_VIDEO_DUAL_UPLOAD
+
+  def decode(24), do: :ORIGINAL_IMAGE_DUAL_UPLOAD
+
   def decode(x), do: x
 
   @spec constants() :: [{integer(), atom()}]
@@ -133,7 +141,9 @@ defmodule WAWebProtobufsE2E.MessageAssociation.AssociationType do
       {19, :HEVC_VIDEO_DUAL_UPLOAD},
       {20, :POLL_ADD_OPTION},
       {21, :AV1_VIDEO_DUAL_UPLOAD},
-      {22, :STREAMED_HD_VIDEO_DUAL_UPLOAD}
+      {22, :STREAMED_HD_VIDEO_DUAL_UPLOAD},
+      {23, :ORIGINAL_VIDEO_DUAL_UPLOAD},
+      {24, :ORIGINAL_IMAGE_DUAL_UPLOAD}
     ]
   end
 
@@ -184,6 +194,10 @@ defmodule WAWebProtobufsE2E.MessageAssociation.AssociationType do
     def has_constant?(:AV1_VIDEO_DUAL_UPLOAD), do: true
 
     def has_constant?(:STREAMED_HD_VIDEO_DUAL_UPLOAD), do: true
+
+    def has_constant?(:ORIGINAL_VIDEO_DUAL_UPLOAD), do: true
+
+    def has_constant?(:ORIGINAL_IMAGE_DUAL_UPLOAD), do: true
 
     def has_constant?(_value), do: false
   )

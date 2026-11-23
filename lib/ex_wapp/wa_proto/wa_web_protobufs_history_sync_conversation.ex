@@ -9,6 +9,10 @@ defmodule WAWebProtobufsHistorySync.Conversation do
   end
 
   @type t :: %__MODULE__{
+          contactAccountEncryptionAttestationType: atom() | nil,
+          nonE2EeType: integer() | nil,
+          isWorkGroup: boolean() | nil,
+          groupRootKeys: [WAWebProtobufsHistorySync.GroupRootKey.t()],
           acp2HistoryWithheld: boolean() | nil,
           acp2Setting: WACommon.ACP2Setting.t() | nil,
           identityVerification: WAWebProtobufsHistorySync.IdentityVerificationState.t() | nil,
@@ -76,7 +80,11 @@ defmodule WAWebProtobufsHistorySync.Conversation do
           ID: String.t() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct acp2HistoryWithheld: nil,
+  defstruct contactAccountEncryptionAttestationType: nil,
+            nonE2EeType: nil,
+            isWorkGroup: nil,
+            groupRootKeys: [],
+            acp2HistoryWithheld: nil,
             acp2Setting: nil,
             identityVerification: nil,
             authAgentObaPhoneNumber: nil,
@@ -161,6 +169,8 @@ defmodule WAWebProtobufsHistorySync.Conversation do
                 {:authAgentParentCompanyName, 61, :optional, {:scalar, ""}, :string},
                 {:capiCreatedGroup, 48, :optional, {:scalar, false}, :bool},
                 {:commentsCount, 45, :optional, {:scalar, 0}, :uint32},
+                {:contactAccountEncryptionAttestationType, 69, :optional, {:scalar, :E2EE},
+                 {:enum, WAWebProtobufsAea.NonE2EEAttestation.AccountType}},
                 {:contactPrimaryIdentityKey, 23, :optional, {:scalar, ""}, :bytes},
                 {:conversationTimestamp, 12, :optional, {:scalar, 0}, :uint64},
                 {:createdAt, 31, :optional, {:scalar, 0}, :uint64},
@@ -175,6 +185,8 @@ defmodule WAWebProtobufsHistorySync.Conversation do
                  {:enum, WAWebProtobufsHistorySync.Conversation.EndOfHistoryTransferType}},
                 {:ephemeralExpiration, 9, :optional, {:scalar, 0}, :uint32},
                 {:ephemeralSettingTimestamp, 10, :optional, {:scalar, 0}, :int64},
+                {:groupRootKeys, 66, :repeated, :unpacked,
+                 {:message, WAWebProtobufsHistorySync.GroupRootKey}},
                 {:identityVerification, 63, :optional, {:scalar, nil},
                  {:message, WAWebProtobufsHistorySync.IdentityVerificationState}},
                 {:isDefaultSubgroup, 36, :optional, {:scalar, false}, :bool},
@@ -182,6 +194,7 @@ defmodule WAWebProtobufsHistorySync.Conversation do
                 {:isParentGroup, 35, :optional, {:scalar, false}, :bool},
                 {:isSenderNewAccount, 56, :optional, {:scalar, false}, :bool},
                 {:isSenderSuspicious, 58, :optional, {:scalar, false}, :bool},
+                {:isWorkGroup, 67, :optional, {:scalar, false}, :bool},
                 {:lastMsgTimestamp, 5, :optional, {:scalar, 0}, :uint64},
                 {:lidJID, 42, :optional, {:scalar, ""}, :string},
                 {:lidOriginType, 44, :optional, {:scalar, ""}, :string},
@@ -200,6 +213,7 @@ defmodule WAWebProtobufsHistorySync.Conversation do
                 {:muteEndTime, 25, :optional, {:scalar, 0}, :uint64},
                 {:name, 13, :optional, {:scalar, ""}, :string},
                 {:newJID, 3, :optional, {:scalar, ""}, :string},
+                {:nonE2EeType, 68, :optional, {:scalar, 0}, :int32},
                 {:notSpam, 15, :optional, {:scalar, false}, :bool},
                 {:oldJID, 4, :optional, {:scalar, ""}, :string},
                 {:pHash, 14, :optional, {:scalar, ""}, :string},
@@ -277,6 +291,10 @@ defmodule WAWebProtobufsHistorySync.Conversation do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_contactAccountEncryptionAttestationType(msg)
+        |> encode_nonE2EeType(msg)
+        |> encode_isWorkGroup(msg)
+        |> encode_groupRootKeys(msg)
         |> encode_acp2HistoryWithheld(msg)
         |> encode_acp2Setting(msg)
         |> encode_identityVerification(msg)
@@ -345,6 +363,73 @@ defmodule WAWebProtobufsHistorySync.Conversation do
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_contactAccountEncryptionAttestationType({acc, acc_size}, msg) do
+      case :erlang.map_get(:contactAccountEncryptionAttestationType, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            value =
+              WAWebProtobufsAea.NonE2EEAttestation.AccountType.encode(
+                :erlang.map_get(:contactAccountEncryptionAttestationType, msg)
+              )
+
+            value_bytes =
+              if value >= 0 do
+                Protox.Varint.encode(:erlang.band(value, 4_294_967_295))
+              else
+                Protox.Varint.encode(:erlang.band(value, 18_446_744_073_709_551_615))
+              end
+          )
+
+          {["\xA8\x04", value_bytes | acc], acc_size + 2 + byte_size(value_bytes)}
+      end
+    end
+
+    defp encode_nonE2EeType({acc, acc_size}, msg) do
+      case :erlang.map_get(:nonE2EeType, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            value = :erlang.map_get(:nonE2EeType, msg)
+
+            value_bytes =
+              if value >= 0 do
+                Protox.Varint.encode(:erlang.band(value, 4_294_967_295))
+              else
+                Protox.Varint.encode(:erlang.band(value, 18_446_744_073_709_551_615))
+              end
+          )
+
+          {["\xA0\x04", value_bytes | acc], acc_size + 2 + byte_size(value_bytes)}
+      end
+    end
+
+    defp encode_isWorkGroup({acc, acc_size}, msg) do
+      case :erlang.map_get(:isWorkGroup, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          {["\x98\x04", Protox.Encode.encode_bool(:erlang.map_get(:isWorkGroup, msg)) | acc],
+           acc_size + 2 + 1}
+      end
+    end
+
+    defp encode_groupRootKeys({acc, acc_size}, msg) do
+      case :erlang.map_get(:groupRootKeys, msg) do
+        [] ->
+          {acc, acc_size}
+
+        values ->
+          {value_bytes, value_size} = encode_repeated_66(values, [], 0)
+          {[value_bytes | acc], acc_size + value_size}
+      end
+    end
 
     defp encode_acp2HistoryWithheld({acc, acc_size}, msg) do
       case :erlang.map_get(:acp2HistoryWithheld, msg) do
@@ -1373,6 +1458,28 @@ defmodule WAWebProtobufsHistorySync.Conversation do
     end
 
     (
+      defp encode_repeated_66([], acc, size), do: {acc, size}
+
+      defp encode_repeated_66([value | rest], acc, size) do
+        (
+          (
+            %{__struct__: WAWebProtobufsHistorySync.GroupRootKey} = child = value
+
+            {child_bytes, child_size} =
+              WAWebProtobufsHistorySync.GroupRootKey.encode_internal!(child)
+
+            child_size_bytes = Protox.Varint.encode(child_size)
+          )
+
+          value_bytes = [child_size_bytes, child_bytes]
+          value_bytes_size = byte_size(child_size_bytes) + child_size
+        )
+
+        encode_repeated_66(rest, [acc, "\x92\x04", value_bytes], size + 2 + value_bytes_size)
+      end
+    )
+
+    (
       defp encode_repeated_20([], acc, size), do: {acc, size}
 
       defp encode_repeated_20([value | rest], acc, size) do
@@ -1419,6 +1526,11 @@ defmodule WAWebProtobufsHistorySync.Conversation do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:contactAccountEncryptionAttestationType,
+           &encode_contactAccountEncryptionAttestationType/2, nil},
+          {:nonE2EeType, &encode_nonE2EeType/2, nil},
+          {:isWorkGroup, &encode_isWorkGroup/2, nil},
+          {:groupRootKeys, &encode_groupRootKeys/2, WAWebProtobufsHistorySync.GroupRootKey},
           {:acp2HistoryWithheld, &encode_acp2HistoryWithheld/2, nil},
           {:acp2Setting, &encode_acp2Setting/2, WACommon.ACP2Setting},
           {:identityVerification, &encode_identityVerification/2,
@@ -1516,6 +1628,12 @@ defmodule WAWebProtobufsHistorySync.Conversation do
       @spec parse_key_value(binary(), struct()) :: struct()
       defp parse_key_value(<<>>, msg) do
         msg =
+          case :erlang.map_get(:groupRootKeys, msg) do
+            [_first, _second | _tail] = values -> %{msg | groupRootKeys: :lists.reverse(values)}
+            _empty_or_single -> msg
+          end
+
+        msg =
           case :erlang.map_get(:participant, msg) do
             [_first, _second | _tail] = values -> %{msg | participant: :lists.reverse(values)}
             _empty_or_single -> msg
@@ -1549,6 +1667,51 @@ defmodule WAWebProtobufsHistorySync.Conversation do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"\xA8\x04", 0::1, varint_value::7, rest::binary>> ->
+            value = WAWebProtobufsAea.NonE2EEAttestation.AccountType.decode(varint_value)
+            msg = %{msg | contactAccountEncryptionAttestationType: value}
+            parse_key_value(rest, msg)
+
+          <<"\xA8\x04", bytes::binary>> ->
+            {value, rest} =
+              Protox.Decode.parse_enum(bytes, WAWebProtobufsAea.NonE2EEAttestation.AccountType)
+
+            msg = %{msg | contactAccountEncryptionAttestationType: value}
+            parse_key_value(rest, msg)
+
+          <<"\xA0\x04", 0::1, varint_value::7, rest::binary>> ->
+            value = varint_value
+            msg = %{msg | nonE2EeType: value}
+            parse_key_value(rest, msg)
+
+          <<"\xA0\x04", bytes::binary>> ->
+            {value, rest} = Protox.Decode.parse_int32(bytes)
+            msg = %{msg | nonE2EeType: value}
+            parse_key_value(rest, msg)
+
+          <<"\x98\x04", 0::1, varint_value::7, rest::binary>> ->
+            value = varint_value != 0
+            msg = %{msg | isWorkGroup: value}
+            parse_key_value(rest, msg)
+
+          <<"\x98\x04", bytes::binary>> ->
+            {value, rest} = Protox.Decode.parse_bool(bytes)
+            msg = %{msg | isWorkGroup: value}
+            parse_key_value(rest, msg)
+
+          <<"\x92\x04", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | groupRootKeys: [
+                  WAWebProtobufsHistorySync.GroupRootKey.decode!(delimited)
+                  | :erlang.map_get(:groupRootKeys, msg)
+                ]
+            }
+
+            parse_key_value(rest, msg)
 
           <<"\x88\x04", 0::1, varint_value::7, rest::binary>> ->
             value = varint_value != 0

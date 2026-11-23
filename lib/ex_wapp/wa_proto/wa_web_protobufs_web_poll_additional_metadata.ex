@@ -9,6 +9,11 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
   end
 
   @type t :: %__MODULE__{
+          pollOptionReplayBase:
+            WAWebProtobufsWeb.PollAdditionalMetadata.PollOptionReplayBase.t() | nil,
+          pollOptionReplayEntries: [
+            WAWebProtobufsWeb.PollAdditionalMetadata.PollOptionReplayEntry.t()
+          ],
           originalOptions: [WAWebProtobufsE2E.PollCreationMessage.Option.t()],
           pollNameHashHistory: [
             WAWebProtobufsWeb.PollAdditionalMetadata.PollNameHashHistoryEntry.t()
@@ -16,7 +21,12 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
           pollInvalidated: boolean() | nil,
           __uf__: [{non_neg_integer(), Protox.Types.tag(), binary()}]
         }
-  defstruct originalOptions: [], pollNameHashHistory: [], pollInvalidated: nil, __uf__: []
+  defstruct pollOptionReplayBase: nil,
+            pollOptionReplayEntries: [],
+            originalOptions: [],
+            pollNameHashHistory: [],
+            pollInvalidated: nil,
+            __uf__: []
 
   (
     @schema Protox.MessageSchema.expand!(
@@ -27,7 +37,11 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
                  {:message, WAWebProtobufsE2E.PollCreationMessage.Option}},
                 {:pollInvalidated, 1, :optional, {:scalar, false}, :bool},
                 {:pollNameHashHistory, 2, :repeated, :unpacked,
-                 {:message, WAWebProtobufsWeb.PollAdditionalMetadata.PollNameHashHistoryEntry}}
+                 {:message, WAWebProtobufsWeb.PollAdditionalMetadata.PollNameHashHistoryEntry}},
+                {:pollOptionReplayBase, 5, :optional, {:scalar, nil},
+                 {:message, WAWebProtobufsWeb.PollAdditionalMetadata.PollOptionReplayBase}},
+                {:pollOptionReplayEntries, 4, :repeated, :unpacked,
+                 {:message, WAWebProtobufsWeb.PollAdditionalMetadata.PollOptionReplayEntry}}
               ],
               %{
                 cc_enable_arenas: nil,
@@ -81,12 +95,48 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
       @doc false
       def encode_internal!(msg) do
         {[], 0}
+        |> encode_pollOptionReplayBase(msg)
+        |> encode_pollOptionReplayEntries(msg)
         |> encode_originalOptions(msg)
         |> encode_pollNameHashHistory(msg)
         |> encode_pollInvalidated(msg)
         |> encode_unknown_fields(msg)
       end
     )
+
+    defp encode_pollOptionReplayBase({acc, acc_size}, msg) do
+      case :erlang.map_get(:pollOptionReplayBase, msg) do
+        nil ->
+          {acc, acc_size}
+
+        _value ->
+          (
+            %{__struct__: WAWebProtobufsWeb.PollAdditionalMetadata.PollOptionReplayBase} =
+              child = :erlang.map_get(:pollOptionReplayBase, msg)
+
+            {child_bytes, child_size} =
+              WAWebProtobufsWeb.PollAdditionalMetadata.PollOptionReplayBase.encode_internal!(
+                child
+              )
+
+            child_size_bytes = Protox.Varint.encode(child_size)
+          )
+
+          {["*", child_size_bytes, child_bytes | acc],
+           acc_size + 1 + (byte_size(child_size_bytes) + child_size)}
+      end
+    end
+
+    defp encode_pollOptionReplayEntries({acc, acc_size}, msg) do
+      case :erlang.map_get(:pollOptionReplayEntries, msg) do
+        [] ->
+          {acc, acc_size}
+
+        values ->
+          {value_bytes, value_size} = encode_repeated_4(values, [], 0)
+          {[value_bytes | acc], acc_size + value_size}
+      end
+    end
 
     defp encode_originalOptions({acc, acc_size}, msg) do
       case :erlang.map_get(:originalOptions, msg) do
@@ -120,6 +170,31 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
            acc_size + 1 + 1}
       end
     end
+
+    (
+      defp encode_repeated_4([], acc, size), do: {acc, size}
+
+      defp encode_repeated_4([value | rest], acc, size) do
+        (
+          (
+            %{__struct__: WAWebProtobufsWeb.PollAdditionalMetadata.PollOptionReplayEntry} =
+              child = value
+
+            {child_bytes, child_size} =
+              WAWebProtobufsWeb.PollAdditionalMetadata.PollOptionReplayEntry.encode_internal!(
+                child
+              )
+
+            child_size_bytes = Protox.Varint.encode(child_size)
+          )
+
+          value_bytes = [child_size_bytes, child_bytes]
+          value_bytes_size = byte_size(child_size_bytes) + child_size
+        )
+
+        encode_repeated_4(rest, [acc, "\"", value_bytes], size + 1 + value_bytes_size)
+      end
+    )
 
     (
       defp encode_repeated_3([], acc, size), do: {acc, size}
@@ -171,6 +246,10 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
     (
       defp encode_diagnose!(%{__struct__: __MODULE__} = msg) do
         Protox.Encode.find_invalid_field!(msg, [
+          {:pollOptionReplayBase, &encode_pollOptionReplayBase/2,
+           WAWebProtobufsWeb.PollAdditionalMetadata.PollOptionReplayBase},
+          {:pollOptionReplayEntries, &encode_pollOptionReplayEntries/2,
+           WAWebProtobufsWeb.PollAdditionalMetadata.PollOptionReplayEntry},
           {:originalOptions, &encode_originalOptions/2,
            WAWebProtobufsE2E.PollCreationMessage.Option},
           {:pollNameHashHistory, &encode_pollNameHashHistory/2,
@@ -206,6 +285,15 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
     (
       @spec parse_key_value(binary(), struct()) :: struct()
       defp parse_key_value(<<>>, msg) do
+        msg =
+          case :erlang.map_get(:pollOptionReplayEntries, msg) do
+            [_first, _second | _tail] = values ->
+              %{msg | pollOptionReplayEntries: :lists.reverse(values)}
+
+            _empty_or_single ->
+              msg
+          end
+
         msg =
           case :erlang.map_get(:originalOptions, msg) do
             [_first, _second | _tail] = values -> %{msg | originalOptions: :lists.reverse(values)}
@@ -243,6 +331,45 @@ defmodule WAWebProtobufsWeb.PollAdditionalMetadata do
 
           <<0::5, _wire_type::3, _rest::binary>> ->
             raise %Protox.IllegalTagError{}
+
+          <<"*", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | pollOptionReplayBase:
+                  case :erlang.map_get(:pollOptionReplayBase, msg) do
+                    nil ->
+                      WAWebProtobufsWeb.PollAdditionalMetadata.PollOptionReplayBase.decode!(
+                        delimited
+                      )
+
+                    previous_value ->
+                      Protox.MergeMessage.merge(
+                        previous_value,
+                        WAWebProtobufsWeb.PollAdditionalMetadata.PollOptionReplayBase.decode!(
+                          delimited
+                        )
+                      )
+                  end
+            }
+
+            parse_key_value(rest, msg)
+
+          <<"\"", bytes::binary>> ->
+            {delimited, rest} = Protox.Decode.parse_delimited(bytes)
+
+            msg = %{
+              msg
+              | pollOptionReplayEntries: [
+                  WAWebProtobufsWeb.PollAdditionalMetadata.PollOptionReplayEntry.decode!(
+                    delimited
+                  )
+                  | :erlang.map_get(:pollOptionReplayEntries, msg)
+                ]
+            }
+
+            parse_key_value(rest, msg)
 
           <<"\x1A", bytes::binary>> ->
             {delimited, rest} = Protox.Decode.parse_delimited(bytes)

@@ -365,7 +365,7 @@ defmodule ExWapp.Binary do
     defp write_jid(encoder, %JID{} = jid) do
       cond do
         (jid.server in [JID.default_user_server(), JID.hidden_user_server()] and jid.device > 0) or
-            jid.server == JID.hosted_server() ->
+            jid.server in [JID.hosted_server(), JID.hosted_lid_server()] ->
           encoder
           |> push_byte(Token.ad_jid())
           |> push_byte(JID.actual_agent(jid))

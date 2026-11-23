@@ -81,6 +81,12 @@ defmodule WAWebProtobufsE2E.ProtocolMessage.Type do
 
   def encode(:SHARED_DEVICE_CONTACT_HASH_KEY_REQUEST), do: 41
 
+  def encode(:GROUP_ROOT_KEY_REQUEST), do: 42
+
+  def encode(:MEMBERSHIP_FORM_KEY_FINGERPRINT_VERIFICATION), do: 43
+
+  def encode(:GROUP_ROOT_KEY_SHARE), do: 44
+
   def encode(x), do: x
 
   @spec decode(integer()) :: atom() | integer()
@@ -96,11 +102,15 @@ defmodule WAWebProtobufsE2E.ProtocolMessage.Type do
 
   def decode(29), do: :AI_QUERY_FANOUT
 
+  def decode(42), do: :GROUP_ROOT_KEY_REQUEST
+
   def decode(7), do: :APP_STATE_SYNC_KEY_REQUEST
 
   def decode(31), do: :AI_MEDIA_COLLECTION_MESSAGE
 
   def decode(8), do: :MSG_FANOUT_BACKFILL_REQUEST
+
+  def decode(44), do: :GROUP_ROOT_KEY_SHARE
 
   def decode(10), do: :APP_STATE_FATAL_EXCEPTION_NOTIFICATION
 
@@ -121,6 +131,8 @@ defmodule WAWebProtobufsE2E.ProtocolMessage.Type do
   def decode(20), do: :MEDIA_NOTIFY_MESSAGE
 
   def decode(6), do: :APP_STATE_SYNC_KEY_SHARE
+
+  def decode(43), do: :MEMBERSHIP_FORM_KEY_FINGERPRINT_VERIFICATION
 
   def decode(11), do: :SHARE_PHONE_NUMBER
 
@@ -193,7 +205,10 @@ defmodule WAWebProtobufsE2E.ProtocolMessage.Type do
       {37, :COEX_STATE_SYNC},
       {39, :ACP2_SETTING},
       {40, :SHARED_DEVICE_CONTACT_HASH_KEY_SHARE},
-      {41, :SHARED_DEVICE_CONTACT_HASH_KEY_REQUEST}
+      {41, :SHARED_DEVICE_CONTACT_HASH_KEY_REQUEST},
+      {42, :GROUP_ROOT_KEY_REQUEST},
+      {43, :MEMBERSHIP_FORM_KEY_FINGERPRINT_VERIFICATION},
+      {44, :GROUP_ROOT_KEY_SHARE}
     ]
   end
 
@@ -268,6 +283,12 @@ defmodule WAWebProtobufsE2E.ProtocolMessage.Type do
     def has_constant?(:SHARED_DEVICE_CONTACT_HASH_KEY_SHARE), do: true
 
     def has_constant?(:SHARED_DEVICE_CONTACT_HASH_KEY_REQUEST), do: true
+
+    def has_constant?(:GROUP_ROOT_KEY_REQUEST), do: true
+
+    def has_constant?(:MEMBERSHIP_FORM_KEY_FINGERPRINT_VERIFICATION), do: true
+
+    def has_constant?(:GROUP_ROOT_KEY_SHARE), do: true
 
     def has_constant?(_value), do: false
   )

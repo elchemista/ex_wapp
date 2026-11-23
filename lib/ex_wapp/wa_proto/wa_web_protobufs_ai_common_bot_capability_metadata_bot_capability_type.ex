@@ -181,6 +181,16 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
 
   def encode(:RICH_RESPONSE_SOCIAL_ENTITY_PREFETCH_SCHEDULER_ENABLED), do: 84
 
+  def encode(:AI_MUSE_JARVIS_EXTENDED_CARDS_ENABLED), do: 85
+
+  def encode(:AI_INTERJECTIONS_ENABLED), do: 86
+
+  def encode(:AI_RICH_RESPONSE_READ_ALOUD_ENABLED), do: 87
+
+  def encode(:AI_RICH_RESPONSE_ITEM_LISTS_ENABLED), do: 88
+
+  def encode(:RICH_RESPONSE_SIDE_BY_SIDE_BUFFER_BOTH), do: 89
+
   def encode(x), do: x
 
   @spec decode(integer()) :: atom() | integer()
@@ -282,6 +292,8 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
 
   def decode(20), do: :WA_IG_1P_PLUGIN_RANKING_UPDATE_10
 
+  def decode(87), do: :AI_RICH_RESPONSE_READ_ALOUD_ENABLED
+
   def decode(6), do: :RICH_RESPONSE_TABLE
 
   def decode(83), do: :HATCH_CVM_ENABLED
@@ -295,6 +307,10 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
   def decode(81), do: :AI_MUSE_JARVIS_SCHEMA_ENABLED
 
   def decode(73), do: :AI_SUGGESTED_REPLIES_ENABLED
+
+  def decode(89), do: :RICH_RESPONSE_SIDE_BY_SIDE_BUFFER_BOTH
+
+  def decode(88), do: :AI_RICH_RESPONSE_ITEM_LISTS_ENABLED
 
   def decode(48), do: :SESSION_TRANSPARENCY_SYSTEM_MESSAGE
 
@@ -320,6 +336,8 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
 
   def decode(62), do: :UNIFIED_RESPONSE_AI_CONTENT_SEARCH_ENABLED
 
+  def decode(86), do: :AI_INTERJECTIONS_ENABLED
+
   def decode(21), do: :RICH_RESPONSE_SUB_HEADING
 
   def decode(5), do: :RICH_RESPONSE_THREAD_SURFING
@@ -329,6 +347,8 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
   def decode(77), do: :HATCH_SECURE_CREDENTIAL_CARD_ENABLED
 
   def decode(27), do: :AGENTIC_PLANNING
+
+  def decode(85), do: :AI_MUSE_JARVIS_EXTENDED_CARDS_ENABLED
 
   def decode(47), do: :AI_RESPONSE_MODEL_BRANDING
 
@@ -443,7 +463,12 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
       {81, :AI_MUSE_JARVIS_SCHEMA_ENABLED},
       {82, :AI_STUDY_QUIZ_ENABLED},
       {83, :HATCH_CVM_ENABLED},
-      {84, :RICH_RESPONSE_SOCIAL_ENTITY_PREFETCH_SCHEDULER_ENABLED}
+      {84, :RICH_RESPONSE_SOCIAL_ENTITY_PREFETCH_SCHEDULER_ENABLED},
+      {85, :AI_MUSE_JARVIS_EXTENDED_CARDS_ENABLED},
+      {86, :AI_INTERJECTIONS_ENABLED},
+      {87, :AI_RICH_RESPONSE_READ_ALOUD_ENABLED},
+      {88, :AI_RICH_RESPONSE_ITEM_LISTS_ENABLED},
+      {89, :RICH_RESPONSE_SIDE_BY_SIDE_BUFFER_BOTH}
     ]
   end
 
@@ -618,6 +643,16 @@ defmodule WAWebProtobufsAICommon.BotCapabilityMetadata.BotCapabilityType do
     def has_constant?(:HATCH_CVM_ENABLED), do: true
 
     def has_constant?(:RICH_RESPONSE_SOCIAL_ENTITY_PREFETCH_SCHEDULER_ENABLED), do: true
+
+    def has_constant?(:AI_MUSE_JARVIS_EXTENDED_CARDS_ENABLED), do: true
+
+    def has_constant?(:AI_INTERJECTIONS_ENABLED), do: true
+
+    def has_constant?(:AI_RICH_RESPONSE_READ_ALOUD_ENABLED), do: true
+
+    def has_constant?(:AI_RICH_RESPONSE_ITEM_LISTS_ENABLED), do: true
+
+    def has_constant?(:RICH_RESPONSE_SIDE_BY_SIDE_BUFFER_BOTH), do: true
 
     def has_constant?(_value), do: false
   )
